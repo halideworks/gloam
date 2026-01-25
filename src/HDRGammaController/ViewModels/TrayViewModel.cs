@@ -7,6 +7,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using HDRGammaController.Core;
+using HDRGammaController.Core.Calibration;
 using HDRGammaController.Services;
 using HDRGammaController.Interop;
 
@@ -41,6 +42,7 @@ namespace HDRGammaController.ViewModels
         public ICommand RefreshCommand { get; }
         public ICommand StartupCommand { get; }
         public ICommand DashboardCommand { get; }
+        public ICommand CalibrateCommand { get; }
 
         public TrayViewModel(HotkeyManager? hotkeyManager = null)
         {
@@ -77,6 +79,7 @@ namespace HDRGammaController.ViewModels
             RefreshCommand = new RelayCommand(_ => RefreshMonitors());
             StartupCommand = new RelayCommand(_ => ToggleStartup());
             DashboardCommand = new RelayCommand(_ => OpenDashboard());
+            CalibrateCommand = new RelayCommand(_ => OpenCalibration());
 
             RefreshMonitors();
             
@@ -364,7 +367,23 @@ namespace HDRGammaController.ViewModels
         private void OpenDashboard()
         {
             var dashboard = new DashboardWindow(_monitorManager, _settingsManager, _nightModeService, RequestApply);
-            dashboard.Show(); 
+            dashboard.Show();
+        }
+
+        private void OpenCalibration()
+        {
+            var setupWindow = new CalibrationSetupWindow(_activeMonitors);
+            if (setupWindow.ShowDialog() == true &&
+                setupWindow.SelectedTarget != null &&
+                setupWindow.ColorimeterService != null)
+            {
+                var calibrationWindow = new CalibrationWindow(
+                    setupWindow.ColorimeterService,
+                    setupWindow.SelectedTarget,
+                    setupWindow.SelectedPreset);
+
+                calibrationWindow.Show();
+            }
         }
 
         public void RefreshMonitors()
@@ -382,6 +401,7 @@ namespace HDRGammaController.ViewModels
             else
             {
                 TrayItems.Add(new ActionViewModel("Open Dashboard...", DashboardCommand));
+                TrayItems.Add(new ActionViewModel("Calibrate Display...", CalibrateCommand));
                 TrayItems.Add(new ActionViewModel("───────────", null));
                 
                 int index = 1;

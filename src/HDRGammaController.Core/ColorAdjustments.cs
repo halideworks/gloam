@@ -1,4 +1,5 @@
 using System;
+using HDRGammaController.Core.Calibration;
 
 namespace HDRGammaController.Core
 {
@@ -252,11 +253,22 @@ namespace HDRGammaController.Core
         
         /// <summary>
         /// Applies all calibration adjustments to an RGB triplet.
+        /// Order: Measured 3D LUT → Dimming → Temperature → Tint → RGB Gains → RGB Offsets
         /// </summary>
         public static (double R, double G, double B) ApplyCalibration(
-            double r, double g, double b, 
+            double r, double g, double b,
             CalibrationSettings settings)
         {
+            // 0. Apply measured 3D LUT correction (if present)
+            // This is the colorimeter-measured base correction
+            if (settings.MeasuredCorrectionLut != null)
+            {
+                var corrected = settings.MeasuredCorrectionLut.Lookup((float)r, (float)g, (float)b);
+                r = corrected.R;
+                g = corrected.G;
+                b = corrected.B;
+            }
+
             // 1. Apply perceptual dimming
             if (settings.Brightness < 100.0)
             {
