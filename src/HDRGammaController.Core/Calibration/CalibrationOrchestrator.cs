@@ -209,9 +209,22 @@ namespace HDRGammaController.Core.Calibration
 
                 RaiseProgressChanged();
 
-                // Run measurement loop
-                SetState(CalibrationState.Running);
-                await RunMeasurementLoopAsync(_cancellationTokenSource.Token);
+                // Open a single persistent spotread session for the whole measurement loop.
+                // This is where we discover "spotread can't talk to the instrument" problems —
+                // any USB/driver/conflict issue surfaces as an exception here instead of as
+                // a cryptic "no color data" error three patches in. The session is torn down
+                // in finally regardless of how the loop terminates.
+                await _colorimeterService.BeginMeasurementSessionAsync(_hdrMode, _cancellationTokenSource.Token);
+
+                try
+                {
+                    SetState(CalibrationState.Running);
+                    await RunMeasurementLoopAsync(_cancellationTokenSource.Token);
+                }
+                finally
+                {
+                    await _colorimeterService.EndMeasurementSessionAsync();
+                }
 
                 // Complete
                 _elapsedTimer.Stop();

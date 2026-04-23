@@ -35,6 +35,14 @@ namespace HDRGammaController.Core.Calibration
         private DisplayType _displayType = DisplayType.LcdLed;
         private readonly object _lock = new();
 
+        // Persistent spotread session. Created by BeginMeasurementSessionAsync at the
+        // start of a calibration and disposed by EndMeasurementSessionAsync. While it's
+        // active every MeasureAsync call reuses the same spotread process instead of
+        // spawning a fresh one per patch — which is what DisplayCAL does and is what
+        // fixed the "starts patches but doesn't read" failure on i1 Display Plus.
+        private SpotreadSession? _session;
+        private bool _sessionHdrMode;
+
         // Log file for debugging spotread communication
         private static readonly string LogFilePath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -174,6 +182,11 @@ namespace HDRGammaController.Core.Calibration
                     // This prevents "sharing violation" errors when measurement starts
                     await Task.Delay(500, cancellationToken);
 
+                    if (_connectedColorimeter.InstrumentIndex != null)
+                    {
+                        Log($"Instrument index: {_connectedColorimeter.InstrumentIndex} ({_connectedColorimeter.InstrumentDescriptor ?? "no descriptor"})");
+                    }
+
                     lock (_lock)
                     {
                         _isInitialized = true;
@@ -257,6 +270,11 @@ namespace HDRGammaController.Core.Calibration
                 MeasurementCompleted?.Invoke(this, new MeasurementEventArgs(result));
                 return result;
             }
+            catch (UsbDriverException ex)
+            {
+                MeasurementError?.Invoke(this, new MeasurementErrorEventArgs(ex.Message, patch));
+                throw;
+            }
             catch (Exception ex)
             {
                 var result = new MeasurementResult
@@ -273,194 +291,103 @@ namespace HDRGammaController.Core.Calibration
         }
 
         /// <summary>
-        /// Takes a raw XYZ measurement using spotread.
+        /// Opens a persistent spotread session for a calibration run. Call once at the
+        /// start of a calibration, then take however many measurements are needed, then
+        /// call <see cref="EndMeasurementSessionAsync"/>. Surfaces connection failures
+        /// here rather than partway through the patch loop.
+        /// </summary>
+        public async Task BeginMeasurementSessionAsync(bool hdrMode, CancellationToken cancellationToken = default)
+        {
+            if (!IsReady)
+                throw new InvalidOperationException("Colorimeter not initialized. Call InitializeAsync first.");
+            if (string.IsNullOrEmpty(_spotreadPath))
+                throw new InvalidOperationException("spotread path not configured.");
+
+            // If a session already exists for the right mode, reuse it. If HDR mode changed,
+            // we must close and reopen (spotread is started with -H or not at process spawn).
+            if (_session != null)
+            {
+                if (_sessionHdrMode == hdrMode) return;
+                await EndMeasurementSessionAsync();
+            }
+
+            int instrumentIndex = _connectedColorimeter?.InstrumentIndex ?? 1;
+            Log($"Opening persistent spotread session (instrument {instrumentIndex}, HDR={hdrMode})");
+            try
+            {
+                _session = await SpotreadSession.StartAsync(
+                    _spotreadPath, instrumentIndex, _displayType, hdrMode, Log, cancellationToken);
+                _sessionHdrMode = hdrMode;
+                RaiseStatusChanged(ColorimeterStatus.Ready, "Spotread session ready");
+            }
+            catch (Exception ex)
+            {
+                Log($"Session startup failed: {ex.Message}");
+                _session = null;
+                // Translate common failures into a clearer UsbDriverException when warranted,
+                // so the UI's existing driver-install offer flow still fires.
+                if (UsbDriverHelper.IsDriverError(ex.Message))
+                    throw new UsbDriverException(
+                        "Colorimeter communication failed — the ArgyllCMS USB driver may be missing or another application holds the device.\n" + ex.Message, ex);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Closes the persistent spotread session. Safe to call if no session is active.
+        /// </summary>
+        public async Task EndMeasurementSessionAsync()
+        {
+            if (_session == null) return;
+            Log("Closing spotread session");
+            try { await _session.DisposeAsync(); }
+            catch (Exception ex) { Log($"Session close error (non-fatal): {ex.Message}"); }
+            _session = null;
+        }
+
+        /// <summary>
+        /// Takes a raw XYZ measurement. Uses the persistent session if one is open;
+        /// otherwise opens a transient single-shot session for this one measurement
+        /// (which still uses the session code path — no more broken <c>-O</c>).
         /// </summary>
         private async Task<CieXyz> TakeMeasurementAsync(bool hdrMode, CancellationToken cancellationToken)
         {
             if (string.IsNullOrEmpty(_spotreadPath))
                 throw new InvalidOperationException("spotread path not configured");
 
-            // Build spotread arguments for non-interactive scripted use:
-            // -O       One measurement and exit (designed for scripted use)
-            // -N       Skip calibration if valid (speeds up successive readings)
-            // -c 1     Use instrument port 1 (the HID colorimeter, not serial ports)
-            // -d N     Display number (1-based)
-            // -e       Emissive measurement mode (absolute results) - for display measurement
-            // -y X     Display type correction (l=LCD CCFL, e=LCD LED, o=OLED, etc.)
-            // -H       HDR mode (higher brightness measurement range)
-            string displayTypeFlag = _displayType.ToSpotreadFlag();
-            var args = $"-O -N -c 1 -d{_displayIndex} -e -y {displayTypeFlag}";
-            if (hdrMode)
-                args += " -H";
-
-            Log($"Running: {_spotreadPath} {args}");
-            Log("Using ARGYLL_NOT_INTERACTIVE=1 for programmatic control");
-
-            var psi = new ProcessStartInfo(_spotreadPath, args)
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                RedirectStandardInput = true,
-                // Set working directory to bin path to avoid path issues
-                WorkingDirectory = Path.GetDirectoryName(_spotreadPath)
-            };
-
-            // CRITICAL: Set ARGYLL_NOT_INTERACTIVE=1 to enable programmatic control
-            // This tells ArgyllCMS tools to expect character+return instead of single keystrokes
-            // and changes progress output to use line feeds instead of carriage returns
-            psi.Environment["ARGYLL_NOT_INTERACTIVE"] = "1";
-
-            using var process = new Process { StartInfo = psi };
-            var outputBuilder = new System.Text.StringBuilder();
-            var errorBuilder = new System.Text.StringBuilder();
-            bool promptDetected = false;
-
-            process.OutputDataReceived += (s, e) =>
-            {
-                if (!string.IsNullOrEmpty(e.Data))
-                {
-                    outputBuilder.AppendLine(e.Data);
-                    Log($"stdout> {e.Data}");
-
-                    // Detect when spotread is ready for input
-                    if (e.Data.Contains("to read") || e.Data.Contains("to take") ||
-                        e.Data.Contains("Place instrument") || e.Data.Contains("key to"))
-                    {
-                        promptDetected = true;
-                    }
-                }
-            };
-
-            process.ErrorDataReceived += (s, e) =>
-            {
-                if (!string.IsNullOrEmpty(e.Data))
-                {
-                    errorBuilder.AppendLine(e.Data);
-                    Log($"stderr> {e.Data}");
-                }
-            };
-
-            process.Start();
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
-
-            Log("Process started, waiting for prompt...");
-
-            // Wait for spotread to initialize and show prompt (or timeout after 5 seconds)
-            var startTime = DateTime.UtcNow;
-            while (!promptDetected && !process.HasExited && (DateTime.UtcNow - startTime).TotalSeconds < 5)
-            {
-                await Task.Delay(100, cancellationToken);
-            }
-
-            // Send space + newline to trigger measurement
-            // In ARGYLL_NOT_INTERACTIVE mode on Windows, character and return must be written in single operation
-            if (!process.HasExited)
+            // Happy path: an orchestrated calibration has already opened a session.
+            if (_session != null && _sessionHdrMode == hdrMode)
             {
                 try
                 {
-                    Log("Sending space+newline to trigger measurement...");
-                    // Write space and newline as a single operation (important for Windows)
-                    await process.StandardInput.WriteAsync(" \r\n");
-                    await process.StandardInput.FlushAsync();
+                    return await _session.MeasureAsync(cancellationToken);
                 }
-                catch (Exception ex)
+                catch (InvalidOperationException ex) when (UsbDriverHelper.IsDriverError(ex.Message))
                 {
-                    Log($"Error sending trigger: {ex.Message}");
+                    throw new UsbDriverException(ex.Message, ex);
                 }
             }
 
-            // Wait for measurement to complete (with timeout)
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(TimeSpan.FromSeconds(30));
-
+            // Transient path: callers who skip the Begin/End lifecycle (e.g. ad-hoc one-off
+            // measurements from tooling) still get correct behavior, just with the extra
+            // cost of spotread startup/shutdown per call.
+            Log($"No active session — opening transient one (HDR={hdrMode})");
+            int instrumentIndex = _connectedColorimeter?.InstrumentIndex ?? 1;
+            SpotreadSession transient;
             try
             {
-                await process.WaitForExitAsync(cts.Token);
+                transient = await SpotreadSession.StartAsync(
+                    _spotreadPath, instrumentIndex, _displayType, hdrMode, Log, cancellationToken);
             }
-            catch (OperationCanceledException)
+            catch (InvalidOperationException ex) when (UsbDriverHelper.IsDriverError(ex.Message))
             {
-                try { process.Kill(); } catch { }
-                throw new TimeoutException("Measurement timed out");
+                throw new UsbDriverException(ex.Message, ex);
             }
 
-            string output = outputBuilder.ToString();
-            string error = errorBuilder.ToString();
-            string combined = output + "\n" + error;
-
-            Log($"spotread exit code: {process.ExitCode}");
-            Log($"stdout: {(string.IsNullOrEmpty(output) ? "(empty)" : output.Trim())}");
-            Log($"stderr: {(string.IsNullOrEmpty(error) ? "(empty)" : error.Trim())}");
-
-            // Note: "SetCommState failed with LastError 31" on serial ports (COM1, etc) is
-            // just a warning during device enumeration - it doesn't mean the colorimeter failed.
-            // The colorimeter uses USB HID, not serial ports. We only fail if we can't get XYZ data.
-
-            // First, try to parse XYZ data - if successful, ignore serial port warnings
-            try
+            await using (transient)
             {
-                return ParseSpotreadOutput(output, combined);
+                return await transient.MeasureAsync(cancellationToken);
             }
-            catch (InvalidOperationException parseEx)
-            {
-                // Parsing failed - now check for specific errors to give better messages
-                Log($"Failed to parse XYZ data: {parseEx.Message}");
-
-                // Check if there's a sharing violation (another app using device)
-                if (combined.Contains("LastError 32", StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new InvalidOperationException(
-                        "Colorimeter is in use by another application.\n" +
-                        "Close DisplayCAL, i1Profiler, or other calibration software and try again.");
-                }
-
-                // Re-throw the parse error with additional context
-                throw;
-            }
-        }
-
-        /// <summary>
-        /// Parses XYZ values from spotread output.
-        /// </summary>
-        /// <remarks>
-        /// spotread output format (relevant lines):
-        /// Result is XYZ:  45.123  47.456  52.789, D50 Lab: 73.45  -2.34   5.67
-        /// or
-        /// XYZ:  45.123  47.456  52.789
-        /// </remarks>
-        private static CieXyz ParseSpotreadOutput(string output, string combinedOutput)
-        {
-            // Try to find XYZ values in the output
-            // Pattern: "XYZ:" followed by three floating-point numbers
-            var xyzPattern = new Regex(
-                @"XYZ:\s*(-?\d+\.?\d*)\s+(-?\d+\.?\d*)\s+(-?\d+\.?\d*)",
-                RegexOptions.IgnoreCase);
-
-            var match = xyzPattern.Match(output);
-            if (!match.Success)
-            {
-                // Try combined output as fallback
-                match = xyzPattern.Match(combinedOutput);
-            }
-
-            if (!match.Success)
-            {
-                // Provide helpful error message based on output content
-                string errorDetail = output.Length > 200 ? output.Substring(0, 200) + "..." : output;
-                Log($"ERROR: No XYZ data found in output. Details: {errorDetail}");
-                throw new InvalidOperationException(
-                    $"Measurement failed - no color data received. Ensure colorimeter is positioned correctly.\n" +
-                    $"Details: {errorDetail}");
-            }
-
-            double x = double.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
-            double y = double.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture);
-            double z = double.Parse(match.Groups[3].Value, CultureInfo.InvariantCulture);
-
-            Log($"SUCCESS: Parsed XYZ = ({x:F4}, {y:F4}, {z:F4})");
-            return new CieXyz(x, y, z);
         }
 
         /// <summary>
@@ -473,48 +400,32 @@ namespace HDRGammaController.Core.Calibration
 
             Log("=== Starting colorimeter detection ===");
 
-            // First, try to get actual device list using -l flag (list instruments)
-            // This is more reliable than parsing help text
-            var listResult = await RunSpotreadCommandAsync("-l", TimeSpan.FromSeconds(10), cancellationToken);
+            // Use help output to get the instrument list (spotread doesn't support -l)
+            var listResult = await RunSpotreadCommandAsync("-?", TimeSpan.FromSeconds(10), cancellationToken);
             if (listResult != null)
             {
-                Log($"spotread -l output: {listResult}");
+                Log($"spotread -? output: {listResult}");
 
                 // Parse actual connected device from list
                 var deviceInfo = ParseDeviceListOutput(listResult);
                 if (deviceInfo != null)
                 {
-                    Log($"Detected device from -l: {deviceInfo.Model}");
+                    Log($"Detected device from -?: {deviceInfo.Model}");
                     return deviceInfo;
                 }
             }
-
-            // Fallback: try just -? to get help which shows connected devices
-            var probeResult = await RunSpotreadCommandAsync("-?", TimeSpan.FromSeconds(10), cancellationToken);
-            if (probeResult != null)
+            // If no errors, assume device is present
+            if (listResult != null &&
+                !listResult.Contains("No colorimeter", StringComparison.OrdinalIgnoreCase) &&
+                !listResult.Contains("Error", StringComparison.OrdinalIgnoreCase) &&
+                !listResult.Contains("failed", StringComparison.OrdinalIgnoreCase))
             {
-                Log($"spotread -? output: {probeResult}");
-
-                // Look for device identification in the probe output
-                var deviceInfo = ParseDeviceListOutput(probeResult);
-                if (deviceInfo != null)
+                Log("No explicit errors - assuming device present");
+                return new ColorimeterInfo
                 {
-                    Log($"Detected device from probe: {deviceInfo.Model}");
-                    return deviceInfo;
-                }
-
-                // If no errors, assume device is present
-                if (!probeResult.Contains("No colorimeter", StringComparison.OrdinalIgnoreCase) &&
-                    !probeResult.Contains("Error", StringComparison.OrdinalIgnoreCase) &&
-                    !probeResult.Contains("failed", StringComparison.OrdinalIgnoreCase))
-                {
-                    Log("No explicit errors - assuming device present");
-                    return new ColorimeterInfo
-                    {
-                        Model = "Colorimeter Detected",
-                        IsHdrCapable = true // Assume capable, actual capability tested during measurement
-                    };
-                }
+                    Model = "Colorimeter Detected",
+                    IsHdrCapable = true // Assume capable, actual capability tested during measurement
+                };
             }
 
             Log("No colorimeter detected");
@@ -599,6 +510,47 @@ namespace HDRGammaController.Core.Calibration
                 (@"Eye-One", true),
                 (@"i1 Studio", true),
             };
+
+            // Try to parse explicit instrument list lines with indices.
+            // Example: "1 = 'hid:/10 (X-Rite i1 DisplayPro, ColorMunki Display)'"
+            var listMatches = Regex.Matches(output, @"(?m)^\s*(\d+)\s*=\s*'([^']+)'");
+            foreach (Match entry in listMatches)
+            {
+                if (!int.TryParse(entry.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int index))
+                    continue;
+
+                string descriptor = entry.Groups[2].Value;
+                foreach (var (pattern, isHdrCapable) in devicePatterns)
+                {
+                    var match = Regex.Match(descriptor, pattern, RegexOptions.IgnoreCase);
+                    if (match.Success)
+                    {
+                        return new ColorimeterInfo
+                        {
+                            Model = match.Value.Trim(),
+                            IsHdrCapable = isHdrCapable,
+                            InstrumentIndex = index,
+                            InstrumentDescriptor = descriptor
+                        };
+                    }
+                }
+            }
+
+            if (listMatches.Count > 0)
+            {
+                var firstEntry = listMatches[0];
+                if (int.TryParse(firstEntry.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int index))
+                {
+                    string descriptor = firstEntry.Groups[2].Value;
+                    return new ColorimeterInfo
+                    {
+                        Model = "Colorimeter Detected",
+                        IsHdrCapable = true,
+                        InstrumentIndex = index,
+                        InstrumentDescriptor = descriptor
+                    };
+                }
+            }
 
             foreach (var (pattern, isHdrCapable) in devicePatterns)
             {
@@ -700,7 +652,19 @@ namespace HDRGammaController.Core.Calibration
 
         public void Dispose()
         {
-            // Nothing to dispose currently, but implementing for future use
+            // Close any dangling spotread session. We use fire-and-forget here because
+            // Dispose() can't be async; the session's DisposeAsync kills the process on
+            // a 3-second timeout so this won't block long in practice.
+            var session = _session;
+            _session = null;
+            if (session != null)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try { await session.DisposeAsync(); }
+                    catch { /* already disposed or process gone */ }
+                });
+            }
         }
     }
 
@@ -713,6 +677,16 @@ namespace HDRGammaController.Core.Calibration
         /// Colorimeter model name (e.g., "i1 Display Plus").
         /// </summary>
         public required string Model { get; init; }
+
+        /// <summary>
+        /// Instrument list index from spotread (used with -c).
+        /// </summary>
+        public int? InstrumentIndex { get; init; }
+
+        /// <summary>
+        /// Raw instrument descriptor from spotread (e.g., "hid:/10 (X-Rite i1 DisplayPro, ColorMunki Display)").
+        /// </summary>
+        public string? InstrumentDescriptor { get; init; }
 
         /// <summary>
         /// Whether this colorimeter supports HDR measurement modes.
