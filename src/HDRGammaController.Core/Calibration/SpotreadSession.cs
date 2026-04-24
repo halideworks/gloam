@@ -294,14 +294,75 @@ namespace HDRGammaController.Core.Calibration
             }
         }
 
-        private static string BuildSharingViolationMessage(string rawLine) =>
-            "The colorimeter is being held open by another process (Windows sharing " +
-            "violation, err 32).\n\n" +
-            "Most common culprit: DisplayCAL's 'DisplayCAL-apply-profiles.exe' tray " +
-            "loader. Right-click its icon in the system tray and choose Exit, then retry.\n" +
-            "Also close any of: DisplayCAL UI, i1Profiler, X-Rite i1Profiler Tray, or other " +
-            "calibration software that may be running.\n\n" +
-            "Underlying spotread line: " + rawLine.Trim();
+        private static string BuildSharingViolationMessage(string rawLine)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("The colorimeter's HID handle is locked by another process (Windows ");
+            sb.AppendLine("sharing violation, err 32). Reinstalling the driver does not help — ");
+            sb.AppendLine("the device needs to be released, not re-installed.\n");
+
+            sb.AppendLine("Try these in order — the first two fix this ~99% of the time:\n");
+            sb.AppendLine("  1. UNPLUG the colorimeter USB cable, wait 3 seconds, plug it back in.");
+            sb.AppendLine("     This forces Windows to release any stuck HID handle.\n");
+            sb.AppendLine("  2. If replug doesn't clear it, close any calibration software");
+            sb.AppendLine("     that may be running or auto-launched. Common culprits:");
+
+            var suspects = FindSuspectProcessesOnCurrentMachine();
+            if (suspects.Count > 0)
+            {
+                sb.AppendLine("     Currently running on this machine:");
+                foreach (var p in suspects)
+                    sb.AppendLine($"        • {p}");
+            }
+            else
+            {
+                sb.AppendLine("     (none of the usual suspects are running right now — but");
+                sb.AppendLine("     DisplayCAL has scheduled tasks that auto-relaunch its loader)");
+            }
+            sb.AppendLine();
+            sb.AppendLine("  3. If step 1 and 2 don't work, reboot. A stale kernel handle may ");
+            sb.AppendLine("     be stuck until the system restarts.\n");
+            sb.AppendLine("Underlying spotread line: " + rawLine.Trim());
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Lists the processes on this machine whose names commonly show up as HID-device
+        /// holders on colorimeter systems. Best-effort — no admin required, so we can't
+        /// query actual handle tables, just report who's plausibly involved.
+        /// </summary>
+        private static System.Collections.Generic.List<string> FindSuspectProcessesOnCurrentMachine()
+        {
+            // Fragment-based match, case insensitive. Kept narrow to avoid false positives.
+            string[] suspectFragments =
+            {
+                "displaycal", "i1profiler", "i1 profiler", "xrite", "x-rite",
+                "colormunki", "basiccolor", "calman"
+            };
+
+            var found = new System.Collections.Generic.List<string>();
+            try
+            {
+                foreach (var p in Process.GetProcesses())
+                {
+                    string name;
+                    try { name = p.ProcessName; }
+                    catch { continue; }
+
+                    string lower = name.ToLowerInvariant();
+                    foreach (var frag in suspectFragments)
+                    {
+                        if (lower.Contains(frag))
+                        {
+                            found.Add($"{name}.exe (PID {p.Id})");
+                            break;
+                        }
+                    }
+                }
+            }
+            catch { /* Process enumeration can fail on locked-down machines; don't crash the error report */ }
+            return found;
+        }
 
         private void OnExited(object? sender, EventArgs e)
         {
@@ -324,14 +385,10 @@ namespace HDRGammaController.Core.Calibration
             }
             else if (_attemptedHidOpen && code == 0 && !_readyTcs.Task.IsCompleted)
             {
-                msg = "The colorimeter's HID device could not be opened, and spotread exited " +
-                      "without reporting why (known bug in ArgyllCMS V3.3.0).\n\n" +
-                      "This is almost always caused by another process holding the device open — " +
-                      "most commonly DisplayCAL's 'DisplayCAL-apply-profiles.exe' tray loader. " +
-                      "Right-click its tray icon and choose Exit, then retry.\n" +
-                      "Also close any of: DisplayCAL UI, i1Profiler, X-Rite i1Profiler Tray, or " +
-                      "other calibration software that may be running.\n\n" +
-                      "Recent spotread output:\n" + SnapshotRecentLog();
+                // V3.3.0 silent-fail after HID-open. Empirically this is always either a
+                // sharing violation or a stale Windows HID handle. Same advice applies.
+                msg = BuildSharingViolationMessage(
+                    "(spotread V3.3.0 exited silently after HID open — error code suppressed by Argyll)");
             }
             else
             {

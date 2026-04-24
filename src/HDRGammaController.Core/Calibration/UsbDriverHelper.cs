@@ -135,18 +135,33 @@ namespace HDRGammaController.Core.Calibration
         }
 
         /// <summary>
-        /// Checks if a driver error message indicates the USB driver needs to be installed.
+        /// Checks whether an error really indicates the ArgyllCMS USB driver is missing.
+        /// Must be narrow: false positives here cause the app to prompt for reinstalling a
+        /// driver that is already installed, which is confusing and unhelpful.
         /// </summary>
+        /// <remarks>
+        /// Things that are NOT driver errors even though they appear in spotread output:
+        ///   - "SetCommState failed" / "LastError 31": benign serial-port enumeration
+        ///     noise printed on every spotread invocation regardless of colorimeter state.
+        ///   - "err 32" / "LastError 32" / "sharing violation": ERROR_SHARING_VIOLATION —
+        ///     another process holds the HID handle. Reinstalling the driver doesn't help;
+        ///     the user needs to close the holder or unplug/replug.
+        /// </remarks>
         public static bool IsDriverError(string errorMessage)
         {
             if (string.IsNullOrEmpty(errorMessage))
                 return false;
 
-            return errorMessage.Contains("SetCommState", StringComparison.OrdinalIgnoreCase) ||
-                   errorMessage.Contains("LastError 31", StringComparison.OrdinalIgnoreCase) ||
-                   errorMessage.Contains("LastError 32", StringComparison.OrdinalIgnoreCase) ||
-                   errorMessage.Contains("USB driver", StringComparison.OrdinalIgnoreCase) ||
-                   errorMessage.Contains("communication error", StringComparison.OrdinalIgnoreCase);
+            // Genuine driver-missing signals from ArgyllCMS / libusb:
+            //  - "Couldn't open USB device" (libusb_open failed without the Argyll driver)
+            //  - "Driver not found" / "No driver installed"
+            //  - libusb0/winusb specific failures
+            return errorMessage.Contains("libusb", StringComparison.OrdinalIgnoreCase) ||
+                   errorMessage.Contains("winusb", StringComparison.OrdinalIgnoreCase) ||
+                   errorMessage.Contains("driver not found", StringComparison.OrdinalIgnoreCase) ||
+                   errorMessage.Contains("no driver installed", StringComparison.OrdinalIgnoreCase) ||
+                   errorMessage.Contains("could not open USB", StringComparison.OrdinalIgnoreCase) ||
+                   errorMessage.Contains("couldn't open USB", StringComparison.OrdinalIgnoreCase);
         }
     }
 }
