@@ -67,10 +67,18 @@ namespace HDRGammaController.Core.Calibration
             "sharing violation"
         };
 
-        // V3.3.0 HID open failure: "hid_open_port: about to open HID port ..." printed,
-        // then process exits 0 with no subsequent "Success" or "Failed" line. This marker
-        // lets us distinguish "opened OK but no prompt yet" from "opened and silently failed".
-        private const string HidOpenAttemptMarker = "about to open HID port";
+        // Markers that mean "spotread has started trying to connect to the instrument."
+        // If any of these appear and the process later exits 0 without a ready prompt,
+        // the HID open silently failed — almost always a sharing violation.
+        //
+        // "connecting to the instrument" is printed with plain -v, which is what we use.
+        // "about to open HID port" only shows with -D 9 full debug; kept as a fallback
+        // in case we ever turn debug up.
+        private static readonly string[] HidOpenAttemptMarkers =
+        {
+            "connecting to the instrument",
+            "about to open hid port"
+        };
 
         private readonly Process _process;
         private readonly TaskCompletionSource<bool> _readyTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -261,8 +269,14 @@ namespace HDRGammaController.Core.Calibration
 
             // 3. Did spotread attempt to open the HID port? Needed so we can detect
             //    the V3.3.0 silent-exit-after-HID-open bug in OnExited.
-            if (lower.Contains(HidOpenAttemptMarker))
-                _attemptedHidOpen = true;
+            foreach (var marker in HidOpenAttemptMarkers)
+            {
+                if (lower.Contains(marker))
+                {
+                    _attemptedHidOpen = true;
+                    break;
+                }
+            }
 
             // 4. Sharing violation (someone else holds the device). V2.3.1 reports this
             //    line explicitly; V3.3.0 doesn't — OnExited handles the silent case.
@@ -297,31 +311,39 @@ namespace HDRGammaController.Core.Calibration
         private static string BuildSharingViolationMessage(string rawLine)
         {
             var sb = new StringBuilder();
-            sb.AppendLine("The colorimeter's HID handle is locked by another process (Windows ");
-            sb.AppendLine("sharing violation, err 32). Reinstalling the driver does not help — ");
-            sb.AppendLine("the device needs to be released, not re-installed.\n");
-
-            sb.AppendLine("Try these in order — the first two fix this ~99% of the time:\n");
-            sb.AppendLine("  1. UNPLUG the colorimeter USB cable, wait 3 seconds, plug it back in.");
-            sb.AppendLine("     This forces Windows to release any stuck HID handle.\n");
-            sb.AppendLine("  2. If replug doesn't clear it, close any calibration software");
-            sb.AppendLine("     that may be running or auto-launched. Common culprits:");
+            sb.AppendLine("The colorimeter's HID handle is locked — Windows sharing violation (err 32).");
+            sb.AppendLine("spotread can enumerate the device but can't open it for measurement.");
+            sb.AppendLine("Reinstalling the driver does NOT help; the device needs to be released.\n");
 
             var suspects = FindSuspectProcessesOnCurrentMachine();
             if (suspects.Count > 0)
             {
-                sb.AppendLine("     Currently running on this machine:");
+                sb.AppendLine("Currently-running suspects on this machine:");
                 foreach (var p in suspects)
-                    sb.AppendLine($"        • {p}");
+                    sb.AppendLine($"  • {p}");
+                sb.AppendLine("Close these first, then retry.\n");
             }
-            else
-            {
-                sb.AppendLine("     (none of the usual suspects are running right now — but");
-                sb.AppendLine("     DisplayCAL has scheduled tasks that auto-relaunch its loader)");
-            }
-            sb.AppendLine();
-            sb.AppendLine("  3. If step 1 and 2 don't work, reboot. A stale kernel handle may ");
-            sb.AppendLine("     be stuck until the system restarts.\n");
+
+            sb.AppendLine("If no obvious holder is running, try in this order:\n");
+
+            sb.AppendLine("  1. UNPLUG the colorimeter USB cable for 10+ seconds, then plug back in.");
+            sb.AppendLine("     A long pause matters — Windows needs time to fully tear down the");
+            sb.AppendLine("     device stack and release any stuck kernel handle.\n");
+
+            sb.AppendLine("  2. Disable DisplayCAL's auto-relaunch tasks (if DisplayCAL is installed):");
+            sb.AppendLine("     • Win+R -> taskschd.msc -> Task Scheduler Library");
+            sb.AppendLine("     • Right-click 'DisplayCAL Profile Loader Launcher' -> Disable");
+            sb.AppendLine("     • Also disable 'DisplayCAL Profile Loader Launcher - Daily Restart'");
+            sb.AppendLine("     These tasks respawn DisplayCAL-apply-profiles.exe after you close");
+            sb.AppendLine("     it from the tray, which can grab the HID device again.\n");
+
+            sb.AppendLine("  3. If the ArgyllCMS USB driver was recently installed, note that it");
+            sb.AppendLine("     can conflict with i1 Display Plus, which normally uses the standard");
+            sb.AppendLine("     Windows HID driver. Consider running ArgyllCMS_uninstall_USB.exe.\n");
+
+            sb.AppendLine("  4. As a last resort, reboot. A stale kernel HID handle won't clear");
+            sb.AppendLine("     until the system restarts.\n");
+
             sb.AppendLine("Underlying spotread line: " + rawLine.Trim());
             return sb.ToString();
         }
