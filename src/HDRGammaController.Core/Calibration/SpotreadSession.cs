@@ -55,6 +55,23 @@ namespace HDRGammaController.Core.Calibration
             "error-"
         };
 
+        // When spotread hit ERROR_SHARING_VIOLATION (err 32) opening the HID handle, it
+        // means another process has the device open. V2.3.1 reports this clearly; V3.3.0
+        // silently swallows the error and exits 0. See the `OpenedHidOk` marker below for
+        // how we detect the V3.3.0 variant.
+        private static readonly string[] SharingViolationFragments =
+        {
+            "err 32",
+            "error 32",
+            "lasterror 32",
+            "sharing violation"
+        };
+
+        // V3.3.0 HID open failure: "hid_open_port: about to open HID port ..." printed,
+        // then process exits 0 with no subsequent "Success" or "Failed" line. This marker
+        // lets us distinguish "opened OK but no prompt yet" from "opened and silently failed".
+        private const string HidOpenAttemptMarker = "about to open HID port";
+
         private readonly Process _process;
         private readonly TaskCompletionSource<bool> _readyTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly object _stateLock = new();
@@ -62,6 +79,8 @@ namespace HDRGammaController.Core.Calibration
         private TaskCompletionSource<CieXyz>? _pendingMeasurement;
         private volatile string? _fatalError;
         private volatile bool _disposed;
+        private volatile bool _attemptedHidOpen;
+        private volatile bool _sharingViolationSeen;
         private readonly Action<string> _log;
 
         private SpotreadSession(Process process, Action<string> log)
@@ -87,13 +106,16 @@ namespace HDRGammaController.Core.Calibration
             CancellationToken cancellationToken)
         {
             string displayFlag = displayType.ToSpotreadFlag();
+            // -v (verbose): makes Argyll 3.x print the hid_open_port lines we need to
+            // distinguish "silently failed to open HID" (V3.3.0 bug, exits 0 with no
+            // error) from "connecting normally". Without -v we lose the diagnostic.
+            //
             // Deliberately NO -O: that flag is broken for our use case — it exits before
-            // emitting a usable prompt when stdin is redirected and stdout is piped, so
-            // our original "wait for prompt, then send input" loop never fired.
+            // emitting a usable prompt when stdin is redirected and stdout is piped.
             //
             // -N disables the colorimeter's initial dark calibration. i1 Display Plus
             // doesn't need a lens cap calibration, so this is safe and avoids a ~5s stall.
-            string args = $"-N -c {instrumentIndex} -e -y {displayFlag}";
+            string args = $"-v -N -c {instrumentIndex} -e -y {displayFlag}";
             if (hdrMode) args += " -H";
 
             var psi = new ProcessStartInfo(spotreadPath, args)
@@ -237,13 +259,34 @@ namespace HDRGammaController.Core.Calibration
                 }
             }
 
-            // 3. Did something go wrong at the spotread level?
+            // 3. Did spotread attempt to open the HID port? Needed so we can detect
+            //    the V3.3.0 silent-exit-after-HID-open bug in OnExited.
+            if (lower.Contains(HidOpenAttemptMarker))
+                _attemptedHidOpen = true;
+
+            // 4. Sharing violation (someone else holds the device). V2.3.1 reports this
+            //    line explicitly; V3.3.0 doesn't — OnExited handles the silent case.
+            foreach (var fragment in SharingViolationFragments)
+            {
+                if (lower.Contains(fragment))
+                {
+                    _sharingViolationSeen = true;
+                    break;
+                }
+            }
+
+            // 5. Did something go wrong at the spotread level?
             foreach (var fragment in FatalFragments)
             {
                 if (lower.Contains(fragment))
                 {
-                    _fatalError = line;
-                    var ex = new InvalidOperationException($"spotread reported: {line.Trim()}");
+                    _fatalError = _sharingViolationSeen
+                        ? BuildSharingViolationMessage(line)
+                        : line;
+                    var ex = new InvalidOperationException(
+                        _sharingViolationSeen
+                            ? _fatalError
+                            : $"spotread reported: {line.Trim()}");
                     _readyTcs.TrySetException(ex);
                     lock (_stateLock) _pendingMeasurement?.TrySetException(ex);
                     return;
@@ -251,14 +294,51 @@ namespace HDRGammaController.Core.Calibration
             }
         }
 
+        private static string BuildSharingViolationMessage(string rawLine) =>
+            "The colorimeter is being held open by another process (Windows sharing " +
+            "violation, err 32).\n\n" +
+            "Most common culprit: DisplayCAL's 'DisplayCAL-apply-profiles.exe' tray " +
+            "loader. Right-click its icon in the system tray and choose Exit, then retry.\n" +
+            "Also close any of: DisplayCAL UI, i1Profiler, X-Rite i1Profiler Tray, or other " +
+            "calibration software that may be running.\n\n" +
+            "Underlying spotread line: " + rawLine.Trim();
+
         private void OnExited(object? sender, EventArgs e)
         {
             // Unblock anyone waiting — they need to know the process is gone.
             int code;
             try { code = _process.ExitCode; } catch { code = -1; }
-            string msg = _fatalError
-                ?? $"spotread exited (code {code}) before producing a measurement. " +
-                   $"Last output:\n{SnapshotRecentLog()}";
+
+            // V3.3.0 silent-exit-after-HID-open bug: spotread attempted HID open, never
+            // emitted a success OR failure message, and exited with 0. We can't tell from
+            // the output alone — we only know something held the device. Surface the
+            // likely cause instead of the cryptic "exited before producing a measurement".
+            string msg;
+            if (_fatalError != null)
+            {
+                msg = _fatalError;
+            }
+            else if (_sharingViolationSeen)
+            {
+                msg = BuildSharingViolationMessage("(spotread exited silently after sharing violation)");
+            }
+            else if (_attemptedHidOpen && code == 0 && !_readyTcs.Task.IsCompleted)
+            {
+                msg = "The colorimeter's HID device could not be opened, and spotread exited " +
+                      "without reporting why (known bug in ArgyllCMS V3.3.0).\n\n" +
+                      "This is almost always caused by another process holding the device open — " +
+                      "most commonly DisplayCAL's 'DisplayCAL-apply-profiles.exe' tray loader. " +
+                      "Right-click its tray icon and choose Exit, then retry.\n" +
+                      "Also close any of: DisplayCAL UI, i1Profiler, X-Rite i1Profiler Tray, or " +
+                      "other calibration software that may be running.\n\n" +
+                      "Recent spotread output:\n" + SnapshotRecentLog();
+            }
+            else
+            {
+                msg = $"spotread exited (code {code}) before producing a measurement.\n" +
+                      $"Last output:\n{SnapshotRecentLog()}";
+            }
+
             var ex = new InvalidOperationException(msg);
             _readyTcs.TrySetException(ex);
             lock (_stateLock) _pendingMeasurement?.TrySetException(ex);
