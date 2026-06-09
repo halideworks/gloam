@@ -293,12 +293,6 @@ namespace HDRGammaController.Core
             bool hasProfile = calibrationProfile != null;
             Log.Info($"DispwinRunner.ApplyGamma: monitor={monitor.DeviceName}, mode={mode}, whiteLevel={whiteLevel}, hasCalibration={calibration.HasAdjustments}, hasProfile={hasProfile}");
 
-            if (!EnsureConfigured())
-            {
-                Log.Info("DispwinRunner.ApplyGamma: Not configured, aborting.");
-                return;
-            }
-
             // Generate LUTs - use calibrated version if profile is available
             double[] lutR, lutG, lutB;
 
@@ -325,13 +319,31 @@ namespace HDRGammaController.Core
 
             Log.Info($"DispwinRunner.ApplyGamma: Generated LUTs with {lutR.Length} entries");
 
-            // Skip the dispwin spawn (and its visible ramp rewrite) when this display
-            // already has exactly this LUT loaded.
+            // Skip the ramp rewrite entirely when this display already has exactly
+            // this LUT loaded.
             string applyKey = monitor.DeviceName;
             if (_lastApplied.TryGetValue(applyKey, out var last) &&
                 LutsEqual(last.R, lutR) && LutsEqual(last.G, lutG) && LutsEqual(last.B, lutB))
             {
-                Log.Info($"DispwinRunner.ApplyGamma: LUT unchanged for {applyKey}, skipping dispwin");
+                Log.Info($"DispwinRunner.ApplyGamma: LUT unchanged for {applyKey}, skipping");
+                return;
+            }
+
+            // Fast path: set the hardware ramp directly via SetDeviceGammaRamp — the
+            // same API dispwin ends up calling, minus the ~100-500ms process spawn and
+            // the temp-file round trip. Argyll is then only needed for calibration.
+            if (NativeGammaRamp.TryApply(monitor.DeviceName, lutR, lutG, lutB))
+            {
+                Log.Info($"DispwinRunner.ApplyGamma: Applied via native gamma ramp for {applyKey}");
+                _lastApplied[applyKey] = (lutR, lutG, lutB);
+                return;
+            }
+
+            // Fallback: external dispwin (requires an Argyll install).
+            Log.Info("DispwinRunner.ApplyGamma: Native apply failed, falling back to dispwin");
+            if (!EnsureConfigured())
+            {
+                Log.Info("DispwinRunner.ApplyGamma: dispwin not configured, aborting.");
                 return;
             }
 
@@ -398,11 +410,16 @@ namespace HDRGammaController.Core
 
         public void ClearGamma(MonitorInfo monitor)
         {
-             if (!EnsureConfigured()) return;
-
              // The ramp is reset (or in an unknown state on failure) either way.
              _lastApplied.TryRemove(monitor.DeviceName, out _);
 
+             if (NativeGammaRamp.TryClear(monitor.DeviceName))
+             {
+                 Log.Info($"DispwinRunner.ClearGamma: Cleared via native gamma ramp for {monitor.DeviceName}");
+                 return;
+             }
+
+             if (!EnsureConfigured()) return;
              int argIndex = ResolveDisplayIndex(monitor);
              RunDispwin($"-d {argIndex} -c");
         }

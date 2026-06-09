@@ -403,13 +403,13 @@ For calibration adjustments that affect color channels differently (temperature,
 
 ### 7.2 Application Methods
 
-The controller applies these generated LUTs to the display using the **ArgyllCMS `dispwin` utility**, a robust industry-standard tool for color management.
+The controller loads the generated LUTs into the video card's hardware gamma ramp (VCGT — Video Card Gamma Table).
 
 #### Direct Hardware Loading
 
-The application leverages `dispwin` to load the 1024-point 1D LUT directly into the video card's hardware gamma ramp (VCGT - Video Card Gamma Table). This method is:
+The primary path calls the Win32 `SetDeviceGammaRamp` API directly: the 1024-point LUT is resampled onto the 256-entry, 16-bit-per-channel hardware ramp by linear interpolation and handed to the display driver in a single sub-millisecond call. This is precisely what the **ArgyllCMS `dispwin` utility** does internally when loading a `.cal` file, so the resulting hardware state is bit-identical to the dispwin path — but without spawning an external process (~100–500 ms per invocation) or round-tripping the LUT through a temp file. `dispwin` is retained as an automatic fallback should the native call be rejected, and ArgyllCMS remains the measurement engine for colorimeter calibration. This method is:
 
-- **Fast**: Updates can be applied near-instantly, allowing for real-time preview of calibration limits.
+- **Fast**: Updates apply near-instantly, allowing real-time preview and smooth scheduled transitions.
 - **Universal**: Works across most GPU vendors and driver versions.
 - **Precise**: Bypasses the Windows compositor's color management quirks by speaking directly to the hardware driver.
 
