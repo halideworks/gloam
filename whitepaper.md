@@ -251,7 +251,13 @@ $$
 \operatorname{PQ}_{\mathrm{OETF}}\bigl(\text{dim}(L)\bigr)
 $$
 
-where the dimming function is the same power+scale defined in §6.4 but applied to absolute nits against the 10,000-nit PQ ceiling. When Brightness = 100%, this reduces exactly to PQ<sub>OETF</sub>(L) — the original identity passthrough — so the behavior is unchanged for users who never touch the dimming slider.
+where the dimming function is the same power+scale defined in §6.4, extended to absolute nits by anchoring at the SDR white level *W*:
+
+$$
+\text{dim}(L) = \left(\frac{L}{W}\right)^{1/\gamma(b)} \cdot b \cdot W
+$$
+
+The choice of anchor matters. At the SDR/HDR boundary (*L* = *W*) this expression evaluates to *b·W* — exactly the value the dimmed SDR portion of the curve reaches at white — so the headroom target meets the corrected curve continuously. An earlier formulation normalized against the 10,000-nit PQ ceiling instead; because the dimming exponent is applied to *L*/10000 rather than *L*/*W*, the headroom target at the boundary came out ~1.7× brighter than the dimmed SDR white at 50% brightness, leaving a brightness shelf just above SDR white that the smoothstep could soften but not remove. When Brightness = 100%, the expression reduces exactly to PQ<sub>OETF</sub>(L) — the original identity passthrough — so the behavior is unchanged for users who never touch the dimming slider.
 
 The final output is:
 
@@ -262,6 +268,8 @@ $$
 This produces a LUT that is smooth and monotonic across the full range, preserves creative intent in the HDR region, and responds correctly to the brightness control throughout.
 
 ---
+
+## 6. Calibration Adjustments
 
 Beyond the core gamma correction, the HDR Gamma Controller provides calibration adjustments—color temperature, tint, brightness—for fine-tuning the display to the user's environment and preferences, adjustments that operate throughout on a philosophy of perceptual accuracy over mathematical simplicity.
 
@@ -277,13 +285,7 @@ Human circadian rhythm is entrained to the color temperature of natural light, w
 
 #### Tanner Helland's Approximation
 
-For computational efficiency, the controller implements Tanner Helland's widely-used approximation of blackbody RGB values,[^8] which provides a visually pleasing, if mathematically simplified, representation of color temperature.
-
-#### CIE 1931 Accurate Method
-
-For users demanding higher fidelity, the controller also implements a physically accurate conversion based on the CIE 1931 color space. This algorithm calculates the chromaticity coordinates (x, y) for a given Kelvin temperature, transforms them into the XYZ color space, and finally projects them into linear sRGB. This method ensures that the white point shifts precisely along the Planckian locus, preserving the exact chromaticity relationships defined by the laws of physics.
-
-For temperature *T* in Kelvin:
+For computational efficiency, the controller implements Tanner Helland's widely-used approximation of blackbody RGB values,[^8] which provides a visually pleasing, if mathematically simplified, representation of color temperature. For temperature *T* in Kelvin:
 
 **Red channel:**
 $$
@@ -310,7 +312,11 @@ B = \begin{cases}
 \end{cases}
 $$
 
-The resulting RGB values are normalized and applied as per-channel multipliers in linear space.
+The resulting RGB values are normalized so that 6500 K yields exactly (1, 1, 1) and applied as per-channel multipliers in linear space.
+
+#### CIE 1931 Accurate Method
+
+For users demanding higher fidelity, the controller also implements a physically accurate conversion based on the CIE 1931 color space, using the Kang et al. cubic approximations of the Planckian locus[^10] to compute the chromaticity coordinates (x, y) for a given Kelvin temperature, transforming them into the XYZ color space, and finally projecting them into linear sRGB via the D65 matrix before encoding and normalizing to a maximum of 1. This method ensures that the white point shifts precisely along the Planckian locus, preserving the exact chromaticity relationships defined by the laws of physics.
 
 #### Temperature Offset for Night Mode
 
@@ -374,6 +380,8 @@ The HDR Gamma Controller solves this by **integrating Night Shift directly into 
 
 This approach offers two profound advantages: first, it eliminates the resource contention for the VCGT, ensuring that the gamma correction and the night mode warming coexist in perfect harmony; second, it applies the warming effect in high-precision floating-point space *before* quantization, resulting in a smoother, band-free transition that maintains the integrity of the shadow details even as the screen warms to a deep amber.
 
+The scheduler driving these transitions is event-disciplined: it emits exactly one change notification per effective state change (a kelvin movement beyond a 5 K threshold, or a settings change that alters the output), and its timer adapts its cadence to the schedule—ticking every 4 seconds only while a fade is actively interpolating, and otherwise sleeping until the next scheduled transition (capped at 60 seconds to remain robust against system clock changes). During a fade, each notification produces at most one ramp write per display, and the deduplication described in §7.2 suppresses any redundant ones.
+
 ---
 
 ## 7. Implementation Architecture
@@ -406,6 +414,16 @@ The application leverages `dispwin` to load the 1024-point 1D LUT directly into 
 - **Precise**: Bypasses the Windows compositor's color management quirks by speaking directly to the hardware driver.
 
 While VCGT loading is sometimes criticized for its volatility—it can be reset by system events or fullscreen exclusive games—the HDR Gamma Controller mitigates this by monitoring the system state and reapplying the profile automatically when necessary, ensuring that the correction remains persistent and stable without requiring user intervention.
+
+#### Apply Hygiene: Why Re-Apply Discipline Matters
+
+Each `dispwin` invocation rewrites the GPU gamma ramp in a single step, and on an HDR display that rewrite is *visible*—a momentary luminance discontinuity the user perceives as flicker. The corollary is that the apply pipeline must treat ramp writes as a scarce resource, not a free idempotent operation. Three mechanisms enforce this:
+
+- **Identical-LUT deduplication.** Before spawning `dispwin`, the generated per-channel LUTs are compared against the last set successfully applied to that display; if nothing changed, the spawn is skipped entirely. This converts the many internal triggers that converge on a re-apply (foreground-app changes, settings touches, night-mode ticks) into no-ops whenever the output would be identical.
+- **Cache invalidation on external resets.** Deduplication is only safe while the application's record of the ramp state is accurate. Display configuration changes and resume-from-sleep can reset the ramp behind the application's back, so both events invalidate the dedupe cache before triggering a re-apply—guaranteeing the correction is restored even though the LUT "hasn't changed."
+- **Event debouncing.** Windows emits `WM_DISPLAYCHANGE` in bursts during HDR mode transitions. Events are coalesced so that only the final event in a burst, after a settling delay, performs the monitor re-enumeration and re-apply; superseded handlers abandon their work rather than queueing overlapping ramp writes.
+
+Together with the night-mode scheduler's single-event-per-state-change contract (§6.6), these ensure the ramp is written exactly once per genuine change in desired output.
 
 ### 7.3 SDR vs. HDR Processing Paths
 
@@ -484,6 +502,8 @@ Additional acknowledgements:
 
 [^9]: Stevens, S. S. (1957). On the psychophysical law. *Psychological Review*, 64(3), 153-181.
 
+[^10]: Kang, B., Moon, O., Hong, C., Lee, H., Cho, B., & Kim, Y. (2002). Design of Advanced Color Temperature Control System for HDTV Applications. *Journal of the Korean Physical Society*, 41(6), 865-871.
+
 ---
 
-*Last updated: April 2026*
+*Last updated: June 2026*
