@@ -14,19 +14,20 @@ A Windows System Tray application to manage HDR Gamma settings on a per-monitor 
   - Smooth fading transitions (configurable duration)
 - **Per-Monitor Color Matching**:
   - **Temperature Offset**: Fine-tune the white point of individual monitors to visually match them to each other, especially effective when Night Mode is active.
+- **Native, Self-Healing Gamma Apply**: LUTs load directly into the GPU gamma ramp via the Windows API (sub-millisecond, no helper process), and a ramp guard detects when a fullscreen game or driver event resets the ramp and silently restores the correction within seconds
+- **Colorimeter Calibration**: Measure your display with a colorimeter (via ArgyllCMS `spotread`) and build measurement-based correction profiles
 - **Update Checker**: Automatically notifies you when a new version or auto-build is available.
 - **System Tray Integration**: Unobtrusive background operation with dark/light mode support
 - **Start with Windows**: Toggle auto-start from the tray menu
-- **Auto-Download ArgyllCMS**: Automatically downloads required ArgyllCMS binaries if not found
+- **Auto-Download ArgyllCMS**: Downloads ArgyllCMS automatically when calibration features need it
 
 ## Requirements
 
 1. **Windows 10/11** with HDR-capable display(s)
-2. **ArgyllCMS** (specifically `dispwin.exe`):
-   - The app will **automatically download** ArgyllCMS if not detected
+2. **.NET 8.0 Runtime** (for the Lite build) or no dependencies (for the self-contained Full build)
+3. **ArgyllCMS** — *optional*. Core gamma correction works without it (the app sets the hardware gamma ramp natively). ArgyllCMS is only needed for colorimeter calibration (`spotread`) and as an automatic fallback if a driver ever rejects the native ramp call:
+   - The app will **automatically download** ArgyllCMS when a feature needs it
    - Or if you have **DisplayCAL** installed, the app detects its bundled Argyll binaries
-   - Or download from [ArgyllCMS](https://www.argyllcms.com/) and place `dispwin.exe` in the app folder
-3. **.NET 8.0 Runtime** (for minimal build) or no dependencies (for self-contained build)
 
 ## Installation
 
@@ -44,7 +45,7 @@ There are two versions available:
 
 2.  **Lite Version (`HDRGammaController_Lite.zip`)**:
     *   **Requires**: [.NET 8.0 Desktop Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/8.0).
-    *   **ArgyllCMS**: Will automatically download `dispwin.exe` on first launch (internet connection required).
+    *   **ArgyllCMS**: Not needed for gamma correction; downloaded automatically if you use colorimeter calibration.
     *   **Size**: ~200 KB.
 
 **Instructions:**
@@ -89,7 +90,7 @@ dotnet publish src/HDRGammaController -c Release -r win-x64 --self-contained tru
    - **Night Mode**: Enable "Sunrise/Sunset" for automatic adjustment based on your location (Latitude/Longitude).
    - **Calibration**: Adjust Brightness, Temperature, Tint, and RGB Gains/Offsets for fine-tuning your display's white point and color balance.
 
-   **Note**: All settings are saved automatically to `%LOCALAPPDATA%\HDRGammaController\settings.json`.
+   **Note**: All settings are saved automatically to `%LOCALAPPDATA%\HDRGammaController\settings.json`. Diagnostic logs are written to `%LOCALAPPDATA%\HDRGammaController\app.log` — include this file when reporting issues.
 
 Your selections are automatically saved and restored on next launch.
 
@@ -113,7 +114,7 @@ This tool generates corrective 1D LUTs that:
 3. Preserve HDR highlights above the SDR white level
 4. Re-encode back to PQ for the display
 
-The LUTs are applied via ArgyllCMS's `dispwin` utility.
+The LUTs load directly into the video card's hardware gamma ramp via the Windows `SetDeviceGammaRamp` API (the same mechanism ArgyllCMS `dispwin` uses, without the external process), and identical re-applies are skipped so the ramp is only ever rewritten when the desired output actually changes. A background ramp guard re-asserts the correction if anything external resets it.
 
 For a detailed explanation of the mathematics and engineering behind this tool, please read the **[Technical Whitepaper](whitepaper.md)**.
 
