@@ -97,6 +97,7 @@ namespace HDRGammaController
         private Lut3D? _generatedLut;
         private DisplayCharacterization? _displayCharacterization;
         private CalibrationMetrics? _calibrationMetrics;
+        private bool _driverInstallAttempted;
 
         // Window state for mode switching
         private ResizeMode _previousResizeMode;
@@ -657,12 +658,24 @@ namespace HDRGammaController
                 });
                 CalibrationCancelled?.Invoke(this, EventArgs.Empty);
             }
-            catch (UsbDriverException)
+            catch (UsbDriverException ex)
             {
-                // USB driver error - offer to install drivers automatically
+                // USB driver error - offer to install drivers automatically (once)
                 Dispatcher.Invoke(() =>
                 {
-                    ShowDriverInstallDialog();
+                    if (_driverInstallAttempted)
+                    {
+                        ShowCompletion(false,
+                            "Colorimeter communication failed even after driver installation.\n\n" +
+                            "Unplug/replug the colorimeter, close other calibration software, and retry.\n\n" +
+                            $"Details: {ex.Message}");
+                        CalibrationCompleted?.Invoke(this, new CalibrationCompleteEventArgs(false, ex.Message));
+                    }
+                    else
+                    {
+                        _driverInstallAttempted = true;
+                        ShowDriverInstallDialog();
+                    }
                 });
             }
             catch (Exception ex)
@@ -672,7 +685,19 @@ namespace HDRGammaController
                 {
                     Dispatcher.Invoke(() =>
                     {
-                        ShowDriverInstallDialog();
+                        if (_driverInstallAttempted)
+                        {
+                            ShowCompletion(false,
+                                "Colorimeter communication failed even after driver installation.\n\n" +
+                                "Unplug/replug the colorimeter, close other calibration software, and retry.\n\n" +
+                                $"Details: {ex.Message}");
+                            CalibrationCompleted?.Invoke(this, new CalibrationCompleteEventArgs(false, ex.Message));
+                        }
+                        else
+                        {
+                            _driverInstallAttempted = true;
+                            ShowDriverInstallDialog();
+                        }
                     });
                     return;
                 }
@@ -1098,7 +1123,7 @@ namespace HDRGammaController
         /// <summary>
         /// Shows the driver installation dialog and offers to retry calibration.
         /// </summary>
-        private void ShowDriverInstallDialog()
+        private async void ShowDriverInstallDialog()
         {
             // First restore the previous state since calibration failed
             try
@@ -1127,6 +1152,20 @@ namespace HDRGammaController
             {
                 // User wants to retry - restart calibration
                 Console.WriteLine("CalibrationWindow: User requested retry after driver installation");
+
+                if (_colorimeterService != null)
+                {
+                    try
+                    {
+                        // Re-initialize to pick up any driver changes
+                        await _colorimeterService.InitializeAsync();
+                        UpdateColorimeterStatus();
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"CalibrationWindow: Colorimeter re-init failed after driver install: {ex.Message}");
+                    }
+                }
 
                 // Reset UI state
                 MeasurementPanel.Visibility = Visibility.Visible;

@@ -169,10 +169,15 @@ namespace HDRGammaController.Core.Calibration
             double whiteLuminance = grayscaleMeasurements.Max(m => m.Xyz.Y);
             if (whiteLuminance <= 0) whiteLuminance = 1;
 
+            // Use black level to normalize raised blacks (avoid skewing gamma)
+            double blackLuminance = grayscaleMeasurements.Min(m => m.Xyz.Y);
+            double luminanceRange = Math.Max(whiteLuminance - blackLuminance, 1e-6);
+
             foreach (var m in grayscaleMeasurements)
             {
                 double inputLevel = getChannelValue(m);
-                double normalizedLuminance = m.Xyz.Y / whiteLuminance;
+                double normalizedLuminance = (m.Xyz.Y - blackLuminance) / luminanceRange;
+                normalizedLuminance = Math.Clamp(normalizedLuminance, 0, 1);
                 points.Add((inputLevel, normalizedLuminance));
             }
 
@@ -212,12 +217,21 @@ namespace HDRGammaController.Core.Calibration
 
             if (whiteLuminance <= 0) whiteLuminance = 1;
 
+            double blackLuminance = _measurements
+                .Where(m => m.Patch.DisplayRgb.R <= 0.01 && m.Patch.DisplayRgb.G <= 0.01 && m.Patch.DisplayRgb.B <= 0.01)
+                .Select(m => m.Xyz.Y)
+                .DefaultIfEmpty(0)
+                .Min();
+
+            double luminanceRange = Math.Max(whiteLuminance - blackLuminance, 1e-6);
+
             // Calculate gamma for each grayscale point and average
             var gammas = new List<double>();
             foreach (var m in grayscale)
             {
                 double input = m.Patch.DisplayRgb.R;
-                double output = m.Xyz.Y / whiteLuminance;
+                double output = (m.Xyz.Y - blackLuminance) / luminanceRange;
+                output = Math.Clamp(output, 0, 1);
 
                 if (output > 0 && input > 0)
                 {

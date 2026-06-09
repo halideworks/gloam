@@ -43,8 +43,8 @@ namespace HDRGammaController.Core.Calibration
             DisplayType.LcdWideGamut => "b", // LCD with wide gamut LED backlight
             DisplayType.LcdCcfl => "l",     // LCD with CCFL backlight
             DisplayType.Crt => "c",         // CRT
-            DisplayType.Plasma => "p",      // Plasma
-            DisplayType.Projector => "m",   // DLP projector
+            DisplayType.Plasma => "m",      // Plasma
+            DisplayType.Projector => "p",   // DLP projector
             _ => "e"                        // Default to LED LCD
         };
 
