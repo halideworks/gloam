@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
@@ -11,6 +12,20 @@ namespace HDRGammaController.Core
     public class DispwinRunner
     {
         private string _dispwinPath;
+
+        // Last LUT successfully applied per display (keyed by \\.\DISPLAYn device name).
+        // Re-applying an identical LUT is not a no-op on screen: each dispwin spawn
+        // rewrites the GPU gamma ramp, which the user can see as a flicker — so we skip
+        // the spawn entirely when nothing changed. The arrays are the shared read-only
+        // references handed out by LutGenerator's cache; they are never mutated.
+        private readonly ConcurrentDictionary<string, (double[] R, double[] G, double[] B)> _lastApplied = new();
+
+        /// <summary>
+        /// Forgets all previously-applied LUTs so the next apply always runs dispwin.
+        /// Call after events that may have reset the GPU gamma ramp behind our back
+        /// (display configuration changes, resume from sleep).
+        /// </summary>
+        public void InvalidateAppliedState() => _lastApplied.Clear();
 
         public DispwinRunner()
         {
@@ -228,6 +243,16 @@ namespace HDRGammaController.Core
 
             Console.WriteLine($"DispwinRunner.ApplyGamma: Generated LUTs with {lutR.Length} entries");
 
+            // Skip the dispwin spawn (and its visible ramp rewrite) when this display
+            // already has exactly this LUT loaded.
+            string applyKey = monitor.DeviceName;
+            if (_lastApplied.TryGetValue(applyKey, out var last) &&
+                LutsEqual(last.R, lutR) && LutsEqual(last.G, lutG) && LutsEqual(last.B, lutB))
+            {
+                Console.WriteLine($"DispwinRunner.ApplyGamma: LUT unchanged for {applyKey}, skipping dispwin");
+                return;
+            }
+
             // Create .cal file content
             // SECURITY: Use GUID-based filename to prevent race conditions
             // (GetTempFileName + ChangeExtension creates a race between file creation and use)
@@ -247,7 +272,15 @@ namespace HDRGammaController.Core
                 int argIndex = (int)monitor.OutputId + 1;
                 string args = $"-d {argIndex} \"{calFile}\"";
                 Console.WriteLine($"DispwinRunner.ApplyGamma: Running dispwin with args: {args}");
-                RunDispwin(args);
+                if (RunDispwin(args))
+                {
+                    _lastApplied[applyKey] = (lutR, lutG, lutB);
+                }
+                else
+                {
+                    // Unknown ramp state — make sure the next apply isn't skipped.
+                    _lastApplied.TryRemove(applyKey, out _);
+                }
             }
             catch (Exception ex)
             {
@@ -285,11 +318,26 @@ namespace HDRGammaController.Core
         {
              if (!EnsureConfigured()) return;
 
-             int argIndex = (int)monitor.OutputId + 1; 
-             RunDispwin($"-d {argIndex} -c"); 
+             // The ramp is reset (or in an unknown state on failure) either way.
+             _lastApplied.TryRemove(monitor.DeviceName, out _);
+
+             int argIndex = (int)monitor.OutputId + 1;
+             RunDispwin($"-d {argIndex} -c");
         }
 
-        private void RunDispwin(string args)
+        private static bool LutsEqual(double[] a, double[] b)
+        {
+            if (ReferenceEquals(a, b)) return true;
+            if (a.Length != b.Length) return false;
+            for (int i = 0; i < a.Length; i++)
+            {
+                if (a[i] != b[i]) return false;
+            }
+            return true;
+        }
+
+        /// <returns>True if dispwin ran to completion with exit code 0.</returns>
+        private bool RunDispwin(string args)
         {
             Console.WriteLine($"DispwinRunner.RunDispwin: Executing '{_dispwinPath}' with args '{args}'");
             try
@@ -301,24 +349,35 @@ namespace HDRGammaController.Core
                     RedirectStandardOutput = true,
                     RedirectStandardError = true
                 };
-                var p = Process.Start(psi);
-                if (p != null)
-                {
-                    string stdout = p.StandardOutput.ReadToEnd();
-                    string stderr = p.StandardError.ReadToEnd();
-                    p.WaitForExit(5000);
-                    Console.WriteLine($"DispwinRunner.RunDispwin: Exit code={p.ExitCode}");
-                    if (!string.IsNullOrWhiteSpace(stdout))
-                        Console.WriteLine($"DispwinRunner.RunDispwin: stdout={stdout}");
-                    if (!string.IsNullOrWhiteSpace(stderr))
-                        Console.WriteLine($"DispwinRunner.RunDispwin: stderr={stderr}");
-                }
-                else
+                using var p = Process.Start(psi);
+                if (p == null)
                 {
                     Console.WriteLine("DispwinRunner.RunDispwin: Process.Start returned null");
+                    return false;
                 }
+
+                // Drain both streams concurrently — sequential ReadToEnd can deadlock if
+                // the process fills the other pipe's buffer first.
+                var stdoutTask = p.StandardOutput.ReadToEndAsync();
+                var stderrTask = p.StandardError.ReadToEndAsync();
+
+                if (!p.WaitForExit(5000))
+                {
+                    Console.WriteLine("DispwinRunner.RunDispwin: Timed out after 5s, killing process");
+                    try { p.Kill(entireProcessTree: true); } catch { }
+                    return false;
+                }
+
+                string stdout = stdoutTask.GetAwaiter().GetResult();
+                string stderr = stderrTask.GetAwaiter().GetResult();
+                Console.WriteLine($"DispwinRunner.RunDispwin: Exit code={p.ExitCode}");
+                if (!string.IsNullOrWhiteSpace(stdout))
+                    Console.WriteLine($"DispwinRunner.RunDispwin: stdout={stdout}");
+                if (!string.IsNullOrWhiteSpace(stderr))
+                    Console.WriteLine($"DispwinRunner.RunDispwin: stderr={stderr}");
+                return p.ExitCode == 0;
             }
-            catch (Exception ex) 
+            catch (Exception ex)
             {
                 Console.WriteLine($"DispwinRunner.RunDispwin: Exception: {ex.GetType().Name}: {ex.Message}");
                 throw;

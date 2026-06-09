@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Windows.Input;
 using System.Windows.Interop;
 using HDRGammaController.Interop;
@@ -10,7 +11,8 @@ namespace HDRGammaController.Services
         private IntPtr _hwnd;
         private HwndSource? _source;
         private int _currentId;
-        
+        private readonly List<int> _registeredIds = new();
+
         public event Action<int>? HotkeyPressed;
 
         public HotkeyManager(IntPtr hwnd)
@@ -38,12 +40,14 @@ namespace HDRGammaController.Services
                 // Failed
                 return 0;
             }
+            _registeredIds.Add(id);
             return id;
         }
 
         public void Unregister(int id)
         {
             User32.UnregisterHotKey(_hwnd, id);
+            _registeredIds.Remove(id);
         }
 
         private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -60,8 +64,12 @@ namespace HDRGammaController.Services
 
         public void Dispose()
         {
+            foreach (var id in _registeredIds)
+            {
+                User32.UnregisterHotKey(_hwnd, id);
+            }
+            _registeredIds.Clear();
             _source?.RemoveHook(WndProc);
-            // Ideally track registered IDs and unregister them
         }
     }
 }

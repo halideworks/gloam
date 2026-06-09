@@ -72,6 +72,7 @@ namespace HDRGammaController
         
         protected override void OnClosed(EventArgs e)
         {
+            _trayViewModel?.Dispose();
             _hotkeyManager?.Dispose();
             base.OnClosed(e);
         }

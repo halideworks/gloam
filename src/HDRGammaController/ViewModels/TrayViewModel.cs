@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -13,7 +14,7 @@ using HDRGammaController.Interop;
 
 namespace HDRGammaController.ViewModels
 {
-    public class TrayViewModel
+    public class TrayViewModel : IDisposable
     {
         // Per-monitor coalescer: rapid slider drags collapse to one dispwin call per
         // completed invocation instead of queueing a backlog. See LatestValueCoalescer
@@ -115,11 +116,19 @@ namespace HDRGammaController.ViewModels
         
         private async void CheckForUpdates()
         {
-            var info = await _updateService.CheckForUpdatesAsync();
-            if (info.IsUpdateAvailable)
+            // async void: any escaped exception would crash the process via the dispatcher.
+            try
             {
-                 NotificationRequested?.Invoke("Update Available", 
-                     $"A new version ({info.Version}) is available.\nClick here to download.");
+                var info = await _updateService.CheckForUpdatesAsync();
+                if (info.IsUpdateAvailable)
+                {
+                     NotificationRequested?.Invoke("Update Available",
+                         $"A new version ({info.Version}) is available.\nClick here to download.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"TrayViewModel.CheckForUpdates: {ex.Message}");
             }
         }
         
@@ -189,13 +198,37 @@ namespace HDRGammaController.ViewModels
             return null;
         }
 
-        public async void HandleDisplayChange()
+        // Debounce sequence for display-change/resume events. Windows fires
+        // WM_DISPLAYCHANGE in bursts during HDR mode transitions; without debouncing,
+        // each burst event queued its own RefreshMonitors+ApplyAll, and the overlapping
+        // re-applies were visible as flicker.
+        private int _displayEventSeq;
+
+        public async void HandleDisplayChange() => await HandleDisplayEventAsync(1500);
+
+        public async void HandleResume() => await HandleDisplayEventAsync(3000);
+
+        private async Task HandleDisplayEventAsync(int settleDelayMs)
         {
-            await Task.Delay(1500);
-            RefreshMonitors();
-            ApplyAll();
+            int seq = Interlocked.Increment(ref _displayEventSeq);
+            await Task.Delay(settleDelayMs);
+            if (seq != Volatile.Read(ref _displayEventSeq)) return; // superseded by a newer event
+
+            try
+            {
+                // Windows may have reset the gamma ramps; don't let the identical-LUT
+                // dedupe skip the re-apply.
+                _dispwinRunner.InvalidateAppliedState();
+                RefreshMonitors();
+                ApplyAll();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"TrayViewModel.HandleDisplayEvent: {ex.Message}");
+            }
         }
-        
+
+
         private void OnForegroundAppChanged(string appName, Dxgi.RECT? appBounds)
         {
             try 
@@ -247,13 +280,6 @@ namespace HDRGammaController.ViewModels
             }
         }
 
-        public async void HandleResume()
-        {
-            await Task.Delay(3000); 
-            RefreshMonitors();
-            ApplyAll();
-        }
-        
         private void ApplyProfile(MonitorInfo monitor, GammaMode mode)
         {
             RequestApply(monitor, mode);
@@ -405,6 +431,13 @@ namespace HDRGammaController.ViewModels
 
                 calibrationWindow.Show();
             }
+        }
+
+        public void Dispose()
+        {
+            // Stops the night-mode timer and unhooks the foreground-window event hook.
+            _nightModeService.Dispose();
+            _appDetectionService.Dispose();
         }
 
         public void RefreshMonitors()
