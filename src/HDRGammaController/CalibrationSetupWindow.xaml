@@ -282,9 +282,12 @@
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 <ComboBox x:Name="CorrectionCombo"/>
-                                <Button x:Name="BrowseCorrectionButton" Grid.Column="1" Content="Browse…"
+                                <Button x:Name="FindCorrectionButton" Grid.Column="1" Content="Find online…"
+                                        Margin="6,0,0,0" Padding="10,2" Click="FindCorrection_Click"/>
+                                <Button x:Name="BrowseCorrectionButton" Grid.Column="2" Content="Browse…"
                                         Margin="6,0,0,0" Padding="10,2" Click="BrowseCorrection_Click"/>
                             </Grid>
                             <TextBlock Foreground="{StaticResource TextDim}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"

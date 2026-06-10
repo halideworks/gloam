@@ -136,6 +136,22 @@ namespace HDRGammaController
             CorrectionCombo.SelectedIndex = 0;
         }
 
+        /// <summary>
+        /// Opens the in-app browser for the DisplayCAL community corrections database,
+        /// pre-seeded with the selected monitor's name; the downloaded file is selected
+        /// in the picker (and persisted per monitor on Start).
+        /// </summary>
+        private void FindCorrection_Click(object sender, RoutedEventArgs e)
+        {
+            var monitor = (MonitorComboBox.SelectedItem as MonitorComboItem)?.Monitor;
+            var browser = new CcssBrowserWindow(monitor?.FriendlyName ?? "", CorrectionsFolder)
+            {
+                Owner = this,
+            };
+            if (browser.ShowDialog() == true && browser.SavedPath != null)
+                SelectCorrectionPath(browser.SavedPath, addIfMissing: true);
+        }
+
         private void BrowseCorrection_Click(object sender, RoutedEventArgs e)
         {
             var dialog = new Microsoft.Win32.OpenFileDialog
