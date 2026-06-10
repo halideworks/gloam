@@ -334,6 +334,11 @@
                             <RadioButton x:Name="Target2020SDR" Content="BT.2020 SDR (Gamma 2.4)" GroupName="Target"/>
                             <RadioButton x:Name="TargetHdrPq" Content="HDR Desktop PQ (sRGB gamut) - recommended for HDR" GroupName="Target"/>
                             <RadioButton x:Name="Target2020PQ" Content="BT.2020 PQ (HDR)" GroupName="Target"/>
+
+                            <CheckBox x:Name="WhitePointOnlyCheck" Margin="0,12,0,0"
+                                      Content="White point correction only (skip gamut re-mapping)"/>
+                            <TextBlock Foreground="{StaticResource TextDim}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"
+                                       Text="Corrects white point and tone but leaves the panel's color gamut untouched. Recommended when the native gamut already measures close to the target, or on OLEDs in HDR, where the panel's own processing makes full gamut correction overshoot. Auto-suggested for OLED."/>
                         </StackPanel>
                     </Border>
 

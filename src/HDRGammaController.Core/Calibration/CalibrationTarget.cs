@@ -87,6 +87,33 @@ namespace HDRGammaController.Core.Calibration
                             TransferFunction == TransferFunctionType.Hlg;
 
         /// <summary>
+        /// When set, the installer corrects ONLY the white point and tone: the gamut matrix
+        /// is built with the target primaries replaced by the panel's measured primaries, so
+        /// no gamut re-mapping happens. The right choice for panels whose native gamut
+        /// already lands on target (verified sub-1.5 ΔE primaries) or whose processing is
+        /// too nonlinear for a 3×3 to improve — e.g. QD-OLED in HDR, where full gamut
+        /// correction measurably overfits (primaries 1.49 → 3.34 on the first attempt).
+        /// </summary>
+        public bool WhitePointOnly { get; init; }
+
+        /// <summary>Clone of this target with <see cref="WhitePointOnly"/> set.</summary>
+        public CalibrationTarget AsWhitePointOnly() => new()
+        {
+            Name = Name,
+            Description = Description,
+            RedPrimary = RedPrimary,
+            GreenPrimary = GreenPrimary,
+            BluePrimary = BluePrimary,
+            WhitePoint = WhitePoint,
+            Gamma = Gamma,
+            TransferFunction = TransferFunction,
+            PeakLuminance = PeakLuminance,
+            BlackLevel = BlackLevel,
+            ReferenceWhite = ReferenceWhite,
+            WhitePointOnly = true,
+        };
+
+        /// <summary>
         /// Gets the RGB to XYZ matrix for this color space.
         /// </summary>
         public double[,] RgbToXyzMatrix =>

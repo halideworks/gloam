@@ -797,6 +797,7 @@ namespace HDRGammaController
                 SetGradeDisplay(afterGrade);
                 GradeScopeText.Text = "after correction";
                 SummaryText.Text = GetSummaryText(afterGrade);
+                PerceptualNotePanel.Visibility = Visibility.Visible;
                 StatusText.Text = $"Verified through the applied profile: average ΔE {after.AverageDeltaE:F2} " +
                                   $"({results.Count(r => r.IsValid)} of {patches.Count} patches).";
 

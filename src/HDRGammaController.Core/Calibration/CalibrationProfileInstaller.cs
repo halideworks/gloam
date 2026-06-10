@@ -56,8 +56,29 @@ namespace HDRGammaController.Core.Calibration
             if (template == null)
                 return new InstallResult(false, "", "No MHC2 template found to base the profile on.");
 
+            // White-point-only mode: substitute the panel's MEASURED primaries for the
+            // target's, so the matrix carries the white correction and nothing else. The
+            // tone LUTs are unaffected. Verification still grades against the full target.
+            var matrixTarget = target;
+            if (target.WhitePointOnly)
+            {
+                matrixTarget = new CalibrationTarget
+                {
+                    Name = target.Name,
+                    RedPrimary = characterization.RedPrimary,
+                    GreenPrimary = characterization.GreenPrimary,
+                    BluePrimary = characterization.BluePrimary,
+                    WhitePoint = target.WhitePoint,
+                    TransferFunction = target.TransferFunction,
+                    Gamma = target.Gamma,
+                    PeakLuminance = target.PeakLuminance,
+                    BlackLevel = target.BlackLevel,
+                    ReferenceWhite = target.ReferenceWhite,
+                };
+            }
+
             double[,] matrix;
-            try { matrix = Mhc2ProfileBuilder.BuildGamutMatrix(characterization, target); }
+            try { matrix = Mhc2ProfileBuilder.BuildGamutMatrix(characterization, matrixTarget); }
             catch (Exception ex) { return new InstallResult(false, "", $"Gamut matrix failed: {ex.Message}"); }
 
             // GAMUT GUARD: block only when the target gamut is wider than the panel can EMIT
@@ -116,7 +137,7 @@ namespace HDRGammaController.Core.Calibration
                 $"  gamut matrix (RGB→RGB, absolute): {FormatMatrix(matrix)}\n" +
                 $"  uniform scale {uniformScale:F4} (max target drive {maxDrive:F3})\n" +
                 $"  MHC2 tag matrix (XYZ-domain wrapped): {FormatMatrix(mhc2Matrix)}\n" +
-                $"  mode {(hdrMode ? "HDR (PQ-domain LUTs)" : "SDR")}" +
+                $"  mode {(hdrMode ? "HDR (PQ-domain LUTs)" : "SDR")}{(target.WhitePointOnly ? ", WHITE-POINT-ONLY matrix" : "")}" +
                 (hdrMode ? $", header range {headerMinNits:F3}–{headerMaxNits:F0} nits, SDR white {monitor.SdrWhiteLevel:F0} nits" : ""));
 
             string profileName = BuildProfileName(monitor, target);
@@ -332,7 +353,9 @@ namespace HDRGammaController.Core.Calibration
         {
             // Compact, recognizable label rather than the long descriptive Name.
             string n = t.Name ?? "Custom";
-            return n.Replace("(", "").Replace(")", "").Replace("Gamma ", "G").Trim();
+            n = n.Replace("(", "").Replace(")", "").Replace("Gamma ", "G").Trim();
+            if (t.WhitePointOnly) n += " WPonly";
+            return n;
         }
 
         private static string Sanitize(string s)

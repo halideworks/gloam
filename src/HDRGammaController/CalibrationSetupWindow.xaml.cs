@@ -77,6 +77,11 @@ namespace HDRGammaController
             };
             LoadCorrectionForSelectedMonitor();
 
+            // OLED panels in HDR overshoot with full gamut correction (their processing is
+            // nonlinear); suggest white-point-only when the user picks OLED. Suggestion only:
+            // the user can still untick it.
+            DisplayTypeOled.Checked += (_, _) => WhitePointOnlyCheck.IsChecked = true;
+
             // Initialize colorimeter asynchronously
             Loaded += async (s, e) =>
             {
@@ -550,20 +555,24 @@ namespace HDRGammaController
         private CalibrationTarget GetSelectedTarget()
         {
             if (Target709G22.IsChecked == true)
-                return StandardTargets.SrgbGamma22;
+                return ApplyScope(StandardTargets.SrgbGamma22);
             if (Target709G24.IsChecked == true)
-                return StandardTargets.Rec709Gamma24;
+                return ApplyScope(StandardTargets.Rec709Gamma24);
             if (TargetP3D65.IsChecked == true)
-                return StandardTargets.P3D65Gamma22;
+                return ApplyScope(StandardTargets.P3D65Gamma22);
             if (Target2020SDR.IsChecked == true)
-                return StandardTargets.Rec2020Gamma24;
+                return ApplyScope(StandardTargets.Rec2020Gamma24);
             if (TargetHdrPq.IsChecked == true)
-                return StandardTargets.Rec709Pq;
+                return ApplyScope(StandardTargets.Rec709Pq);
             if (Target2020PQ.IsChecked == true)
-                return StandardTargets.Rec2020Pq;
+                return ApplyScope(StandardTargets.Rec2020Pq);
 
-            return StandardTargets.SrgbGamma22;
+            return ApplyScope(StandardTargets.SrgbGamma22);
         }
+
+        /// <summary>Applies the white-point-only scope choice to the selected target.</summary>
+        private CalibrationTarget ApplyScope(CalibrationTarget t) =>
+            WhitePointOnlyCheck.IsChecked == true ? t.AsWhitePointOnly() : t;
 
         private CalibrationPreset GetSelectedPreset()
         {
