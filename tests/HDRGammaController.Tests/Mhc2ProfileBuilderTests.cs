@@ -142,6 +142,45 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void Build_PatchesMinMaxLuminance_AndLumiTag()
+        {
+            string? template = FindTemplate();
+            if (template == null) return; // template not present in this checkout; skip silently
+
+            var identity = new double[,] { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } };
+            var lut = new double[1024];
+            for (int i = 0; i < 1024; i++) lut[i] = i / 1023.0;
+
+            string outPath = Path.Combine(Path.GetTempPath(), $"mhc2_lumi_{Guid.NewGuid():N}.icm");
+            try
+            {
+                Mhc2ProfileBuilder.Build(template, outPath, identity, lut, lut, lut,
+                    minLuminanceNits: 0.0512, maxLuminanceNits: 437.5);
+                var b = File.ReadAllBytes(outPath);
+                int t = FindMhc2(b);
+                Assert.Equal(0.0512, ReadS15(b, t + 12), 3);
+                Assert.Equal(437.5, ReadS15(b, t + 16), 3);
+
+                // lumi tag Y must carry the peak as well.
+                int tagCount = ReadU32(b, 128);
+                for (int i = 0; i < tagCount; i++)
+                {
+                    int e = 132 + i * 12;
+                    if (ReadU32(b, e) != 0x6C756D69) continue; // 'lumi'
+                    int off = ReadU32(b, e + 4);
+                    Assert.Equal(437.5, ReadS15(b, off + 12), 3);
+                    return;
+                }
+                // Template without a lumi tag would also be acceptable — but ours has one.
+                Assert.Fail("template has no lumi tag");
+            }
+            finally
+            {
+                try { File.Delete(outPath); } catch { }
+            }
+        }
+
+        [Fact]
         public void BuildGamutMatrix_IdentityWhenDisplayMatchesTarget()
         {
             // If the display's measured matrix equals the target's, the gamut correction is identity.

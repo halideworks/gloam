@@ -45,10 +45,15 @@ namespace HDRGammaController.Core.Calibration
         /// <param name="description">Profile description shown by Windows Color Management
         /// (replaces the template's leftover "SDR ACM: srgb_d50 [...]" text). Null keeps the
         /// template's description.</param>
+        /// <param name="minLuminanceNits">Display black level for the MHC2 header (and lumi
+        /// tag). Null keeps the template values. Required for HDR: Windows uses these to
+        /// scale tone mapping (the Windows HDR Calibration app's profile carries exactly
+        /// this — measured min/max with identity transforms).</param>
         public static void Build(
             string templatePath, string outputPath,
             double[,] matrix3x3, double[] lutR, double[] lutG, double[] lutB,
-            string? description = null)
+            string? description = null,
+            double? minLuminanceNits = null, double? maxLuminanceNits = null)
         {
             if (matrix3x3.GetLength(0) != 3 || matrix3x3.GetLength(1) != 3)
                 throw new ArgumentException("matrix must be 3x3", nameof(matrix3x3));
@@ -78,6 +83,14 @@ namespace HDRGammaController.Core.Calibration
             WriteLut(data, lut0Off, lutR);
             WriteLut(data, lut1Off, lutG);
             WriteLut(data, lut2Off, lutB);
+
+            if (minLuminanceNits is double minL)
+                WriteS15Fixed16(data, tagStart + 12, Math.Clamp(minL, 0, 32767));
+            if (maxLuminanceNits is double maxL)
+            {
+                WriteS15Fixed16(data, tagStart + 16, Math.Clamp(maxL, 0, 32767));
+                PatchLumiTag(data, maxL);
+            }
 
             if (!string.IsNullOrWhiteSpace(description))
                 data = PatchDescription(data, description);
@@ -128,6 +141,23 @@ namespace HDRGammaController.Core.Calibration
             WriteU32(result, descEntry + 8, mluc.Length);
             WriteU32(result, 0, result.Length); // header profile-size field
             return result;
+        }
+
+        /// <summary>Writes the display peak luminance into the 'lumi' tag's XYZ Y field.</summary>
+        private static void PatchLumiTag(byte[] data, double maxNits)
+        {
+            const int LumiSignature = 0x6C756D69; // 'lumi'
+            int tagCount = ReadU32(data, IccHeaderSize);
+            for (int i = 0; i < tagCount; i++)
+            {
+                int e = IccHeaderSize + 4 + i * IccTagEntrySize;
+                if (e + 12 > data.Length || ReadU32(data, e) != LumiSignature) continue;
+                int off = ReadU32(data, e + 4);
+                // XYZType: sig(4) + reserved(4) + X(4) + Y(4) + Z(4) — luminance lives in Y.
+                if (off + 20 <= data.Length)
+                    WriteS15Fixed16(data, off + 12, Math.Clamp(maxNits, 0, 32767));
+                return;
+            }
         }
 
         private static void WriteU32(byte[] b, int o, int v)

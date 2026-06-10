@@ -98,11 +98,19 @@ namespace HDRGammaController
             SetTargetReachable(Target709G24, StandardTargets.Rec709Gamma24, gamut, false, hdr);
             SetTargetReachable(TargetP3D65, StandardTargets.P3D65Gamma22, gamut, false, hdr);
             SetTargetReachable(Target2020SDR, StandardTargets.Rec2020Gamma24, gamut, false, hdr);
+            SetTargetReachable(TargetHdrPq, StandardTargets.Rec709Pq, gamut, true, hdr);
             SetTargetReachable(Target2020PQ, StandardTargets.Rec2020Pq, gamut, true, hdr);
 
-            // If the currently-checked target just got disabled, fall back to sRGB (always reachable).
-            foreach (var rb in new[] { Target709G22, Target709G24, TargetP3D65, Target2020SDR, Target2020PQ })
-                if (rb.IsChecked == true && !rb.IsEnabled) { Target709G22.IsChecked = true; break; }
+            // If the currently-checked target just got disabled, fall back to the first target
+            // that is still enabled (sRGB in SDR mode, the HDR desktop target in HDR mode).
+            var radios = new[] { Target709G22, Target709G24, TargetP3D65, Target2020SDR, TargetHdrPq, Target2020PQ };
+            foreach (var rb in radios)
+            {
+                if (rb.IsChecked != true || rb.IsEnabled) continue;
+                foreach (var candidate in radios)
+                    if (candidate.IsEnabled) { candidate.IsChecked = true; break; }
+                break;
+            }
         }
 
         private static void SetTargetReachable(
@@ -418,6 +426,8 @@ namespace HDRGammaController
                 return StandardTargets.P3D65Gamma22;
             if (Target2020SDR.IsChecked == true)
                 return StandardTargets.Rec2020Gamma24;
+            if (TargetHdrPq.IsChecked == true)
+                return StandardTargets.Rec709Pq;
             if (Target2020PQ.IsChecked == true)
                 return StandardTargets.Rec2020Pq;
 

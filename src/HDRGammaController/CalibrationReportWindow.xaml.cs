@@ -29,7 +29,8 @@ namespace HDRGammaController
         public sealed record ApplyContext(
             MonitorInfo Monitor, CalibrationTarget Target,
             double[] LutR, double[] LutG, double[] LutB, double WhiteLevel,
-            Action<string>? OnInstalled, ColorimeterService? Colorimeter = null);
+            Action<string>? OnInstalled, ColorimeterService? Colorimeter = null,
+            bool HdrMode = false);
         private ApplyContext? _applyContext;
         private bool _profileApplied;
 
@@ -543,9 +544,12 @@ namespace HDRGammaController
             {
                 // Install the measured correction as the monitor's native Windows color
                 // profile (gamut matrix + tone LUTs). Windows then applies it persistently.
+                // In HDR the installer rebuilds the LUTs in PQ wire-signal domain from the
+                // raw measurements and associates via the Advanced Color list.
                 var result = CalibrationProfileInstaller.Install(
                     ctx.Monitor, _characterization, ctx.Target,
-                    ctx.LutR, ctx.LutG, ctx.LutB, ctx.WhiteLevel);
+                    ctx.LutR, ctx.LutG, ctx.LutB, ctx.WhiteLevel,
+                    hdrMode: ctx.HdrMode, measurements: _measurements);
 
                 if (result.Success)
                 {
@@ -616,14 +620,14 @@ namespace HDRGammaController
 
                 var patches = CalibrationVerifier.BuildVerificationPatches();
                 var results = new List<MeasurementResult>();
-                await colorimeter.BeginMeasurementSessionAsync(hdrMode: false);
+                await colorimeter.BeginMeasurementSessionAsync(hdrMode: ctx.HdrMode);
                 for (int i = 0; i < patches.Count; i++)
                 {
                     var p = patches[i];
                     VerifyButton.Content = $"Verifying {i + 1}/{patches.Count}…";
                     patchWindow.SetColor(p.DisplayRgb.R, p.DisplayRgb.G, p.DisplayRgb.B);
                     await Task.Delay(i == 0 ? 1200 : 500); // settle (longer for the first patch)
-                    results.Add(await colorimeter.MeasureAsync(p));
+                    results.Add(await colorimeter.MeasureAsync(p, ctx.HdrMode));
                 }
 
                 var after = CalibrationVerifier.ComputeMetrics(results, ctx.Target);

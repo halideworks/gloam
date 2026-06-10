@@ -62,11 +62,19 @@ namespace HDRGammaController.Core.Calibration
             double peakY = valid.Count > 0 ? valid.Max(m => m.Xyz.Y) : 1.0;
             if (peakY <= 0) peakY = 1.0;
 
+            // Tone reference for the patches. For PQ (HDR) targets the patches are still SDR
+            // content — Windows renders them with the sRGB curve scaled to the SDR white
+            // level — so THAT is the curve they should be graded against. PQ-decoding the
+            // patch signal would compare against a curve nothing in the pipeline applies.
+            double Linearize(double s) => target.TransferFunction == TransferFunctionType.Pq
+                ? ColorMath.SrgbEotf(s)
+                : target.ApplyEotf(s);
+
             foreach (var measurement in valid)
             {
                 var rgb = measurement.Patch.DisplayRgb;
                 var targetXyz = target.LinearRgbToXyz(new LinearRgb(
-                    target.ApplyEotf(rgb.R), target.ApplyEotf(rgb.G), target.ApplyEotf(rgb.B)));
+                    Linearize(rgb.R), Linearize(rgb.G), Linearize(rgb.B)));
                 var targetLab = ColorMath.XyzToLab(targetXyz);
                 var normalized = new CieXyz(
                     measurement.Xyz.X / peakY, measurement.Xyz.Y / peakY, measurement.Xyz.Z / peakY);

@@ -314,6 +314,7 @@
                             <RadioButton x:Name="Target709G24" Content="Rec.709 Gamma 2.4 (BT.1886)" GroupName="Target"/>
                             <RadioButton x:Name="TargetP3D65" Content="DCI-P3 D65" GroupName="Target"/>
                             <RadioButton x:Name="Target2020SDR" Content="BT.2020 SDR (Gamma 2.4)" GroupName="Target"/>
+                            <RadioButton x:Name="TargetHdrPq" Content="HDR Desktop PQ (sRGB gamut) — recommended for HDR" GroupName="Target"/>
                             <RadioButton x:Name="Target2020PQ" Content="BT.2020 PQ (HDR)" GroupName="Target"/>
                         </StackPanel>
                     </Border>

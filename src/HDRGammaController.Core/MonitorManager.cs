@@ -152,10 +152,13 @@ namespace HDRGammaController.Core
                                 HMonitor = desc1.Monitor,
                                 IsHdrCapable = (desc1.ColorSpace == Dxgi.DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020),
                                 IsHdrActive = (desc1.ColorSpace == Dxgi.DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020),
-                                MonitorBounds = desc1.DesktopCoordinates
+                                MonitorBounds = desc1.DesktopCoordinates,
+                                HdrPeakNits = desc1.MaxLuminance,
+                                HdrMinNits = desc1.MinLuminance,
                             };
 
                             EnrichWithGdiData(monitorInfo);
+                            EnrichWithDisplayConfig(monitorInfo);
                             monitors.Add(monitorInfo);
                         }
                         else
@@ -182,6 +185,36 @@ namespace HDRGammaController.Core
             }
 
             return monitors;
+        }
+
+        /// <summary>
+        /// Resolves the monitor's DisplayConfig identity (adapter LUID + source id — needed
+        /// for Advanced Color profile association) and, when HDR is active, the REAL SDR
+        /// white level (the "SDR content brightness" slider) instead of the 200-nit default.
+        /// </summary>
+        private static void EnrichWithDisplayConfig(MonitorInfo monitor)
+        {
+            try
+            {
+                if (DisplayConfig.TryGetPathForGdiName(monitor.DeviceName, out var adapterId, out uint sourceId, out _))
+                {
+                    monitor.DisplayConfigAdapterId = adapterId;
+                    monitor.DisplayConfigSourceId = sourceId;
+                    monitor.HasDisplayConfigIds = true;
+                }
+
+                if (monitor.IsHdrActive &&
+                    DisplayConfig.TryGetSdrWhiteLevelNits(monitor.DeviceName) is double sdrNits)
+                {
+                    monitor.SdrWhiteLevel = sdrNits;
+                    Log.Info($"MonitorManager: {monitor.DeviceName} SDR white level {sdrNits:F0} nits, " +
+                             $"panel HDR range {monitor.HdrMinNits:F3}–{monitor.HdrPeakNits:F0} nits.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"MonitorManager: DisplayConfig enrichment failed for {monitor.DeviceName}: {ex.Message}");
+            }
         }
 
         private void EnrichWithGdiData(MonitorInfo monitor)

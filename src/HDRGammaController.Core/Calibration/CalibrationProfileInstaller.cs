@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
@@ -30,21 +31,26 @@ namespace HDRGammaController.Core.Calibration
             DisplayCharacterization characterization,
             CalibrationTarget target,
             double[] lutR, double[] lutG, double[] lutB,
-            double whiteLevel)
+            double whiteLevel,
+            bool hdrMode = false,
+            IReadOnlyList<MeasurementResult>? measurements = null)
         {
             if (string.IsNullOrEmpty(monitor.MonitorDevicePath))
                 return new InstallResult(false, "", "Monitor has no device path; cannot associate a profile.");
 
-            // SAFETY GATE: the shipped MHC2 templates are SDR (gamma 2.2). Installing an SDR
-            // profile while the display is in HDR mode produces a washed-out, highlight-crushed
-            // image (learned the hard way). Refuse the mismatch instead of wrecking the display.
-            // HDR-native MHC2 generation is a separate, validated path.
-            if (monitor.IsHdrActive)
-                return new InstallResult(false, "",
-                    "This display is currently in HDR mode, and only SDR calibration profiles are " +
-                    "available to install. Applying an SDR profile in HDR would wash out the image.\n\n" +
-                    "Switch the display to SDR to apply this calibration, or wait for the HDR-native " +
-                    "calibration path. (Your measurements and the report are still valid.)");
+            // SAFETY GATE: the correction is only valid in the mode it was MEASURED in. The
+            // LUT domain differs completely (gamma-encoded signal in SDR vs PQ wire signal in
+            // HDR), so a cross-mode install wrecks the image (the original hardcoded-SDR bug
+            // washed out the HDR desktop). Refuse the mismatch instead.
+            if (monitor.IsHdrActive != hdrMode)
+                return new InstallResult(false, "", hdrMode
+                    ? "This calibration was measured in HDR, but the display is now in SDR mode.\n\n" +
+                      "Switch the display back to HDR and apply again."
+                    : "This calibration was measured in SDR, but the display is now in HDR mode.\n\n" +
+                      "Switch the display back to SDR and apply again (or re-run the calibration in HDR).");
+
+            if (hdrMode && measurements == null)
+                return new InstallResult(false, "", "HDR install needs the calibration measurements to build PQ-domain LUTs.");
 
             string? template = FindTemplate(whiteLevel);
             if (template == null)
@@ -75,13 +81,33 @@ namespace HDRGammaController.Core.Calibration
                     "correction would clip and cast color.\n\nCalibrate to a target the panel can reach — " +
                     "for an SDR display that's usually \"sRGB (Gamma 2.2)\" or Rec.709. Re-run with that selected.");
 
-            // Fold the white-point correction into the tone LUTs as per-channel signal gains.
-            // For a gamma-law panel a linear gain g is exactly a signal gain g^(1/gamma).
-            double gamma = characterization.MeasuredGamma is > 1.0 and < 3.5
-                ? characterization.MeasuredGamma : 2.2;
-            double[] gainedR = ApplySignalGain(lutR, whiteGains.R, gamma);
-            double[] gainedG = ApplySignalGain(lutG, whiteGains.G, gamma);
-            double[] gainedB = ApplySignalGain(lutB, whiteGains.B, gamma);
+            // Per-channel tone LUTs with the white-point correction folded in.
+            //  SDR: scale the caller's signal-domain LUTs by gain^(1/gamma) (for a gamma-law
+            //       panel a linear gain is exactly that signal gain).
+            //  HDR: the LUTs live in PQ wire-signal domain instead — build them from the HDR
+            //       measurements with the gains applied in nits.
+            double[] gainedR, gainedG, gainedB;
+            double? headerMinNits = null, headerMaxNits = null;
+            if (hdrMode)
+            {
+                HdrMhc2LutBuilder.Result hdrLuts;
+                try { hdrLuts = HdrMhc2LutBuilder.Build(measurements!, monitor.SdrWhiteLevel, whiteGains); }
+                catch (Exception ex) { return new InstallResult(false, "", $"HDR LUT generation failed: {ex.Message}"); }
+                (gainedR, gainedG, gainedB) = (hdrLuts.LutR, hdrLuts.LutG, hdrLuts.LutB);
+
+                // MHC2 header range: the panel's DXGI-reported HDR range when available
+                // (matches what the Windows HDR Calibration app writes), else measured.
+                headerMinNits = hdrLuts.MeasuredBlackNits;
+                headerMaxNits = monitor.HdrPeakNits > 50 ? monitor.HdrPeakNits : hdrLuts.MeasuredPeakNits;
+            }
+            else
+            {
+                double gamma = characterization.MeasuredGamma is > 1.0 and < 3.5
+                    ? characterization.MeasuredGamma : 2.2;
+                gainedR = ApplySignalGain(lutR, whiteGains.R, gamma);
+                gainedG = ApplySignalGain(lutG, whiteGains.G, gamma);
+                gainedB = ApplySignalGain(lutB, whiteGains.B, gamma);
+            }
 
             // Windows applies the MHC2 matrix sandwiched between fixed sRGB↔XYZ conversions,
             // so the tag must hold the matrix pre-wrapped into that domain.
@@ -97,8 +123,9 @@ namespace HDRGammaController.Core.Calibration
                 $"peak {c.PeakLuminance:F1} cd/m², gamma {c.MeasuredGamma:F2}\n" +
                 $"  gamut matrix (RGB→RGB, white-preserving): {FormatMatrix(matrix)}\n" +
                 $"  MHC2 tag matrix (XYZ-domain wrapped):     {FormatMatrix(mhc2Matrix)}\n" +
-                $"  white-point LUT gains R={whiteGains.R:F4} G={whiteGains.G:F4} B={whiteGains.B:F4} " +
-                $"(signal exp 1/{gamma:F2}), max target drive {maxDrive:F3}");
+                $"  white-point LUT gains R={whiteGains.R:F4} G={whiteGains.G:F4} B={whiteGains.B:F4}, " +
+                $"max target drive {maxDrive:F3}, mode {(hdrMode ? "HDR (PQ-domain LUTs)" : "SDR")}" +
+                (hdrMode ? $", header range {headerMinNits:F3}–{headerMaxNits:F0} nits, SDR white {monitor.SdrWhiteLevel:F0} nits" : ""));
 
             string profileName = BuildProfileName(monitor, target);
             string srcPath = Path.Combine(Path.GetTempPath(), profileName);
@@ -108,23 +135,46 @@ namespace HDRGammaController.Core.Calibration
                 // The internal description is what Windows Color Management displays — without
                 // it the profile shows the template's leftover "SDR ACM: srgb_d50 [...]" text.
                 Mhc2ProfileBuilder.Build(template, srcPath, mhc2Matrix, gainedR, gainedG, gainedB,
-                    description: Path.GetFileNameWithoutExtension(profileName));
+                    description: Path.GetFileNameWithoutExtension(profileName),
+                    minLuminanceNits: headerMinNits, maxLuminanceNits: headerMaxNits);
 
                 // Copy into the system color store. Returns false if an identical name already
                 // exists — harmless, we re-associate below regardless.
                 if (!Wcs.InstallColorProfile(null, srcPath))
                     Log.Info($"CalibrationProfileInstaller: InstallColorProfile returned false for {profileName} (may already exist).");
 
-                if (!Wcs.AssociateColorProfileWithDevice(null, srcPath, monitor.MonitorDevicePath))
-                    return new InstallResult(false, profileName,
-                        "Windows refused to associate the profile with the display. Make sure the monitor is active.");
+                if (hdrMode)
+                {
+                    // HDR displays read profiles from the ADVANCED COLOR association list
+                    // (registry ICMProfileAC) — the classic association APIs only touch the
+                    // SDR list, which Windows ignores while HDR is on. This is how the
+                    // Windows HDR Calibration app's own profiles are associated.
+                    if (!monitor.HasDisplayConfigIds)
+                        return new InstallResult(false, profileName,
+                            "Could not resolve this display's identity (adapter LUID / source id) for the " +
+                            "Advanced Color profile association. Try re-opening calibration to refresh displays.");
 
-                if (!Wcs.WcsSetDefaultColorProfile(
+                    int hr = Wcs.ColorProfileAddDisplayAssociation(
                         Wcs.WCS_PROFILE_MANAGEMENT_SCOPE.WCS_PROFILE_MANAGEMENT_SCOPE_CURRENT_USER,
-                        monitor.MonitorDevicePath, Wcs.CPT_ICC, Wcs.CPST_PERCEPTUAL, 0, profileName))
-                    Log.Info($"CalibrationProfileInstaller: WcsSetDefaultColorProfile returned false for {profileName}.");
+                        profileName, monitor.DisplayConfigAdapterId, monitor.DisplayConfigSourceId,
+                        setAsDefault: true, associateAsAdvancedColor: true);
+                    if (hr != 0)
+                        return new InstallResult(false, profileName,
+                            $"Windows refused the Advanced Color profile association (HRESULT 0x{hr:X8}).");
+                }
+                else
+                {
+                    if (!Wcs.AssociateColorProfileWithDevice(null, srcPath, monitor.MonitorDevicePath))
+                        return new InstallResult(false, profileName,
+                            "Windows refused to associate the profile with the display. Make sure the monitor is active.");
 
-                Log.Info($"CalibrationProfileInstaller: Installed + set default '{profileName}' for {monitor.FriendlyName}.");
+                    if (!Wcs.WcsSetDefaultColorProfile(
+                            Wcs.WCS_PROFILE_MANAGEMENT_SCOPE.WCS_PROFILE_MANAGEMENT_SCOPE_CURRENT_USER,
+                            monitor.MonitorDevicePath, Wcs.CPT_ICC, Wcs.CPST_PERCEPTUAL, 0, profileName))
+                        Log.Info($"CalibrationProfileInstaller: WcsSetDefaultColorProfile returned false for {profileName}.");
+                }
+
+                Log.Info($"CalibrationProfileInstaller: Installed + set default '{profileName}' for {monitor.FriendlyName} ({(hdrMode ? "advanced color" : "SDR")} association).");
                 return new InstallResult(true, profileName, null);
             }
             catch (Exception ex)
@@ -150,7 +200,17 @@ namespace HDRGammaController.Core.Calibration
             if (string.IsNullOrEmpty(monitor.MonitorDevicePath) || string.IsNullOrEmpty(profileName)) return;
             try
             {
+                // Remove from BOTH association lists (SDR and Advanced Color) — we don't track
+                // which mode the profile was installed for, and removing from a list it isn't
+                // in is harmless.
                 Wcs.DisassociateColorProfileFromDevice(null, profileName, monitor.MonitorDevicePath);
+                if (monitor.HasDisplayConfigIds)
+                {
+                    Wcs.ColorProfileRemoveDisplayAssociation(
+                        Wcs.WCS_PROFILE_MANAGEMENT_SCOPE.WCS_PROFILE_MANAGEMENT_SCOPE_CURRENT_USER,
+                        profileName, monitor.DisplayConfigAdapterId, monitor.DisplayConfigSourceId,
+                        dissociateAdvancedColor: true);
+                }
                 Log.Info($"CalibrationProfileInstaller: Disabled '{profileName}' on {monitor.FriendlyName} (file kept in color store).");
             }
             catch (Exception ex)

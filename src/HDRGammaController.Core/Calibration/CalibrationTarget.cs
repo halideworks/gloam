@@ -348,6 +348,27 @@ namespace HDRGammaController.Core.Calibration
         };
 
         /// <summary>
+        /// HDR desktop calibration: sRGB/Rec.709 CONTENT gamut with PQ tone. In HDR Windows
+        /// already color-manages app content (sRGB) onto the wire, so a calibration measured
+        /// through that pipeline sees content-basis primaries ≈ sRGB — the correction's job
+        /// is to fix the residual gamut/white error and the panel's PQ tracking, not to
+        /// expand to the container gamut (that's what made wide targets clip).
+        /// </summary>
+        public static CalibrationTarget Rec709Pq { get; } = new()
+        {
+            Name = "HDR Desktop PQ (sRGB gamut)",
+            Description = "sRGB/Rec.709 content gamut, D65 white, SMPTE ST 2084 PQ tone. " +
+                          "The right target for calibrating the HDR desktop experience.",
+            RedPrimary = Chromaticity.Rec709Red,
+            GreenPrimary = Chromaticity.Rec709Green,
+            BluePrimary = Chromaticity.Rec709Blue,
+            WhitePoint = Chromaticity.D65,
+            TransferFunction = TransferFunctionType.Pq,
+            PeakLuminance = 1000,
+            ReferenceWhite = 203
+        };
+
+        /// <summary>
         /// P3 with PQ for HDR content on P3 displays.
         /// </summary>
         public static CalibrationTarget P3Pq { get; } = new()

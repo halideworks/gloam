@@ -69,6 +69,32 @@ namespace HDRGammaController.Interop
             string? pDeviceName
         );
         
+        /// <summary>
+        /// Associates an installed profile with a display via DisplayConfig identifiers.
+        /// With <paramref name="associateAsAdvancedColor"/> the profile lands in the
+        /// ADVANCED COLOR association list (registry ICMProfileAC) — the list Windows
+        /// actually consults while the display runs in HDR / Advanced Color. The classic
+        /// AssociateColorProfileWithDevice API only touches the SDR list. Win10 20348+.
+        /// Returns an HRESULT (0 = S_OK).
+        /// </summary>
+        [DllImport("mscms.dll", CharSet = CharSet.Unicode)]
+        public static extern int ColorProfileAddDisplayAssociation(
+            WCS_PROFILE_MANAGEMENT_SCOPE scope,
+            string profileName,
+            Dxgi.LUID targetAdapterID,
+            uint sourceID,
+            [MarshalAs(UnmanagedType.Bool)] bool setAsDefault,
+            [MarshalAs(UnmanagedType.Bool)] bool associateAsAdvancedColor);
+
+        /// <summary>Removes a display association added via the API above. HRESULT.</summary>
+        [DllImport("mscms.dll", CharSet = CharSet.Unicode)]
+        public static extern int ColorProfileRemoveDisplayAssociation(
+            WCS_PROFILE_MANAGEMENT_SCOPE scope,
+            string profileName,
+            Dxgi.LUID targetAdapterID,
+            uint sourceID,
+            [MarshalAs(UnmanagedType.Bool)] bool dissociateAdvancedColor);
+
         public const int CPT_ICC = 0;
         public const int CPST_PERCEPTUAL = 0;
         public const int CPST_RELATIVE_COLORIMETRIC = 1;

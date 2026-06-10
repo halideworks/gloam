@@ -80,6 +80,7 @@ namespace HDRGammaController
         private readonly CalibrationSettings? _previousSettings;
         private bool _bypassApplied;
         private bool _completedSuccessfully;
+        private bool _measuredInHdr;
 
         private bool _isFullScreenMode = true;
         private int _patchSize = 600;
@@ -639,6 +640,7 @@ namespace HDRGammaController
             // (the old hardcoded false) feeds the corrector nits-scaled data against an SDR
             // target, which made it diverge and produced an SDR profile for an HDR panel.
             bool hdrMode = _targetMonitor?.IsHdrActive ?? false;
+            _measuredInHdr = hdrMode;
             _orchestrator = new CalibrationOrchestrator(
                 _colorimeterService,
                 _calibrationTarget,
@@ -1220,7 +1222,8 @@ namespace HDRGammaController
                         _settingsManager?.SetMhc2Calibration(monitor.MonitorDevicePath, profileName);
                         Log.Info($"CalibrationWindow: Installed + recorded calibration profile {profileName}");
                     },
-                    Colorimeter: _colorimeterService));
+                    Colorimeter: _colorimeterService,
+                    HdrMode: _measuredInHdr));
             }
 
             reportWindow.Show();
