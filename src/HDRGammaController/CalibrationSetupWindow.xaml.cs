@@ -80,7 +80,82 @@ namespace HDRGammaController
             if (MonitorComboBox.SelectedItem is MonitorComboItem item)
             {
                 Services.DisplayIdentify.Flash(item.Monitor, MonitorComboBox.SelectedIndex + 1);
+                UpdateTargetAvailability(item.Monitor);
             }
+        }
+
+        /// <summary>
+        /// Greys out calibration targets the selected display can't reach (per its EDID gamut),
+        /// and HDR-only targets when the display isn't in HDR — so the user only picks settings
+        /// that will actually apply, before spending a calibration on them.
+        /// </summary>
+        private void UpdateTargetAvailability(MonitorInfo monitor)
+        {
+            var gamut = monitor.EdidColor;
+            bool hdr = monitor.IsHdrActive;
+
+            SetTargetReachable(Target709G22, StandardTargets.SrgbGamma22, gamut, false, hdr);
+            SetTargetReachable(Target709G24, StandardTargets.Rec709Gamma24, gamut, false, hdr);
+            SetTargetReachable(TargetP3D65, StandardTargets.P3D65Gamma22, gamut, false, hdr);
+            SetTargetReachable(Target2020SDR, StandardTargets.Rec2020Gamma24, gamut, false, hdr);
+            SetTargetReachable(Target2020PQ, StandardTargets.Rec2020Pq, gamut, true, hdr);
+
+            // If the currently-checked target just got disabled, fall back to sRGB (always reachable).
+            foreach (var rb in new[] { Target709G22, Target709G24, TargetP3D65, Target2020SDR, Target2020PQ })
+                if (rb.IsChecked == true && !rb.IsEnabled) { Target709G22.IsChecked = true; break; }
+        }
+
+        private static void SetTargetReachable(
+            System.Windows.Controls.RadioButton rb, CalibrationTarget target,
+            EdidColorInfo? gamut, bool requiresHdr, bool displayIsHdr)
+        {
+            string? reason = null;
+            if (requiresHdr && !displayIsHdr)
+                reason = "Requires the display to be in HDR mode.";
+            else if (!requiresHdr && displayIsHdr)
+                reason = "This is an SDR target; switch the display to SDR to use it.";
+            else if (gamut != null && !TargetFitsGamut(target, gamut))
+                reason = "Exceeds this display's gamut — it can't reproduce these primaries.";
+
+            rb.IsEnabled = reason == null;
+            rb.ToolTip = reason;
+            rb.Opacity = reason == null ? 1.0 : 0.45;
+        }
+
+        /// <summary>True if every target primary sits inside the display's EDID gamut triangle (with a small tolerance).</summary>
+        private static bool TargetFitsGamut(CalibrationTarget t, EdidColorInfo g)
+        {
+            const double tol = 0.025; // EDID primaries are approximate
+            return InTriangle(t.RedPrimary.X, t.RedPrimary.Y, g, tol)
+                && InTriangle(t.GreenPrimary.X, t.GreenPrimary.Y, g, tol)
+                && InTriangle(t.BluePrimary.X, t.BluePrimary.Y, g, tol);
+        }
+
+        private static bool InTriangle(double px, double py, EdidColorInfo g, double tol)
+        {
+            // Barycentric sign test against the display's R/G/B chromaticity triangle, expanded
+            // outward by `tol` toward the centroid to tolerate EDID rounding.
+            double cx = (g.RedX + g.GreenX + g.BlueX) / 3.0;
+            double cy = (g.RedY + g.GreenY + g.BlueY) / 3.0;
+            (double x, double y) Expand(double x, double y)
+            {
+                double dx = x - cx, dy = y - cy;
+                double len = Math.Sqrt(dx * dx + dy * dy);
+                if (len < 1e-6) return (x, y);
+                return (x + dx / len * tol, y + dy / len * tol);
+            }
+            var (ax, ay) = Expand(g.RedX, g.RedY);
+            var (bx, by) = Expand(g.GreenX, g.GreenY);
+            var (cxx, cyy) = Expand(g.BlueX, g.BlueY);
+
+            double Sign(double x1, double y1, double x2, double y2, double x3, double y3)
+                => (x1 - x3) * (y2 - y3) - (x2 - x3) * (y1 - y3);
+            double d1 = Sign(px, py, ax, ay, bx, by);
+            double d2 = Sign(px, py, bx, by, cxx, cyy);
+            double d3 = Sign(px, py, cxx, cyy, ax, ay);
+            bool neg = d1 < 0 || d2 < 0 || d3 < 0;
+            bool pos = d1 > 0 || d2 > 0 || d3 > 0;
+            return !(neg && pos); // inside if all same sign
         }
 
         private void IdentifyButton_Click(object sender, System.Windows.RoutedEventArgs e) => IdentifySelectedMonitor();

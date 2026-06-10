@@ -198,8 +198,9 @@ namespace HDRGammaController.Core
                 // displayDevice.DeviceID looks like: MONITOR\GSM5B08\{GUID}
                 monitor.MonitorDevicePath = displayDevice.DeviceID;
                 
-                // Try to get the real monitor name from EDID in registry
-                string? edidName = GetMonitorNameFromEdid(displayDevice.DeviceID);
+                // Read the EDID once; derive both the friendly name and the reported gamut.
+                byte[]? edid = GetEdidBytes(displayDevice.DeviceID);
+                string? edidName = edid != null ? ParseEdidForName(edid) : null;
                 if (!string.IsNullOrEmpty(edidName))
                 {
                     monitor.FriendlyName = edidName;
@@ -210,13 +211,22 @@ namespace HDRGammaController.Core
                     // Fallback to GDI name (usually "Generic PnP Monitor")
                     monitor.FriendlyName = displayDevice.DeviceString;
                 }
+
+                if (edid != null)
+                {
+                    monitor.EdidColor = ParseEdidColor(edid);
+                    if (monitor.EdidColor != null)
+                        Log.Info($"MonitorManager: EDID gamut R({monitor.EdidColor.RedX:F3},{monitor.EdidColor.RedY:F3}) " +
+                                 $"G({monitor.EdidColor.GreenX:F3},{monitor.EdidColor.GreenY:F3}) " +
+                                 $"B({monitor.EdidColor.BlueX:F3},{monitor.EdidColor.BlueY:F3})");
+                }
             }
         }
         
         /// <summary>
-        /// Attempts to read the monitor's friendly name from the EDID data in the registry.
+        /// Reads the raw 128+ byte EDID block for a monitor device from the registry.
         /// </summary>
-        private string? GetMonitorNameFromEdid(string deviceId)
+        private byte[]? GetEdidBytes(string deviceId)
         {
             try
             {
@@ -257,13 +267,9 @@ namespace HDRGammaController.Core
                                         if (paramsKey == null) continue;
                                         
                                         byte[]? edid = paramsKey.GetValue("EDID") as byte[];
-                                        if (edid != null && edid.Length > 0)
+                                        if (edid != null && edid.Length >= 128)
                                         {
-                                            string? name = ParseEdidForName(edid);
-                                            if (!string.IsNullOrEmpty(name))
-                                            {
-                                                return name;
-                                            }
+                                            return edid;
                                         }
                                     }
                                 }
@@ -280,6 +286,42 @@ namespace HDRGammaController.Core
             return null;
         }
         
+        /// <summary>
+        /// Decodes the EDID color-characteristics block (bytes 25–34) into CIE xy chromaticities.
+        /// Each coordinate is 10 bits: 8 high bits in bytes 27–34, low 2 bits packed into bytes
+        /// 25–26. Value = (10-bit) / 1024.
+        /// </summary>
+        private EdidColorInfo? ParseEdidColor(byte[] e)
+        {
+            if (e.Length < 35) return null;
+
+            double Coord(int highByte, int lowShift, int whichLowByte)
+            {
+                int low2 = (e[whichLowByte] >> lowShift) & 0x3;
+                int v = (e[highByte] << 2) | low2;
+                return v / 1024.0;
+            }
+
+            // byte 25 holds Rx,Ry,Gx,Gy low bits; byte 26 holds Bx,By,Wx,Wy low bits.
+            var info = new EdidColorInfo
+            {
+                RedX   = Coord(27, 6, 25),
+                RedY   = Coord(28, 4, 25),
+                GreenX = Coord(29, 2, 25),
+                GreenY = Coord(30, 0, 25),
+                BlueX  = Coord(31, 6, 26),
+                BlueY  = Coord(32, 4, 26),
+                WhiteX = Coord(33, 2, 26),
+                WhiteY = Coord(34, 0, 26),
+            };
+
+            // Sanity: real primaries are positive, < 1, and red is the most red (highest x).
+            if (info.RedX <= 0 || info.RedX > 0.8 || info.GreenY <= 0 || info.GreenY > 0.9 ||
+                info.RedX < info.BlueX) // red x should exceed blue x on any sane display
+                return null;
+            return info;
+        }
+
         /// <summary>
         /// Parses EDID data to extract the monitor name from descriptor blocks.
         /// </summary>
