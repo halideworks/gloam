@@ -109,5 +109,43 @@ namespace HDRGammaController.Tests
                 for (int c = 0; c < 3; c++)
                     Assert.Equal(r == c ? 1.0 : 0.0, m[r, c], 4);
         }
+
+        [Fact]
+        public void BuildGamutMatrix_ReproducesTargetWhiteOnACoolDisplay()
+        {
+            // Definitive correctness check: a display with sRGB-ish primaries but a COOL white
+            // (bluer than D65). The gamut matrix applied to content-white, run back through the
+            // display's own RGB→XYZ, must land on the TARGET white (D65) — i.e. it neutralizes
+            // the blue cast. (This is the path that produced the magenta when double-corrected.)
+            var target = StandardTargets.SrgbGamma22;
+            var coolWhite = new Chromaticity(0.297, 0.318); // measured M27Q-like cool white
+            var displayMatrix = ColorMath.CalculateRgbToXyzMatrix(
+                new Chromaticity(0.64, 0.33), new Chromaticity(0.30, 0.60), new Chromaticity(0.15, 0.06), coolWhite);
+            var characterization = new DisplayCharacterization { RgbToXyzMatrix = displayMatrix };
+
+            var m = Mhc2ProfileBuilder.BuildGamutMatrix(characterization, target);
+
+            // content white (1,1,1) -> corrected display RGB -> measured XYZ
+            double[] dispRgb = MulVec(m, 1.0, 1.0, 1.0);
+            double[] producedXyz = MulVec(displayMatrix, dispRgb[0], dispRgb[1], dispRgb[2]);
+
+            // Target white XYZ (D65, normalized).
+            var targetWhite = target.LinearRgbToXyz(new LinearRgb(1, 1, 1));
+            var px = new CieXyz(producedXyz[0], producedXyz[1], producedXyz[2]);
+
+            // Chromaticity of the produced white must match the target white (the point of it).
+            Assert.Equal(targetWhite.ToChromaticity().X, px.ToChromaticity().X, 3);
+            Assert.Equal(targetWhite.ToChromaticity().Y, px.ToChromaticity().Y, 3);
+
+            // And to correct a too-blue panel the white correction must pull blue DOWN.
+            Assert.True(dispRgb[2] < dispRgb[0], $"expected blue<red to warm a cool panel; got R={dispRgb[0]:F3} B={dispRgb[2]:F3}");
+        }
+
+        private static double[] MulVec(double[,] m, double a, double b, double c) => new[]
+        {
+            m[0,0]*a + m[0,1]*b + m[0,2]*c,
+            m[1,0]*a + m[1,1]*b + m[1,2]*c,
+            m[2,0]*a + m[2,1]*b + m[2,2]*c,
+        };
     }
 }

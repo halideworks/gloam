@@ -1141,19 +1141,17 @@ namespace HDRGammaController
             if (_targetMonitor != null && _calibrationTarget != null && _displayCharacterization != null)
             {
                 double white = _targetMonitor.SdrWhiteLevel;
-                (double[] r, double[] g, double[] b) corr;
-                if (_calibrationResult?.FinalCorrection is { } fc)
-                {
-                    corr = (fc.R, fc.G, fc.B);
-                }
-                else
-                {
-                    double targetGamma = _calibrationTarget.Gamma ?? 2.2;
-                    var (lr, lg, lb, _) = LutGenerator.GenerateCalibratedLut(
-                        targetGamma, _displayCharacterization, CalibrationSettings.Default,
-                        white, _targetMonitor.IsHdrActive);
-                    corr = (lr, lg, lb);
-                }
+
+                // TONE-ONLY per-channel LUTs for the MHC2: each channel is inverse-mapped to
+                // the target transfer with no cross-channel white balance. The MHC2 *matrix*
+                // does ALL the chromatic correction (primaries + white point). Using the
+                // closed-loop correction here instead would white-balance a second time on top
+                // of the matrix — that double-correction is what turned the image magenta.
+                double targetGamma = _calibrationTarget.Gamma ?? 2.2;
+                var (lr, lg, lb, _) = LutGenerator.GenerateCalibratedLut(
+                    targetGamma, _displayCharacterization, CalibrationSettings.Default,
+                    white, isHdr: false);
+                (double[] r, double[] g, double[] b) corr = (lr, lg, lb);
 
                 var monitor = _targetMonitor;
                 reportWindow.SetApplyContext(new CalibrationReportWindow.ApplyContext(

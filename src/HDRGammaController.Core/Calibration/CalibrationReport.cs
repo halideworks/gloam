@@ -215,17 +215,23 @@ namespace HDRGammaController.Core.Calibration
             if (measurements.Count == 0)
                 return new DeltaEStatistics();
 
+            // The colorimeter returns ABSOLUTE luminance (white Y can be ~100–120 cd/m²), but
+            // the patch targets are normalized (white Y = 1). Computing Lab on raw absolute XYZ
+            // pushes L* far past 100 and makes Δ E meaningless. Normalize measured XYZ so the
+            // measured white maps to Y = 1, matching the target scale — the white-point error
+            // then shows up correctly as an a*/b* deviation rather than a luminance blowout.
+            double peakY = measurements.Max(m => m.Xyz.Y);
+            if (peakY <= 0) peakY = 1;
+
             var deltaEs = new List<double>();
             foreach (var m in measurements)
             {
+                var normalized = new CieXyz(m.Xyz.X / peakY, m.Xyz.Y / peakY, m.Xyz.Z / peakY);
+                var measuredLab = ColorMath.XyzToLab(normalized);
                 if (m.Patch.TargetXyz != null)
-                {
-                    deltaEs.Add(m.DeltaE2000To(m.Patch.TargetXyz.Value));
-                }
+                    deltaEs.Add(measuredLab.DeltaE2000(ColorMath.XyzToLab(m.Patch.TargetXyz.Value)));
                 else if (m.Patch.TargetLab != null)
-                {
-                    deltaEs.Add(m.DeltaE2000To(m.Patch.TargetLab.Value));
-                }
+                    deltaEs.Add(measuredLab.DeltaE2000(m.Patch.TargetLab.Value));
             }
 
             if (deltaEs.Count == 0)
