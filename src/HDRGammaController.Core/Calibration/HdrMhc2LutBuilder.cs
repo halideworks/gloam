@@ -69,21 +69,29 @@ namespace HDRGammaController.Core.Calibration
                     $"Measured HDR grayscale has almost no range ({blackNits:F2}–{peakNits:F2} nits) — readings look invalid.");
 
             var lut = new double[LutSamples];
-            // Blend window: the top 15% of the measured nits range fades from
-            // measured-inverse correction to the analytic continuation.
-            double blendStartNits = blackNits + (peakNits - blackNits) * 0.85;
+            // Correct fully only in the lower half of the measured range; fade to IDENTITY
+            // between 50% and 80% of it. Two hard-won reasons (verified on the M27Q):
+            //  1. The upper range sits inside the panel's HDR tone-mapping knee, where the
+            //     wire-axis model breaks down — "correcting" the knee overshoots and just
+            //     dims highlights (verified white came in at 189 nits instead of ~220).
+            //  2. The LUT is applied per channel AFTER the gamut matrix. Strong curvature
+            //     near the top distorts the channel ratios of unequal drive values — which
+            //     is exactly the matrix's D65-corrected white (it measured x=0.301, blue-
+            //     green, with the aggressive top-end correction). Identity near the top
+            //     keeps the white point the matrix worked for.
+            double blendStartNits = blackNits + (peakNits - blackNits) * 0.50;
+            double blendEndNits = blackNits + (peakNits - blackNits) * 0.80;
 
             for (int i = 0; i < LutSamples; i++)
             {
                 double p = i / (double)(LutSamples - 1);
                 double desired = TransferFunctions.PqEotf(p);
 
-                // Analytic passthrough: identity. Above the measured range this preserves
-                // the panel's own tone mapping behavior.
+                // Analytic passthrough: identity — preserves the panel's own behavior.
                 double analytic = p;
 
                 double v;
-                if (desired >= peakNits)
+                if (desired >= blendEndNits)
                 {
                     v = analytic;
                 }
@@ -96,7 +104,7 @@ namespace HDRGammaController.Core.Calibration
                     }
                     else
                     {
-                        double t = (desired - blendStartNits) / Math.Max(peakNits - blendStartNits, 1e-9);
+                        double t = (desired - blendStartNits) / Math.Max(blendEndNits - blendStartNits, 1e-9);
                         t = Math.Clamp(t, 0, 1);
                         double s = t * t * (3 - 2 * t);
                         v = corrected + (analytic - corrected) * s;

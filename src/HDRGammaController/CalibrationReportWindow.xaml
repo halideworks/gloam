@@ -343,7 +343,7 @@
                             </StackPanel>
                         </Grid>
                         <TextBlock FontSize="11" Foreground="#707070" Margin="0,8,0,0" TextWrapping="Wrap"
-                                   Text="Dashed = target, solid = your display. Orange dot = measured white, gray dot = target white."/>
+                                   Text="Dashed = target · orange = native (before) · green = corrected, re-measured through the applied profile. Orange dot = measured white, gray dot = target white."/>
                     </StackPanel>
                 </Border>
 

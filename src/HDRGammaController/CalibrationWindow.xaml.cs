@@ -775,12 +775,15 @@ namespace HDRGammaController
 
                         ShowCompletion(true, detail);
 
-                        if (SoundNotificationsCheck.IsChecked == true)
-                            CalibrationSounds.PlayCompletion();
-
                         // Hands-free flow: open the report immediately — it auto-applies the
                         // profile and runs the verification sweep itself (the probe is still
-                        // on the display). The completion overlay stays behind as fallback.
+                        // on the display), and plays the completion sound when verification
+                        // finishes — not here, mid-flow.
+                        // _isCalibrationRunning must be cleared FIRST: ViewReport_Click closes
+                        // this window, and Window_Closing otherwise shows the "calibration in
+                        // progress — cancel?" prompt, blocking the close and stranding the
+                        // user on the completion screen in a report→prompt loop.
+                        _isCalibrationRunning = false;
                         ViewReport_Click(this, new RoutedEventArgs());
                     });
 
@@ -1154,6 +1157,8 @@ namespace HDRGammaController
             WindowState = WindowState.Minimized;
         }
 
+        private bool _reportOpened;
+
         private void ViewReport_Click(object sender, RoutedEventArgs e)
         {
             if (_calibrationResult?.Success != true || _calibrationTarget == null)
@@ -1162,6 +1167,12 @@ namespace HDRGammaController
                     MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
+
+            // One report per calibration: each report auto-applies + verifies, so opening
+            // more than one (auto-open + a manual click) would install duplicate profiles
+            // and run duplicate sweeps.
+            if (_reportOpened) { Close(); return; }
+            _reportOpened = true;
 
             // Create a calibration profile from the results
             var profile = new CalibrationProfile
@@ -1229,6 +1240,13 @@ namespace HDRGammaController
                     monitor, _calibrationTarget, corr.r, corr.g, corr.b, white,
                     OnInstalled: profileName =>
                     {
+                        // Retire the previous calibration's association before recording the
+                        // new one — otherwise repeated applies stack associations in the
+                        // color store (the report loop left three in one session).
+                        var previous = _settingsManager?.GetMonitorProfile(monitor.MonitorDevicePath)?.Mhc2ProfileName;
+                        if (!string.IsNullOrEmpty(previous) && previous != profileName)
+                            CalibrationProfileInstaller.Disable(monitor, previous);
+
                         // Persist the active calibration so the live apply path composes night
                         // mode on top of it instead of double-applying the gamma curve.
                         _settingsManager?.SetMhc2Calibration(monitor.MonitorDevicePath, profileName);

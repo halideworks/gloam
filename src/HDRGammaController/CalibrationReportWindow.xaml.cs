@@ -22,6 +22,7 @@ namespace HDRGammaController
         private readonly DisplayCharacterization? _characterization;
         private readonly Lut3D? _correctionLut;
         private readonly IReadOnlyList<MeasurementResult>? _measurements;
+        private IReadOnlyList<MeasurementResult>? _verifyMeasurements;
 
         // Everything needed to install the calibration as a native Windows MHC2 profile and
         // to verify it afterwards. Set by the calibration window; when present, "Apply
@@ -466,6 +467,21 @@ namespace HDRGammaController
                 tRef.Add((v, TargetOut(v)));
                 tFit.Add((v, MeasuredOut(_characterization.RedToneCurve, v)));
             }
+            // Corrected (verified) grayscale, when a verify pass has run — the proof that the
+            // scary-looking native curves were actually fixed.
+            var corrected = _verifyMeasurements?
+                .Where(m => m.IsValid && m.Patch.Category == PatchCategory.Grayscale)
+                .OrderBy(m => m.Patch.DisplayRgb.R)
+                .ToList();
+            double corrMinY = 0, corrRangeY = 1;
+            if (corrected is { Count: > 1 })
+            {
+                corrMinY = corrected.Min(m => m.Xyz.Y);
+                corrRangeY = Math.Max(corrected.Max(m => m.Xyz.Y) - corrMinY, 1e-6);
+            }
+            double CorrNormY(MeasurementResult m) => Math.Clamp((m.Xyz.Y - corrMinY) / corrRangeY, 0, 1);
+            var corrColor = Color.FromRgb(0x22, 0xc5, 0x5e);
+
             var toneSeries = new List<CalibrationCharts.Series>
             {
                 new(targetLabel, CGrey, tRef, Dashed: true),
@@ -474,6 +490,12 @@ namespace HDRGammaController
             if (grays is { Count: > 1 })
                 toneSeries.Add(new CalibrationCharts.Series("Measured", Color.FromRgb(0xf9, 0x73, 0x16),
                     grays.Select(m => (m.Patch.DisplayRgb.R, NormY(m))).ToList(), Scatter: true));
+            if (corrected is { Count: > 1 })
+            {
+                var pts = corrected.Select(m => (m.Patch.DisplayRgb.R, CorrNormY(m))).ToList();
+                toneSeries.Add(new CalibrationCharts.Series("Corrected", corrColor, pts));
+                toneSeries.Add(new CalibrationCharts.Series("", corrColor, pts, Scatter: true));
+            }
             CalibrationCharts.DrawLineChart(ToneCanvas, toneSeries, 0, 1, 0, 1, "Input signal", "Output");
 
             // 2. Gamma tracking (fit line + per-point measured gamma) vs the TARGET's
@@ -506,6 +528,16 @@ namespace HDRGammaController
                     .ToList();
                 gammaSeries.Add(new CalibrationCharts.Series("Measured", Color.FromRgb(0xf9, 0x73, 0x16),
                     gammaScatter, Scatter: true));
+            }
+            if (corrected is { Count: > 1 })
+            {
+                var corrGamma = corrected
+                    .Where(m => m.Patch.DisplayRgb.R is >= 0.05 and <= 0.95 && CorrNormY(m) > 0)
+                    .Select(m => (m.Patch.DisplayRgb.R, Math.Log(CorrNormY(m)) / Math.Log(m.Patch.DisplayRgb.R)))
+                    .ToList();
+                gammaSeries.Add(new CalibrationCharts.Series("Corrected", corrColor, corrGamma));
+                gammaSeries.Add(new CalibrationCharts.Series("", corrColor, corrGamma, Scatter: true));
+                gammaScatter = gammaScatter.Concat(corrGamma).ToList(); // include in auto-range
             }
             // Auto-range so a deep tone-mapping rolloff (HDR knee) shows as data, not as a
             // suspicious flatline pinned to the chart floor.
@@ -739,11 +771,12 @@ namespace HDRGammaController
                 {
                     var p = patches[i];
                     VerifyButton.Content = $"Verifying {i + 1}/{patches.Count}…";
-                    patchWindow.SetStatus($"Verifying calibration — patch {i + 1} of {patches.Count} ({p.Name})");
+                    patchWindow.SetProgress(i + 1, patches.Count, p.Name);
                     patchWindow.SetColor(p.DisplayRgb.R, p.DisplayRgb.G, p.DisplayRgb.B);
                     await Task.Delay(i == 0 ? 1200 : 500); // settle (longer for the first patch)
                     results.Add(await colorimeter.MeasureAsync(p, ctx.HdrMode));
                 }
+                _verifyMeasurements = results;
 
                 var after = CalibrationVerifier.ComputeMetrics(results, ctx.Target);
                 AfterAvgText.Text = $"{after.AverageDeltaE:F2}";
@@ -760,6 +793,10 @@ namespace HDRGammaController
                 GradeScopeText.Text = "after correction";
                 StatusText.Text = $"Verified through the applied profile: average ΔE {after.AverageDeltaE:F2} " +
                                   $"({results.Count(r => r.IsValid)} of {patches.Count} patches).";
+
+                // Overlay the corrected response on the charts: the native curves alone read
+                // as alarming even when the corrected result is good.
+                RenderCharts();
 
                 CalibrationSounds.PlayCompletion();
                 Log.Info($"CalibrationReportWindow: Verify pass avg dE {after.AverageDeltaE:F2}, " +

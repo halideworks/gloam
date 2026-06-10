@@ -7,16 +7,25 @@ using HDRGammaController.Core;
 namespace HDRGammaController
 {
     /// <summary>
-    /// Patch window for the post-apply verify pass, styled like the main calibration
-    /// measurement screen: a patch rectangle of the SAME size and placement the user chose
-    /// during calibration, on a black field, with a dim progress line — instead of the old
-    /// full-screen color flashing. Windows applies the installed MHC2 profile at the
-    /// compositor, so what the probe sees through this window IS the corrected output.
+    /// Patch window for the post-apply verify pass, styled to MATCH the main calibration
+    /// measurement screen: same dark surround, the patch at the size and placement the user
+    /// chose during calibration, and the same bottom progress overlay (bar + patch counter +
+    /// patch name). Windows applies the installed MHC2 profile at the compositor, so what
+    /// the probe sees through this window IS the corrected output.
     /// </summary>
     public sealed class PatchDisplayWindow : Window
     {
+        // Palette mirrored from CalibrationWindow.xaml resources.
+        private static readonly Brush Surround = new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A));
+        private static readonly Brush OverlayBg = new SolidColorBrush(Color.FromArgb(0xCC, 0x1A, 0x1A, 0x1A));
+        private static readonly Brush BarBg = new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33));
+        private static readonly Brush Accent = new SolidColorBrush(Color.FromRgb(0x08, 0x91, 0xb2));
+        private static readonly Brush TextDim = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88));
+
         private readonly Border _patch;
-        private readonly TextBlock _status;
+        private readonly ProgressBar _progress;
+        private readonly TextBlock _patchInfo;
+        private readonly TextBlock _phase;
 
         public PatchDisplayWindow(MonitorInfo monitor, double patchSize = 600, double offsetX = 0, double offsetY = 0)
         {
@@ -25,8 +34,7 @@ namespace HDRGammaController
             ShowInTaskbar = false;
             ShowActivated = false;
             Topmost = true;
-            Background = Brushes.Black;
-            Cursor = System.Windows.Input.Cursors.None;
+            Background = Surround;
 
             // Same monitor-bounds placement the calibration window uses (DXGI desktop rect).
             var b = monitor.MonitorBounds;
@@ -55,21 +63,45 @@ namespace HDRGammaController
                 RenderTransform = new TranslateTransform(offsetX, offsetY),
             };
 
-            // Same idea as the calibration screen's progress text: dim, well away from the
-            // patch so it doesn't meaningfully change what the probe integrates.
-            _status = new TextBlock
+            _progress = new ProgressBar
             {
-                Foreground = new SolidColorBrush(Color.FromRgb(0x70, 0x70, 0x70)),
-                FontSize = 14,
-                HorizontalAlignment = HorizontalAlignment.Left,
+                Height = 8,
+                Minimum = 0,
+                Maximum = 100,
+                Background = BarBg,
+                Foreground = Accent,
+                BorderThickness = new Thickness(0),
+                Margin = new Thickness(0, 0, 0, 8),
+            };
+            _patchInfo = new TextBlock { Foreground = TextDim, FontSize = 13, HorizontalAlignment = HorizontalAlignment.Left };
+            _phase = new TextBlock
+            {
+                Foreground = Brushes.White,
+                FontSize = 13,
+                FontWeight = FontWeights.Medium,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Text = "Verifying calibration",
+            };
+
+            var infoRow = new Grid();
+            infoRow.Children.Add(_patchInfo);
+            infoRow.Children.Add(_phase);
+
+            var overlayContent = new StackPanel { MaxWidth = 600 };
+            overlayContent.Children.Add(_progress);
+            overlayContent.Children.Add(infoRow);
+
+            var overlay = new Border
+            {
+                Background = OverlayBg,
+                Padding = new Thickness(20, 16, 20, 16),
                 VerticalAlignment = VerticalAlignment.Bottom,
-                Margin = new Thickness(24, 0, 0, 18),
-                Text = "Verifying calibration…",
+                Child = overlayContent,
             };
 
             var root = new Grid();
             root.Children.Add(_patch);
-            root.Children.Add(_status);
+            root.Children.Add(overlay);
             Content = root;
         }
 
@@ -81,6 +113,11 @@ namespace HDRGammaController
                 (byte)Math.Round(Math.Clamp(b, 0, 1) * 255)));
         }
 
-        public void SetStatus(string text) => _status.Text = text;
+        public void SetProgress(int current, int total, string patchName)
+        {
+            _progress.Value = total > 0 ? current * 100.0 / total : 0;
+            _patchInfo.Text = $"Patch {current} of {total}";
+            _phase.Text = $"Verifying — {patchName}";
+        }
     }
 }

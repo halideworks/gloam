@@ -73,12 +73,14 @@ namespace HDRGammaController.Tests
             });
             var result = HdrMhc2LutBuilder.Build(measurements, SdrWhite);
 
+            // Only the fully-corrected region (below the 50%-of-range blend start) — above it
+            // the LUT deliberately fades to identity to stay out of the panel's HDR knee.
             int checkedCount = 0;
             for (int i = 0; i < 1024; i++)
             {
                 double p = i / 1023.0;
                 double nits = TransferFunctions.PqEotf(p);
-                if (nits < 5.0 || nits > result.MeasuredPeakNits * 0.6) continue;
+                if (nits < 5.0 || nits > result.MeasuredPeakNits * 0.45) continue;
                 Assert.True(result.LutR[i] > p,
                     $"expected boost at p={p:F3} (panel too dark), got {result.LutR[i]:F3}");
                 checkedCount++;
@@ -103,14 +105,15 @@ namespace HDRGammaController.Tests
             var measurements = SimulatePanel(p => Math.Max(TransferFunctions.PqEotf(p), 0.05));
             var result = HdrMhc2LutBuilder.Build(measurements, SdrWhite);
 
-            // Far above the measured ceiling (e.g. 1000+ nits on a 200-nit-measured sweep)
-            // the LUT must be the analytic passthrough — never extrapolated measurement data.
+            // Above the blend window (80% of the measured range and beyond — including all
+            // true HDR highlights) the LUT must be the identity passthrough: never corrected
+            // panel-knee territory, never extrapolated measurement data.
             for (int i = 0; i < 1024; i++)
             {
                 double p = i / 1023.0;
-                if (TransferFunctions.PqEotf(p) < result.MeasuredPeakNits * 2) continue;
+                if (TransferFunctions.PqEotf(p) < result.MeasuredPeakNits * 0.85) continue;
                 Assert.True(Math.Abs(result.LutR[i] - p) < 0.002,
-                    $"analytic passthrough expected at p={p:F3}, got {result.LutR[i]:F3}");
+                    $"identity passthrough expected at p={p:F3}, got {result.LutR[i]:F3}");
             }
 
             foreach (var lut in new[] { result.LutR, result.LutG, result.LutB })
