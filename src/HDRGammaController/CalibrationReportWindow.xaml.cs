@@ -788,9 +788,12 @@ namespace HDRGammaController
                 SetDeltaEColor(AfterGrayscaleText, after.AverageGrayscaleDeltaE);
                 SetDeltaEColor(AfterPrimaryText, after.AveragePrimaryDeltaE);
 
-                // The grade now reflects what the user actually sees: the corrected display.
-                SetGradeDisplay(after.GetGrade());
+                // The grade AND its summary sentence now reflect what the user actually
+                // sees: the corrected display, not the uncorrected panel.
+                var afterGrade = after.GetGrade();
+                SetGradeDisplay(afterGrade);
                 GradeScopeText.Text = "after correction";
+                SummaryText.Text = GetSummaryText(afterGrade);
                 StatusText.Text = $"Verified through the applied profile: average ΔE {after.AverageDeltaE:F2} " +
                                   $"({results.Count(r => r.IsValid)} of {patches.Count} patches).";
 

@@ -785,21 +785,27 @@ namespace HDRGammaController.Core.Calibration
         /// <summary>Average primary Delta E.</summary>
         public double AveragePrimaryDeltaE => PrimaryDeltaEs.Count > 0 ? PrimaryDeltaEs.Average() : 0;
 
-        /// <summary>Gets the quality grade based on average Delta E.</summary>
+        /// <summary>
+        /// Quality grade from average ΔE2000. Scaled to perceptual reality, not exam scores:
+        /// ΔE &lt; 1 is at/below the just-noticeable-difference threshold (reference), 1–2 is
+        /// excellent (visible only to trained eyes in direct A/B), 2–3 good for general use,
+        /// 3–4 noticeable in side-by-side. A consumer panel averaging 1.5 after calibration
+        /// is performing very well and the grade should say so.
+        /// </summary>
         public CalibrationGrade GetGrade()
         {
             return AverageDeltaE switch
             {
-                < 0.5 => CalibrationGrade.APLus,  // Reference grade
-                < 1.0 => CalibrationGrade.A,      // Excellent
-                < 1.5 => CalibrationGrade.AMinus,
-                < 2.0 => CalibrationGrade.BPlus,  // Good
-                < 2.5 => CalibrationGrade.B,
-                < 3.0 => CalibrationGrade.BMinus,
-                < 4.0 => CalibrationGrade.CPlus,  // Acceptable
-                < 5.0 => CalibrationGrade.C,
-                < 6.0 => CalibrationGrade.CMinus,
-                < 8.0 => CalibrationGrade.D,
+                < 0.6 => CalibrationGrade.APLus,  // Reference — below the JND
+                < 1.2 => CalibrationGrade.A,      // Excellent
+                < 1.8 => CalibrationGrade.AMinus, // Very good
+                < 2.5 => CalibrationGrade.BPlus,  // Good
+                < 3.25 => CalibrationGrade.B,
+                < 4.0 => CalibrationGrade.BMinus,
+                < 5.0 => CalibrationGrade.CPlus,  // Acceptable for general use
+                < 6.5 => CalibrationGrade.C,
+                < 8.0 => CalibrationGrade.CMinus,
+                < 10.0 => CalibrationGrade.D,
                 _ => CalibrationGrade.F           // Poor
             };
         }
