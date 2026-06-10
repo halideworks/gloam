@@ -34,7 +34,11 @@ namespace HDRGammaController.Interop
             public uint outputTechnology;
             public uint rotation;
             public uint scaling;
-            public long refreshRate; // DISPLAYCONFIG_RATIONAL (2 × uint32)
+            // DISPLAYCONFIG_RATIONAL — MUST be two uint32 fields, not a long: a long forces
+            // 8-byte alignment, inflating the struct from 48 to 56 bytes, and
+            // QueryDisplayConfig rejects the whole call with ERROR_INVALID_PARAMETER (87).
+            public uint refreshRateNumerator;
+            public uint refreshRateDenominator;
             public uint scanLineOrdering;
             public int targetAvailable;
             public uint statusFlags;
@@ -102,12 +106,21 @@ namespace HDRGammaController.Interop
             adapterId = default; sourceId = 0; targetId = 0;
             if (string.IsNullOrEmpty(gdiDeviceName)) return false;
 
-            if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, out uint pathCount, out uint modeCount) != 0)
-                return false;
-            var paths = new DISPLAYCONFIG_PATH_INFO[pathCount];
-            var modes = new DISPLAYCONFIG_MODE_INFO[modeCount];
-            if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, ref pathCount, paths, ref modeCount, modes, IntPtr.Zero) != 0)
-                return false;
+            // The display set can change between sizing and querying — retry on
+            // ERROR_INSUFFICIENT_BUFFER (122) instead of failing the resolution.
+            DISPLAYCONFIG_PATH_INFO[] paths;
+            uint pathCount;
+            int attempts = 0;
+            while (true)
+            {
+                if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, out pathCount, out uint modeCount) != 0)
+                    return false;
+                paths = new DISPLAYCONFIG_PATH_INFO[pathCount];
+                var modes = new DISPLAYCONFIG_MODE_INFO[modeCount];
+                int err = QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, ref pathCount, paths, ref modeCount, modes, IntPtr.Zero);
+                if (err == 0) break;
+                if (err != 122 /* ERROR_INSUFFICIENT_BUFFER */ || ++attempts >= 3) return false;
+            }
 
             for (int i = 0; i < pathCount; i++)
             {

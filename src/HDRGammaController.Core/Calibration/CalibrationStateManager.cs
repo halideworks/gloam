@@ -122,7 +122,11 @@ namespace HDRGammaController.Core.Calibration
                     }
                     else
                     {
-                        Log.Info($"CalibrationStateManager: Monitor {state.Monitor.FriendlyName} was at defaults, no restore needed");
+                        // "Defaults" means an identity ramp — but the closed loop (or a
+                        // crashed run) may have left its last candidate correction loaded.
+                        // Skipping here would strand that ramp on screen, so assert identity.
+                        _dispwinRunner.ClearGamma(state.Monitor);
+                        Log.Info($"CalibrationStateManager: Monitor {state.Monitor.FriendlyName} was at defaults; cleared ramp to identity");
                     }
                 }
                 catch (Exception ex)

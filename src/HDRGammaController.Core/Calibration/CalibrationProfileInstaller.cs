@@ -149,14 +149,25 @@ namespace HDRGammaController.Core.Calibration
                     // (registry ICMProfileAC) — the classic association APIs only touch the
                     // SDR list, which Windows ignores while HDR is on. This is how the
                     // Windows HDR Calibration app's own profiles are associated.
-                    if (!monitor.HasDisplayConfigIds)
+                    // Resolve the DisplayConfig identity FRESH at install time — the cached
+                    // enumeration may predate an HDR toggle or display-topology change.
+                    var adapterId = monitor.DisplayConfigAdapterId;
+                    uint sourceId = monitor.DisplayConfigSourceId;
+                    bool haveIds = monitor.HasDisplayConfigIds;
+                    if (DisplayConfig.TryGetPathForGdiName(monitor.DeviceName, out var freshAdapter, out uint freshSource, out _))
+                    {
+                        adapterId = freshAdapter;
+                        sourceId = freshSource;
+                        haveIds = true;
+                    }
+                    if (!haveIds)
                         return new InstallResult(false, profileName,
                             "Could not resolve this display's identity (adapter LUID / source id) for the " +
                             "Advanced Color profile association. Try re-opening calibration to refresh displays.");
 
                     int hr = Wcs.ColorProfileAddDisplayAssociation(
                         Wcs.WCS_PROFILE_MANAGEMENT_SCOPE.WCS_PROFILE_MANAGEMENT_SCOPE_CURRENT_USER,
-                        profileName, monitor.DisplayConfigAdapterId, monitor.DisplayConfigSourceId,
+                        profileName, adapterId, sourceId,
                         setAsDefault: true, associateAsAdvancedColor: true);
                     if (hr != 0)
                         return new InstallResult(false, profileName,
@@ -204,11 +215,11 @@ namespace HDRGammaController.Core.Calibration
                 // which mode the profile was installed for, and removing from a list it isn't
                 // in is harmless.
                 Wcs.DisassociateColorProfileFromDevice(null, profileName, monitor.MonitorDevicePath);
-                if (monitor.HasDisplayConfigIds)
+                if (DisplayConfig.TryGetPathForGdiName(monitor.DeviceName, out var adapterId, out uint sourceId, out _))
                 {
                     Wcs.ColorProfileRemoveDisplayAssociation(
                         Wcs.WCS_PROFILE_MANAGEMENT_SCOPE.WCS_PROFILE_MANAGEMENT_SCOPE_CURRENT_USER,
-                        profileName, monitor.DisplayConfigAdapterId, monitor.DisplayConfigSourceId,
+                        profileName, adapterId, sourceId,
                         dissociateAdvancedColor: true);
                 }
                 Log.Info($"CalibrationProfileInstaller: Disabled '{profileName}' on {monitor.FriendlyName} (file kept in color store).");

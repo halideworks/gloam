@@ -678,7 +678,14 @@ namespace HDRGammaController
             // monitor + bypass manager. It loads each candidate correction onto the display's
             // gamma ramp and re-measures, giving a real before/after instead of grading the
             // uncorrected panel. Keep-best (in the orchestrator) makes refinement safe.
-            if (_stateManager != null && _targetMonitor != null && _refinementRounds > 0)
+            // HDR: skipped — the corrector's GPU-ramp curves are signal-domain, but in HDR the
+            // ramp sits on the PQ wire (wrong axis); the MHC2 PQ LUTs do the tone correction.
+            // The report's Verify button provides the measured after instead.
+            if (hdrMode)
+            {
+                Log.Info("CalibrationWindow: closed-loop refinement skipped in HDR (use report Verify for the measured after).");
+            }
+            else if (_stateManager != null && _targetMonitor != null && _refinementRounds > 0)
             {
                 var corrector = new ClosedLoopCorrector(
                     _calibrationTarget, _targetMonitor.SdrWhiteLevel, _targetMonitor.IsHdrActive);
