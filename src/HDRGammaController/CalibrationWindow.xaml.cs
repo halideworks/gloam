@@ -74,6 +74,7 @@ namespace HDRGammaController
 
         // State management for bypassing corrections during calibration
         private readonly CalibrationStateManager? _stateManager;
+        private readonly SettingsManager? _settingsManager;
         private readonly MonitorInfo? _targetMonitor;
         private readonly GammaMode _previousGammaMode;
         private readonly CalibrationSettings? _previousSettings;
@@ -165,13 +166,15 @@ namespace HDRGammaController
             CalibrationStateManager stateManager,
             MonitorInfo targetMonitor,
             GammaMode previousGammaMode,
-            CalibrationSettings? previousSettings)
+            CalibrationSettings? previousSettings,
+            SettingsManager? settingsManager = null)
             : this(colorimeterService, target, preset)
         {
             _stateManager = stateManager;
             _targetMonitor = targetMonitor;
             _previousGammaMode = previousGammaMode;
             _previousSettings = previousSettings;
+            _settingsManager = settingsManager;
 
             // Show bypass warning in the setup panel
             if (_previousGammaMode != GammaMode.WindowsDefault || previousSettings?.HasAdjustments == true)
@@ -1107,6 +1110,39 @@ namespace HDRGammaController
 
             // Open the report window
             var reportWindow = new CalibrationReportWindow(profile, _calibrationMetrics, _displayCharacterization, _generatedLut);
+
+            // Give the report what it needs to install the calibration natively. Prefer the
+            // closed-loop's final correction (verified on-screen); otherwise derive per-channel
+            // correction LUTs from the characterization.
+            if (_targetMonitor != null && _calibrationTarget != null && _displayCharacterization != null)
+            {
+                double white = _targetMonitor.SdrWhiteLevel;
+                (double[] r, double[] g, double[] b) corr;
+                if (_calibrationResult?.FinalCorrection is { } fc)
+                {
+                    corr = (fc.R, fc.G, fc.B);
+                }
+                else
+                {
+                    double targetGamma = _calibrationTarget.Gamma ?? 2.2;
+                    var (lr, lg, lb, _) = LutGenerator.GenerateCalibratedLut(
+                        targetGamma, _displayCharacterization, CalibrationSettings.Default,
+                        white, _targetMonitor.IsHdrActive);
+                    corr = (lr, lg, lb);
+                }
+
+                var monitor = _targetMonitor;
+                reportWindow.SetApplyContext(new CalibrationReportWindow.ApplyContext(
+                    monitor, _calibrationTarget, corr.r, corr.g, corr.b, white,
+                    OnInstalled: profileName =>
+                    {
+                        // Persist the active calibration so the live apply path composes night
+                        // mode on top of it instead of double-applying the gamma curve.
+                        _settingsManager?.SetMhc2Calibration(monitor.MonitorDevicePath, profileName);
+                        Log.Info($"CalibrationWindow: Installed + recorded calibration profile {profileName}");
+                    }));
+            }
+
             reportWindow.Show();
 
             Close();

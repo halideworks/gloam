@@ -87,6 +87,13 @@ namespace HDRGammaController.Core
 
             bool nightModeActive = nightKelvinOverride.HasValue || currentKelvin < 6450;
 
+            // Compose with a native MHC2 calibration: Windows is already applying the measured
+            // gamut + target tone at the compositor, so the GPU gamma ramp must not also apply
+            // a tone curve (that would double the gamma). Force passthrough tone here; the
+            // night-mode temperature shift below still rides on top.
+            if (_settingsManager.HasMhc2Calibration(monitor.MonitorDevicePath))
+                mode = GammaMode.WindowsDefault;
+
             CalibrationSettings calibration;
             if (manualCalibration != null)
             {

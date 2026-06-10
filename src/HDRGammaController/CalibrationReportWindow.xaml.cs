@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Windows;
 using System.Windows.Media;
+using HDRGammaController.Core;
 using HDRGammaController.Core.Calibration;
 using HDRGammaController.Services;
 using Microsoft.Win32;
@@ -18,6 +19,16 @@ namespace HDRGammaController
         private readonly CalibrationMetrics? _metrics;
         private readonly DisplayCharacterization? _characterization;
         private readonly Lut3D? _correctionLut;
+
+        // Everything needed to install the calibration as a native Windows MHC2 profile.
+        // Set by the calibration window; when present, "Apply Profile" does the real install.
+        public sealed record ApplyContext(
+            MonitorInfo Monitor, CalibrationTarget Target,
+            double[] LutR, double[] LutG, double[] LutB, double WhiteLevel,
+            Action<string>? OnInstalled);
+        private ApplyContext? _applyContext;
+
+        public void SetApplyContext(ApplyContext context) => _applyContext = context;
 
         /// <summary>
         /// Creates a new CalibrationReportWindow for displaying calibration results.
@@ -364,10 +375,47 @@ namespace HDRGammaController
 
         private void ApplyButton_Click(object sender, RoutedEventArgs e)
         {
-            // This would integrate with the main application to apply the profile
-            MessageBox.Show("Profile application would be triggered here.\n\n" +
-                "This will integrate with the main LUT pipeline to apply the calibration.",
-                "Apply Profile", MessageBoxButton.OK, MessageBoxImage.Information);
+            if (_applyContext == null || _characterization == null)
+            {
+                MessageBox.Show("This calibration can't be applied (missing display characterization).",
+                    "Apply Profile", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var ctx = _applyContext;
+            ApplyButton.IsEnabled = false;
+            try
+            {
+                // Install the measured correction as the monitor's native Windows color
+                // profile (gamut matrix + tone LUTs). Windows then applies it persistently.
+                var result = CalibrationProfileInstaller.Install(
+                    ctx.Monitor, _characterization, ctx.Target,
+                    ctx.LutR, ctx.LutG, ctx.LutB, ctx.WhiteLevel);
+
+                if (result.Success)
+                {
+                    // Clear the GPU gamma ramp to identity so the freshly-installed MHC2 shows
+                    // through cleanly (no leftover gamma curve doubling it). Night mode resumes
+                    // on its next tick via the apply path's MHC2-aware composition.
+                    NativeGammaRamp.TryClear(ctx.Monitor.DeviceName);
+                    ctx.OnInstalled?.Invoke(result.ProfileName);
+                    MessageBox.Show(
+                        "Calibration applied.\n\n" +
+                        "Your display now uses the measured gamut + tone correction as its " +
+                        "Windows color profile — persistently, including in HDR. Night mode and " +
+                        "gamma adjustments layer on top.",
+                        "Calibration Applied", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                else
+                {
+                    MessageBox.Show($"Could not apply the calibration:\n\n{result.Error}",
+                        "Apply Failed", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+            }
+            finally
+            {
+                ApplyButton.IsEnabled = true;
+            }
         }
 
         private void CloseButton_Click(object sender, RoutedEventArgs e)

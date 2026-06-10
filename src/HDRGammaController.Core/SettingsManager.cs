@@ -46,6 +46,14 @@ namespace HDRGammaController.Core
         /// When true, gamma switching uses the measured display response for accurate compensation.
         /// </summary>
         public bool UseCalibrationForGamma { get; set; } = true;
+
+        /// <summary>
+        /// Filename of the installed native MHC2 calibration profile for this monitor, if any.
+        /// Its presence means Windows is applying the full gamut+tone correction at the
+        /// compositor, so the app's GPU gamma ramp must NOT re-apply a tone curve (it would
+        /// double the gamma) — it should layer only night-mode warmth on top.
+        /// </summary>
+        public string? Mhc2ProfileName { get; set; }
         
         public CalibrationSettings ToCalibrationSettings() => new CalibrationSettings
         {
@@ -305,6 +313,26 @@ namespace HDRGammaController.Core
             Save();
             NightModeChanged?.Invoke(settings);
         }
+
+        /// <summary>
+        /// Records (or clears, with null) the installed native MHC2 calibration profile for a
+        /// monitor. Used by the apply path to compose night mode on top without double-gamma.
+        /// </summary>
+        public void SetMhc2Calibration(string monitorDevicePath, string? profileName)
+        {
+            if (string.IsNullOrEmpty(monitorDevicePath)) return;
+            if (!_data.MonitorProfiles.TryGetValue(monitorDevicePath, out var profile))
+            {
+                profile = new MonitorProfileData();
+                _data.MonitorProfiles[monitorDevicePath] = profile;
+            }
+            profile.Mhc2ProfileName = profileName;
+            Save();
+        }
+
+        /// <summary>True if a native MHC2 calibration is installed for this monitor.</summary>
+        public bool HasMhc2Calibration(string monitorDevicePath)
+            => !string.IsNullOrEmpty(GetMonitorProfile(monitorDevicePath)?.Mhc2ProfileName);
 
         public List<AppExclusionRule> ExcludedApps => _data.ExcludedApps;
 

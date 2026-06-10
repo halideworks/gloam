@@ -333,7 +333,8 @@ namespace HDRGammaController.ViewModels
                     stateManager,
                     setupWindow.SelectedMonitor,
                     currentMode,
-                    currentSettings);
+                    currentSettings,
+                    _settingsManager);
 
                 // Handle calibration completion to refresh our state
                 calibrationWindow.CalibrationCompleted += (s, e) =>
