@@ -310,7 +310,7 @@ namespace HDRGammaController.ViewModels
 
         private void OpenCalibration()
         {
-            var setupWindow = new CalibrationSetupWindow(_activeMonitors);
+            var setupWindow = new CalibrationSetupWindow(_activeMonitors, _settingsManager);
             var dialogResult = setupWindow.ShowDialog();
 
             if (dialogResult == true &&

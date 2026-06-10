@@ -54,6 +54,14 @@ namespace HDRGammaController.Core
         /// double the gamma) — it should layer only night-mode warmth on top.
         /// </summary>
         public string? Mhc2ProfileName { get; set; }
+
+        /// <summary>
+        /// Colorimeter spectral correction file (.ccss/.ccmx) for this monitor's panel
+        /// type. Three-filter colorimeters like the i1 Display read narrow-spectrum panels
+        /// (QD-OLED especially) wrong without one — typically a green/magenta white error
+        /// the calibration then faithfully reproduces.
+        /// </summary>
+        public string? MeterCorrectionPath { get; set; }
         
         public CalibrationSettings ToCalibrationSettings() => new CalibrationSettings
         {
@@ -327,6 +335,19 @@ namespace HDRGammaController.Core
                 _data.MonitorProfiles[monitorDevicePath] = profile;
             }
             profile.Mhc2ProfileName = profileName;
+            Save();
+        }
+
+        /// <summary>Records (or clears) the meter spectral correction file for a monitor.</summary>
+        public void SetMeterCorrection(string monitorDevicePath, string? ccssPath)
+        {
+            if (string.IsNullOrEmpty(monitorDevicePath)) return;
+            if (!_data.MonitorProfiles.TryGetValue(monitorDevicePath, out var profile))
+            {
+                profile = new MonitorProfileData();
+                _data.MonitorProfiles[monitorDevicePath] = profile;
+            }
+            profile.MeterCorrectionPath = ccssPath;
             Save();
         }
 

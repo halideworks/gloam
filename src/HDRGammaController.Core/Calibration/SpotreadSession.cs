@@ -111,7 +111,8 @@ namespace HDRGammaController.Core.Calibration
             DisplayType displayType,
             bool hdrMode,
             Action<string> log,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            string? correctionFilePath = null)
         {
             string displayFlag = displayType.ToSpotreadFlag();
             // -v (verbose): makes Argyll 3.x print the hid_open_port lines we need to
@@ -125,6 +126,12 @@ namespace HDRGammaController.Core.Calibration
             // doesn't need a lens cap calibration, so this is safe and avoids a ~5s stall.
             string args = $"-v -N -c {instrumentIndex} -e -y {displayFlag}";
             if (hdrMode) args += " -H";
+            // Spectral correction sample (.ccss) or matrix (.ccmx): replaces the generic
+            // display-type calibration with one matched to the actual panel spectrum.
+            // Essential on narrow-primary panels (QD-OLED) where the generic corrections
+            // misplace the white point by several ΔE.
+            if (!string.IsNullOrEmpty(correctionFilePath) && File.Exists(correctionFilePath))
+                args += $" -X \"{correctionFilePath}\"";
 
             var psi = new ProcessStartInfo(spotreadPath, args)
             {

@@ -47,10 +47,15 @@ namespace HDRGammaController
         /// </summary>
         public ColorimeterService? ColorimeterService => _colorimeterService;
 
-        public CalibrationSetupWindow(List<MonitorInfo> monitors)
+        private readonly SettingsManager? _settingsManager;
+
+        public CalibrationSetupWindow(List<MonitorInfo> monitors, SettingsManager? settingsManager = null)
         {
             InitializeComponent();
             _monitors = monitors;
+            _settingsManager = settingsManager;
+
+            PopulateCorrectionFiles();
 
             // Populate monitor dropdown
             foreach (var monitor in monitors)
@@ -65,7 +70,12 @@ namespace HDRGammaController
             // Flash a big "this is the display" overlay on the chosen monitor whenever the
             // selection changes (and once on open), so it's unambiguous which physical screen
             // will be calibrated — critical when two identical displays are attached.
-            MonitorComboBox.SelectionChanged += (_, _) => IdentifySelectedMonitor();
+            MonitorComboBox.SelectionChanged += (_, _) =>
+            {
+                IdentifySelectedMonitor();
+                LoadCorrectionForSelectedMonitor();
+            };
+            LoadCorrectionForSelectedMonitor();
 
             // Initialize colorimeter asynchronously
             Loaded += async (s, e) =>
@@ -74,6 +84,107 @@ namespace HDRGammaController
                 await InitializeColorimeterAsync();
             };
         }
+
+        /// <summary>
+        /// User's drop-folder for meter correction files; created so there's an obvious
+        /// place to put downloaded .ccss/.ccmx files.
+        /// </summary>
+        private static string CorrectionsFolder => System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "HDRGammaController", "corrections");
+
+        /// <summary>
+        /// Fills the meter-correction combo with every .ccss/.ccmx found in the usual
+        /// places: our corrections folder, Argyll's per-user instrument data (where
+        /// oeminst installs converted X-Rite EDRs), and the app directory.
+        /// </summary>
+        private void PopulateCorrectionFiles()
+        {
+            CorrectionCombo.Items.Clear();
+            CorrectionCombo.Items.Add(new ComboBoxItem
+            {
+                Content = "(Built-in for display type)",
+                Tag = null,
+            });
+
+            var dirs = new[]
+            {
+                CorrectionsFolder,
+                System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ArgyllCMS"),
+                AppContext.BaseDirectory,
+            };
+            try { System.IO.Directory.CreateDirectory(CorrectionsFolder); } catch { }
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var dir in dirs)
+            {
+                try
+                {
+                    if (!System.IO.Directory.Exists(dir)) continue;
+                    foreach (var pattern in new[] { "*.ccss", "*.ccmx" })
+                        foreach (var file in System.IO.Directory.GetFiles(dir, pattern, System.IO.SearchOption.AllDirectories))
+                            if (seen.Add(file))
+                                CorrectionCombo.Items.Add(new ComboBoxItem
+                                {
+                                    Content = System.IO.Path.GetFileName(file),
+                                    ToolTip = file,
+                                    Tag = file,
+                                });
+                }
+                catch { /* unreadable dir — skip */ }
+            }
+            CorrectionCombo.SelectedIndex = 0;
+        }
+
+        private void BrowseCorrection_Click(object sender, RoutedEventArgs e)
+        {
+            var dialog = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "Select meter correction file",
+                Filter = "Colorimeter corrections (*.ccss;*.ccmx)|*.ccss;*.ccmx|All files (*.*)|*.*",
+            };
+            if (dialog.ShowDialog() != true) return;
+            SelectCorrectionPath(dialog.FileName, addIfMissing: true);
+        }
+
+        private void LoadCorrectionForSelectedMonitor()
+        {
+            var monitor = (MonitorComboBox.SelectedItem as MonitorComboItem)?.Monitor;
+            var saved = monitor != null && _settingsManager != null
+                ? _settingsManager.GetMonitorProfile(monitor.MonitorDevicePath)?.MeterCorrectionPath
+                : null;
+            SelectCorrectionPath(saved, addIfMissing: !string.IsNullOrEmpty(saved));
+        }
+
+        private void SelectCorrectionPath(string? path, bool addIfMissing)
+        {
+            if (string.IsNullOrEmpty(path))
+            {
+                CorrectionCombo.SelectedIndex = 0;
+                return;
+            }
+            foreach (ComboBoxItem item in CorrectionCombo.Items)
+            {
+                if (string.Equals(item.Tag as string, path, StringComparison.OrdinalIgnoreCase))
+                {
+                    CorrectionCombo.SelectedItem = item;
+                    return;
+                }
+            }
+            if (addIfMissing && System.IO.File.Exists(path))
+            {
+                var item = new ComboBoxItem { Content = System.IO.Path.GetFileName(path), ToolTip = path, Tag = path };
+                CorrectionCombo.Items.Add(item);
+                CorrectionCombo.SelectedItem = item;
+            }
+            else
+            {
+                CorrectionCombo.SelectedIndex = 0;
+            }
+        }
+
+        private string? SelectedCorrectionPath =>
+            (CorrectionCombo.SelectedItem as ComboBoxItem)?.Tag as string;
 
         private void IdentifySelectedMonitor()
         {
@@ -407,7 +518,14 @@ namespace HDRGammaController
             SelectedDisplayType = GetSelectedDisplayType();
             _colorimeterService?.SetDisplayType(SelectedDisplayType);
 
-            Log.Info($"Start_Click: Monitor={SelectedMonitor?.FriendlyName ?? "null"}, Target={SelectedTarget?.Name ?? "null"}, DisplayType={SelectedDisplayType}, Colorimeter={(_colorimeterService != null ? "present" : "null")}");
+            // Meter spectral correction: applied to this session and remembered per monitor.
+            string? correction = SelectedCorrectionPath;
+            _colorimeterService?.SetCorrectionFile(correction);
+            if (SelectedMonitor != null)
+                _settingsManager?.SetMeterCorrection(SelectedMonitor.MonitorDevicePath, correction);
+
+            Log.Info($"Start_Click: Monitor={SelectedMonitor?.FriendlyName ?? "null"}, Target={SelectedTarget?.Name ?? "null"}, DisplayType={SelectedDisplayType}, " +
+                     $"Correction={(correction != null ? System.IO.Path.GetFileName(correction) : "built-in")}, Colorimeter={(_colorimeterService != null ? "present" : "null")}");
 
             DialogResult = true;
             Close();

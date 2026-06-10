@@ -239,6 +239,18 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public DisplayType DisplayType => _displayType;
 
+        private string? _correctionFilePath;
+
+        /// <summary>
+        /// Sets the spectral correction file (.ccss/.ccmx) passed to spotread via -X.
+        /// Null clears it (generic display-type correction is used instead).
+        /// </summary>
+        public void SetCorrectionFile(string? path)
+        {
+            _correctionFilePath = string.IsNullOrWhiteSpace(path) ? null : path;
+            Log($"Meter correction file set to: {_correctionFilePath ?? "(built-in for display type)"}");
+        }
+
         /// <summary>
         /// Takes a single color measurement.
         /// </summary>
@@ -316,7 +328,8 @@ namespace HDRGammaController.Core.Calibration
             try
             {
                 _session = await SpotreadSession.StartAsync(
-                    _spotreadPath, instrumentIndex, _displayType, hdrMode, Log, cancellationToken);
+                    _spotreadPath, instrumentIndex, _displayType, hdrMode, Log, cancellationToken,
+                    _correctionFilePath);
                 _sessionHdrMode = hdrMode;
                 RaiseStatusChanged(ColorimeterStatus.Ready, "Spotread session ready");
             }
@@ -377,7 +390,8 @@ namespace HDRGammaController.Core.Calibration
             try
             {
                 transient = await SpotreadSession.StartAsync(
-                    _spotreadPath, instrumentIndex, _displayType, hdrMode, Log, cancellationToken);
+                    _spotreadPath, instrumentIndex, _displayType, hdrMode, Log, cancellationToken,
+                    _correctionFilePath);
             }
             catch (InvalidOperationException ex) when (UsbDriverHelper.IsDriverError(ex.Message))
             {

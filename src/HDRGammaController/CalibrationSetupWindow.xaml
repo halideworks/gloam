@@ -276,6 +276,19 @@
                                                Foreground="{StaticResource TextDim}" FontSize="11"/>
                                 </StackPanel>
                             </RadioButton>
+
+                            <TextBlock Text="Meter spectral correction" FontWeight="Medium" Margin="0,14,0,4"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <ComboBox x:Name="CorrectionCombo"/>
+                                <Button x:Name="BrowseCorrectionButton" Grid.Column="1" Content="Browse…"
+                                        Margin="6,0,0,0" Padding="10,2" Click="BrowseCorrection_Click"/>
+                            </Grid>
+                            <TextBlock Foreground="{StaticResource TextDim}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"
+                                       Text="A correction file (.ccss/.ccmx) matched to this exact panel makes the colorimeter read it truthfully — essential on QD-OLED, where generic corrections shift the white point green/magenta by several ΔE. Get one from DisplayCAL's colorimeter corrections database, or import X-Rite EDRs with Argyll's oeminst. Remembered per monitor."/>
                         </StackPanel>
                     </Border>
 
