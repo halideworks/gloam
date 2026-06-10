@@ -445,6 +445,23 @@ namespace HDRGammaController.Core
             };
         }
 
+        /// <summary>
+        /// Applies raw per-channel correction LUTs (1024-point, signal→signal in [0,1])
+        /// directly to the display's hardware gamma ramp, bypassing gamma-mode/calibration
+        /// generation. Closed-loop calibration uses this to load a candidate correction and
+        /// re-measure it. The applied LUTs are recorded so the ramp guard preserves them
+        /// for the duration of the measurement loop instead of restoring a stale profile.
+        /// </summary>
+        public bool ApplyCorrectionLut(MonitorInfo monitor, double[] lutR, double[] lutG, double[] lutB)
+        {
+            bool ok = NativeGammaRamp.TryApply(monitor.DeviceName, lutR, lutG, lutB);
+            if (ok)
+                _lastApplied[monitor.DeviceName] = (lutR, lutG, lutB);
+            else
+                _lastApplied.TryRemove(monitor.DeviceName, out _);
+            return ok;
+        }
+
         public void ClearGamma(MonitorInfo monitor)
         {
              // The ramp is reset (or in an unknown state on failure) either way.
