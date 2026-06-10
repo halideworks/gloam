@@ -35,7 +35,8 @@ namespace HDRGammaController
             CalibrationStateManager? StateManager = null,
             GammaMode PreviousGammaMode = GammaMode.WindowsDefault,
             CalibrationSettings? PreviousSettings = null,
-            double PatchSize = 600, double PatchOffsetX = 0, double PatchOffsetY = 0);
+            double PatchSize = 600, double PatchOffsetX = 0, double PatchOffsetY = 0,
+            bool CaptureSounds = false);
         private ApplyContext? _applyContext;
         private bool _profileApplied;
 
@@ -775,6 +776,8 @@ namespace HDRGammaController
                     patchWindow.SetColor(p.DisplayRgb.R, p.DisplayRgb.G, p.DisplayRgb.B);
                     await Task.Delay(i == 0 ? 1200 : 500); // settle (longer for the first patch)
                     results.Add(await colorimeter.MeasureAsync(p, ctx.HdrMode));
+                    if (ctx.CaptureSounds)
+                        CalibrationSounds.PlayCapture();
                 }
                 _verifyMeasurements = results;
 

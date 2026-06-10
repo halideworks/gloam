@@ -15,6 +15,12 @@ namespace HDRGammaController
     /// </summary>
     public sealed class PatchDisplayWindow : Window
     {
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter,
+            int x, int y, int cx, int cy, uint uFlags);
+        private static readonly IntPtr HWND_TOPMOST = new(-1);
+        private const uint SWP_NOACTIVATE = 0x0010;
+
         // Palette mirrored from CalibrationWindow.xaml resources.
         private static readonly Brush Surround = new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A));
         private static readonly Brush OverlayBg = new SolidColorBrush(Color.FromArgb(0xCC, 0x1A, 0x1A, 0x1A));
@@ -36,15 +42,26 @@ namespace HDRGammaController
             Topmost = true;
             Background = Surround;
 
-            // Same monitor-bounds placement the calibration window uses (DXGI desktop rect).
+            // Place via raw Win32 pixels once the HWND exists. Feeding the DXGI pixel rect
+            // into WPF's DIP-based Left/Width on a hidden window gets reinterpreted against
+            // the wrong monitor's DPI on mixed-DPI setups — the window (and so the patch)
+            // came out a different physical size than the calibration pass.
             var b = monitor.MonitorBounds;
-            if (b.Right > b.Left && b.Bottom > b.Top)
+            bool haveBounds = b.Right > b.Left && b.Bottom > b.Top;
+            if (haveBounds)
             {
                 WindowStartupLocation = WindowStartupLocation.Manual;
+                SourceInitialized += (_, _) =>
+                {
+                    var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+                    SetWindowPos(hwnd, HWND_TOPMOST, b.Left, b.Top, b.Right - b.Left, b.Bottom - b.Top, SWP_NOACTIVATE);
+                };
+                // Rough WPF placement so the window first materializes on the right monitor
+                // (and therefore the right DPI context) before the pixel-exact SetWindowPos.
                 Left = b.Left;
                 Top = b.Top;
-                Width = b.Right - b.Left;
-                Height = b.Bottom - b.Top;
+                Width = 200;
+                Height = 200;
             }
             else
             {

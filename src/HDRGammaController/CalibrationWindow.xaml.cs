@@ -1259,7 +1259,8 @@ namespace HDRGammaController
                     PreviousSettings: _previousSettings,
                     PatchSize: _patchSize,
                     PatchOffsetX: _patchOffsetX,
-                    PatchOffsetY: _patchOffsetY));
+                    PatchOffsetY: _patchOffsetY,
+                    CaptureSounds: CaptureSoundCheck.IsChecked == true));
 
                 // Hands-free: the report applies the profile and verifies on open.
                 reportWindow.AutoApplyOnLoad = true;
