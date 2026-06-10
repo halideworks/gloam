@@ -62,9 +62,28 @@ namespace HDRGammaController
                 MonitorComboBox.SelectedIndex = 0;
             }
 
+            // Flash a big "this is the display" overlay on the chosen monitor whenever the
+            // selection changes (and once on open), so it's unambiguous which physical screen
+            // will be calibrated — critical when two identical displays are attached.
+            MonitorComboBox.SelectionChanged += (_, _) => IdentifySelectedMonitor();
+
             // Initialize colorimeter asynchronously
-            Loaded += async (s, e) => await InitializeColorimeterAsync();
+            Loaded += async (s, e) =>
+            {
+                IdentifySelectedMonitor();
+                await InitializeColorimeterAsync();
+            };
         }
+
+        private void IdentifySelectedMonitor()
+        {
+            if (MonitorComboBox.SelectedItem is MonitorComboItem item)
+            {
+                Services.DisplayIdentify.Flash(item.Monitor, MonitorComboBox.SelectedIndex + 1);
+            }
+        }
+
+        private void IdentifyButton_Click(object sender, System.Windows.RoutedEventArgs e) => IdentifySelectedMonitor();
 
         private async Task InitializeColorimeterAsync()
         {

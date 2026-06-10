@@ -54,6 +54,18 @@ namespace HDRGammaController.Core.Calibration
             try { matrix = Mhc2ProfileBuilder.BuildGamutMatrix(characterization, target); }
             catch (Exception ex) { return new InstallResult(false, "", $"Gamut matrix failed: {ex.Message}"); }
 
+            // GAMUT GUARD: if the target gamut is much wider than the panel can reproduce (e.g.
+            // calibrating an sRGB-class display to Rec.2020), the correction matrix swings far
+            // from identity — it tries to synthesize primaries the display can't emit, which
+            // clips and casts the whole image (magenta, in testing). Refuse and point the user
+            // at a reachable target rather than install a profile that wrecks color.
+            if (MatrixDistanceFromIdentity(matrix) > 0.35)
+                return new InstallResult(false, "",
+                    $"The chosen target ('{target.Name}') has a much wider gamut than this display can " +
+                    "reproduce, so the correction would distort colors badly (the matrix is far from " +
+                    "neutral).\n\nCalibrate to a target the panel can actually reach — for an SDR display " +
+                    "that's almost always \"sRGB (Gamma 2.2)\". Re-run with sRGB selected.");
+
             string profileName = BuildProfileName(monitor, target);
             string srcPath = Path.Combine(Path.GetTempPath(), profileName);
 
@@ -103,6 +115,19 @@ namespace HDRGammaController.Core.Calibration
             {
                 Log.Error($"CalibrationProfileInstaller: Uninstall failed: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Max absolute deviation of a 3×3 matrix from the identity. ~0 for an on-gamut
+        /// calibration, large when the target gamut exceeds what the display can emit.
+        /// </summary>
+        private static double MatrixDistanceFromIdentity(double[,] m)
+        {
+            double max = 0;
+            for (int r = 0; r < 3; r++)
+                for (int c = 0; c < 3; c++)
+                    max = Math.Max(max, Math.Abs(m[r, c] - (r == c ? 1.0 : 0.0)));
+            return max;
         }
 
         private static string? FindTemplate(double whiteLevel)
