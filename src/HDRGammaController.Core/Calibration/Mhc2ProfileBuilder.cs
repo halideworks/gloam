@@ -81,14 +81,76 @@ namespace HDRGammaController.Core.Calibration
         /// <summary>
         /// Gamut correction matrix mapping content (in the target's primaries, linear) to the
         /// display's native linear RGB so the panel reproduces the target chromaticities:
-        /// M = displayXyzToRgb · targetRgbToXyz.
+        /// M = displayXyzToRgb · bradford(targetWhite→displayWhite) · targetRgbToXyz.
+        ///
+        /// The Bradford step makes the matrix WHITE-PRESERVING (M·[1,1,1] = [1,1,1]): only the
+        /// primaries are corrected, relative to the panel's own white. Baking an absolute
+        /// white-point shift into the matrix instead drives a deficient channel above 1.0
+        /// (e.g. red 1.09 on a blue-ish panel), which clips at full scale and casts every
+        /// highlight. White-point correction belongs in the per-channel LUTs, scaled to fit —
+        /// see <see cref="WhitePointLutGains"/>.
         /// </summary>
         public static double[,] BuildGamutMatrix(DisplayCharacterization characterization, CalibrationTarget target)
         {
             var displayRgbToXyz = characterization.RgbToXyzMatrix
                 ?? throw new InvalidOperationException("Characterization has no measured RGB→XYZ matrix.");
             var displayXyzToRgb = ColorMath.Invert3x3(displayRgbToXyz);
-            return ColorMath.MultiplyMatrices(displayXyzToRgb, target.RgbToXyzMatrix);
+            // Display white straight from the measured matrix (M·[1,1,1]) so the adaptation is
+            // exactly consistent with the inversion above.
+            var displayWhite = new CieXyz(
+                displayRgbToXyz[0, 0] + displayRgbToXyz[0, 1] + displayRgbToXyz[0, 2],
+                displayRgbToXyz[1, 0] + displayRgbToXyz[1, 1] + displayRgbToXyz[1, 2],
+                displayRgbToXyz[2, 0] + displayRgbToXyz[2, 1] + displayRgbToXyz[2, 2]);
+            var adapt = ColorMath.ChromaticAdaptationMatrix(target.WhitePoint.ToXyz(1), displayWhite);
+            return ColorMath.MultiplyMatrices(displayXyzToRgb,
+                ColorMath.MultiplyMatrices(adapt, target.RgbToXyzMatrix));
+        }
+
+        /// <summary>
+        /// Converts an RGB→RGB correction matrix into the domain Windows actually applies the
+        /// MHC2 matrix in. The DWM/driver pipeline evaluates the tag's matrix sandwiched
+        /// between FIXED sRGB↔XYZ conversions (it is effectively an XYZ→XYZ transform):
+        ///
+        ///     wire = LUT( xyzToSrgb_fixed · M_tag · srgbToXyz_fixed · linearContent )
+        ///
+        /// (MHC2Gen left-multiplies its matrix by sRGB→XYZ with the comment "hack: eliminate
+        /// fixed sRGB to XYZ" — that fixed stage is the engine's, not the profile's.)
+        /// Writing a plain RGB→RGB matrix here is what caused the strong magenta cast: the
+        /// engine's sandwich turned our gentle warm correction into red ≈1.39 (clipped) with
+        /// green crushed to ≈0.87. Wrapping the matrix as srgbToXyz · M · xyzToSrgb makes the
+        /// engine's fixed conversions cancel exactly, so it applies precisely M in linear RGB.
+        /// </summary>
+        public static double[,] ToMhc2MatrixDomain(double[,] rgbToRgbMatrix)
+        {
+            var srgbToXyz = ColorMath.CalculateRgbToXyzMatrix(
+                Chromaticity.Rec709Red, Chromaticity.Rec709Green, Chromaticity.Rec709Blue, Chromaticity.D65);
+            return ColorMath.MultiplyMatrices(srgbToXyz,
+                ColorMath.MultiplyMatrices(rgbToRgbMatrix, ColorMath.Invert3x3(srgbToXyz)));
+        }
+
+        /// <summary>
+        /// Per-channel LINEAR gains (max component = 1.0) that move the panel's native white to
+        /// the target white point: the device drive that reproduces target white, normalized so
+        /// no channel exceeds full scale. Multiplying the tone LUTs by these (in signal domain:
+        /// gain^(1/gamma)) performs the white-point correction the gamut matrix deliberately
+        /// no longer does. Costs a little peak luminance (1/maxDrive) — that's inherent to
+        /// white-point calibration on a panel whose white isn't the target white.
+        /// </summary>
+        public static (double R, double G, double B) WhitePointLutGains(
+            DisplayCharacterization characterization, CalibrationTarget target)
+        {
+            var displayRgbToXyz = characterization.RgbToXyzMatrix
+                ?? throw new InvalidOperationException("Characterization has no measured RGB→XYZ matrix.");
+            var displayXyzToRgb = ColorMath.Invert3x3(displayRgbToXyz);
+            var w = target.WhitePoint.ToXyz(1);
+            double r = displayXyzToRgb[0, 0] * w.X + displayXyzToRgb[0, 1] * w.Y + displayXyzToRgb[0, 2] * w.Z;
+            double g = displayXyzToRgb[1, 0] * w.X + displayXyzToRgb[1, 1] * w.Y + displayXyzToRgb[1, 2] * w.Z;
+            double b = displayXyzToRgb[2, 0] * w.X + displayXyzToRgb[2, 1] * w.Y + displayXyzToRgb[2, 2] * w.Z;
+            double max = Math.Max(r, Math.Max(g, b));
+            if (max <= 0 || r <= 0 || g <= 0 || b <= 0)
+                throw new InvalidOperationException(
+                    $"White-point drive is degenerate (R={r:F3} G={g:F3} B={b:F3}); measurements look invalid.");
+            return (r / max, g / max, b / max);
         }
 
         private static void WriteLut(byte[] data, int lutOffset, double[] lut)

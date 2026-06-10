@@ -137,7 +137,12 @@ namespace HDRGammaController
                 var displayRgbToXyz = ColorMath.CalculateRgbToXyzMatrix(
                     new Chromaticity(g.RedX, g.RedY), new Chromaticity(g.GreenX, g.GreenY),
                     new Chromaticity(g.BlueX, g.BlueY), new Chromaticity(g.WhiteX, g.WhiteY));
-                var matrix = ColorMath.MultiplyMatrices(ColorMath.Invert3x3(displayRgbToXyz), t.RgbToXyzMatrix);
+                // Same white-preserving (Bradford-adapted) construction as
+                // Mhc2ProfileBuilder.BuildGamutMatrix, so setup and apply measure the same drive.
+                var adapt = ColorMath.ChromaticAdaptationMatrix(
+                    t.WhitePoint.ToXyz(1), new Chromaticity(g.WhiteX, g.WhiteY).ToXyz(1));
+                var matrix = ColorMath.MultiplyMatrices(ColorMath.Invert3x3(displayRgbToXyz),
+                    ColorMath.MultiplyMatrices(adapt, t.RgbToXyzMatrix));
 
                 double max = 0;
                 (double, double, double)[] contents = { (1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 1) };

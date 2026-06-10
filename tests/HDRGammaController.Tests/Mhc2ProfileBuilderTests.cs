@@ -111,34 +111,107 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
-        public void BuildGamutMatrix_ReproducesTargetWhiteOnACoolDisplay()
+        public void BuildGamutMatrix_IsWhitePreserving_OnACoolDisplay()
         {
-            // Definitive correctness check: a display with sRGB-ish primaries but a COOL white
-            // (bluer than D65). The gamut matrix applied to content-white, run back through the
-            // display's own RGB→XYZ, must land on the TARGET white (D65) — i.e. it neutralizes
-            // the blue cast. (This is the path that produced the magenta when double-corrected.)
+            // The gamut matrix must NOT shift the white point: an absolute white correction in
+            // the matrix drives the deficient channel above 1.0 (clips at full scale). On a
+            // cool (blue-ish) panel the matrix must map neutral to neutral exactly; the white
+            // correction lives in the per-channel LUT gains instead.
             var target = StandardTargets.SrgbGamma22;
             var coolWhite = new Chromaticity(0.297, 0.318); // measured M27Q-like cool white
             var displayMatrix = ColorMath.CalculateRgbToXyzMatrix(
                 new Chromaticity(0.64, 0.33), new Chromaticity(0.30, 0.60), new Chromaticity(0.15, 0.06), coolWhite);
-            var characterization = new DisplayCharacterization { RgbToXyzMatrix = displayMatrix };
+            var characterization = new DisplayCharacterization
+            {
+                RgbToXyzMatrix = displayMatrix,
+                WhitePoint = coolWhite,
+            };
 
             var m = Mhc2ProfileBuilder.BuildGamutMatrix(characterization, target);
-
-            // content white (1,1,1) -> corrected display RGB -> measured XYZ
             double[] dispRgb = MulVec(m, 1.0, 1.0, 1.0);
-            double[] producedXyz = MulVec(displayMatrix, dispRgb[0], dispRgb[1], dispRgb[2]);
+            Assert.Equal(1.0, dispRgb[0], 3);
+            Assert.Equal(1.0, dispRgb[1], 3);
+            Assert.Equal(1.0, dispRgb[2], 3);
+        }
 
-            // Target white XYZ (D65, normalized).
-            var targetWhite = target.LinearRgbToXyz(new LinearRgb(1, 1, 1));
+        [Fact]
+        public void WhitePointLutGains_ReproduceTargetWhite_AndNeverExceedFullScale()
+        {
+            var target = StandardTargets.SrgbGamma22;
+            var coolWhite = new Chromaticity(0.297, 0.318);
+            var displayMatrix = ColorMath.CalculateRgbToXyzMatrix(
+                new Chromaticity(0.64, 0.33), new Chromaticity(0.30, 0.60), new Chromaticity(0.15, 0.06), coolWhite);
+            var characterization = new DisplayCharacterization
+            {
+                RgbToXyzMatrix = displayMatrix,
+                WhitePoint = coolWhite,
+            };
+
+            var (gr, gg, gb) = Mhc2ProfileBuilder.WhitePointLutGains(characterization, target);
+
+            // Gains are normalized: nothing above full scale, the limiting channel exactly 1.
+            Assert.True(gr <= 1.0 && gg <= 1.0 && gb <= 1.0);
+            Assert.Equal(1.0, Math.Max(gr, Math.Max(gg, gb)), 6);
+            // Cool panel → red is the deficient channel (gain 1), blue gets pulled down.
+            Assert.Equal(1.0, gr, 6);
+            Assert.True(gb < gr, $"expected blue<red to warm a cool panel; got R={gr:F3} B={gb:F3}");
+
+            // Driving the panel with the gains lands on the target white chromaticity (D65).
+            double[] producedXyz = MulVec(displayMatrix, gr, gg, gb);
             var px = new CieXyz(producedXyz[0], producedXyz[1], producedXyz[2]);
+            var targetWhite = target.WhitePoint;
+            Assert.Equal(targetWhite.X, px.ToChromaticity().X, 3);
+            Assert.Equal(targetWhite.Y, px.ToChromaticity().Y, 3);
+        }
 
-            // Chromaticity of the produced white must match the target white (the point of it).
-            Assert.Equal(targetWhite.ToChromaticity().X, px.ToChromaticity().X, 3);
-            Assert.Equal(targetWhite.ToChromaticity().Y, px.ToChromaticity().Y, 3);
+        /// <summary>
+        /// Models the Windows MHC2 engine: the tag's matrix is applied between FIXED sRGB↔XYZ
+        /// conversions (wire = xyzToSrgb · M_tag · srgbToXyz · linear content).
+        /// </summary>
+        private static double[,] EngineNetTransform(double[,] tagMatrix)
+        {
+            var srgbToXyz = ColorMath.CalculateRgbToXyzMatrix(
+                Chromaticity.Rec709Red, Chromaticity.Rec709Green, Chromaticity.Rec709Blue, Chromaticity.D65);
+            return ColorMath.MultiplyMatrices(ColorMath.Invert3x3(srgbToXyz),
+                ColorMath.MultiplyMatrices(tagMatrix, srgbToXyz));
+        }
 
-            // And to correct a too-blue panel the white correction must pull blue DOWN.
-            Assert.True(dispRgb[2] < dispRgb[0], $"expected blue<red to warm a cool panel; got R={dispRgb[0]:F3} B={dispRgb[2]:F3}");
+        [Fact]
+        public void ToMhc2MatrixDomain_EngineSandwichRecoversIntendedRgbMatrix()
+        {
+            // Wrapping must make the engine's fixed conversions cancel exactly, so the engine
+            // applies precisely the intended RGB→RGB correction.
+            var intended = new double[,] { { 0.88, 0.20, 0.01 }, { 0.05, 0.93, -0.001 }, { 0.01, 0.04, 0.86 } };
+            var engineNet = EngineNetTransform(Mhc2ProfileBuilder.ToMhc2MatrixDomain(intended));
+            for (int r = 0; r < 3; r++)
+                for (int c = 0; c < 3; c++)
+                    Assert.Equal(intended[r, c], engineNet[r, c], 6);
+        }
+
+        [Fact]
+        public void EngineModel_NeutralsStayNeutral_WithMeasuredM27QPanel()
+        {
+            // Regression for the magenta cast (2026-06-10): the M27Q P's actual measured
+            // primaries/white. Writing the RGB→RGB matrix RAW into the tag made the engine
+            // render white as (R 1.39→clip, G 0.87, B 0.91) — blown red, crushed green =
+            // strong magenta. The wrapped white-preserving matrix must keep neutrals neutral.
+            var measured = ColorMath.CalculateRgbToXyzMatrix(
+                new Chromaticity(0.6890, 0.3056), new Chromaticity(0.2569, 0.6714),
+                new Chromaticity(0.1472, 0.0590), new Chromaticity(0.2992, 0.3216));
+            var characterization = new DisplayCharacterization
+            {
+                RgbToXyzMatrix = measured,
+                WhitePoint = new Chromaticity(0.2992, 0.3216),
+            };
+            var target = StandardTargets.Rec709Gamma24;
+
+            var tag = Mhc2ProfileBuilder.ToMhc2MatrixDomain(
+                Mhc2ProfileBuilder.BuildGamutMatrix(characterization, target));
+            double[] wire = MulVec(EngineNetTransform(tag), 1.0, 1.0, 1.0);
+
+            Assert.Equal(1.0, wire[0], 3);
+            Assert.Equal(1.0, wire[1], 3);
+            Assert.Equal(1.0, wire[2], 3);
         }
 
         private static double[] MulVec(double[,] m, double a, double b, double c) => new[]

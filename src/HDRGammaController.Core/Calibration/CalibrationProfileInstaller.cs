@@ -51,7 +51,12 @@ namespace HDRGammaController.Core.Calibration
                 return new InstallResult(false, "", "No MHC2 template found to base the profile on.");
 
             double[,] matrix;
-            try { matrix = Mhc2ProfileBuilder.BuildGamutMatrix(characterization, target); }
+            (double R, double G, double B) whiteGains;
+            try
+            {
+                matrix = Mhc2ProfileBuilder.BuildGamutMatrix(characterization, target);
+                whiteGains = Mhc2ProfileBuilder.WhitePointLutGains(characterization, target);
+            }
             catch (Exception ex) { return new InstallResult(false, "", $"Gamut matrix failed: {ex.Message}"); }
 
             // GAMUT GUARD: block only when the target gamut is wider than the panel can EMIT
@@ -60,7 +65,8 @@ namespace HDRGammaController.Core.Calibration
             // display drive value well above full-scale → clipping and a heavy cast (the magenta
             // we hit). NARROWING a slightly-wide panel to sRGB/Rec.709 is perfectly reachable
             // (drive values stay <= 1) and must NOT be blocked — that wrongly rejected a good
-            // Gamma-2.4 calibration. A small overshoot from white-point correction is fine.
+            // Gamma-2.4 calibration. (The matrix is white-preserving now, so white-point
+            // correction no longer contributes any overshoot here.)
             double maxDrive = MaxTargetDrive(matrix);
             if (maxDrive > 1.3) // keep in sync with the setup-time EDID filter
                 return new InstallResult(false, "",
@@ -69,12 +75,37 @@ namespace HDRGammaController.Core.Calibration
                     "correction would clip and cast color.\n\nCalibrate to a target the panel can reach — " +
                     "for an SDR display that's usually \"sRGB (Gamma 2.2)\" or Rec.709. Re-run with that selected.");
 
+            // Fold the white-point correction into the tone LUTs as per-channel signal gains.
+            // For a gamma-law panel a linear gain g is exactly a signal gain g^(1/gamma).
+            double gamma = characterization.MeasuredGamma is > 1.0 and < 3.5
+                ? characterization.MeasuredGamma : 2.2;
+            double[] gainedR = ApplySignalGain(lutR, whiteGains.R, gamma);
+            double[] gainedG = ApplySignalGain(lutG, whiteGains.G, gamma);
+            double[] gainedB = ApplySignalGain(lutB, whiteGains.B, gamma);
+
+            // Windows applies the MHC2 matrix sandwiched between fixed sRGB↔XYZ conversions,
+            // so the tag must hold the matrix pre-wrapped into that domain.
+            double[,] mhc2Matrix = Mhc2ProfileBuilder.ToMhc2MatrixDomain(matrix);
+
+            // Self-documenting diagnostics: every install logs exactly what was computed, so a
+            // bad-looking result can be diagnosed from app.log without re-running calibration.
+            var c = characterization;
+            Log.Info(
+                $"CalibrationProfileInstaller: target '{target.Name}'\n" +
+                $"  measured primaries R({c.RedPrimary.X:F4},{c.RedPrimary.Y:F4}) G({c.GreenPrimary.X:F4},{c.GreenPrimary.Y:F4}) " +
+                $"B({c.BluePrimary.X:F4},{c.BluePrimary.Y:F4}) W({c.WhitePoint.X:F4},{c.WhitePoint.Y:F4}) " +
+                $"peak {c.PeakLuminance:F1} cd/m², gamma {c.MeasuredGamma:F2}\n" +
+                $"  gamut matrix (RGB→RGB, white-preserving): {FormatMatrix(matrix)}\n" +
+                $"  MHC2 tag matrix (XYZ-domain wrapped):     {FormatMatrix(mhc2Matrix)}\n" +
+                $"  white-point LUT gains R={whiteGains.R:F4} G={whiteGains.G:F4} B={whiteGains.B:F4} " +
+                $"(signal exp 1/{gamma:F2}), max target drive {maxDrive:F3}");
+
             string profileName = BuildProfileName(monitor, target);
             string srcPath = Path.Combine(Path.GetTempPath(), profileName);
 
             try
             {
-                Mhc2ProfileBuilder.Build(template, srcPath, matrix, lutR, lutG, lutB);
+                Mhc2ProfileBuilder.Build(template, srcPath, mhc2Matrix, gainedR, gainedG, gainedB);
 
                 // Copy into the system color store. Returns false if an identical name already
                 // exists — harmless, we re-associate below regardless.
@@ -126,6 +157,21 @@ namespace HDRGammaController.Core.Calibration
         /// reachable (including narrowing a wider panel); well above 1 means the target asks for
         /// primaries the display can't emit → it would clip and cast.
         /// </summary>
+        /// <summary>Scales a signal-domain tone LUT by a linear-light gain (gain^(1/gamma)).</summary>
+        private static double[] ApplySignalGain(double[] lut, double linearGain, double gamma)
+        {
+            double signalGain = Math.Pow(Math.Clamp(linearGain, 1e-6, 1.0), 1.0 / gamma);
+            var result = new double[lut.Length];
+            for (int i = 0; i < lut.Length; i++)
+                result[i] = Math.Clamp(lut[i] * signalGain, 0.0, 1.0);
+            return result;
+        }
+
+        private static string FormatMatrix(double[,] m) =>
+            $"[{m[0, 0]:F5} {m[0, 1]:F5} {m[0, 2]:F5}; " +
+            $"{m[1, 0]:F5} {m[1, 1]:F5} {m[1, 2]:F5}; " +
+            $"{m[2, 0]:F5} {m[2, 1]:F5} {m[2, 2]:F5}]";
+
         private static double MaxTargetDrive(double[,] m)
         {
             double max = 0;
