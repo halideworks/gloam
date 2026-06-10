@@ -28,7 +28,9 @@ namespace HDRGammaController.Core.Calibration
         private readonly bool _isHdr;
         private readonly double _damping; // 0..1; lower = more cautious steps
 
-        public ClosedLoopCorrector(CalibrationTarget target, double sdrWhiteLevel, bool isHdr, double damping = 0.85)
+        // Cautious default damping: each refinement only takes ~half the proposed step, so
+        // measurement noise can't make the on-screen correction swing wildly between passes.
+        public ClosedLoopCorrector(CalibrationTarget target, double sdrWhiteLevel, bool isHdr, double damping = 0.5)
         {
             _target = target ?? throw new ArgumentNullException(nameof(target));
             _sdrWhiteLevel = sdrWhiteLevel;
@@ -173,9 +175,11 @@ namespace HDRGammaController.Core.Calibration
             double gR = mr > 1e-4 ? tr / mr : 1.0;
             double gG = mg > 1e-4 ? tg / mg : 1.0;
             double gB = mb > 1e-4 ? tb / mb : 1.0;
-            gR = Math.Clamp(Lerp(1.0, gR, _damping), 0.85, 1.15);
-            gG = Math.Clamp(Lerp(1.0, gG, _damping), 0.85, 1.15);
-            gB = Math.Clamp(Lerp(1.0, gB, _damping), 0.85, 1.15);
+            // Tight per-step bound: white balance moves at most a few percent per round, so a
+            // single noisy white reading can't tint the whole screen red or green.
+            gR = Math.Clamp(Lerp(1.0, gR, _damping), 0.94, 1.06);
+            gG = Math.Clamp(Lerp(1.0, gG, _damping), 0.94, 1.06);
+            gB = Math.Clamp(Lerp(1.0, gB, _damping), 0.94, 1.06);
             return (gR, gG, gB);
         }
 

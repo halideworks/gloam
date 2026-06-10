@@ -35,6 +35,17 @@ namespace HDRGammaController.Core.Calibration
             if (string.IsNullOrEmpty(monitor.MonitorDevicePath))
                 return new InstallResult(false, "", "Monitor has no device path; cannot associate a profile.");
 
+            // SAFETY GATE: the shipped MHC2 templates are SDR (gamma 2.2). Installing an SDR
+            // profile while the display is in HDR mode produces a washed-out, highlight-crushed
+            // image (learned the hard way). Refuse the mismatch instead of wrecking the display.
+            // HDR-native MHC2 generation is a separate, validated path.
+            if (monitor.IsHdrActive)
+                return new InstallResult(false, "",
+                    "This display is currently in HDR mode, and only SDR calibration profiles are " +
+                    "available to install. Applying an SDR profile in HDR would wash out the image.\n\n" +
+                    "Switch the display to SDR to apply this calibration, or wait for the HDR-native " +
+                    "calibration path. (Your measurements and the report are still valid.)");
+
             string? template = FindTemplate(whiteLevel);
             if (template == null)
                 return new InstallResult(false, "", "No MHC2 template found to base the profile on.");
@@ -43,7 +54,7 @@ namespace HDRGammaController.Core.Calibration
             try { matrix = Mhc2ProfileBuilder.BuildGamutMatrix(characterization, target); }
             catch (Exception ex) { return new InstallResult(false, "", $"Gamut matrix failed: {ex.Message}"); }
 
-            string profileName = $"HDRCal_{ShortHash(monitor.MonitorDevicePath)}.icm";
+            string profileName = BuildProfileName(monitor, target);
             string srcPath = Path.Combine(Path.GetTempPath(), profileName);
 
             try
@@ -114,6 +125,33 @@ namespace HDRGammaController.Core.Calibration
             var dir = new DirectoryInfo(AppContext.BaseDirectory);
             for (int i = 0; i < 8 && dir != null; i++, dir = dir.Parent)
                 yield return dir.FullName;
+        }
+
+        /// <summary>
+        /// Human-readable, explanatory, dated profile filename, e.g.
+        /// "M27Q P - sRGB G2.2 - 2026-06-09 2245.icm". Sanitized for the file system; the
+        /// trailing timestamp keeps each calibration distinct in Color Management.
+        /// </summary>
+        private static string BuildProfileName(MonitorInfo monitor, CalibrationTarget target)
+        {
+            string monitorName = Sanitize(string.IsNullOrWhiteSpace(monitor.FriendlyName) ? "Display" : monitor.FriendlyName);
+            string targetName = Sanitize(ShortTargetName(target));
+            string stamp = DateTime.Now.ToString("yyyy-MM-dd HHmm");
+            return $"{monitorName} - {targetName} - {stamp}.icm";
+        }
+
+        private static string ShortTargetName(CalibrationTarget t)
+        {
+            // Compact, recognizable label rather than the long descriptive Name.
+            string n = t.Name ?? "Custom";
+            return n.Replace("(", "").Replace(")", "").Replace("Gamma ", "G").Trim();
+        }
+
+        private static string Sanitize(string s)
+        {
+            foreach (char c in Path.GetInvalidFileNameChars()) s = s.Replace(c, ' ');
+            s = s.Replace("  ", " ").Trim();
+            return s.Length > 40 ? s[..40].Trim() : s;
         }
 
         private static string ShortHash(string input)

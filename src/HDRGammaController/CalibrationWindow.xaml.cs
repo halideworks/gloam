@@ -613,13 +613,17 @@ namespace HDRGammaController
             ApplyPatchOffset();
 
             // Create the calibration orchestrator
+            // Measure in the display's actual HDR/SDR state — measuring HDR signal as if SDR
+            // (the old hardcoded false) feeds the corrector nits-scaled data against an SDR
+            // target, which made it diverge and produced an SDR profile for an HDR panel.
+            bool hdrMode = _targetMonitor?.IsHdrActive ?? false;
             _orchestrator = new CalibrationOrchestrator(
                 _colorimeterService,
                 _calibrationTarget,
                 _calibrationPreset,
                 settleTimeMs: 300,
                 maxRetries: 3,
-                hdrMode: false); // TODO: Detect HDR mode
+                hdrMode: hdrMode);
 
             // Wire up orchestrator events
             _orchestrator.DisplayPatchRequested += Orchestrator_DisplayPatchRequested;
@@ -628,7 +632,23 @@ namespace HDRGammaController
             _orchestrator.MeasurementTaken += Orchestrator_MeasurementTaken;
             _orchestrator.ErrorOccurred += Orchestrator_ErrorOccurred;
             _orchestrator.CalibrationCompleted += Orchestrator_CalibrationCompleted;
-            _orchestrator.PhaseChanged += (_, label) => Dispatcher.Invoke(() => PhaseText.Text = label);
+            _orchestrator.PhaseChanged += (_, label) => Dispatcher.Invoke(() =>
+            {
+                // Verification/refinement passes report "Phase: i/N". Restart the progress bar
+                // at 0 for each pass instead of leaving it pinned at ~99% from the measure pass.
+                PhaseText.Text = label;
+                int slash = label.LastIndexOf('/');
+                int colon = label.LastIndexOf(':');
+                if (slash > colon && colon >= 0
+                    && int.TryParse(label.AsSpan(colon + 1, slash - colon - 1).Trim(), out int cur)
+                    && int.TryParse(label.AsSpan(slash + 1).Trim(), out int total) && total > 0)
+                {
+                    double pct = cur * 100.0 / total;
+                    CalibrationProgressBar.Value = pct;
+                    ProgressPercentText.Text = $"{pct:F0}%";
+                    PatchInfoText.Text = label;
+                }
+            });
 
             // Enable the in-session apply → verify → refine closed loop when we have a target
             // monitor + bypass manager. It loads each candidate correction onto the display's
