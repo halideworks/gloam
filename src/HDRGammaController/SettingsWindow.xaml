@@ -472,7 +472,7 @@
                                     <TextBlock Text="Brightness" Style="{StaticResource SectionHeader}"/>
                                     <TextBlock x:Name="BrightnessValue" Text="100%" Style="{StaticResource ValueDisplay}"/>
                                 </Grid>
-                                <Slider x:Name="BrightnessSlider" Style="{StaticResource ModernSlider}"
+                                <Slider x:Name="BrightnessSlider" IsSnapToTickEnabled="True" TickFrequency="1" Style="{StaticResource ModernSlider}"
                                         Minimum="10" Maximum="100" Value="100" 
                                         ValueChanged="BrightnessSlider_ValueChanged"/>
                                 <CheckBox x:Name="EnhanceShadowsCheck" Content="Enhance shadow detail (Recommended)" 
@@ -503,7 +503,7 @@
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
-                                    <Slider x:Name="TemperatureSlider" Grid.Column="0" Style="{StaticResource CenteredSlider}"
+                                    <Slider x:Name="TemperatureSlider" IsSnapToTickEnabled="True" TickFrequency="1" Grid.Column="0" Style="{StaticResource CenteredSlider}"
                                             Minimum="-50" Maximum="50" Value="0"
                                             behaviors:SliderDetent.IsEnabled="True"
                                             behaviors:SliderDetent.DetentValue="0"
@@ -526,7 +526,7 @@
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
-                                    <Slider x:Name="TintSlider" Grid.Column="0" Style="{StaticResource CenteredSlider}"
+                                    <Slider x:Name="TintSlider" IsSnapToTickEnabled="True" TickFrequency="1" Grid.Column="0" Style="{StaticResource CenteredSlider}"
                                             Minimum="-50" Maximum="50" Value="0"
                                             behaviors:SliderDetent.IsEnabled="True"
                                             behaviors:SliderDetent.DetentValue="0"
@@ -565,7 +565,7 @@
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
-                                    <Slider x:Name="TempOffsetSlider" Grid.Column="0" Style="{StaticResource CenteredSlider}"
+                                    <Slider x:Name="TempOffsetSlider" IsSnapToTickEnabled="True" TickFrequency="1" Grid.Column="0" Style="{StaticResource CenteredSlider}"
                                             Minimum="-20" Maximum="20" Value="0"
                                             behaviors:SliderDetent.IsEnabled="True"
                                             behaviors:SliderDetent.DetentValue="0"
@@ -671,3 +671,5 @@
         </Grid>
     </Border>
 </Window>
+
+

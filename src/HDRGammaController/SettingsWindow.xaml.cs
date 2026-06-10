@@ -354,14 +354,17 @@ namespace HDRGammaController
         private void UpdateProfileFromUI()
         {
             _currentProfile.GammaMode = GetSelectedGammaMode();
-            _currentProfile.Brightness = BrightnessSlider.Value;
+            // Whole-number values: the raw slider doubles (59.71698113207549%) are
+            // meaningless precision for these controls and ugly in the UI/logs.
+            _currentProfile.Brightness = Math.Round(BrightnessSlider.Value);
             _currentProfile.UseLinearBrightness = EnhanceShadowsCheck.IsChecked != true;
-            _currentProfile.Temperature = TemperatureSlider.Value;
-            _currentProfile.TemperatureOffset = TempOffsetSlider.Value;
-            _currentProfile.Tint = TintSlider.Value;
-            _currentProfile.RedGain = RedGainSlider.Value;
-            _currentProfile.GreenGain = GreenGainSlider.Value;
-            _currentProfile.BlueGain = BlueGainSlider.Value;
+            _currentProfile.Temperature = Math.Round(TemperatureSlider.Value);
+            _currentProfile.TemperatureOffset = Math.Round(TempOffsetSlider.Value);
+            _currentProfile.Tint = Math.Round(TintSlider.Value);
+            // RGB gains are fractional (0.5-1.5) - two decimals, not whole numbers.
+            _currentProfile.RedGain = Math.Round(RedGainSlider.Value, 2);
+            _currentProfile.GreenGain = Math.Round(GreenGainSlider.Value, 2);
+            _currentProfile.BlueGain = Math.Round(BlueGainSlider.Value, 2);
             
             Log.Info($"UpdateProfileFromUI: Brightness={_currentProfile.Brightness}, Temp={_currentProfile.Temperature}, Tint={_currentProfile.Tint}");
         }
