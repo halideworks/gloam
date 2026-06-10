@@ -655,10 +655,15 @@ namespace HDRGammaController
                         PhaseText.Text = "Generating LUT...";
                     });
 
+                    // 33³ is the standard "high quality" 3D-LUT grid (the size Resolve/most
+                    // .cube workflows default to). The grid is sampled from the fitted
+                    // characterization model, not the raw patches, so a denser grid just
+                    // interpolates the correction more smoothly — it costs <1s to build and
+                    // doesn't require more measurements. 17³ was coarse enough to band gradients.
                     var generator = new Lut3DGenerator(
                         _calibrationTarget!,
                         _calibrationResult.Measurements,
-                        lutSize: 17);
+                        lutSize: 33);
 
                     _generatedLut = generator.Generate(progress =>
                     {
@@ -1036,10 +1041,11 @@ namespace HDRGammaController
             // Create a calibration profile from the results
             var profile = new CalibrationProfile
             {
-                MonitorDevicePath = "calibration_session", // Session-based, not persisted yet
-                MonitorName = "Calibrated Display", // TODO: Get actual monitor name from CalibrationSetupWindow
+                MonitorDevicePath = _targetMonitor?.MonitorDevicePath ?? "calibration_session",
+                MonitorName = !string.IsNullOrWhiteSpace(_targetMonitor?.FriendlyName)
+                    ? _targetMonitor!.FriendlyName : "Calibrated Display",
                 Target = _calibrationTarget,
-                LutSize = 17,
+                LutSize = _generatedLut?.Size ?? 33,
                 PatchCount = _calibrationResult.Measurements?.Count ?? 0,
                 ColorimeterModel = _colorimeterService?.ConnectedColorimeter?.Model,
                 LastCalibratedAt = DateTime.UtcNow,

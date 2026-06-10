@@ -4,6 +4,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Media;
 using HDRGammaController.Core.Calibration;
+using HDRGammaController.Services;
 using Microsoft.Win32;
 
 namespace HDRGammaController
@@ -32,6 +33,7 @@ namespace HDRGammaController
             Lut3D? correctionLut = null)
         {
             InitializeComponent();
+            WindowTheme.UseDarkTitleBar(this);
 
             _profile = profile;
             _metrics = metrics;

@@ -359,6 +359,11 @@ namespace HDRGammaController.Core.Calibration
                 // Request patch display
                 DisplayPatchRequested?.Invoke(this, new DisplayPatchEventArgs(patch, _currentPatchIndex, _patches.Count));
 
+                // Update progress now that this patch is on screen and being measured, so the
+                // "Current"/"Next" labels track what's actually displayed. (A second update
+                // fires after the measurement completes to advance the percentage.)
+                RaiseProgressChanged();
+
                 // Wait for display to settle
                 await Task.Delay(_settleTimeMs, cancellationToken);
 
