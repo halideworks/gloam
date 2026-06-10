@@ -23,8 +23,9 @@ This whitepaper documents the mathematical foundations, engineering decisions, a
 7. [Implementation Architecture](#7-implementation-architecture)
 8. [Windows HDR Pipeline Context](#8-windows-hdr-pipeline-context)
 9. [Verification and Accuracy](#9-verification-and-accuracy)
-10. [Acknowledgements](#10-acknowledgements)
-11. [References](#11-references)
+10. [Colorimeter Calibration and the MHC2 Pipeline](#10-colorimeter-calibration-and-the-mhc2-pipeline)
+11. [Acknowledgements](#11-acknowledgements)
+12. [References](#12-references)
 
 ---
 
@@ -471,7 +472,47 @@ Correct gamma application manifests visually as rich, defined shadows rather tha
 
 ---
 
-## 10. Acknowledgements
+## 10. Colorimeter Calibration and the MHC2 Pipeline
+
+The per-channel ramp of Sections 4–7 corrects tone, but it is structurally incapable of correcting color: a 1D LUT per channel cannot move a primary, cannot rotate a white point without disturbing the channels independently, and—decisively—is not honored consistently by the Advanced Color compositor. Measurement-based calibration therefore required a second application mechanism, and Windows offers exactly one OS-native hook for it: an ICC profile carrying the **MHC2 tag**, from which the Desktop Window Manager extracts a 3×4 matrix and three regamma LUTs and applies them at composition—persistently, system-wide, and in both SDR and HDR. The findings in this section were each purchased with a failed on-screen result and a colorimeter; they are documented here because almost none of them are written down anywhere else.
+
+### 10.1 The Matrix Slot Is an XYZ Transform
+
+The single most consequential discovery: Windows does not apply the MHC2 matrix to RGB values. The engine evaluates it **sandwiched between fixed conversions to and from CIE XYZ**, using the wire primaries of the current mode—sRGB in SDR, BT.2020 in HDR:
+
+```
+wire = LUT( XYZ→wire_fixed · M_tag · wire→XYZ_fixed · linear_content )
+```
+
+The reference generator (MHC2Gen) acknowledges this only in a code comment—left-multiplying its matrix by sRGB→XYZ with the note *"hack: eliminate fixed sRGB to XYZ."* Writing a plain linear-RGB→RGB correction into the slot, as a naive implementation does, produces dramatic damage: on the test display the engine's sandwich turned a gentle warm correction into a white drive of (R 1.39—clipped, G 0.866, B 0.910), a violent magenta cast across the entire tonal range. The correct construction wraps the intended RGB→RGB matrix **M** as `S·M·S⁻¹` (with S the wire RGB→XYZ matrix), whereupon the engine's fixed conversions cancel algebraically and exactly **M** is applied. A useful corollary: because the display is characterized *through* Windows' own content rendering, the wire-format conversion cancels identically in SDR and HDR—the same sRGB-wrapped matrix is correct in both modes, a result verified both algebraically and on-screen.
+
+### 10.2 White Point: Absolute Matrix, Uniform Scale
+
+White-point correction belongs **inside the matrix**, as the textbook absolute mapping (content white → target white), with one refinement: on a panel whose native white differs from the target, some channel demands more than full-scale drive (1.095 on the blue-leaning test LCD), which clips. The resolution is a single **uniform scale** of the entire matrix by the reciprocal of the largest drive value—every chromaticity, primaries included, is preserved exactly, at the cost of a few percent of peak luminance.
+
+The tempting alternative—normalizing per channel and folding the residual gains into the tone LUTs—was implemented, measured, and rejected: per-channel gains form a diagonal matrix applied *after* the gamut matrix and re-tint every non-neutral color the matrix had just placed. Verified consequence: primaries degraded from 1.39 to 2.46 ΔE2000 while neutrals measured fine. Chromatic corrections must never be split across stages that compose multiplicatively per channel.
+
+### 10.3 HDR: PQ-Domain LUTs and the Tone-Mapping Knee
+
+In HDR the MHC2 LUTs operate on **PQ wire signal** (0–1 ≙ 0–10,000 nits via ST.2084), and two physical constraints bound what they may attempt. First, calibration patches are SDR content, mapped by Windows onto the wire at `PQ(sdrWhite · sRGB(v))`—the measurements only cover the wire up to the SDR white level (queried live via `DISPLAYCONFIG_SDR_WHITE_LEVEL`; the assumed 200-nit default was off by 20% on the test system). Second, the upper portion of even that range sits inside the panel's own tone-mapping knee, where the wire-axis model is invalid—and, more subtly, where a strongly curved per-channel LUT distorts the channel ratios of unequal drive values, which is precisely the matrix's corrected white. The first implementation corrected aggressively to the top and measurably destroyed its own white point (189 nits at x = 0.301 instead of ~220 at D65). The shipped builder corrects fully only below 50% of the measured range, fades to identity by 80%, and passes the knee—and all true HDR highlights—through untouched. Microsoft's own HDR Calibration utility, dissected for reference, ships an identity matrix and two-entry identity LUTs: its entire payload is the MHC2 header's min/max luminance metadata, which this tool also writes from the panel's DXGI-reported range.
+
+### 10.4 Advanced Color Association
+
+HDR displays do not read the classic per-device profile association; they read the **Advanced Color list** (registry `ICMProfileAC`), reachable only through `ColorProfileAddDisplayAssociation(..., associateAsAdvancedColor: true)` with the display's DisplayConfig adapter LUID and source id. The classic WCS association APIs place profiles in a list Windows ignores while HDR is active—a silent failure mode. (A practical interop warning recorded for posterity: `DISPLAYCONFIG_RATIONAL` must be declared as two 32-bit fields; declaring it as a 64-bit integer changes the struct's alignment, inflates `DISPLAYCONFIG_PATH_TARGET_INFO` from 48 to 56 bytes, and `QueryDisplayConfig` rejects every call with `ERROR_INVALID_PARAMETER`—silently breaking both association and SDR-white-level queries.)
+
+### 10.5 Meter Truth: Spectral Corrections
+
+A three-filter colorimeter is only as accurate as the spectral correction matching the panel's emission spectra, and modern panels—KSF/PFS phosphor LCDs, QD-OLED—are pathological cases for generic corrections. Measured consequence on this project's two test panels: opposite-signed white errors of roughly ±11 tint steps against a common WOLED reference, each calibration faithfully reproducing its meter's misplaced D65. With panel-matched spectral samples (`.ccss`, applied via Argyll's `-X`), the KSF LCD's native state measured nearly on-target (0.89 ΔE primaries)—revealing that earlier corrections had been partly chasing a meter artifact. The application integrates the DisplayCAL community corrections database directly (searchable in-app; entries embed the full CGATS content) and remembers the correction per monitor.
+
+### 10.6 Verification and the Noise Floor
+
+Every calibration is verified by re-measuring a patch sweep **through the applied profile**—the compositor applies MHC2 to all content, so a patch window sees the corrected output—using the identical ΔE2000 metric as the native characterization, with the GPU ramp quiesced for the sweep's duration (the user's gamma preference is a deliberate offset, and an early verification pass that measured it produced a phantom 2.3 ΔE grayscale "regression" with untouched full-signal patches—the diagnostic signature of a gamma ramp riding the measurement).
+
+Two empirical rules emerged. First: **once a panel measures inside the system's noise-plus-nonlinearity floor natively (≲ 2.5 ΔE average), full gamut correction has nothing real to fix and verification reliably comes back worse**—the correct prescriptions are white-point-only correction (the matrix built with target primaries replaced by the measured ones) or no correction at all. Second: measured accuracy and perceptual match are distinct targets. Observer metamerism guarantees that displays of different spectral character can measure identical and look different side by side; the final small visual trim against a reference display is not a failure of calibration but its last legitimate step, and the tool's report says so explicitly.
+
+---
+
+## 11. Acknowledgements
 
 This work builds directly on the research and implementation of **Dylan Raga** ([dylanraga/win11hdr-srgb-to-gamma2.2-icm](https://github.com/dylanraga/win11hdr-srgb-to-gamma2.2-icm)), whose identification of the Windows SDR-in-HDR transfer function problem and creation of the original LUT generator laid the foundation for this project.
 
@@ -483,7 +524,7 @@ Additional acknowledgements:
 
 ---
 
-## 11. References
+## 12. References
 
 [^1]: Poynton, C. (2003). *Digital Video and HDTV: Algorithms and Interfaces*. Morgan Kaufmann. Chapter on gamma and transfer functions.
 
@@ -507,4 +548,4 @@ Additional acknowledgements:
 
 ---
 
-*Last updated: June 2026*
+*Last updated: June 10, 2026 — added Section 10 (Colorimeter Calibration and the MHC2 Pipeline), documenting the MHC2 matrix XYZ-sandwich semantics, uniform-scale white handling, knee-safe PQ LUTs, Advanced Color association, spectral corrections, and the verification methodology.*

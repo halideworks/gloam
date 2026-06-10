@@ -15,7 +15,13 @@ A Windows System Tray application to manage HDR Gamma settings on a per-monitor 
 - **Per-Monitor Color Matching**:
   - **Temperature Offset**: Fine-tune the white point of individual monitors to visually match them to each other, especially effective when Night Mode is active.
 - **Native, Self-Healing Gamma Apply**: LUTs load directly into the GPU gamma ramp via the Windows API (sub-millisecond, no helper process), and a ramp guard detects when a fullscreen game or driver event resets the ramp and silently restores the correction within seconds
-- **Colorimeter Calibration**: Measure your display with a colorimeter (via ArgyllCMS `spotread`) and build measurement-based correction profiles
+- **Full Colorimeter Calibration (SDR and HDR)**: Measure your display with a colorimeter (via ArgyllCMS `spotread`) and install a measurement-based correction as a native Windows MHC2 color profile - applied by the compositor itself, persistently, including in HDR:
+  - Hands-free flow: measure, apply, and verify automatically, ending on a scored report with measured before/after accuracy (dE2000), corrected-response charts, and an enable/disable A/B toggle
+  - Gamut + white point correction via a properly domain-wrapped MHC2 matrix, plus tone correction (PQ-domain in HDR, knee-safe so the panel's own highlight handling is preserved)
+  - White-point-only mode for panels that already measure close to target (auto-suggested for OLED)
+  - Meter spectral corrections (.ccss/.ccmx) with an in-app browser for the DisplayCAL community corrections database - essential for accurate readings on QD-OLED and wide-gamut panels
+  - Per-monitor memory of display type, correction file, and calibration scope
+  - Your gamma preference and night mode compose on top of the installed calibration
 - **Update Checker**: Automatically notifies you when a new version or auto-build is available.
 - **System Tray Integration**: Unobtrusive background operation with dark/light mode support
 - **Start with Windows**: Toggle auto-start from the tray menu
@@ -94,6 +100,17 @@ dotnet publish src/HDRGammaController -c Release -r win-x64 --self-contained tru
 
 Your selections are automatically saved and restored on next launch.
 
+## Display Calibration (Colorimeter)
+
+With a supported colorimeter connected (e.g. X-Rite i1 Display Pro), open **Calibrate Display** from the tray:
+
+1. **Pick the monitor, display type, and target.** For HDR displays use "HDR Desktop PQ (sRGB gamut)". Select a **meter spectral correction** matched to your panel - the "Find online" button searches the DisplayCAL community database and downloads directly (strongly recommended for QD-OLED and wide-gamut panels, where generic corrections misread the white point by several dE).
+2. **Run the calibration.** Patches are measured with your existing corrections bypassed; on completion the report opens, applies the profile, and re-measures through it automatically.
+3. **Read the report.** Native vs. calibrated dE2000 (average / max / grayscale / primaries), tone and gamut charts with the corrected response overlaid, and a grade reflecting the corrected display. Use the toggle button for an eyes-on A/B against the uncorrected panel.
+4. **Trust your eyes last.** Instruments and eyes weigh display spectra differently (observer metamerism) - a small final Tint/Temperature trim against a reference display is normal, rides on top of the profile, and never affects the measurements.
+
+If a panel already measures close to target natively, prefer the **white point correction only** option - full gamut correction cannot improve what is already inside measurement noise. Calibrate with the panel warmed up (especially OLEDs).
+
 ## Keyboard Shortcuts
 
 Global hotkeys allow you to quickly switch modes without opening the tray menu:
@@ -121,7 +138,9 @@ For a detailed explanation of the mathematics and engineering behind this tool, 
 ## Acknowledgements
 
 - **[dylanraga](https://github.com/dylanraga/win11hdr-srgb-to-gamma2.2-icm)**: Original research and Python implementation
-- **[ArgyllCMS](https://www.argyllcms.com/)**: Low-level VCGT access via `dispwin`
+- **[ArgyllCMS](https://www.argyllcms.com/)**: Colorimeter measurement (`spotread`) and low-level VCGT access via `dispwin`
+- **[MHC2 / MHC2Gen](https://github.com/dantmnf/MHC2)** by dantmnf: Reference for the MHC2 ICC tag format and matrix semantics
+- **[DisplayCAL colorimeter corrections database](https://colorimetercorrections.displaycal.net/)**: Community-contributed spectral corrections used by the in-app browser
 
 ## License
 
