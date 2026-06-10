@@ -279,6 +279,12 @@
                                 </StackPanel>
                             </RadioButton>
 
+                            <Border x:Name="OledWarmupHint" Visibility="Collapsed"
+                                    Background="#2a2418" CornerRadius="4" Padding="10,8" Margin="0,10,0,0">
+                                <TextBlock Foreground="#d9c184" FontSize="11" TextWrapping="Wrap"
+                                           Text="OLED tip: calibrate with the panel WARM (30+ minutes of normal use). OLED white drifts a couple of dE while cold and through panel-compensation cycles; calibrating cold bakes the cold state into the profile."/>
+                            </Border>
+
                             <TextBlock Text="Meter spectral correction" FontWeight="Medium" Margin="0,14,0,4"/>
                             <Grid>
                                 <Grid.ColumnDefinitions>
@@ -294,6 +300,10 @@
                             </Grid>
                             <TextBlock Foreground="{StaticResource TextDim}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"
                                        Text="A correction file (.ccss/.ccmx) matched to this exact panel makes the colorimeter read it truthfully. Essential on QD-OLED, where generic corrections shift the white point green/magenta by several ΔE. Use Find online to get one from the DisplayCAL community database. Remembered per monitor."/>
+
+                            <Button x:Name="ManageProfilesButton" Content="Manage installed calibration profiles…"
+                                    HorizontalAlignment="Left" Margin="0,12,0,0" Padding="10,4"
+                                    Background="#3D3D3D" Click="ManageProfiles_Click"/>
                         </StackPanel>
                     </Border>
 

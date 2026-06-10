@@ -79,8 +79,13 @@ namespace HDRGammaController
 
             // OLED panels in HDR overshoot with full gamut correction (their processing is
             // nonlinear); suggest white-point-only when the user picks OLED. Suggestion only:
-            // the user can still untick it.
-            DisplayTypeOled.Checked += (_, _) => WhitePointOnlyCheck.IsChecked = true;
+            // the user can still untick it. The warm-up hint follows the radio.
+            DisplayTypeOled.Checked += (_, _) =>
+            {
+                WhitePointOnlyCheck.IsChecked = true;
+                OledWarmupHint.Visibility = Visibility.Visible;
+            };
+            DisplayTypeOled.Unchecked += (_, _) => OledWarmupHint.Visibility = Visibility.Collapsed;
 
             // Initialize colorimeter asynchronously
             Loaded += async (s, e) =>
@@ -155,6 +160,13 @@ namespace HDRGammaController
             };
             if (browser.ShowDialog() == true && browser.SavedPath != null)
                 SelectCorrectionPath(browser.SavedPath, addIfMissing: true);
+        }
+
+        private void ManageProfiles_Click(object sender, RoutedEventArgs e)
+        {
+            var monitor = (MonitorComboBox.SelectedItem as MonitorComboItem)?.Monitor;
+            if (monitor == null) return;
+            new ProfileManagerWindow(monitor, _settingsManager) { Owner = this }.ShowDialog();
         }
 
         private void BrowseCorrection_Click(object sender, RoutedEventArgs e)

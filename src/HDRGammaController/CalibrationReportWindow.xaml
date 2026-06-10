@@ -218,6 +218,10 @@
                             <TextBlock Grid.Row="2" Grid.Column="4" x:Name="AfterPrimaryText" Text="-" Style="{StaticResource MetricValue}" FontSize="22" FontWeight="Bold" HorizontalAlignment="Center"/>
                         </Grid>
 
+                        <!-- Verify detail: grayscale tone/color decomposition + dE ITP -->
+                        <TextBlock x:Name="VerifyDetailText" Visibility="Collapsed"
+                                   FontSize="12" Foreground="#a0a0a0" TextWrapping="Wrap" Margin="0,10,0,0"/>
+
                         <!-- Closed-loop grey-ramp refinement note (a different, narrower metric than
                              the table: 1D grey-axis tracking only, measured during calibration) -->
                         <TextBlock x:Name="BeforeAfterNoteText" Visibility="Collapsed"
@@ -478,6 +482,7 @@
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
                 <TextBlock Grid.Column="0" x:Name="StatusText"
@@ -509,6 +514,14 @@
                         Click="VerifyButton_Click"/>
 
                 <Button Grid.Column="4"
+                        x:Name="WhiteToolsButton"
+                        Content="White Tools"
+                        ToolTip="Re-anchor white with a quick measurement (drift fix), or trim the target white by eye against a reference display."
+                        Style="{StaticResource SecondaryButton}"
+                        Margin="0,0,10,0"
+                        Click="WhiteToolsButton_Click"/>
+
+                <Button Grid.Column="5"
                         x:Name="CloseButton"
                         Content="Close"
                         Style="{StaticResource SecondaryButton}"

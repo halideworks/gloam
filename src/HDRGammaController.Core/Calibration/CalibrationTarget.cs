@@ -96,6 +96,23 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public bool WhitePointOnly { get; init; }
 
+        /// <summary>Clone of this target with a different white point (visual white trim).</summary>
+        public CalibrationTarget WithWhitePoint(Chromaticity white) => new()
+        {
+            Name = Name,
+            Description = Description,
+            RedPrimary = RedPrimary,
+            GreenPrimary = GreenPrimary,
+            BluePrimary = BluePrimary,
+            WhitePoint = white,
+            Gamma = Gamma,
+            TransferFunction = TransferFunction,
+            PeakLuminance = PeakLuminance,
+            BlackLevel = BlackLevel,
+            ReferenceWhite = ReferenceWhite,
+            WhitePointOnly = WhitePointOnly,
+        };
+
         /// <summary>Clone of this target with <see cref="WhitePointOnly"/> set.</summary>
         public CalibrationTarget AsWhitePointOnly() => new()
         {

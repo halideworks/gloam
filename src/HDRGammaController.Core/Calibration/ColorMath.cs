@@ -184,34 +184,6 @@ namespace HDRGammaController.Core.Calibration
         }
 
         /// <summary>
-        /// The Bradford adaptation as a reusable 3x3 XYZ→XYZ matrix (same math as
-        /// <see cref="ChromaticAdaptation"/>, but composable with other matrices).
-        /// Maps <paramref name="sourceWhite"/> exactly onto <paramref name="destWhite"/>.
-        /// </summary>
-        public static double[,] ChromaticAdaptationMatrix(CieXyz sourceWhite, CieXyz destWhite)
-        {
-            double[,] mBradford = {
-                {  0.8951000,  0.2664000, -0.1614000 },
-                { -0.7502000,  1.7135000,  0.0367000 },
-                {  0.0389000, -0.0685000,  1.0296000 }
-            };
-            double[,] mBradfordInv = {
-                {  0.9869929, -0.1470543,  0.1599627 },
-                {  0.4323053,  0.5183603,  0.0492912 },
-                { -0.0085287,  0.0400428,  0.9684867 }
-            };
-
-            double[] srcCone = MatrixMultiply(mBradford, new[] { sourceWhite.X, sourceWhite.Y, sourceWhite.Z });
-            double[] dstCone = MatrixMultiply(mBradford, new[] { destWhite.X, destWhite.Y, destWhite.Z });
-
-            var scale = new double[3, 3];
-            for (int i = 0; i < 3; i++)
-                scale[i, i] = dstCone[i] / srcCone[i];
-
-            return MultiplyMatrices(mBradfordInv, MultiplyMatrices(scale, mBradford));
-        }
-
-        /// <summary>
         /// Convenience method: Adapt from D50 to D65.
         /// </summary>
         public static CieXyz AdaptD50ToD65(CieXyz xyz) => ChromaticAdaptation(xyz, D50White, D65White);

@@ -33,7 +33,8 @@ namespace HDRGammaController.Core.Calibration
             double[] lutR, double[] lutG, double[] lutB,
             double whiteLevel,
             bool hdrMode = false,
-            IReadOnlyList<MeasurementResult>? measurements = null)
+            IReadOnlyList<MeasurementResult>? measurements = null,
+            string? profileNameOverride = null)
         {
             if (string.IsNullOrEmpty(monitor.MonitorDevicePath))
                 return new InstallResult(false, "", "Monitor has no device path; cannot associate a profile.");
@@ -140,7 +141,10 @@ namespace HDRGammaController.Core.Calibration
                 $"  mode {(hdrMode ? "HDR (PQ-domain LUTs)" : "SDR")}{(target.WhitePointOnly ? ", WHITE-POINT-ONLY matrix" : "")}" +
                 (hdrMode ? $", header range {headerMinNits:F3}–{headerMaxNits:F0} nits, SDR white {monitor.SdrWhiteLevel:F0} nits" : ""));
 
-            string profileName = BuildProfileName(monitor, target);
+            // Override names support the live white-trim preview: it alternates between two
+            // fixed names so each step forces the compositor to load fresh content instead
+            // of trusting a possibly-cached profile, without littering the store.
+            string profileName = profileNameOverride ?? BuildProfileName(monitor, target);
             string srcPath = Path.Combine(Path.GetTempPath(), profileName);
 
             try

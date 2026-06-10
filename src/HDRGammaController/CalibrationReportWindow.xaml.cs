@@ -25,6 +25,14 @@ namespace HDRGammaController
         private IReadOnlyList<MeasurementResult>? _verifyMeasurements;
         private System.Threading.CancellationTokenSource? _verifyCts;
 
+        // White tools state: re-anchoring replaces the characterization's white (drift fix);
+        // the visual trim shifts the TARGET white (metameric fix). Both rebuild the profile.
+        private DisplayCharacterization? _activeCharacterization;
+        private Chromaticity? _trimmedTargetWhite;
+        private bool _trimNameToggle;
+        private bool _trimBusy;
+        private (double Dx, double Dy)? _trimPendingNudge;
+
         // Everything needed to install the calibration as a native Windows MHC2 profile and
         // to verify it afterwards. Set by the calibration window; when present, "Apply
         // Profile" does the real install and "Verify" can re-measure through it.
@@ -84,6 +92,7 @@ namespace HDRGammaController
             _profile = profile;
             _metrics = metrics;
             _characterization = characterization;
+            _activeCharacterization = characterization;
             _correctionLut = correctionLut;
             _measurements = measurements;
 
@@ -328,9 +337,39 @@ namespace HDRGammaController
             return $"{error:F4}";
         }
 
-        private void PopulateRecommendations(CalibrationGrade grade)
+        private void PopulateRecommendations(CalibrationGrade grade, CalibrationMetrics? verified = null)
         {
             var recommendations = new List<string>();
+
+            // Verify-aware guidance beats generic advice: once we have measured-after data,
+            // lead with what it actually says.
+            if (verified != null)
+            {
+                if (_metrics != null && verified.AverageDeltaE > _metrics.AverageDeltaE + 0.3
+                    && _profile?.Target.WhitePointOnly != true)
+                {
+                    recommendations.Add(
+                        $"Verified accuracy ({verified.AverageDeltaE:F2}) came back worse than native ({_metrics.AverageDeltaE:F2}) - " +
+                        "this panel is already inside the correction's noise floor. Recalibrate with " +
+                        "\"White point correction only\", or run without a profile and use a small visual trim.");
+                }
+
+                double tone = verified.AverageGrayscaleToneDeltaE;
+                double color = verified.AverageGrayscaleColorDeltaE;
+                if (color > 1.0 && color > tone * 1.5)
+                {
+                    recommendations.Add(
+                        $"Remaining grayscale error is mostly CHROMATIC (color {color:F2} vs tone {tone:F2}) - a visible cast. " +
+                        "Check the meter spectral correction matches this panel; a small Tint trim can finish the job.");
+                }
+                else if (tone > 1.0 && tone > color * 1.5)
+                {
+                    recommendations.Add(
+                        $"Remaining grayscale error is mostly TONE-AXIS (tone {tone:F2} vs color {color:F2}), typically " +
+                        "concentrated near black where colorimeter accuracy is poorest - much of this is instrument noise, " +
+                        "not visible error.");
+                }
+            }
 
             if (grade <= CalibrationGrade.A)
             {
@@ -674,9 +713,13 @@ namespace HDRGammaController
         /// domain and associates via the Advanced Color list), then runs the verification
         /// sweep automatically — the probe is still on the display right after a calibration.
         /// </summary>
-        private async Task ApplyAndVerifyAsync()
+        /// <summary>The target with the visual white trim applied, when one is set.</summary>
+        private CalibrationTarget EffectiveTarget(ApplyContext ctx) =>
+            _trimmedTargetWhite is { } w ? ctx.Target.WithWhitePoint(w) : ctx.Target;
+
+        private async Task ApplyAndVerifyAsync(bool runVerify = true)
         {
-            if (_applyContext == null || _characterization == null)
+            if (_applyContext == null || _activeCharacterization == null)
             {
                 MessageBox.Show("This calibration can't be applied (missing display characterization).",
                     "Apply Profile", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -689,7 +732,7 @@ namespace HDRGammaController
             {
                 StatusText.Text = "Applying profile…";
                 var result = CalibrationProfileInstaller.Install(
-                    ctx.Monitor, _characterization, ctx.Target,
+                    ctx.Monitor, _activeCharacterization, EffectiveTarget(ctx),
                     ctx.LutR, ctx.LutG, ctx.LutB, ctx.WhiteLevel,
                     hdrMode: ctx.HdrMode, measurements: _measurements);
 
@@ -701,11 +744,15 @@ namespace HDRGammaController
                     ApplyButton.Content = "Disable Profile";
                     ctx.OnInstalled?.Invoke(result.ProfileName);
 
-                    StatusText.Text = "Profile applied - verifying through the correction…";
-                    if (ctx.Colorimeter != null)
+                    if (runVerify && ctx.Colorimeter != null)
+                    {
+                        StatusText.Text = "Profile applied - verifying through the correction…";
                         await RunVerificationAsync();
+                    }
                     else
+                    {
                         StatusText.Text = "Profile applied.";
+                    }
                 }
                 else
                 {
@@ -717,6 +764,196 @@ namespace HDRGammaController
             finally
             {
                 ApplyButton.IsEnabled = true;
+            }
+        }
+
+        private void WhiteToolsButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_applyContext == null || _activeCharacterization == null)
+            {
+                MessageBox.Show("White tools need the live calibration context (open this report right after a calibration).",
+                    "White Tools", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var menu = new System.Windows.Controls.ContextMenu();
+            var reanchor = new System.Windows.Controls.MenuItem
+            {
+                Header = "Re-anchor white (measure)",
+                ToolTip = "Quick drift fix: re-measures only white and rebuilds the profile around the fresh " +
+                          "reading. Use after the panel has warmed up, or whenever an OLED has drifted.",
+                IsEnabled = _applyContext.Colorimeter != null,
+            };
+            reanchor.Click += async (_, _) => await ReanchorWhiteAsync();
+
+            var trim = new System.Windows.Controls.MenuItem
+            {
+                Header = "Visual white trim…",
+                ToolTip = "Nudge the target white by eye against a reference display; the result is baked " +
+                          "into the profile (fixes the metameric gap instruments can't see).",
+                IsEnabled = _profileApplied,
+            };
+            trim.Click += async (_, _) => await RunVisualWhiteTrimAsync();
+
+            menu.Items.Add(reanchor);
+            menu.Items.Add(trim);
+            menu.PlacementTarget = (UIElement)sender;
+            menu.IsOpen = true;
+        }
+
+        /// <summary>
+        /// Drift fix for OLEDs and warm-up shifts: measure ONLY white (averaged 3x), replace
+        /// the characterization's white anchor, rebuild + reinstall + re-verify. ~30 seconds
+        /// instead of a full calibration.
+        /// </summary>
+        private async Task ReanchorWhiteAsync()
+        {
+            if (_applyContext is not { Colorimeter: { } colorimeter } ctx || _activeCharacterization is not { } ch)
+                return;
+            if (MessageBox.Show("Place the probe on the display, then press Yes to re-measure white.",
+                    "Re-anchor White", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+                return;
+
+            ApplyButton.IsEnabled = false;
+            VerifyButton.IsEnabled = false;
+            PatchDisplayWindow? patchWindow = null;
+            bool bypassed = false;
+            try
+            {
+                if (ctx.StateManager != null)
+                {
+                    try { ctx.StateManager.EnterBypassMode(ctx.Monitor, ctx.PreviousGammaMode, ctx.PreviousSettings); bypassed = true; }
+                    catch { }
+                }
+
+                patchWindow = new PatchDisplayWindow(ctx.Monitor, ctx.PatchSize, ctx.PatchOffsetX, ctx.PatchOffsetY);
+                patchWindow.Show();
+                patchWindow.SetColor(1, 1, 1);
+                patchWindow.SetProgress(1, 1, "White (re-anchor)");
+                await colorimeter.BeginMeasurementSessionAsync(hdrMode: ctx.HdrMode);
+                await Task.Delay(1500);
+
+                var whitePatch = new ColorPatch
+                {
+                    Name = "White",
+                    DisplayRgb = new LinearRgb(1, 1, 1),
+                    Category = PatchCategory.Grayscale,
+                };
+                double sx = 0, sy = 0, sz = 0;
+                const int reads = 3;
+                for (int i = 0; i < reads; i++)
+                {
+                    var m = await colorimeter.MeasureAsync(whitePatch, ctx.HdrMode);
+                    sx += m.Xyz.X; sy += m.Xyz.Y; sz += m.Xyz.Z;
+                    if (ctx.CaptureSounds) CalibrationSounds.PlayCapture();
+                    await Task.Delay(300);
+                }
+                var avg = new CieXyz(sx / reads, sy / reads, sz / reads);
+                var newWhite = avg.ToChromaticity();
+                Log.Info($"CalibrationReportWindow: Re-anchored white to ({newWhite.X:F4},{newWhite.Y:F4}), {avg.Y:F1} nits " +
+                         $"(was ({ch.WhitePoint.X:F4},{ch.WhitePoint.Y:F4}), {ch.PeakLuminance:F1} nits).");
+
+                _activeCharacterization = new DisplayCharacterization
+                {
+                    BlackXyz = ch.BlackXyz,
+                    WhiteXyz = avg,
+                    RedPrimary = ch.RedPrimary,
+                    GreenPrimary = ch.GreenPrimary,
+                    BluePrimary = ch.BluePrimary,
+                    WhitePoint = newWhite,
+                    BlackLevel = ch.BlackLevel,
+                    PeakLuminance = avg.Y,
+                    RedToneCurve = ch.RedToneCurve,
+                    GreenToneCurve = ch.GreenToneCurve,
+                    BlueToneCurve = ch.BlueToneCurve,
+                    RgbToXyzMatrix = ColorMath.CalculateRgbToXyzMatrix(
+                        ch.RedPrimary, ch.GreenPrimary, ch.BluePrimary, newWhite),
+                    MeasuredGamma = ch.MeasuredGamma,
+                };
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"White re-anchor failed:\n\n{ex.Message}", "Re-anchor White",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+            finally
+            {
+                try { await colorimeter.EndMeasurementSessionAsync(); } catch { }
+                patchWindow?.Close();
+                if (bypassed) { try { ctx.StateManager!.RestorePreviousState(); } catch { } }
+                ApplyButton.IsEnabled = true;
+                VerifyButton.IsEnabled = true;
+            }
+
+            await ApplyAndVerifyAsync();
+        }
+
+        /// <summary>
+        /// Visual white trim: live-preview nudges of the TARGET white, each rebuilding the
+        /// profile (alternating between two preview names so the compositor never serves a
+        /// cached profile). Done bakes the trim into a final, recorded profile.
+        /// </summary>
+        private async Task RunVisualWhiteTrimAsync()
+        {
+            if (_applyContext is not { } ctx || _activeCharacterization == null) return;
+
+            var baseWhite = EffectiveTarget(ctx).WhitePoint;
+            var editor = new WhiteTrimWindow { Owner = this };
+            editor.TrimChanged += async (dx, dy) => await InstallTrimPreviewAsync(ctx, baseWhite, dx, dy);
+
+            bool? accepted = editor.ShowDialog();
+
+            // Retire the preview profiles either way (throwaway artifacts, fully ours).
+            foreach (string previewName in new[] { TrimPreviewName(ctx, true), TrimPreviewName(ctx, false) })
+            {
+                CalibrationProfileInstaller.Disable(ctx.Monitor, previewName);
+                CalibrationProfileInstaller.Uninstall(ctx.Monitor, previewName);
+            }
+
+            if (accepted == true && editor.Result is { } trim && (trim.Dx != 0 || trim.Dy != 0))
+            {
+                _trimmedTargetWhite = new Chromaticity(baseWhite.X + trim.Dx, baseWhite.Y + trim.Dy);
+                StatusText.Text = $"White trim baked in (dx {trim.Dx:+0.0000;-0.0000}, dy {trim.Dy:+0.0000;-0.0000}).";
+                await ApplyAndVerifyAsync(runVerify: false);
+            }
+            else
+            {
+                // Cancelled (or zero trim): restore the untrimmed profile.
+                await ApplyAndVerifyAsync(runVerify: false);
+            }
+        }
+
+        private static string TrimPreviewName(ApplyContext ctx, bool a) =>
+            $"{ctx.Monitor.FriendlyName} - white trim preview {(a ? "A" : "B")}.icm";
+
+        private async Task InstallTrimPreviewAsync(ApplyContext ctx, Chromaticity baseWhite, double dx, double dy)
+        {
+            // Serialize: nudges can arrive faster than installs complete. Keep only the latest.
+            if (_trimBusy) { _trimPendingNudge = (dx, dy); return; }
+            _trimBusy = true;
+            try
+            {
+                while (true)
+                {
+                    var target = ctx.Target.WithWhitePoint(new Chromaticity(baseWhite.X + dx, baseWhite.Y + dy));
+                    _trimNameToggle = !_trimNameToggle;
+                    var result = CalibrationProfileInstaller.Install(
+                        ctx.Monitor, _activeCharacterization!, target,
+                        ctx.LutR, ctx.LutG, ctx.LutB, ctx.WhiteLevel,
+                        hdrMode: ctx.HdrMode, measurements: _measurements,
+                        profileNameOverride: TrimPreviewName(ctx, _trimNameToggle));
+                    if (!result.Success)
+                        Log.Info($"CalibrationReportWindow: trim preview install failed: {result.Error}");
+
+                    await Task.Delay(150); // let the compositor pick it up before the next step
+                    if (_trimPendingNudge is { } pending) { (dx, dy) = pending; _trimPendingNudge = null; }
+                    else break;
+                }
+            }
+            finally
+            {
+                _trimBusy = false;
             }
         }
 
@@ -830,6 +1067,17 @@ namespace HDRGammaController
                 GradeScopeText.Text = "after correction";
                 SummaryText.Text = GetSummaryText(afterGrade);
                 PerceptualNotePanel.Visibility = Visibility.Visible;
+
+                // Diagnostics line: tone/color decomposition answers "is the residual real?",
+                // and ΔE ITP is the HDR-native metric for cross-tool comparison.
+                VerifyDetailText.Text =
+                    $"Grayscale residual split: tone {after.AverageGrayscaleToneDeltaE:F2} / color {after.AverageGrayscaleColorDeltaE:F2} ΔE2000 " +
+                    $"(tone near black is mostly instrument noise; color is a visible cast). " +
+                    $"ΔE ITP avg {after.AverageItpDeltaE:F1}, max {after.MaxItpDeltaE:F1} (BT.2124; ~3x ΔE2000 scale, 1 unit ≈ 1 JND).";
+                VerifyDetailText.Visibility = Visibility.Visible;
+
+                // Refresh recommendations with verify-aware guidance.
+                PopulateRecommendations(afterGrade, after);
                 StatusText.Text = $"Verified through the applied profile: average ΔE {after.AverageDeltaE:F2} " +
                                   $"({results.Count(r => r.IsValid)} of {patches.Count} patches).";
 

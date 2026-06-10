@@ -70,5 +70,61 @@ namespace HDRGammaController.Tests
 
             Assert.InRange(metrics.AverageDeltaE, 1.0, 25.0);
         }
+
+        [Fact]
+        public void GrayscaleDecomposition_BlueCast_IsChromaticNotTonal()
+        {
+            // A pure white-point error must land in the CHROMATIC component of the grayscale
+            // decomposition, with the tone component near zero (luminance is unchanged).
+            var target = StandardTargets.SrgbGamma22;
+            var measurements = BuildGrayscale(target, whiteNits: 120.0, extraBlueGain: 1.15);
+
+            var metrics = new Lut3DGenerator(target, measurements, 9).CalculateMetrics();
+
+            Assert.True(metrics.AverageGrayscaleColorDeltaE > metrics.AverageGrayscaleToneDeltaE * 2,
+                $"blue cast should be chromatic: color={metrics.AverageGrayscaleColorDeltaE:F2} tone={metrics.AverageGrayscaleToneDeltaE:F2}");
+            Assert.True(metrics.AverageGrayscaleToneDeltaE < 1.0,
+                $"tone component should be tiny for a pure cast, got {metrics.AverageGrayscaleToneDeltaE:F2}");
+        }
+
+        [Fact]
+        public void DeltaEItp_IdenticalColors_IsZero()
+        {
+            var xyz = new CieXyz(95.0, 100.0, 108.0);
+            Assert.Equal(0.0, CalibrationVerifier.DeltaEItp(xyz, xyz), 9);
+        }
+
+        [Fact]
+        public void DeltaEItp_BehavesSanely()
+        {
+            // Luminance-only and chroma-only differences both register; the metric grows
+            // with error size; values stay in the JND-scaled range, not thousands.
+            var white = new CieXyz(95.0, 100.0, 108.0);
+            var dimmer = new CieXyz(85.5, 90.0, 97.2);
+            var bluer = new CieXyz(95.0, 100.0, 118.0);
+            var muchBluer = new CieXyz(95.0, 100.0, 130.0);
+
+            double lum = CalibrationVerifier.DeltaEItp(white, dimmer);
+            double chroma = CalibrationVerifier.DeltaEItp(white, bluer);
+            double chromaBig = CalibrationVerifier.DeltaEItp(white, muchBluer);
+
+            Assert.True(lum > 0.1 && double.IsFinite(lum));
+            Assert.True(chroma > 0.1 && double.IsFinite(chroma));
+            Assert.True(chromaBig > chroma, "larger error must produce larger dE ITP");
+            Assert.True(chroma < 200, $"dE ITP implausibly large: {chroma:F1}");
+        }
+
+        [Fact]
+        public void Metrics_PopulateItpValues()
+        {
+            var target = StandardTargets.SrgbGamma22;
+            var measurements = BuildGrayscale(target, whiteNits: 120.0, extraBlueGain: 1.10);
+
+            var metrics = new Lut3DGenerator(target, measurements, 9).CalculateMetrics();
+
+            Assert.True(metrics.ItpDeltaEs.Count > 0, "ITP values should be computed");
+            Assert.True(metrics.AverageItpDeltaE > 0);
+            Assert.True(metrics.MaxItpDeltaE >= metrics.AverageItpDeltaE);
+        }
     }
 }

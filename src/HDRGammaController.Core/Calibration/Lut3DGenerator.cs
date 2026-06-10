@@ -779,6 +779,27 @@ namespace HDRGammaController.Core.Calibration
         /// <summary>Delta E values for primary color patches.</summary>
         public List<double> PrimaryDeltaEs { get; } = new();
 
+        /// <summary>Grayscale error decomposed: lightness-axis component per gray patch.</summary>
+        public List<double> GrayscaleToneDeltaEs { get; } = new();
+
+        /// <summary>Grayscale error decomposed: chromatic component per gray patch.</summary>
+        public List<double> GrayscaleColorDeltaEs { get; } = new();
+
+        /// <summary>ΔE ITP (BT.2124) per patch, absolute-luminance HDR metric. ~3× ΔE2000 scale.</summary>
+        public List<double> ItpDeltaEs { get; } = new();
+
+        /// <summary>Average grayscale tone-axis (lightness) error.</summary>
+        public double AverageGrayscaleToneDeltaE => GrayscaleToneDeltaEs.Count > 0 ? GrayscaleToneDeltaEs.Average() : 0;
+
+        /// <summary>Average grayscale chromatic (cast) error.</summary>
+        public double AverageGrayscaleColorDeltaE => GrayscaleColorDeltaEs.Count > 0 ? GrayscaleColorDeltaEs.Average() : 0;
+
+        /// <summary>Average ΔE ITP across all patches.</summary>
+        public double AverageItpDeltaE => ItpDeltaEs.Count > 0 ? ItpDeltaEs.Average() : 0;
+
+        /// <summary>Maximum ΔE ITP across all patches.</summary>
+        public double MaxItpDeltaE => ItpDeltaEs.Count > 0 ? ItpDeltaEs.Max() : 0;
+
         /// <summary>Average grayscale Delta E.</summary>
         public double AverageGrayscaleDeltaE => GrayscaleDeltaEs.Count > 0 ? GrayscaleDeltaEs.Average() : 0;
 
