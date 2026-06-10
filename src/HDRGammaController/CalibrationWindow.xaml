@@ -467,7 +467,21 @@
                          Margin="20">
                     <Border x:Name="PositioningPatchBorder" Width="400" Height="400"
                             Background="White" BorderThickness="0">
-                        <!-- White patch for positioning - scales with window -->
+                        <!-- Probe-placement target: align the colorimeter's sensor over the
+                             center ring. Muted gray so it guides placement without skewing
+                             the white reference; the actual measurement uses a clean patch. -->
+                        <Grid x:Name="ProbeTargetOverlay">
+                            <Ellipse Width="150" Height="150" Stroke="#9AA0A6" StrokeThickness="2"
+                                     StrokeDashArray="4 3" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <Ellipse Width="92" Height="92" Stroke="#7A7F85" StrokeThickness="2"
+                                     HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <Rectangle Width="2" Height="44" Fill="#7A7F85"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <Rectangle Width="44" Height="2" Fill="#7A7F85"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <Ellipse Width="8" Height="8" Fill="#5F6368"
+                                     HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Grid>
                     </Border>
                 </Viewbox>
 
@@ -478,8 +492,10 @@
                                    HorizontalAlignment="Center" Margin="0,0,0,12"/>
                         <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextDim}" FontSize="13"
                                    HorizontalAlignment="Center" TextAlignment="Center" Margin="0,0,0,16">
-                            Drag the white patch to position it under your colorimeter.
-                            When the patch is centered under your sensor, click Begin Measurement.
+                            Drag this panel so the center target sits directly under your
+                            colorimeter's sensor, flush against the screen. Align the sensor
+                            with the crosshair, then click Begin Measurement. Hang the counterweight
+                            over the back of the display so the sensor stays flat.
                         </TextBlock>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                             <Button Content="Back" Style="{StaticResource SubtleButton}"
