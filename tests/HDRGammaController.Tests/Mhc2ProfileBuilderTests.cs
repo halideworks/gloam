@@ -147,5 +147,36 @@ namespace HDRGammaController.Tests
             m[1,0]*a + m[1,1]*b + m[1,2]*c,
             m[2,0]*a + m[2,1]*b + m[2,2]*c,
         };
+
+        private static double MaxDrive(double[,] displayRgbToXyz, CalibrationTarget target)
+        {
+            var m = ColorMath.MultiplyMatrices(ColorMath.Invert3x3(displayRgbToXyz), target.RgbToXyzMatrix);
+            double max = 0;
+            (double, double, double)[] contents = { (1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 1) };
+            foreach (var (a, b, c) in contents)
+                for (int r = 0; r < 3; r++)
+                    max = Math.Max(max, m[r, 0] * a + m[r, 1] * b + m[r, 2] * c);
+            return max;
+        }
+
+        [Fact]
+        public void GamutGuard_AllowsP3_BlocksRec2020_OnA98PercentP3Panel()
+        {
+            // The user's M27Q P measured/EDID primaries (≈ 98% DCI-P3).
+            var m27q = ColorMath.CalculateRgbToXyzMatrix(
+                new Chromaticity(0.685, 0.309), new Chromaticity(0.265, 0.668),
+                new Chromaticity(0.150, 0.058), new Chromaticity(0.3135, 0.329));
+
+            double p3Drive = MaxDrive(m27q, StandardTargets.P3D65Gamma22);
+            double srgbDrive = MaxDrive(m27q, StandardTargets.SrgbGamma22);
+            double rec2020Drive = MaxDrive(m27q, StandardTargets.Rec2020Gamma24);
+
+            // sRGB/Rec.709 narrows a wide panel — never over the limit.
+            Assert.True(srgbDrive <= 1.3, $"sRGB should be reachable, drive={srgbDrive:F3}");
+            // P3 on a 98%-P3 panel is a small reach — must be allowed (threshold 1.3).
+            Assert.True(p3Drive <= 1.3, $"P3 should be reachable on a 98% P3 panel, drive={p3Drive:F3}");
+            // Rec.2020 far exceeds P3 — must be blocked.
+            Assert.True(rec2020Drive > 1.3, $"Rec.2020 should be unreachable, drive={rec2020Drive:F3}");
+        }
     }
 }

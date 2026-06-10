@@ -122,40 +122,35 @@ namespace HDRGammaController
             rb.Opacity = reason == null ? 1.0 : 0.45;
         }
 
-        /// <summary>True if every target primary sits inside the display's EDID gamut triangle (with a small tolerance).</summary>
+        /// <summary>
+        /// Whether the display can reasonably reach the target, using the SAME drive-value
+        /// metric as the apply-time gamut guard (so setup and apply agree). We build the
+        /// display's RGB→XYZ from its EDID primaries, derive the correction matrix toward the
+        /// target, and ask how hard it drives the channels for the target's primaries/white.
+        /// A small overshoot (e.g. a 98%-P3 panel reaching for P3's green corner) is fine; only
+        /// a genuinely wider gamut (Rec.2020 on a P3 panel) blows past the limit.
+        /// </summary>
         private static bool TargetFitsGamut(CalibrationTarget t, EdidColorInfo g)
         {
-            const double tol = 0.025; // EDID primaries are approximate
-            return InTriangle(t.RedPrimary.X, t.RedPrimary.Y, g, tol)
-                && InTriangle(t.GreenPrimary.X, t.GreenPrimary.Y, g, tol)
-                && InTriangle(t.BluePrimary.X, t.BluePrimary.Y, g, tol);
-        }
-
-        private static bool InTriangle(double px, double py, EdidColorInfo g, double tol)
-        {
-            // Barycentric sign test against the display's R/G/B chromaticity triangle, expanded
-            // outward by `tol` toward the centroid to tolerate EDID rounding.
-            double cx = (g.RedX + g.GreenX + g.BlueX) / 3.0;
-            double cy = (g.RedY + g.GreenY + g.BlueY) / 3.0;
-            (double x, double y) Expand(double x, double y)
+            try
             {
-                double dx = x - cx, dy = y - cy;
-                double len = Math.Sqrt(dx * dx + dy * dy);
-                if (len < 1e-6) return (x, y);
-                return (x + dx / len * tol, y + dy / len * tol);
-            }
-            var (ax, ay) = Expand(g.RedX, g.RedY);
-            var (bx, by) = Expand(g.GreenX, g.GreenY);
-            var (cxx, cyy) = Expand(g.BlueX, g.BlueY);
+                var displayRgbToXyz = ColorMath.CalculateRgbToXyzMatrix(
+                    new Chromaticity(g.RedX, g.RedY), new Chromaticity(g.GreenX, g.GreenY),
+                    new Chromaticity(g.BlueX, g.BlueY), new Chromaticity(g.WhiteX, g.WhiteY));
+                var matrix = ColorMath.MultiplyMatrices(ColorMath.Invert3x3(displayRgbToXyz), t.RgbToXyzMatrix);
 
-            double Sign(double x1, double y1, double x2, double y2, double x3, double y3)
-                => (x1 - x3) * (y2 - y3) - (x2 - x3) * (y1 - y3);
-            double d1 = Sign(px, py, ax, ay, bx, by);
-            double d2 = Sign(px, py, bx, by, cxx, cyy);
-            double d3 = Sign(px, py, cxx, cyy, ax, ay);
-            bool neg = d1 < 0 || d2 < 0 || d3 < 0;
-            bool pos = d1 > 0 || d2 > 0 || d3 > 0;
-            return !(neg && pos); // inside if all same sign
+                double max = 0;
+                (double, double, double)[] contents = { (1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 1) };
+                foreach (var (a, b, c) in contents)
+                    for (int r = 0; r < 3; r++)
+                        max = Math.Max(max, matrix[r, 0] * a + matrix[r, 1] * b + matrix[r, 2] * c);
+                // Matches the installer's gamut guard threshold so setup and apply never disagree.
+                return max <= 1.3;
+            }
+            catch
+            {
+                return true; // if the EDID is unusable, don't block — the apply guard still protects.
+            }
         }
 
         private void IdentifyButton_Click(object sender, System.Windows.RoutedEventArgs e) => IdentifySelectedMonitor();

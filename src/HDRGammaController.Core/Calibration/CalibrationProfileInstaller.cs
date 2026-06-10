@@ -62,7 +62,7 @@ namespace HDRGammaController.Core.Calibration
             // (drive values stay <= 1) and must NOT be blocked — that wrongly rejected a good
             // Gamma-2.4 calibration. A small overshoot from white-point correction is fine.
             double maxDrive = MaxTargetDrive(matrix);
-            if (maxDrive > 1.25)
+            if (maxDrive > 1.3) // keep in sync with the setup-time EDID filter
                 return new InstallResult(false, "",
                     $"The chosen target ('{target.Name}') needs primaries about {maxDrive:P0} of this " +
                     "display's maximum — i.e. a wider gamut than the panel can physically produce, so the " +
