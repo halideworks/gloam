@@ -357,6 +357,19 @@ namespace HDRGammaController
                 recommendations.Add("Consider using full-screen mode for better measurement accuracy.");
             }
 
+            // The hard-won rule of this project: once the panel already measures inside the
+            // system's noise + nonlinearity floor, full gamut correction has nothing real to
+            // fix and verification tends to come back WORSE (seen on both test panels).
+            // (_profile.Target carries the WhitePointOnly flag; _applyContext isn't set yet
+            // when this runs from the constructor.)
+            if (_metrics != null && _metrics.AverageDeltaE < 2.5 && _profile?.Target.WhitePointOnly != true)
+            {
+                recommendations.Add(
+                    $"This panel already measures close to target natively (avg ΔE {_metrics.AverageDeltaE:F2}). " +
+                    "Full gamut correction usually can't improve that and may verify worse - try the " +
+                    "\"White point correction only\" option in calibration setup instead.");
+            }
+
             if (_characterization != null)
             {
                 double cct = ColorMath.ChromaticityToCct(_characterization.WhitePoint);

@@ -599,12 +599,20 @@ namespace HDRGammaController
             // correction — a useless reading. DISABLE it (disassociate only) so we characterize
             // the native panel; the .icm stays in the color store so the previous calibration
             // can be restored from Color Management if this run is abandoned.
-            if (_settingsManager != null && _targetMonitor != null &&
-                _settingsManager.GetMonitorProfile(_targetMonitor.MonitorDevicePath)?.Mhc2ProfileName is { } activeProfile)
+            if (_targetMonitor != null)
             {
-                Log.Info($"CalibrationWindow: Disabling active calibration profile '{activeProfile}' before measuring native (kept in color store).");
-                CalibrationProfileInstaller.Disable(_targetMonitor, activeProfile);
-                _settingsManager.SetMhc2Calibration(_targetMonitor.MonitorDevicePath, null);
+                if (_settingsManager?.GetMonitorProfile(_targetMonitor.MonitorDevicePath)?.Mhc2ProfileName is { } activeProfile)
+                {
+                    Log.Info($"CalibrationWindow: Disabling active calibration profile '{activeProfile}' before measuring native (kept in color store).");
+                    CalibrationProfileInstaller.Disable(_targetMonitor, activeProfile);
+                    _settingsManager?.SetMhc2Calibration(_targetMonitor.MonitorDevicePath, null);
+                }
+
+                // Belt and braces: also retire any STALE app-generated associations (a past
+                // bug installed several in one session). If one became the fallback default,
+                // "native" would silently measure through it.
+                CalibrationProfileInstaller.DisableAllForMonitor(_targetMonitor);
+
                 NativeGammaRamp.TryClear(_targetMonitor.DeviceName);
                 await Task.Delay(300); // let the compositor drop the profile
             }

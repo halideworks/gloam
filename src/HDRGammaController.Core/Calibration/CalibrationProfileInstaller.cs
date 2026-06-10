@@ -277,6 +277,53 @@ namespace HDRGammaController.Core.Calibration
             }
         }
 
+        /// <summary>
+        /// Disables EVERY profile this app ever associated with the monitor (matched by our
+        /// "&lt;monitor&gt; - &lt;target&gt; - &lt;date&gt;" naming), not just the recorded latest. A past
+        /// bug installed several in one session; if a stale association ever becomes the
+        /// fallback default, the "native" measurement would silently run through it and the
+        /// new correction would be built against an already-corrected panel.
+        /// </summary>
+        public static void DisableAllForMonitor(MonitorInfo monitor)
+        {
+            if (string.IsNullOrEmpty(monitor.MonitorDevicePath) || string.IsNullOrWhiteSpace(monitor.FriendlyName))
+                return;
+            try
+            {
+                // Discovery via the ICM association registry: the device key suffix is the
+                // last path segment of MonitorDevicePath (e.g. ...\0002 → key "0002").
+                string suffix = monitor.MonitorDevicePath.TrimEnd('\\');
+                int cut = suffix.LastIndexOf('\\');
+                if (cut < 0) return;
+                suffix = suffix[(cut + 1)..];
+
+                using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+                    $@"Software\Microsoft\Windows NT\CurrentVersion\ICM\ProfileAssociations\Display\{{4d36e96e-e325-11ce-bfc1-08002be10318}}\{suffix}");
+                if (key == null) return;
+
+                string prefix = monitor.FriendlyName.Trim() + " - ";
+                var names = new List<string>();
+                foreach (var valueName in new[] { "ICMProfile", "ICMProfileAC" })
+                {
+                    if (key.GetValue(valueName) is string[] multi)
+                        names.AddRange(multi);
+                    else if (key.GetValue(valueName) is string single)
+                        names.Add(single);
+                }
+
+                foreach (string name in names.Distinct(StringComparer.OrdinalIgnoreCase))
+                {
+                    if (!name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+                    Disable(monitor, name);
+                    Log.Info($"CalibrationProfileInstaller: Retired stale association '{name}' on {monitor.FriendlyName}.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"CalibrationProfileInstaller: DisableAllForMonitor failed (non-fatal): {ex.Message}");
+            }
+        }
+
         /// <summary>Fully removes a previously-installed calibration profile from a monitor.</summary>
         public static void Uninstall(MonitorInfo monitor, string profileName)
         {
