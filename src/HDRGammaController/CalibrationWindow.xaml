@@ -446,7 +446,8 @@
 
         <!-- Positioning Panel (shown after clicking Start, before measurement begins) -->
         <Grid x:Name="PositioningPanel" Visibility="Collapsed" Background="{StaticResource DarkSurround}"
-              MouseLeftButtonDown="PositioningPanel_MouseDown" Cursor="SizeAll">
+              MouseLeftButtonDown="PatchDrag_MouseDown" MouseMove="PatchDrag_MouseMove"
+              MouseLeftButtonUp="PatchDrag_MouseUp" Cursor="SizeAll">
             <!-- Windowed Mode Warning Banner -->
             <Border x:Name="PositioningWindowedBanner" Background="{StaticResource WarningBackgroundBrush}"
                     VerticalAlignment="Top" Padding="8,6" Visibility="Collapsed" Panel.ZIndex="100">
@@ -462,9 +463,14 @@
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
-                <!-- Preview Patch Display - Scales with window size -->
+                <!-- Preview Patch Display - Scales with window size. The RenderTransform
+                     lets the user move the patch to wherever the probe hangs; the offset
+                     is shared with the measurement patch so placement carries over. -->
                 <Viewbox Grid.Row="0" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center"
                          Margin="20">
+                    <Viewbox.RenderTransform>
+                        <TranslateTransform x:Name="PositioningPatchTransform"/>
+                    </Viewbox.RenderTransform>
                     <Border x:Name="PositioningPatchBorder" Width="400" Height="400"
                             Background="White" BorderThickness="0">
                         <!-- Probe-placement target: align the colorimeter's sensor over the
@@ -492,10 +498,11 @@
                                    HorizontalAlignment="Center" Margin="0,0,0,12"/>
                         <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextDim}" FontSize="13"
                                    HorizontalAlignment="Center" TextAlignment="Center" Margin="0,0,0,16">
-                            Drag this panel so the center target sits directly under your
-                            colorimeter's sensor, flush against the screen. Align the sensor
-                            with the crosshair, then click Begin Measurement. Hang the counterweight
-                            over the back of the display so the sensor stays flat.
+                            Hang the colorimeter with its counterweight over the top of the
+                            display, then <Run FontWeight="SemiBold">drag the target</Run> (or use the
+                            <Run FontWeight="SemiBold">arrow keys</Run>) so the crosshair sits directly
+                            under the sensor, flush against the screen. This position carries into
+                            measurement, so click Begin Measurement once it's aligned.
                         </TextBlock>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                             <Button Content="Back" Style="{StaticResource SubtleButton}"
@@ -509,7 +516,9 @@
         </Grid>
 
         <!-- Measurement Panel (shown during calibration) -->
-        <Grid x:Name="MeasurementPanel" Visibility="Collapsed" Background="{StaticResource DarkSurround}">
+        <Grid x:Name="MeasurementPanel" Visibility="Collapsed" Background="{StaticResource DarkSurround}"
+              MouseLeftButtonDown="PatchDrag_MouseDown" MouseMove="PatchDrag_MouseMove"
+              MouseLeftButtonUp="PatchDrag_MouseUp" Cursor="SizeAll">
             <!-- Windowed Mode Warning Banner -->
             <Border x:Name="WindowedModeBanner" Background="{StaticResource WarningBackgroundBrush}"
                     VerticalAlignment="Top" Padding="8,6" Visibility="Collapsed" Panel.ZIndex="100">
@@ -526,8 +535,12 @@
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
-                <!-- Color Patch Display -->
+                <!-- Color Patch Display. Shares the positioning patch's drag offset so the
+                     measured patch appears exactly where the probe was placed. -->
                 <Viewbox Grid.Row="0" Stretch="None" HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <Viewbox.RenderTransform>
+                        <TranslateTransform x:Name="MeasurementPatchTransform"/>
+                    </Viewbox.RenderTransform>
                     <Border x:Name="ColorPatchBorder" Width="250" Height="250"
                             Background="White" BorderThickness="0">
                         <!-- Patch color is set programmatically -->

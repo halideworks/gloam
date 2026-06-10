@@ -104,6 +104,12 @@ namespace HDRGammaController
         private double _previousLeft, _previousTop, _previousWidth, _previousHeight;
         private bool _wasMaximized;
 
+        // Patch placement offset (shared by positioning + measurement patches)
+        private double _patchOffsetX, _patchOffsetY;
+        private bool _isDraggingPatch;
+        private Point _dragStartMouse;
+        private double _dragStartOffsetX, _dragStartOffsetY;
+
         #endregion
 
         #region Events
@@ -235,6 +241,16 @@ namespace HDRGammaController
 
         private void Window_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
         {
+            // Arrow keys nudge the patch while positioning or measuring, so the user can
+            // fine-tune alignment to a fixed-hanging probe without the mouse.
+            bool placingPatch = PositioningPanel.Visibility == Visibility.Visible
+                                 || MeasurementPanel.Visibility == Visibility.Visible;
+            if (placingPatch && TryNudgePatch(e.Key, (Keyboard.Modifiers & ModifierKeys.Shift) != 0))
+            {
+                e.Handled = true;
+                return;
+            }
+
             if (e.Key == Key.Escape)
             {
                 if (_isCalibrationRunning)
@@ -584,6 +600,9 @@ namespace HDRGammaController
             PositioningPanel.Visibility = Visibility.Collapsed;
             PositioningWindowedBanner.Visibility = Visibility.Collapsed;
             MeasurementPanel.Visibility = Visibility.Visible;
+
+            // Carry the patch placement chosen during positioning into the measurement patch.
+            ApplyPatchOffset();
 
             // Create the calibration orchestrator
             _orchestrator = new CalibrationOrchestrator(
@@ -941,12 +960,63 @@ namespace HDRGammaController
             }
         }
 
-        private void PositioningPanel_MouseDown(object sender, MouseButtonEventArgs e)
+        // Patch placement: the user moves the patch (not the window) to wherever the
+        // probe hangs. The offset is shared between the positioning and measurement
+        // patches via two TranslateTransforms, so placement carries straight through.
+        private void ApplyPatchOffset()
         {
-            if (e.ChangedButton == MouseButton.Left)
+            if (PositioningPatchTransform != null)
             {
-                DragMove();
+                PositioningPatchTransform.X = _patchOffsetX;
+                PositioningPatchTransform.Y = _patchOffsetY;
             }
+            if (MeasurementPatchTransform != null)
+            {
+                MeasurementPatchTransform.X = _patchOffsetX;
+                MeasurementPatchTransform.Y = _patchOffsetY;
+            }
+        }
+
+        private void PatchDrag_MouseDown(object sender, MouseButtonEventArgs e)
+        {
+            if (e.ChangedButton != MouseButton.Left) return;
+            _isDraggingPatch = true;
+            _dragStartMouse = e.GetPosition(this);
+            _dragStartOffsetX = _patchOffsetX;
+            _dragStartOffsetY = _patchOffsetY;
+            ((UIElement)sender).CaptureMouse();
+        }
+
+        private void PatchDrag_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (!_isDraggingPatch) return;
+            var p = e.GetPosition(this);
+            _patchOffsetX = _dragStartOffsetX + (p.X - _dragStartMouse.X);
+            _patchOffsetY = _dragStartOffsetY + (p.Y - _dragStartMouse.Y);
+            ApplyPatchOffset();
+        }
+
+        private void PatchDrag_MouseUp(object sender, MouseButtonEventArgs e)
+        {
+            if (!_isDraggingPatch) return;
+            _isDraggingPatch = false;
+            ((UIElement)sender).ReleaseMouseCapture();
+        }
+
+        /// <summary>Nudges the patch with the arrow keys (Shift = larger step).</summary>
+        private bool TryNudgePatch(Key key, bool shift)
+        {
+            double step = shift ? 25 : 5;
+            switch (key)
+            {
+                case Key.Left:  _patchOffsetX -= step; break;
+                case Key.Right: _patchOffsetX += step; break;
+                case Key.Up:    _patchOffsetY -= step; break;
+                case Key.Down:  _patchOffsetY += step; break;
+                default: return false;
+            }
+            ApplyPatchOffset();
+            return true;
         }
 
         private void Minimize_Click(object sender, RoutedEventArgs e)
