@@ -777,6 +777,11 @@ namespace HDRGammaController
 
                         if (SoundNotificationsCheck.IsChecked == true)
                             CalibrationSounds.PlayCompletion();
+
+                        // Hands-free flow: open the report immediately — it auto-applies the
+                        // profile and runs the verification sweep itself (the probe is still
+                        // on the display). The completion overlay stays behind as fallback.
+                        ViewReport_Click(this, new RoutedEventArgs());
                     });
 
                     CalibrationCompleted?.Invoke(this, new CalibrationCompleteEventArgs(true, null));
@@ -1230,7 +1235,13 @@ namespace HDRGammaController
                         Log.Info($"CalibrationWindow: Installed + recorded calibration profile {profileName}");
                     },
                     Colorimeter: _colorimeterService,
-                    HdrMode: _measuredInHdr));
+                    HdrMode: _measuredInHdr,
+                    StateManager: _stateManager,
+                    PreviousGammaMode: _previousGammaMode,
+                    PreviousSettings: _previousSettings));
+
+                // Hands-free: the report applies the profile and verifies on open.
+                reportWindow.AutoApplyOnLoad = true;
             }
 
             reportWindow.Show();

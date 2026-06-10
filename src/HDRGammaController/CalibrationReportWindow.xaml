@@ -91,10 +91,14 @@
         </Style>
 
         <Style x:Key="GradeText" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="36"/>
+            <Setter Property="FontSize" Value="32"/>
             <Setter Property="FontWeight" Value="Bold"/>
             <Setter Property="HorizontalAlignment" Value="Center"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="TextAlignment" Value="Center"/>
+            <!-- Optical centering: bold capitals sit slightly below the geometric middle of
+                 the line box, so nudge up a touch inside the circle. -->
+            <Setter Property="Margin" Value="0,-3,0,0"/>
         </Style>
 
         <!-- Dark scrollbar matching the report theme (replaces the default light one). -->
@@ -176,7 +180,7 @@
                 <Border Style="{StaticResource CardBorder}">
                     <StackPanel>
                         <TextBlock Text="Accuracy (ΔE2000)" Style="{StaticResource SectionHeader}"/>
-                        <TextBlock Text="Native = the uncorrected panel, measured during calibration. After = re-measured through the applied profile — click Apply Profile, then Verify."
+                        <TextBlock Text="Native = the uncorrected panel, measured during calibration. After = re-measured automatically through the applied profile (gamma preference and night mode are suspended during the sweep)."
                                    FontSize="12" Foreground="#909090" TextWrapping="Wrap" Margin="0,-4,0,12"/>
 
                         <Grid>
@@ -468,7 +472,6 @@
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
                 <TextBlock Grid.Column="0" x:Name="StatusText"
@@ -493,22 +496,13 @@
 
                 <Button Grid.Column="3"
                         x:Name="VerifyButton"
-                        Content="Verify"
-                        ToolTip="Re-measure a quick patch sweep through the applied profile to fill in the 'after' numbers. Place the probe on the display first."
+                        Content="Re-verify"
+                        ToolTip="Re-measure a quick patch sweep through the applied profile to refresh the 'after' numbers. Place the probe on the display first."
                         Style="{StaticResource SecondaryButton}"
                         Margin="0,0,10,0"
                         Click="VerifyButton_Click"/>
 
                 <Button Grid.Column="4"
-                        x:Name="ToggleProfileButton"
-                        Content="Disable Profile"
-                        Visibility="Collapsed"
-                        ToolTip="A/B comparison: toggle the freshly applied profile off and on without leaving the report."
-                        Style="{StaticResource SecondaryButton}"
-                        Margin="0,0,10,0"
-                        Click="ToggleProfileButton_Click"/>
-
-                <Button Grid.Column="5"
                         x:Name="CloseButton"
                         Content="Close"
                         Style="{StaticResource SecondaryButton}"
