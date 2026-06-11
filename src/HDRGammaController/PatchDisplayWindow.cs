@@ -201,6 +201,20 @@ namespace HDRGammaController
             Content = root;
         }
 
+        /// <summary>
+        /// The patch area in physical screen pixels (PointToScreen includes the drag
+        /// transform and per-monitor DPI). Used to place the FP16 wire renderer exactly
+        /// over the patch for the HDR PQ-tracking verify sweep. Only valid once shown.
+        /// </summary>
+        public Int32Rect GetPatchPixelRect()
+        {
+            var topLeft = _patch.PointToScreen(new Point(0, 0));
+            var bottomRight = _patch.PointToScreen(new Point(_patch.ActualWidth, _patch.ActualHeight));
+            return new Int32Rect(
+                (int)Math.Round(topLeft.X), (int)Math.Round(topLeft.Y),
+                (int)Math.Round(bottomRight.X - topLeft.X), (int)Math.Round(bottomRight.Y - topLeft.Y));
+        }
+
         public void SetColor(double r, double g, double b)
         {
             _patch.Background = new SolidColorBrush(Color.FromRgb(

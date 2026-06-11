@@ -920,6 +920,96 @@ namespace HDRGammaController
         }
 
         /// <summary>
+        /// HDR PQ-tracking verify: FP16 wire patches through the applied profile, graded in
+        /// ABSOLUTE nits against ST.2084 plus ΔE ITP against D65 gray at each level. Runs
+        /// only when the calibration itself measured a wire ladder (so the LUT actually
+        /// corrected this range); rungs stay below the LUT's identity blend at the panel's
+        /// reachable peak. Returns the report line, or null when not applicable.
+        /// </summary>
+        private async Task<string?> RunPqTrackingSweepAsync(
+            PatchDisplayWindow patchWindow, ColorimeterService colorimeter,
+            ApplyContext ctx, System.Threading.CancellationToken token)
+        {
+            var wireCal = _measurements?
+                .Where(m => m.IsValid && m.Patch.Nits is not null && m.Patch.Nits > 0)
+                .ToList();
+            if (wireCal == null || wireCal.Count == 0)
+                return null; // profile predates the wire ladder - nothing above SDR white was corrected
+
+            // Grade only the region the LUT corrects: below the identity blend that starts
+            // at 90% of the panel's reachable (measured) peak.
+            double reachablePeak = wireCal.Max(m => m.Xyz.Y);
+            double top = reachablePeak * 0.85;
+            var rungs = new[] { 16.0, 64, 150, 320, 650, 1000 }.Where(n => n <= top).ToList();
+            if (rungs.Count == 0)
+                return null;
+
+            HdrPatchRenderer? wire = null;
+            var readings = new List<(double Requested, MeasurementResult M)>();
+            try
+            {
+                var rect = patchWindow.GetPatchPixelRect();
+                wire = new HdrPatchRenderer(rect.X, rect.Y, rect.Width, rect.Height);
+                patchWindow.SetColor(0, 0, 0);
+
+                for (int i = 0; i < rungs.Count; i++)
+                {
+                    double nits = rungs[i];
+                    var p = new ColorPatch
+                    {
+                        Name = $"PQ {nits:F0} nits",
+                        DisplayRgb = new LinearRgb(0.5, 0.5, 0.5),
+                        Nits = nits,
+                        Category = PatchCategory.General,
+                    };
+                    VerifyButton.Content = $"PQ tracking {i + 1}/{rungs.Count}…";
+                    patchWindow.SetProgress(i + 1, rungs.Count, p.Name);
+                    wire.PresentNits(nits, nits, nits);
+                    await Task.Delay(i == 0 ? 1200 : 600, token);
+                    var m = await colorimeter.MeasureAsync(p, ctx.HdrMode, token);
+                    if (ctx.CaptureSounds)
+                        CalibrationSounds.PlayCapture();
+                    if (m.IsValid)
+                        readings.Add((nits, m));
+                }
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                Log.Info($"CalibrationReportWindow: PQ tracking sweep failed: {ex.Message}");
+                return $"HDR PQ tracking sweep failed ({ex.Message}).";
+            }
+            finally
+            {
+                wire?.Dispose();
+            }
+
+            if (readings.Count == 0)
+                return "HDR PQ tracking sweep returned no valid readings.";
+
+            double sumAbsErr = 0, worstErr = 0, worstNits = 0, itpSum = 0, itpMax = 0;
+            foreach (var (requested, m) in readings)
+            {
+                double err = (m.Xyz.Y - requested) / requested;
+                sumAbsErr += Math.Abs(err);
+                if (Math.Abs(err) > Math.Abs(worstErr)) { worstErr = err; worstNits = requested; }
+
+                // D65 gray at the requested absolute luminance - the PQ spec target.
+                var target = new CieXyz(
+                    requested * 0.3127 / 0.3290, requested, requested * (1 - 0.3127 - 0.3290) / 0.3290);
+                double itp = CalibrationVerifier.DeltaEItp(m.Xyz, target);
+                itpSum += itp;
+                itpMax = Math.Max(itpMax, itp);
+                Log.Info($"CalibrationReportWindow: PQ verify {requested,6:F0} nits -> {m.Xyz.Y,7:F1} " +
+                         $"({err:+0.0%;-0.0%}), xy ({m.Xyz.ToChromaticity().X:F4},{m.Xyz.ToChromaticity().Y:F4}), ITP {itp:F1}");
+            }
+
+            return $"HDR PQ tracking (FP16 through profile, {readings.Count} levels to {readings[^1].Requested:F0} nits): " +
+                   $"avg luminance error {sumAbsErr / readings.Count:P1}, worst {worstErr:+0.0%;-0.0%} at {worstNits:F0} nits; " +
+                   $"ΔE ITP avg {itpSum / readings.Count:F1}, max {itpMax:F1} vs D65 gray.";
+        }
+
+        /// <summary>
         /// Drift fix for OLEDs and warm-up shifts: measure ONLY white (averaged 3x), replace
         /// the characterization's white anchor, rebuild + reinstall + re-verify. ~30 seconds
         /// instead of a full calibration.
@@ -1168,6 +1258,16 @@ namespace HDRGammaController
                 }
                 _verifyMeasurements = results;
 
+                // HDR PQ-TRACKING SWEEP: when the applied profile was built from the FP16
+                // wire ladder, verify it the same way - wire-exact FP16 patches THROUGH the
+                // profile, graded in absolute nits against the PQ spec. Only rungs inside
+                // the corrected region (below the LUT's identity blend near the panel's
+                // reachable peak) are graded; above it the LUT intentionally passes the
+                // panel's own rolloff through.
+                string? pqSummary = ctx.HdrMode
+                    ? await RunPqTrackingSweepAsync(patchWindow, colorimeter, ctx, verifyCts.Token)
+                    : null;
+
                 var after = CalibrationVerifier.ComputeMetrics(results, ctx.Target);
                 AfterAvgText.Text = $"{after.AverageDeltaE:F2}";
                 AfterMaxText.Text = $"{after.MaxDeltaE:F2}";
@@ -1192,6 +1292,8 @@ namespace HDRGammaController
                     $"Grayscale residual split: tone {after.AverageGrayscaleToneDeltaE:F2} / color {after.AverageGrayscaleColorDeltaE:F2} ΔE2000 " +
                     $"(tone near black is mostly instrument noise; color is a visible cast). " +
                     $"ΔE ITP avg {after.AverageItpDeltaE:F1}, max {after.MaxItpDeltaE:F1} (BT.2124; ~3x ΔE2000 scale, 1 unit ≈ 1 JND).";
+                if (pqSummary != null)
+                    VerifyDetailText.Text += "\n" + pqSummary;
                 VerifyDetailText.Visibility = Visibility.Visible;
 
                 // Refresh recommendations with verify-aware guidance.
