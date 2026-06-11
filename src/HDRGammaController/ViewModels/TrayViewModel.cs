@@ -111,6 +111,12 @@ namespace HDRGammaController.ViewModels
             CheckForUpdates();
         }
         
+        /// <summary>
+        /// URL to open when the user clicks the update notification balloon.
+        /// Null until an update has actually been detected.
+        /// </summary>
+        public string? PendingUpdateUrl { get; private set; }
+
         private async void CheckForUpdates()
         {
             // async void: any escaped exception would crash the process via the dispatcher.
@@ -119,6 +125,9 @@ namespace HDRGammaController.ViewModels
                 var info = await _updateService.CheckForUpdatesAsync();
                 if (info.IsUpdateAvailable)
                 {
+                     PendingUpdateUrl = !string.IsNullOrEmpty(info.ReleaseUrl)
+                         ? info.ReleaseUrl
+                         : $"https://github.com/davidtorcivia/win11hdr-gamma-adjuster/releases";
                      NotificationRequested?.Invoke("Update Available",
                          $"A new version ({info.Version}) is available.\nClick here to download.");
                 }
@@ -126,6 +135,29 @@ namespace HDRGammaController.ViewModels
             catch (Exception ex)
             {
                 Log.Error($"TrayViewModel.CheckForUpdates: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Opens the release page for a pending update. Wired to the tray balloon
+        /// click; without this the balloon's "Click here to download" did nothing.
+        /// </summary>
+        public void OpenPendingUpdate()
+        {
+            string? url = PendingUpdateUrl;
+            if (string.IsNullOrEmpty(url)) return;
+
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = url,
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"TrayViewModel.OpenPendingUpdate: {ex.Message}");
             }
         }
         

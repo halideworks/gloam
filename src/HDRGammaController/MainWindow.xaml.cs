@@ -40,10 +40,14 @@ namespace HDRGammaController
             _trayViewModel = ActivatorUtilities.CreateInstance<TrayViewModel>(App.Services, _hotkeyManager);
             
             // Subscribe to notifications
-            _trayViewModel.NotificationRequested += (title, msg) => 
+            _trayViewModel.NotificationRequested += (title, msg) =>
             {
                 MyNotifyIcon.ShowBalloonTip(title, msg, Hardcodet.Wpf.TaskbarNotification.BalloonIcon.Info);
             };
+
+            // Update balloons say "Click here to download"; honor that by opening
+            // the release page when the balloon is clicked.
+            MyNotifyIcon.TrayBalloonTipClicked += (s, e) => _trayViewModel?.OpenPendingUpdate();
             
             // Set DataContext for the specific bindings in XAML
             MyNotifyIcon.DataContext = _trayViewModel;
