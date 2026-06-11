@@ -102,6 +102,9 @@ namespace HDRGammaController
             Topmost = true;
             Background = Surround;
             Focusable = true;
+            // Hovering a taskbar icon mid-sweep triggers Aero Peek; without this the patch
+            // fades to glass and the probe reads the desktop instead of the patch.
+            Services.WindowTheme.ExcludeFromPeek(this);
 
             PreviewKeyDown += (_, e) =>
             {
@@ -199,6 +202,20 @@ namespace HDRGammaController
             root.Children.Add(_patch);
             root.Children.Add(overlay);
             Content = root;
+        }
+
+        /// <summary>
+        /// A stray Win+D / taskbar-preview click can minimize the patch window mid-sweep,
+        /// leaving the probe staring at the desktop. Snap straight back to Normal.
+        /// </summary>
+        protected override void OnStateChanged(EventArgs e)
+        {
+            base.OnStateChanged(e);
+            if (WindowState == WindowState.Minimized)
+            {
+                Core.Log.Info("PatchDisplayWindow: minimized during a sweep; restoring to keep the patch on screen.");
+                WindowState = WindowState.Normal;
+            }
         }
 
         /// <summary>

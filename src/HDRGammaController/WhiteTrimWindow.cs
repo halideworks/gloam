@@ -35,6 +35,9 @@ namespace HDRGammaController
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             Background = new SolidColorBrush(Color.FromRgb(0xBC, 0xBC, 0xBC)); // ~50% gray field
             WindowStyle = WindowStyle.SingleBorderWindow;
+            // The gray field is the measurement surface here (visually, against a reference
+            // display); keep it opaque if a taskbar hover triggers Aero Peek mid-comparison.
+            Services.WindowTheme.ExcludeFromPeek(this);
 
             _readout = new TextBlock
             {
