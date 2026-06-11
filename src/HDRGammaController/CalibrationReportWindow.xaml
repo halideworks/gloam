@@ -1,0 +1,532 @@
+<Window x:Class="HDRGammaController.CalibrationReportWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Title="Calibration Report"
+        Width="960" Height="860"
+        MinWidth="820" MinHeight="560"
+        WindowStartupLocation="CenterScreen"
+        Background="#1e1e1e"
+        Foreground="#e0e0e0">
+
+    <Window.Resources>
+        <!-- Styles -->
+        <Style x:Key="SectionHeader" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="#0891b2"/>
+            <Setter Property="Margin" Value="0,0,0,10"/>
+        </Style>
+
+        <Style x:Key="MetricLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="#a0a0a0"/>
+            <Setter Property="Margin" Value="0,2"/>
+        </Style>
+
+        <Style x:Key="MetricValue" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="#e0e0e0"/>
+            <Setter Property="Margin" Value="0,2"/>
+        </Style>
+
+        <Style x:Key="CardBorder" TargetType="Border">
+            <Setter Property="Background" Value="#2d2d2d"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Padding" Value="16"/>
+            <Setter Property="Margin" Value="0,0,0,12"/>
+        </Style>
+
+        <Style x:Key="ActionButton" TargetType="Button">
+            <Setter Property="Background" Value="#0891b2"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="16,8"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                CornerRadius="4"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#06b6d4"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="SecondaryButton" TargetType="Button">
+            <Setter Property="Background" Value="#3d3d3d"/>
+            <Setter Property="Foreground" Value="#e0e0e0"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="16,8"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                CornerRadius="4"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#4d4d4d"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="GradeText" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="32"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="TextAlignment" Value="Center"/>
+            <!-- Optical centering: bold capitals sit slightly below the geometric middle of
+                 the line box, so nudge up a touch inside the circle. -->
+            <Setter Property="Margin" Value="0,-3,0,0"/>
+        </Style>
+
+        <!-- Dark scrollbar matching the report theme (replaces the default light one). -->
+        <Style x:Key="DarkScrollThumb" TargetType="Thumb">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Thumb">
+                        <Border Background="#4d4d4d" CornerRadius="4" Margin="2,0"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Foreground" Value="#5d5d5d"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style TargetType="ScrollBar">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Width" Value="12"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid Background="#1e1e1e">
+                            <Track x:Name="PART_Track" IsDirectionReversed="True">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageUpCommand" Opacity="0" Focusable="False"/>
+                                </Track.DecreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Style="{StaticResource DarkScrollThumb}"/>
+                                </Track.Thumb>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageDownCommand" Opacity="0" Focusable="False"/>
+                                </Track.IncreaseRepeatButton>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <Border Grid.Row="0" Background="#252525" Padding="20,16">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0">
+                    <TextBlock Text="Calibration Report" FontSize="22" FontWeight="SemiBold" Foreground="#e0e0e0"/>
+                    <TextBlock x:Name="MonitorNameText" Text="Monitor Name" FontSize="13" Foreground="#a0a0a0" Margin="0,4,0,0"/>
+                    <TextBlock x:Name="CalibrationDateText" Text="Calibrated: Today" FontSize="12" Foreground="#707070" Margin="0,2,0,0"/>
+                </StackPanel>
+
+                <!-- Grade Display (the letter in a colored disc is self-evidently a grade) -->
+                <StackPanel Grid.Column="1" Margin="0,0,8,0">
+                    <Border Width="84" Height="84" CornerRadius="42" x:Name="GradeBorder" Background="#164e63">
+                        <TextBlock x:Name="GradeText" Style="{StaticResource GradeText}" Foreground="#22d3ee"/>
+                    </Border>
+                    <TextBlock x:Name="GradeScopeText" Text="uncorrected panel" FontSize="10" Foreground="#808080"
+                               HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Main Content -->
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="20">
+            <StackPanel>
+                <!-- Summary Section: before/after accuracy table -->
+                <Border Style="{StaticResource CardBorder}">
+                    <StackPanel>
+                        <TextBlock Text="Accuracy (ΔE2000)" Style="{StaticResource SectionHeader}"/>
+                        <TextBlock Text="Native = the uncorrected panel, measured during calibration. After = re-measured automatically through the applied profile (gamma preference and night mode are suspended during the sweep)."
+                                   FontSize="12" Foreground="#909090" TextWrapping="Wrap" Margin="0,-4,0,12"/>
+
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="170"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <!-- Column headers -->
+                            <TextBlock Grid.Row="0" Grid.Column="1" Text="Average" Style="{StaticResource MetricLabel}" HorizontalAlignment="Center"/>
+                            <TextBlock Grid.Row="0" Grid.Column="2" Text="Max" Style="{StaticResource MetricLabel}" HorizontalAlignment="Center"/>
+                            <TextBlock Grid.Row="0" Grid.Column="3" Text="Grayscale" Style="{StaticResource MetricLabel}" HorizontalAlignment="Center"/>
+                            <TextBlock Grid.Row="0" Grid.Column="4" Text="Primaries" Style="{StaticResource MetricLabel}" HorizontalAlignment="Center"/>
+
+                            <!-- Before: native panel -->
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Native (before)" Style="{StaticResource MetricLabel}" FontSize="13" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Row="1" Grid.Column="1" x:Name="AvgDeltaEText" Text="-" Style="{StaticResource MetricValue}" FontSize="22" HorizontalAlignment="Center"/>
+                            <TextBlock Grid.Row="1" Grid.Column="2" x:Name="MaxDeltaEText" Text="-" Style="{StaticResource MetricValue}" FontSize="22" HorizontalAlignment="Center"/>
+                            <TextBlock Grid.Row="1" Grid.Column="3" x:Name="GrayscaleDeltaEText" Text="-" Style="{StaticResource MetricValue}" FontSize="22" HorizontalAlignment="Center"/>
+                            <TextBlock Grid.Row="1" Grid.Column="4" x:Name="PrimaryDeltaEText" Text="-" Style="{StaticResource MetricValue}" FontSize="22" HorizontalAlignment="Center"/>
+
+                            <!-- After: re-measured through the applied correction -->
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Calibrated (after)" Style="{StaticResource MetricLabel}" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Row="2" Grid.Column="1" x:Name="AfterAvgText" Text="-" Style="{StaticResource MetricValue}" FontSize="22" FontWeight="Bold" HorizontalAlignment="Center"/>
+                            <TextBlock Grid.Row="2" Grid.Column="2" x:Name="AfterMaxText" Text="-" Style="{StaticResource MetricValue}" FontSize="22" FontWeight="Bold" HorizontalAlignment="Center"/>
+                            <TextBlock Grid.Row="2" Grid.Column="3" x:Name="AfterGrayscaleText" Text="-" Style="{StaticResource MetricValue}" FontSize="22" FontWeight="Bold" HorizontalAlignment="Center"/>
+                            <TextBlock Grid.Row="2" Grid.Column="4" x:Name="AfterPrimaryText" Text="-" Style="{StaticResource MetricValue}" FontSize="22" FontWeight="Bold" HorizontalAlignment="Center"/>
+                        </Grid>
+
+                        <!-- Verify detail: grayscale tone/color decomposition + dE ITP -->
+                        <TextBlock x:Name="VerifyDetailText" Visibility="Collapsed"
+                                   FontSize="12" Foreground="#a0a0a0" TextWrapping="Wrap" Margin="0,10,0,0"/>
+
+                        <!-- Closed-loop grey-ramp refinement note (a different, narrower metric than
+                             the table: 1D grey-axis tracking only, measured during calibration) -->
+                        <TextBlock x:Name="BeforeAfterNoteText" Visibility="Collapsed"
+                                   FontSize="12" Foreground="#909090" TextWrapping="Wrap" Margin="0,10,0,0"/>
+
+                        <TextBlock x:Name="SummaryText"
+                                   Text="Calibration completed successfully."
+                                   FontSize="13"
+                                   Foreground="#a0a0a0"
+                                   TextWrapping="Wrap"
+                                   Margin="0,16,0,0"/>
+
+                        <Border x:Name="PerceptualNotePanel" Visibility="Collapsed"
+                                Background="#22303a" CornerRadius="6" Padding="12,10" Margin="0,12,0,0">
+                            <TextBlock FontSize="12" Foreground="#a8c5d8" TextWrapping="Wrap"
+                                       Text="Final step: trust your eyes. Instruments and eyes weigh light spectra differently, so two display technologies can measure identical yet look slightly different side by side (observer metamerism). If this display does not quite match your reference, nudge the Tint/Temperature trims in the monitor dashboard while comparing a gray image. Small trims are a normal part of professional workflows; they ride on top of this profile and never affect the measurements above."/>
+                        </Border>
+                    </StackPanel>
+                </Border>
+
+                <!-- Display Characteristics -->
+                <Border Style="{StaticResource CardBorder}">
+                    <StackPanel>
+                        <TextBlock Text="Display Characteristics" Style="{StaticResource SectionHeader}"/>
+
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <!-- Peak Luminance -->
+                            <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,0,12">
+                                <TextBlock Text="Peak Luminance" Style="{StaticResource MetricLabel}"/>
+                                <TextBlock x:Name="PeakLuminanceText" Text="-- cd/m2" Style="{StaticResource MetricValue}"/>
+                            </StackPanel>
+
+                            <!-- Black Level -->
+                            <StackPanel Grid.Row="0" Grid.Column="1" Margin="0,0,0,12">
+                                <TextBlock Text="Black Level" Style="{StaticResource MetricLabel}"/>
+                                <TextBlock x:Name="BlackLevelText" Text="-- cd/m2" Style="{StaticResource MetricValue}"/>
+                            </StackPanel>
+
+                            <!-- Contrast Ratio -->
+                            <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,0,0,12">
+                                <TextBlock Text="Contrast Ratio" Style="{StaticResource MetricLabel}"/>
+                                <TextBlock x:Name="ContrastRatioText" Text="--:1" Style="{StaticResource MetricValue}"/>
+                            </StackPanel>
+
+                            <!-- Measured Gamma -->
+                            <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,0,0,12">
+                                <TextBlock Text="Measured Gamma" Style="{StaticResource MetricLabel}"/>
+                                <TextBlock x:Name="MeasuredGammaText" Text="--" Style="{StaticResource MetricValue}"/>
+                            </StackPanel>
+
+                            <!-- White Point CCT -->
+                            <StackPanel Grid.Row="2" Grid.Column="0" Margin="0,0,0,12">
+                                <TextBlock Text="White Point CCT" Style="{StaticResource MetricLabel}"/>
+                                <TextBlock x:Name="WhitePointCctText" Text="-- K" Style="{StaticResource MetricValue}"/>
+                            </StackPanel>
+
+                            <!-- White Point Duv -->
+                            <StackPanel Grid.Row="2" Grid.Column="1" Margin="0,0,0,12">
+                                <TextBlock Text="White Point Duv" Style="{StaticResource MetricLabel}"/>
+                                <TextBlock x:Name="WhitePointDuvText" Text="--" Style="{StaticResource MetricValue}"/>
+                            </StackPanel>
+
+                            <!-- Gamut Coverage -->
+                            <StackPanel Grid.Row="3" Grid.Column="0">
+                                <TextBlock Text="sRGB Coverage" Style="{StaticResource MetricLabel}"/>
+                                <TextBlock x:Name="SrgbCoverageText" Text="--%" Style="{StaticResource MetricValue}"/>
+                            </StackPanel>
+
+                            <!-- Target -->
+                            <StackPanel Grid.Row="3" Grid.Column="1">
+                                <TextBlock Text="Calibration Target" Style="{StaticResource MetricLabel}"/>
+                                <TextBlock x:Name="TargetText" Text="--" Style="{StaticResource MetricValue}"/>
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <!-- Charts -->
+                <Border Style="{StaticResource CardBorder}">
+                    <StackPanel>
+                        <TextBlock Text="Tone Response &amp; Gamut" Style="{StaticResource SectionHeader}"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,4,8,12">
+                                <TextBlock Text="Per-channel tone response (measured vs target)" Style="{StaticResource MetricLabel}"/>
+                                <Border Background="#181818" CornerRadius="4" Height="200">
+                                    <Canvas x:Name="ToneCanvas"/>
+                                </Border>
+                            </StackPanel>
+
+                            <StackPanel Grid.Row="0" Grid.Column="1" Margin="8,4,0,12">
+                                <TextBlock Text="Gamma tracking" Style="{StaticResource MetricLabel}"/>
+                                <Border Background="#181818" CornerRadius="4" Height="200">
+                                    <Canvas x:Name="GammaCanvas"/>
+                                </Border>
+                            </StackPanel>
+
+                            <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,4,8,0">
+                                <TextBlock Text="Grayscale RGB balance" Style="{StaticResource MetricLabel}"/>
+                                <Border Background="#181818" CornerRadius="4" Height="200">
+                                    <Canvas x:Name="BalanceCanvas"/>
+                                </Border>
+                            </StackPanel>
+
+                            <StackPanel Grid.Row="1" Grid.Column="1" Margin="8,4,0,0">
+                                <TextBlock Text="Gamut + white point (CIE xy)" Style="{StaticResource MetricLabel}"/>
+                                <Border Background="#181818" CornerRadius="4" Height="200">
+                                    <Canvas x:Name="GamutCanvas"/>
+                                </Border>
+                            </StackPanel>
+                        </Grid>
+                        <TextBlock FontSize="11" Foreground="#707070" Margin="0,8,0,0" TextWrapping="Wrap"
+                                   Text="Dashed = target · orange = native (before) · green = corrected, re-measured through the applied profile. Orange dot = measured white, gray dot = target white."/>
+                    </StackPanel>
+                </Border>
+
+                <!-- Primaries Comparison -->
+                <Border Style="{StaticResource CardBorder}">
+                    <StackPanel>
+                        <TextBlock Text="Color Primaries" Style="{StaticResource SectionHeader}"/>
+
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="60"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="80"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <!-- Headers -->
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="" Style="{StaticResource MetricLabel}"/>
+                            <TextBlock Grid.Row="0" Grid.Column="1" Text="Measured" Style="{StaticResource MetricLabel}"/>
+                            <TextBlock Grid.Row="0" Grid.Column="2" Text="Target" Style="{StaticResource MetricLabel}"/>
+                            <TextBlock Grid.Row="0" Grid.Column="3" Text="Error" Style="{StaticResource MetricLabel}"/>
+
+                            <!-- Red -->
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Red" Foreground="#ef4444" Style="{StaticResource MetricValue}"/>
+                            <TextBlock Grid.Row="1" Grid.Column="1" x:Name="RedMeasuredText" Text="(0.640, 0.330)" Style="{StaticResource MetricValue}"/>
+                            <TextBlock Grid.Row="1" Grid.Column="2" x:Name="RedTargetText" Text="(0.640, 0.330)" Style="{StaticResource MetricValue}"/>
+                            <TextBlock Grid.Row="1" Grid.Column="3" x:Name="RedErrorText" Text="0.000" Style="{StaticResource MetricValue}"/>
+
+                            <!-- Green -->
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Green" Foreground="#22c55e" Style="{StaticResource MetricValue}"/>
+                            <TextBlock Grid.Row="2" Grid.Column="1" x:Name="GreenMeasuredText" Text="(0.300, 0.600)" Style="{StaticResource MetricValue}"/>
+                            <TextBlock Grid.Row="2" Grid.Column="2" x:Name="GreenTargetText" Text="(0.300, 0.600)" Style="{StaticResource MetricValue}"/>
+                            <TextBlock Grid.Row="2" Grid.Column="3" x:Name="GreenErrorText" Text="0.000" Style="{StaticResource MetricValue}"/>
+
+                            <!-- Blue -->
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Blue" Foreground="#3b82f6" Style="{StaticResource MetricValue}"/>
+                            <TextBlock Grid.Row="3" Grid.Column="1" x:Name="BlueMeasuredText" Text="(0.150, 0.060)" Style="{StaticResource MetricValue}"/>
+                            <TextBlock Grid.Row="3" Grid.Column="2" x:Name="BlueTargetText" Text="(0.150, 0.060)" Style="{StaticResource MetricValue}"/>
+                            <TextBlock Grid.Row="3" Grid.Column="3" x:Name="BlueErrorText" Text="0.000" Style="{StaticResource MetricValue}"/>
+
+                            <!-- White -->
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="White" Style="{StaticResource MetricValue}"/>
+                            <TextBlock Grid.Row="4" Grid.Column="1" x:Name="WhiteMeasuredText" Text="(0.313, 0.329)" Style="{StaticResource MetricValue}"/>
+                            <TextBlock Grid.Row="4" Grid.Column="2" x:Name="WhiteTargetText" Text="(0.313, 0.329)" Style="{StaticResource MetricValue}"/>
+                            <TextBlock Grid.Row="4" Grid.Column="3" x:Name="WhiteErrorText" Text="0.000" Style="{StaticResource MetricValue}"/>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <!-- Calibration Info -->
+                <Border Style="{StaticResource CardBorder}">
+                    <StackPanel>
+                        <TextBlock Text="Calibration Details" Style="{StaticResource SectionHeader}"/>
+
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,0,12">
+                                <TextBlock Text="Patches Measured" Style="{StaticResource MetricLabel}"/>
+                                <TextBlock x:Name="PatchCountText" Text="--" Style="{StaticResource MetricValue}"/>
+                            </StackPanel>
+
+                            <StackPanel Grid.Row="0" Grid.Column="1" Margin="0,0,0,12">
+                                <TextBlock Text="Measurement Time" Style="{StaticResource MetricLabel}"/>
+                                <TextBlock x:Name="MeasurementTimeText" Text="--" Style="{StaticResource MetricValue}"/>
+                            </StackPanel>
+
+                            <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,0,0,12">
+                                <TextBlock Text="Colorimeter" Style="{StaticResource MetricLabel}"/>
+                                <TextBlock x:Name="ColorimeterText" Text="--" Style="{StaticResource MetricValue}"/>
+                            </StackPanel>
+
+                            <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,0,0,12">
+                                <TextBlock Text="LUT Size" Style="{StaticResource MetricLabel}"/>
+                                <TextBlock x:Name="LutSizeText" Text="--" Style="{StaticResource MetricValue}"/>
+                            </StackPanel>
+
+                            <StackPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2">
+                                <TextBlock Text="Profile Location" Style="{StaticResource MetricLabel}"/>
+                                <TextBlock x:Name="ProfilePathText" Text="--" Style="{StaticResource MetricValue}" TextWrapping="Wrap" FontSize="11"/>
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <!-- Recommendations -->
+                <Border Style="{StaticResource CardBorder}" x:Name="RecommendationsPanel">
+                    <StackPanel>
+                        <TextBlock Text="Recommendations" Style="{StaticResource SectionHeader}"/>
+                        <ItemsControl x:Name="RecommendationsList">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                                        <TextBlock Text="*" Foreground="#0891b2" FontWeight="Bold" Margin="0,0,8,0"/>
+                                        <TextBlock Text="{Binding}" TextWrapping="Wrap" Foreground="#a0a0a0"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- Footer with Actions -->
+        <Border Grid.Row="2" Background="#252525" Padding="20,16">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Column="0" x:Name="StatusText"
+                           Text="Profile is active and applied."
+                           Foreground="#22c55e"
+                           VerticalAlignment="Center"
+                           FontSize="13"/>
+
+                <Button Grid.Column="1"
+                        x:Name="ExportButton"
+                        Content="Export LUT"
+                        Style="{StaticResource SecondaryButton}"
+                        Margin="0,0,10,0"
+                        Click="ExportButton_Click"/>
+
+                <Button Grid.Column="2"
+                        x:Name="ApplyButton"
+                        Content="Apply Profile"
+                        Style="{StaticResource ActionButton}"
+                        Margin="0,0,10,0"
+                        Click="ApplyButton_Click"/>
+
+                <Button Grid.Column="3"
+                        x:Name="VerifyButton"
+                        Content="Re-verify"
+                        ToolTip="Re-measure a quick patch sweep through the applied profile to refresh the 'after' numbers. Place the probe on the display first."
+                        Style="{StaticResource SecondaryButton}"
+                        Margin="0,0,10,0"
+                        Click="VerifyButton_Click"/>
+
+                <Button Grid.Column="4"
+                        x:Name="WhiteToolsButton"
+                        Content="White Tools"
+                        ToolTip="Re-anchor white with a quick measurement (drift fix), or trim the target white by eye against a reference display."
+                        Style="{StaticResource SecondaryButton}"
+                        Margin="0,0,10,0"
+                        Click="WhiteToolsButton_Click"/>
+
+                <Button Grid.Column="5"
+                        x:Name="CloseButton"
+                        Content="Close"
+                        Style="{StaticResource SecondaryButton}"
+                        Click="CloseButton_Click"/>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

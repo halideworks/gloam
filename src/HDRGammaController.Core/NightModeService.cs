@@ -105,14 +105,21 @@ namespace HDRGammaController.Core
         
         /// <summary>
         /// Gets effective start/end times, using sunrise/sunset if auto mode enabled.
+        /// Falls back to the manual StartTime/EndTime if we're in polar day/night, where
+        /// the NOAA sentinels (0,0 / 0,24h) would otherwise drive a degenerate schedule.
         /// </summary>
         public (TimeSpan start, TimeSpan end) GetEffectiveTimes()
         {
             if (UseAutoSchedule && Latitude.HasValue && Longitude.HasValue)
             {
-                var (sunrise, sunset) = SunCalculator.CalculateToday(Latitude.Value, Longitude.Value);
-                // Night mode starts at sunset, ends at sunrise
-                return (sunset, sunrise);
+                var result = SunCalculator.CalculateTodayDetailed(Latitude.Value, Longitude.Value);
+                if (result.HasValidTimes)
+                {
+                    // Night mode starts at sunset, ends at sunrise
+                    return (result.Sunset, result.Sunrise);
+                }
+                // Polar day/night: fall back to the manual fallback times rather than
+                // collapsing the schedule to (0,0) or (0,24h).
             }
             return (StartTime, EndTime);
         }
@@ -125,20 +132,16 @@ namespace HDRGammaController.Core
     {
         private System.Timers.Timer _timer;
         private NightModeSettings _settings;
-        private double _currentBlend = 0.0; // 0 = day mode, 1 = full night mode
-        private bool _isTransitioning = false;
         private DateTime? _pauseUntil = null;
         
         /// <summary>
-        /// Fired when the night mode blend factor changes (for real-time UI updates).
+        /// Fired exactly once per effective state change (kelvin moved or settings changed).
+        /// Subscribers re-apply gamma and refresh UI. Value is 1.0 while night mode is in
+        /// effect, 0 when forced back to day. Firing more than once per change causes
+        /// redundant dispwin invocations, which the user sees as flicker.
         /// </summary>
         public event Action<double>? BlendChanged;
-        
-        /// <summary>
-        /// Fired when calibration should be reapplied with new night mode adjustments.
-        /// </summary>
-        public event Action<CalibrationSettings>? ApplyAdjustments;
-        
+
         public int CurrentNightKelvin => _currentNightKelvin;
         public bool IsNightModeActive => _currentNightKelvin < 6450;
         
@@ -173,14 +176,14 @@ namespace HDRGammaController.Core
             else
             {
                 // Force an update to catch new times/durations immediately
-                UpdateState();
+                bool notified = UpdateState();
                 ScheduleNextTick();
 
-                // Always re-apply adjustments when settings change
-                // (e.g., UseUltraWarmMode changed but temperature didn't)
-                if (_settings.Enabled)
+                // Re-apply even when the kelvin didn't move — other settings that affect
+                // the output may have changed (e.g. UseUltraWarmMode, Algorithm).
+                if (_settings.Enabled && !notified)
                 {
-                    ApplyCurrentAdjustments();
+                    BlendChanged?.Invoke(1.0);
                 }
             }
         }
@@ -203,53 +206,64 @@ namespace HDRGammaController.Core
             ScheduleNextTick();
         }
 
+        // Tick fast only while a fade is actually interpolating; when idle, sleep until
+        // the next schedule trigger (capped at 60s so system clock changes can't strand
+        // us). The old constant 4s tick was ~21,600 wakeups/day of pure idle work.
+        private const double FadeTickMs = 4000;
+        private const double IdleTickMs = 60000;
+        private bool _inFadeWindow;
+        private double _msToNextTrigger = double.MaxValue;
+
         private void ScheduleNextTick()
         {
             if (!_settings.Enabled) return;
 
-            // Simple logic: update frequently (4s) to ensure smooth transitions
-            // Optimization for the future: calculate time to next transition event
-            // For now, consistent updates ensure responsiveness to schedule changes
-            _timer.Interval = 4000;
+            _timer.Interval = _inFadeWindow
+                ? FadeTickMs
+                : Math.Clamp(_msToNextTrigger, FadeTickMs, IdleTickMs);
             _timer.Start();
         }
         
-        private void UpdateState()
+        /// <returns>True if BlendChanged was fired.</returns>
+        private bool UpdateState()
         {
             if (!_settings.Enabled)
             {
-                ForceDayMode();
-                return;
+                return ForceDayMode();
             }
 
             if (_pauseUntil.HasValue)
             {
                 if (DateTime.Now < _pauseUntil.Value)
                 {
-                    ForceDayMode();
-                    return;
+                    return ForceDayMode();
                 }
                 _pauseUntil = null; // Expired
             }
-            
+
             _settings.EnsureSchedule(_settings.Latitude, _settings.Longitude);
-            
+
             int targetKelvin = CalculateCurrentKelvin();
-            
+
             // Only update if changed significantly
             if (Math.Abs(targetKelvin - _currentNightKelvin) > 5)
             {
                 _currentNightKelvin = targetKelvin;
-                BlendChanged?.Invoke(1.0); // Signal update
-                ApplyCurrentAdjustments();
+                BlendChanged?.Invoke(1.0);
+                return true;
             }
+            return false;
         }
         
         private int CalculateCurrentKelvin()
         {
             var now = DateTime.Now;
             var timeOfDay = now.TimeOfDay;
-            
+
+            // Recomputed below; default to "no fade, nothing scheduled".
+            _inFadeWindow = false;
+            _msToNextTrigger = double.MaxValue;
+
             // 1. Resolve all points to absolute TimeSpans for today
             var points = _settings.Schedule;
             if (points == null || points.Count == 0) return 6500;
@@ -308,69 +322,53 @@ namespace HDRGammaController.Core
                 }
             }
             
-            // 4. Calculate Interpolation
-            // Transition is: From PreviousTarget -> CurrentTarget
-            // Triggered at: CurrentContext.Time
-            // Duration: CurrentContext.Point.FadeMinutes
-            
-            // Wait. My Logic earlier:
-            // "At 18:00 (Point A), we start fading TO Point A's target."  <- This effectively means Point A defines the transition start.
-            // Start Value = Target of (A-1). End Value = Target of A.
-            
+            // 4. Calculate interpolation. A point defines the transition TO its own target:
+            // at currentContext.Time we start fading from the previous point's target to
+            // currentContext's target over currentContext's FadeMinutes.
+
             var targetPoint = currentContext.Point;
             var startKelvin = previousContext.Point.TargetKelvin;
             var endKelvin = targetPoint.TargetKelvin;
-            
-            // Check if we are inside the fade window
-            // Window starts at currentContext.Time
+
+            // Tell the timer when the next scheduled trigger fires so the idle tick can
+            // sleep right up to it instead of polling.
+            var nextTrigger = resolvedPoints[(currentIndex + 1 + resolvedPoints.Count) % resolvedPoints.Count].Time;
+            var untilNext = nextTrigger - timeOfDay;
+            if (untilNext <= TimeSpan.Zero) untilNext += TimeSpan.FromHours(24);
+            _msToNextTrigger = untilNext.TotalMilliseconds;
+
+            // Check if we are inside the fade window (starts at currentContext.Time)
             var timeSinceTrigger = timeOfDay - currentContext.Time;
-            if (timeSinceTrigger < TimeSpan.Zero) timeSinceTrigger += TimeSpan.FromHours(24); // Handle wrapping if needed logic mismatch
-            
-            // Only fade if we are within the duration
+            if (timeSinceTrigger < TimeSpan.Zero) timeSinceTrigger += TimeSpan.FromHours(24);
+
             double fadeMinutes = targetPoint.FadeMinutes;
             if (timeSinceTrigger.TotalMinutes < fadeMinutes && fadeMinutes > 0)
             {
+                _inFadeWindow = true;
                 double progress = timeSinceTrigger.TotalMinutes / fadeMinutes;
                 progress = Math.Clamp(progress, 0.0, 1.0);
-                
-                // Lerp
+
                 return (int)(startKelvin + (endKelvin - startKelvin) * progress);
             }
-            
+
             // Otherwise we have arrived
             return endKelvin;
         }
 
-        private void ForceDayMode()
+        /// <returns>True if BlendChanged was fired.</returns>
+        private bool ForceDayMode()
         {
+            _inFadeWindow = false;
             if (_currentNightKelvin != 6500)
             {
                 _currentNightKelvin = 6500;
-                BlendChanged?.Invoke(0); // Legacy blend support (0=Day)
-                ApplyCurrentAdjustments();
+                BlendChanged?.Invoke(0); // 0 = day
+                return true;
             }
+            return false;
         }
 
-        private void ApplyCurrentAdjustments()
-        {
-            // Convert Absolute Kelvin to relative Shift
-            // 6500K = 0 shift
-            // Base logic: Temp = (Kelvin - 6500) / 70
-            double tempShift = (_currentNightKelvin - 6500) / 70.0;
-            
-            var calibration = new CalibrationSettings
-            {
-                Temperature = tempShift,
-                Algorithm = _settings.Algorithm,
-                UseUltraWarmMode = _settings.UseUltraWarmMode
-            };
-            ApplyAdjustments?.Invoke(calibration);
 
-            // Also fire BlendChanged to trigger ApplyAll() in TrayViewModel
-            // This ensures settings changes (like UseUltraWarmMode) get applied
-            BlendChanged?.Invoke(1.0);
-        }
-        
         public void Dispose()
         {
             _timer.Stop();

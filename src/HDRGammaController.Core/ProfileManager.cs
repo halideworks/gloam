@@ -50,7 +50,7 @@ namespace HDRGammaController.Core
                     // But usually we want to ensure our new version is used.
                     // Ideally we uninstall old one first?
                     // For now, assume success or harmless failure if identical.
-                    Console.WriteLine($"ProfileManager: InstallColorProfile returned false for {profileName}");
+                    Log.Info($"ProfileManager: InstallColorProfile returned false for {profileName}");
                 }
 
                 // 5. Associate Profile with Monitor
@@ -72,7 +72,7 @@ namespace HDRGammaController.Core
                     profileName // Just the filename, not path
                     ))
                 {
-                    Console.WriteLine($"ProfileManager: WcsSetDefaultColorProfile returned false for {profileName}");
+                    Log.Info($"ProfileManager: WcsSetDefaultColorProfile returned false for {profileName}");
                 }
             }
             finally
@@ -81,7 +81,7 @@ namespace HDRGammaController.Core
                 if (File.Exists(sourcePath))
                 {
                     try { File.Delete(sourcePath); }
-                    catch (Exception ex) { Console.WriteLine($"ProfileManager: Failed to cleanup temp file: {ex.Message}"); }
+                    catch (Exception ex) { Log.Info($"ProfileManager: Failed to cleanup temp file: {ex.Message}"); }
                 }
             }
         }

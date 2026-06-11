@@ -121,20 +121,34 @@ namespace HDRGammaController.Core
 
             // Normalize linear light to [0, 1]
             double linear = (linearNits - blackLevel) / (whiteLevel - blackLevel);
-            linear = Math.Clamp(linear, 0.0, 1.0);
+            return SrgbOetf(linear);
+        }
 
-            // sRGB Inverse Companding (Linear -> Signal)
-            // If linear <= 0.0031308, S = 12.92 * L
-            // Else S = 1.055 * L^(1/2.4) - 0.055
-            
+        /// <summary>
+        /// IEC 61966-2-1 sRGB OETF: encodes a normalized linear value [0,1] to sRGB signal [0,1].
+        /// </summary>
+        public static double SrgbOetf(double linear)
+        {
+            linear = Math.Clamp(linear, 0.0, 1.0);
             if (linear <= 0.0031308)
             {
                 return 12.92 * linear;
             }
-            else
+            return 1.055 * Math.Pow(linear, 1.0 / 2.4) - 0.055;
+        }
+
+        /// <summary>
+        /// IEC 61966-2-1 sRGB EOTF: decodes sRGB signal [0,1] to normalized linear value [0,1].
+        /// Inverse of <see cref="SrgbOetf"/>.
+        /// </summary>
+        public static double SrgbEotf(double signal)
+        {
+            signal = Math.Clamp(signal, 0.0, 1.0);
+            if (signal <= 0.04045)
             {
-                return 1.055 * Math.Pow(linear, 1.0 / 2.4) - 0.055;
+                return signal / 12.92;
             }
+            return Math.Pow((signal + 0.055) / 1.055, 2.4);
         }
     }
 }

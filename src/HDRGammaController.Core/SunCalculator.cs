@@ -10,7 +10,29 @@ namespace HDRGammaController.Core
     {
         private const double DegToRad = Math.PI / 180.0;
         private const double RadToDeg = 180.0 / Math.PI;
-        
+
+        /// <summary>
+        /// Result of a sunrise/sunset calculation, including a flag for polar day/night where
+        /// the returned sunrise/sunset TimeSpans are degenerate sentinels rather than real events.
+        /// </summary>
+        public readonly struct SunResult
+        {
+            public readonly TimeSpan Sunrise;
+            public readonly TimeSpan Sunset;
+            public readonly bool IsPolarNight;   // sun never rises above horizon today
+            public readonly bool IsMidnightSun;  // sun never sets below horizon today
+
+            public SunResult(TimeSpan sunrise, TimeSpan sunset, bool polarNight = false, bool midnightSun = false)
+            {
+                Sunrise = sunrise;
+                Sunset = sunset;
+                IsPolarNight = polarNight;
+                IsMidnightSun = midnightSun;
+            }
+
+            public bool HasValidTimes => !IsPolarNight && !IsMidnightSun;
+        }
+
         /// <summary>
         /// Calculate sunrise and sunset times for a given location and date.
         /// </summary>
@@ -18,8 +40,20 @@ namespace HDRGammaController.Core
         /// <param name="longitude">Longitude in degrees (-180 to 180)</param>
         /// <param name="date">Date to calculate for</param>
         /// <param name="utcOffset">UTC offset in hours (e.g., -5 for EST)</param>
-        /// <returns>Tuple of (sunrise, sunset) as local TimeSpan</returns>
+        /// <returns>Tuple of (sunrise, sunset) as local TimeSpan. Callers that need to
+        /// distinguish polar day/night from real events should use <see cref="CalculateDetailed"/>.</returns>
         public static (TimeSpan sunrise, TimeSpan sunset) Calculate(
+            double latitude, double longitude, DateTime date, double utcOffset)
+        {
+            var result = CalculateDetailed(latitude, longitude, date, utcOffset);
+            return (result.Sunrise, result.Sunset);
+        }
+
+        /// <summary>
+        /// Detailed version of <see cref="Calculate"/> that reports polar day / polar night
+        /// explicitly instead of folding them into the (0,0)/(0,24h) sentinels.
+        /// </summary>
+        public static SunResult CalculateDetailed(
             double latitude, double longitude, DateTime date, double utcOffset)
         {
             // Julian day
@@ -89,16 +123,16 @@ namespace HDRGammaController.Core
                            (Math.Cos(latitude * DegToRad) * Math.Cos(decl * DegToRad))) -
                            Math.Tan(latitude * DegToRad) * Math.Tan(decl * DegToRad);
             
-            // Handle polar day/night
+            // Handle polar day/night. Sentinels are retained for backward compatibility but
+            // the flags on SunResult let callers react correctly instead of scheduling a
+            // fade-to-zero transition at local midnight, which the old code effectively did.
             if (cosHA > 1)
             {
-                // Polar night - sun never rises
-                return (TimeSpan.Zero, TimeSpan.Zero);
+                return new SunResult(TimeSpan.Zero, TimeSpan.Zero, polarNight: true);
             }
             else if (cosHA < -1)
             {
-                // Midnight sun - sun never sets
-                return (TimeSpan.Zero, new TimeSpan(24, 0, 0));
+                return new SunResult(TimeSpan.Zero, new TimeSpan(24, 0, 0), midnightSun: true);
             }
             
             double HA = Math.Acos(cosHA) * RadToDeg;
@@ -113,13 +147,12 @@ namespace HDRGammaController.Core
             // Normalize to 0-1440 range
             sunriseMinutes = Mod1440(sunriseMinutes);
             sunsetMinutes = Mod1440(sunsetMinutes);
-            
-            return (
+
+            return new SunResult(
                 TimeSpan.FromMinutes(sunriseMinutes),
-                TimeSpan.FromMinutes(sunsetMinutes)
-            );
+                TimeSpan.FromMinutes(sunsetMinutes));
         }
-        
+
         /// <summary>
         /// Calculate sunrise/sunset for today at the given location, using local timezone.
         /// </summary>
@@ -128,6 +161,16 @@ namespace HDRGammaController.Core
             var now = DateTime.Now;
             var utcOffset = TimeZoneInfo.Local.GetUtcOffset(now).TotalHours;
             return Calculate(latitude, longitude, now, utcOffset);
+        }
+
+        /// <summary>
+        /// Detailed variant of <see cref="CalculateToday"/>, with polar day/night flags.
+        /// </summary>
+        public static SunResult CalculateTodayDetailed(double latitude, double longitude)
+        {
+            var now = DateTime.Now;
+            var utcOffset = TimeZoneInfo.Local.GetUtcOffset(now).TotalHours;
+            return CalculateDetailed(latitude, longitude, now, utcOffset);
         }
         
         private static double Mod360(double x)

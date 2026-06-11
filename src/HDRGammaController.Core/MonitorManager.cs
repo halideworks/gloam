@@ -14,15 +14,15 @@ namespace HDRGammaController.Core
             var monitors = new List<MonitorInfo>();
             
             // 1. Create DXGI Factory1 (Base for newer)
-            Console.WriteLine("MonitorManager: Creating DXGI Factory1...");
+            Log.Info("MonitorManager: Creating DXGI Factory1...");
             Guid iidFactory1 = Dxgi.IID_IDXGIFactory1;
             int hr = Dxgi.CreateDXGIFactory1(ref iidFactory1, out IntPtr pFactory);
-            Console.WriteLine($"MonitorManager: CreateDXGIFactory1 returned HR={hr}, Ptr={pFactory}");
+            Log.Info($"MonitorManager: CreateDXGIFactory1 returned HR={hr}, Ptr={pFactory}");
 
             if (pFactory == IntPtr.Zero)
             {
                 // Fallback or error
-                Console.WriteLine("MonitorManager: Failed to create factory.");
+                Log.Info("MonitorManager: Failed to create factory.");
                 return monitors;
             }
 
@@ -32,12 +32,12 @@ namespace HDRGammaController.Core
                  object? factoryObj = Marshal.GetObjectForIUnknown(pFactory);
                  factory = factoryObj as Dxgi.IDXGIFactory1;
             } catch (Exception ex) {
-                Console.WriteLine($"MonitorManager: Failed to wrap IDXGIFactory1: {ex.Message}");
+                Log.Info($"MonitorManager: Failed to wrap IDXGIFactory1: {ex.Message}");
             }
             
             if (factory == null)
             {
-                Console.WriteLine("MonitorManager: IDXGIFactory1 wrapper failed.");
+                Log.Info("MonitorManager: IDXGIFactory1 wrapper failed.");
                 Marshal.Release(pFactory);
                 return monitors;
             }
@@ -58,33 +58,43 @@ namespace HDRGammaController.Core
                     }
                     if (hr < 0)
                     {
-                        Console.WriteLine($"MonitorManager: EnumAdapters1 failed for {adapterIndex} with HR={hr}");
+                        Log.Info($"MonitorManager: EnumAdapters1 failed for {adapterIndex} with HR={hr}");
                         break;
                     }
 
                     if (pAdapter == IntPtr.Zero) break;
                     
-                    // Wrap adapter using GetObjectForIUnknown and cast via interface
+                    // Wrap adapter using GetObjectForIUnknown and cast via interface.
+                    //
+                    // COM lifetime invariant: `pAdapter` is a raw IntPtr whose refcount we
+                    // release via Marshal.Release below. `GetObjectForIUnknown` creates a
+                    // managed RCW with its own refcount; if the cast to IDXGIAdapter1 fails
+                    // we must release that RCW explicitly — otherwise the orphaned refcount
+                    // is only reclaimed at finalization, leaking one per failed enumeration.
                     Dxgi.IDXGIAdapter1? adapter = null;
+                    object? adapterObj = null;
                     try {
-                        object? adapterObj = Marshal.GetObjectForIUnknown(pAdapter);
+                        adapterObj = Marshal.GetObjectForIUnknown(pAdapter);
                         adapter = adapterObj as Dxgi.IDXGIAdapter1;
                         if (adapter == null && adapterObj != null)
                         {
-                            Console.WriteLine($"MonitorManager: Adapter {adapterIndex} doesn't support IDXGIAdapter1, type: {adapterObj.GetType().Name}");
+                            Log.Info($"MonitorManager: Adapter {adapterIndex} doesn't support IDXGIAdapter1, type: {adapterObj.GetType().Name}");
+                            Marshal.ReleaseComObject(adapterObj);
+                            adapterObj = null;
                         }
                     } catch (Exception ex) {
-                        Console.WriteLine($"MonitorManager: Exception wrapping adapter {adapterIndex}: {ex.GetType().Name}: {ex.Message}");
+                        Log.Info($"MonitorManager: Exception wrapping adapter {adapterIndex}: {ex.GetType().Name}: {ex.Message}");
+                        if (adapterObj != null) { try { Marshal.ReleaseComObject(adapterObj); } catch { } }
                     }
                     
                     if (adapter == null) {
-                         Console.WriteLine($"MonitorManager: Failed to wrap IDXGIAdapter1 for index {adapterIndex}");
+                         Log.Info($"MonitorManager: Failed to wrap IDXGIAdapter1 for index {adapterIndex}");
                          Marshal.Release(pAdapter);
                          adapterIndex++;
                          continue;
                     }
 
-                    Console.WriteLine($"MonitorManager: Found adapter at index {adapterIndex}");
+                    Log.Info($"MonitorManager: Found adapter at index {adapterIndex}");
 
                     Dxgi.DXGI_ADAPTER_DESC1 adapterDesc;
                     adapter.GetDesc1(out adapterDesc);
@@ -103,23 +113,30 @@ namespace HDRGammaController.Core
                         }
                         if (hr < 0)
                         {
-                            Console.WriteLine($"MonitorManager: EnumOutputs failed for {outputIndex} with HR={hr}");
+                            Log.Info($"MonitorManager: EnumOutputs failed for {outputIndex} with HR={hr}");
                             break;
                         }
 
-                        Console.WriteLine($"MonitorManager: Found output {outputIndex}");
+                        Log.Info($"MonitorManager: Found output {outputIndex}");
 
-                        // QueryInterface for Output6 (HDR)
+                        // QueryInterface for Output6 (HDR). Same RCW lifetime rule as adapters —
+                        // if the cast fails we still own a refcount and must release it.
                         Dxgi.IDXGIOutput6? output6 = null;
+                        object? outObj = null;
                         try
                         {
-                            // If we have pOutput, we can get object
-                            object? outObj = Marshal.GetObjectForIUnknown(pOutput);
+                            outObj = Marshal.GetObjectForIUnknown(pOutput);
                             output6 = outObj as Dxgi.IDXGIOutput6;
+                            if (output6 == null && outObj != null)
+                            {
+                                Marshal.ReleaseComObject(outObj);
+                                outObj = null;
+                            }
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"MonitorManager: Failed to get IDXGIOutput6 for output {outputIndex}: {ex.Message}");
+                            Log.Info($"MonitorManager: Failed to get IDXGIOutput6 for output {outputIndex}: {ex.Message}");
+                            if (outObj != null) { try { Marshal.ReleaseComObject(outObj); } catch { } }
                         }
 
                         if (output6 != null)
@@ -135,15 +152,18 @@ namespace HDRGammaController.Core
                                 HMonitor = desc1.Monitor,
                                 IsHdrCapable = (desc1.ColorSpace == Dxgi.DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020),
                                 IsHdrActive = (desc1.ColorSpace == Dxgi.DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020),
-                                MonitorBounds = desc1.DesktopCoordinates
+                                MonitorBounds = desc1.DesktopCoordinates,
+                                HdrPeakNits = desc1.MaxLuminance,
+                                HdrMinNits = desc1.MinLuminance,
                             };
 
                             EnrichWithGdiData(monitorInfo);
+                            EnrichWithDisplayConfig(monitorInfo);
                             monitors.Add(monitorInfo);
                         }
                         else
                         {
-                            Console.WriteLine($"MonitorManager: Output {outputIndex} does not support IDXGIOutput6.");
+                            Log.Info($"MonitorManager: Output {outputIndex} does not support IDXGIOutput6.");
                         }
 
                         if (pOutput != IntPtr.Zero)
@@ -167,6 +187,36 @@ namespace HDRGammaController.Core
             return monitors;
         }
 
+        /// <summary>
+        /// Resolves the monitor's DisplayConfig identity (adapter LUID + source id — needed
+        /// for Advanced Color profile association) and, when HDR is active, the REAL SDR
+        /// white level (the "SDR content brightness" slider) instead of the 200-nit default.
+        /// </summary>
+        private static void EnrichWithDisplayConfig(MonitorInfo monitor)
+        {
+            try
+            {
+                if (DisplayConfig.TryGetPathForGdiName(monitor.DeviceName, out var adapterId, out uint sourceId, out _))
+                {
+                    monitor.DisplayConfigAdapterId = adapterId;
+                    monitor.DisplayConfigSourceId = sourceId;
+                    monitor.HasDisplayConfigIds = true;
+                }
+
+                if (monitor.IsHdrActive &&
+                    DisplayConfig.TryGetSdrWhiteLevelNits(monitor.DeviceName) is double sdrNits)
+                {
+                    monitor.SdrWhiteLevel = sdrNits;
+                    Log.Info($"MonitorManager: {monitor.DeviceName} SDR white level {sdrNits:F0} nits, " +
+                             $"panel HDR range {monitor.HdrMinNits:F3}–{monitor.HdrPeakNits:F0} nits.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"MonitorManager: DisplayConfig enrichment failed for {monitor.DeviceName}: {ex.Message}");
+            }
+        }
+
         private void EnrichWithGdiData(MonitorInfo monitor)
         {
             // Use EnumDisplayDevices to find friendly name and path
@@ -181,25 +231,35 @@ namespace HDRGammaController.Core
                 // displayDevice.DeviceID looks like: MONITOR\GSM5B08\{GUID}
                 monitor.MonitorDevicePath = displayDevice.DeviceID;
                 
-                // Try to get the real monitor name from EDID in registry
-                string? edidName = GetMonitorNameFromEdid(displayDevice.DeviceID);
+                // Read the EDID once; derive both the friendly name and the reported gamut.
+                byte[]? edid = GetEdidBytes(displayDevice.DeviceID);
+                string? edidName = edid != null ? ParseEdidForName(edid) : null;
                 if (!string.IsNullOrEmpty(edidName))
                 {
                     monitor.FriendlyName = edidName;
-                    Console.WriteLine($"MonitorManager: Got EDID name '{edidName}' for {monitor.DeviceName}");
+                    Log.Info($"MonitorManager: Got EDID name '{edidName}' for {monitor.DeviceName}");
                 }
                 else
                 {
                     // Fallback to GDI name (usually "Generic PnP Monitor")
                     monitor.FriendlyName = displayDevice.DeviceString;
                 }
+
+                if (edid != null)
+                {
+                    monitor.EdidColor = ParseEdidColor(edid);
+                    if (monitor.EdidColor != null)
+                        Log.Info($"MonitorManager: EDID gamut R({monitor.EdidColor.RedX:F3},{monitor.EdidColor.RedY:F3}) " +
+                                 $"G({monitor.EdidColor.GreenX:F3},{monitor.EdidColor.GreenY:F3}) " +
+                                 $"B({monitor.EdidColor.BlueX:F3},{monitor.EdidColor.BlueY:F3})");
+                }
             }
         }
         
         /// <summary>
-        /// Attempts to read the monitor's friendly name from the EDID data in the registry.
+        /// Reads the raw 128+ byte EDID block for a monitor device from the registry.
         /// </summary>
-        private string? GetMonitorNameFromEdid(string deviceId)
+        private byte[]? GetEdidBytes(string deviceId)
         {
             try
             {
@@ -240,13 +300,9 @@ namespace HDRGammaController.Core
                                         if (paramsKey == null) continue;
                                         
                                         byte[]? edid = paramsKey.GetValue("EDID") as byte[];
-                                        if (edid != null && edid.Length > 0)
+                                        if (edid != null && edid.Length >= 128)
                                         {
-                                            string? name = ParseEdidForName(edid);
-                                            if (!string.IsNullOrEmpty(name))
-                                            {
-                                                return name;
-                                            }
+                                            return edid;
                                         }
                                     }
                                 }
@@ -257,12 +313,48 @@ namespace HDRGammaController.Core
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"MonitorManager: Error reading EDID: {ex.Message}");
+                Log.Info($"MonitorManager: Error reading EDID: {ex.Message}");
             }
             
             return null;
         }
         
+        /// <summary>
+        /// Decodes the EDID color-characteristics block (bytes 25–34) into CIE xy chromaticities.
+        /// Each coordinate is 10 bits: 8 high bits in bytes 27–34, low 2 bits packed into bytes
+        /// 25–26. Value = (10-bit) / 1024.
+        /// </summary>
+        private EdidColorInfo? ParseEdidColor(byte[] e)
+        {
+            if (e.Length < 35) return null;
+
+            double Coord(int highByte, int lowShift, int whichLowByte)
+            {
+                int low2 = (e[whichLowByte] >> lowShift) & 0x3;
+                int v = (e[highByte] << 2) | low2;
+                return v / 1024.0;
+            }
+
+            // byte 25 holds Rx,Ry,Gx,Gy low bits; byte 26 holds Bx,By,Wx,Wy low bits.
+            var info = new EdidColorInfo
+            {
+                RedX   = Coord(27, 6, 25),
+                RedY   = Coord(28, 4, 25),
+                GreenX = Coord(29, 2, 25),
+                GreenY = Coord(30, 0, 25),
+                BlueX  = Coord(31, 6, 26),
+                BlueY  = Coord(32, 4, 26),
+                WhiteX = Coord(33, 2, 26),
+                WhiteY = Coord(34, 0, 26),
+            };
+
+            // Sanity: real primaries are positive, < 1, and red is the most red (highest x).
+            if (info.RedX <= 0 || info.RedX > 0.8 || info.GreenY <= 0 || info.GreenY > 0.9 ||
+                info.RedX < info.BlueX) // red x should exceed blue x on any sane display
+                return null;
+            return info;
+        }
+
         /// <summary>
         /// Parses EDID data to extract the monitor name from descriptor blocks.
         /// </summary>
@@ -290,7 +382,7 @@ namespace HDRGammaController.Core
                 // We need to access offset+5 through offset+17 (13 bytes of name data)
                 if (offset + 18 > edid.Length)
                 {
-                    Console.WriteLine($"MonitorManager: EDID too short for descriptor at offset {offset}");
+                    Log.Info($"MonitorManager: EDID too short for descriptor at offset {offset}");
                     break;
                 }
 

@@ -1,10 +1,8 @@
 using System;
+using HDRGammaController.Core.Calibration;
 
 namespace HDRGammaController.Core
 {
-    /// <summary>
-    /// Color adjustment functions for temperature, tint, dimming, and RGB corrections.
-    /// </summary>
     /// <summary>
     /// Color adjustment functions for temperature, tint, dimming, and RGB corrections.
     /// </summary>
@@ -21,22 +19,53 @@ namespace HDRGammaController.Core
         {
             if (brightnessPercent >= 100.0) return value;
             if (brightnessPercent <= 0) return 0;
-            
+
             // Clamp to valid range (0-100)
             double brightness = Math.Clamp(brightnessPercent, 0.0, 100.0) / 100.0;
-            
+
             if (linear)
             {
                 return value * brightness;
             }
-            
-            // Power-law compression: raises shadow detail while compressing highlights
-            // This preserves near-black tones better than linear multiply
+
+            // Power-law compression: lifts shadow detail relative to a straight linear dim
+            // while still landing white at exactly `brightness`. At value=1 the output equals
+            // brightness; at value<1 the shadow lift preserves near-black separation.
             // Formula: output = input^(1/gamma_boost) * brightness
-            // where gamma_boost increases as brightness decreases
-            double gammaBoost = 1.0 + (1.0 - brightness) * 0.3; // 1.0 at 100%, 1.27 at 10%
-            
+            // where gamma_boost grows as brightness falls (1.0 at 100%, 1.27 at 10%).
+            double gammaBoost = 1.0 + (1.0 - brightness) * 0.3;
+
             return Math.Pow(value, 1.0 / gammaBoost) * brightness;
+        }
+
+        /// <summary>
+        /// Applies the same dimming curve to an absolute-nit value. Used by the HDR headroom
+        /// blend so highlights follow the brightness slider instead of snapping back to passthrough.
+        /// </summary>
+        /// <remarks>
+        /// Anchored at the SDR white level so the headroom curve meets the SDR portion of
+        /// the LUT exactly: at nits == sdrWhiteLevel this returns
+        /// ApplyDimming(1.0) * sdrWhiteLevel. The previous version normalized against the
+        /// 10,000-nit PQ ceiling instead, which made the headroom target start ~1.7× brighter
+        /// than the dimmed SDR white at 50% brightness — a visible shelf at the boundary.
+        /// Above white the same power curve keeps the rolloff monotonic.
+        /// </remarks>
+        public static double ApplyDimmingNits(double nits, double brightnessPercent, double sdrWhiteLevel, bool linear = false)
+        {
+            if (brightnessPercent >= 100.0) return nits;
+            if (brightnessPercent <= 0) return 0;
+
+            double brightness = Math.Clamp(brightnessPercent, 0.0, 100.0) / 100.0;
+
+            if (linear)
+            {
+                return nits * brightness;
+            }
+
+            double white = Math.Max(sdrWhiteLevel, 1.0);
+            double ratio = Math.Max(nits, 0.0) / white;
+            double gammaBoost = 1.0 + (1.0 - brightness) * 0.3;
+            return Math.Pow(ratio, 1.0 / gammaBoost) * brightness * white;
         }
         
         /// <summary>
@@ -167,9 +196,9 @@ namespace HDRGammaController.Core
 
             // Gamma Correct (Linear -> sRGB) using proper sRGB transfer function
             // IEC 61966-2-1:1999 specifies piecewise function, not simple 1/2.2 power
-            double r = LinearToSrgb(rL);
-            double g = LinearToSrgb(gL);
-            double b = LinearToSrgb(bL);
+            double r = TransferFunctions.SrgbOetf(rL);
+            double g = TransferFunctions.SrgbOetf(gL);
+            double b = TransferFunctions.SrgbOetf(bL);
 
             // Normalize to Max=1 to preserve brightness
             double max = Math.Max(r, Math.Max(g, b));
@@ -205,24 +234,6 @@ namespace HDRGammaController.Core
         }
 
         /// <summary>
-        /// Converts linear RGB value to sRGB using the proper IEC 61966-2-1:1999 transfer function.
-        /// Uses piecewise function with linear portion for small values.
-        /// </summary>
-        private static double LinearToSrgb(double linear)
-        {
-            // IEC 61966-2-1:1999 sRGB transfer function
-            // Threshold: 0.0031308
-            if (linear <= 0.0031308)
-            {
-                return 12.92 * linear;
-            }
-            else
-            {
-                return 1.055 * Math.Pow(linear, 1.0 / 2.4) - 0.055;
-            }
-        }
-
-        /// <summary>
         /// Calculates RGB multipliers for tint adjustment (green/magenta axis).
         /// </summary>
         public static (double R, double G, double B) GetTintMultipliers(double tint)
@@ -252,11 +263,22 @@ namespace HDRGammaController.Core
         
         /// <summary>
         /// Applies all calibration adjustments to an RGB triplet.
+        /// Order: Measured 3D LUT → Dimming → Temperature → Tint → RGB Gains → RGB Offsets
         /// </summary>
         public static (double R, double G, double B) ApplyCalibration(
-            double r, double g, double b, 
+            double r, double g, double b,
             CalibrationSettings settings)
         {
+            // 0. Apply measured 3D LUT correction (if present)
+            // This is the colorimeter-measured base correction
+            if (settings.MeasuredCorrectionLut != null)
+            {
+                var corrected = settings.MeasuredCorrectionLut.Lookup((float)r, (float)g, (float)b);
+                r = corrected.R;
+                g = corrected.G;
+                b = corrected.B;
+            }
+
             // 1. Apply perceptual dimming
             if (settings.Brightness < 100.0)
             {
@@ -265,22 +287,14 @@ namespace HDRGammaController.Core
                 b = ApplyDimming(b, settings.Brightness, settings.UseLinearBrightness);
             }
             
-            // 2. Apply temperature (using selected algorithm)
-            if (Math.Abs(settings.Temperature) > 0.01 || settings.Algorithm != NightModeAlgorithm.Standard)
+            // 2. Apply temperature. All algorithms return (1,1,1) at 6500K (temperature 0),
+            // so skipping when there's no shift is safe regardless of algorithm.
+            if (Math.Abs(settings.Temperature) > 0.01)
             {
-                // Even if temperature is 0, if non-standard algorithm is selected, we might want to apply?
-                // Actually, if temp is 0 (6500K), all algorithms should return 1,1,1.
-                // So checking Abs(Temperature) > 0.01 is still a valid optimization.
-                // Except "BlueReduction" at 6500K is 1,1,1.
-                // So optimization holds.
-                 
-                if (Math.Abs(settings.Temperature) > 0.01)
-                {
-                    var temp = GetTemperatureMultipliers(settings.Temperature, settings.Algorithm, settings.UseUltraWarmMode);
-                    r *= temp.R;
-                    g *= temp.G;
-                    b *= temp.B;
-                }
+                var temp = GetTemperatureMultipliers(settings.Temperature, settings.Algorithm, settings.UseUltraWarmMode);
+                r *= temp.R;
+                g *= temp.G;
+                b *= temp.B;
             }
             
             // 3. Apply tint

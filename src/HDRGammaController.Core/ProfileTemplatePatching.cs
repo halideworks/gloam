@@ -1,30 +1,53 @@
 using System;
 using System.IO;
-using System.Text;
-using System.Linq;
 
 namespace HDRGammaController.Core
 {
     public static class ProfileTemplatePatching
     {
+        // ICC v4 header is 128 bytes; the tag count is at offset 128, tag table follows at 132.
+        // Each tag table entry is 12 bytes: signature (4), offset (4), size (4). All big-endian.
+        // Hard caps keep a malformed or hostile profile from steering us into arbitrary reads.
+        private const int IccHeaderSize = 128;
+        private const int IccTagEntrySize = 12;
+        private const int MaxTagCount = 4096;           // defensive; real profiles have tens
+        private const int LutSamples = 1024;
+        private const int LutBytes = LutSamples * 4;    // 16.16 fixed, 4 bytes per sample
+
         public static void PatchProfile(string templatePath, string outputPath, double[] newLut)
         {
+            if (newLut == null) throw new ArgumentNullException(nameof(newLut));
+            if (newLut.Length != LutSamples)
+                throw new ArgumentException($"LUT must contain exactly {LutSamples} entries.", nameof(newLut));
+
             byte[] data = File.ReadAllBytes(templatePath);
 
-            // 1. Validate ICC Header
-            if (data.Length < 128) throw new ArgumentException("Invalid ICC profile (too small)");
+            if (data.Length < IccHeaderSize + 4)
+                throw new ArgumentException("Invalid ICC profile (too small).");
 
-            // 2. Locate 'mhc2' tag
-            int tagCount = ReadInt32BigEndian(data, 128);
+            int declaredSize = ReadInt32BigEndian(data, 0);
+            if (declaredSize != data.Length)
+            {
+                // Don't hard-fail: many real profiles have a header size that matches the file.
+                // If it's wildly off, reject — that's a strong signal of corruption or tampering.
+                if (declaredSize < IccHeaderSize || declaredSize > data.Length + 1024)
+                    throw new ArgumentException("ICC profile declared size is inconsistent with file size.");
+            }
+
+            int tagCount = ReadInt32BigEndian(data, IccHeaderSize);
+            if (tagCount < 0 || tagCount > MaxTagCount)
+                throw new ArgumentException($"ICC profile tag count ({tagCount}) is out of range.");
+
+            int tagTableEnd = IccHeaderSize + 4 + (tagCount * IccTagEntrySize);
+            if (tagTableEnd > data.Length)
+                throw new ArgumentException("ICC profile tag table extends past end of file.");
+
             int mhc2Offset = -1;
             int mhc2Size = -1;
-
             for (int i = 0; i < tagCount; i++)
             {
-                int entryStart = 132 + (i * 12);
-                if (entryStart + 12 > data.Length) break;
-
-                int sig = ReadInt32BigEndian(data, entryStart); // Signature
+                int entryStart = IccHeaderSize + 4 + (i * IccTagEntrySize);
+                int sig = ReadInt32BigEndian(data, entryStart);
                 if (sig == 0x6D686332) // 'mhc2'
                 {
                     mhc2Offset = ReadInt32BigEndian(data, entryStart + 4);
@@ -33,84 +56,78 @@ namespace HDRGammaController.Core
                 }
             }
 
-            if (mhc2Offset == -1) throw new ArgumentException("Template does not contain 'mhc2' tag");
+            if (mhc2Offset < 0) throw new ArgumentException("Template does not contain an 'mhc2' tag.");
+            if (mhc2Size < 0 || mhc2Offset + mhc2Size > data.Length)
+                throw new ArgumentException("'mhc2' tag offset/size exceeds file bounds.");
 
-            // 3. Locate LUT data within 'mhc2' tag
-            // We search for a block of data that matches the size of our LUT (1024 entries).
-            // Format is likely 16.16 Fixed Point (4 bytes per entry * 1024 = 4096 bytes).
-            // Or just search for the specific 'lut ' structure if we knew it.
-            // As a heuristic for the specific templates from the original project:
-            // Look for a run of 4096 bytes.
-            
-            // To be robust: We assume the template is 'srgb_to_gamma2p2_100_mhc2.icm'.
-            // We can search for the "Identity" LUT portion or just assume the layout based on known tools.
-            // But let's look for the *offset* where we expect it to be.
-            // In win11hdr templates, the mhc2 tag contains a structure.
-            // We'll search for 4096 bytes of reasonable data? 
-            // Wait, if we just blindly overwrite, we might kill metadata.
-            
-            // Let's use a heuristic: Find the sequential numbers?
-            // If the template is "srgb_to_gamma2p2...", the LUT is NOT identity.
-            
-            // Fallback strategy:
-            // The user MUST provide a template.
-            // We will search for the "start of LUT" signature if it exists, or just the offset.
-            // Original project: LUT starts at offset `tag_start + header_size`.
-            // Structure:
-            // [Header..] 
-            // [LUT curve type (4)]
-            // [LUT size (4)] -> 1024
-            // [Data...]
-            
-            // Let's look for count = 1024 (0x00000400).
-            int lutOffsetRel = -1;
-            for (int j = 0; j < mhc2Size - 4; j += 4)
+            // Locate the 1024-entry LUT inside the mhc2 tag by finding the count field.
+            // mhc2 is a Microsoft-private tag not formally specified in ICC, so we scan for
+            // either a big-endian or little-endian 1024 count, require there to be room for
+            // 4096 bytes of samples after it, and perform a monotonicity sanity-check on the
+            // first several candidate samples to avoid landing on an unrelated 1024 word.
+            int lutAbsOffset = FindLutStart(data, mhc2Offset, mhc2Size);
+            if (lutAbsOffset < 0)
+                throw new InvalidOperationException("Could not locate LUT start in mhc2 tag.");
+
+            for (int k = 0; k < LutSamples; k++)
             {
-                int val = ReadInt32BigEndian(data, mhc2Offset + j); // usually BE in ICC? MHC2 might be LE?
-                // Windows structures are often LE. ICC is BE.
-                // 'mhc2' tag is private, so it can be LE.
-                // Checks both.
-                if (val == 1024 || val == 0x00040000) // 1024 LE or BE
-                {
-                    // Verify if the following bytes look like LUT data?
-                    // Let's assume this is the count.
-                    // The data usually follows immediately.
-                    lutOffsetRel = j + 4;
-                    break;
-                }
+                double val = Math.Clamp(newLut[k], 0.0, 1.0);
+                int fixedPt = (int)Math.Round(val * 65536.0);
+                if (fixedPt > 0xFFFF) fixedPt = 0xFFFF; // saturate; 1.0 → 65536 overflows unsigned 16.16
+                WriteInt32BigEndian(data, lutAbsOffset + (k * 4), fixedPt);
             }
 
-            if (lutOffsetRel == -1)
-            {
-                // Fallback: Assume it's at a fixed offset if we fail?
-                // Or throw.
-                throw new InvalidOperationException("Could not locate LUT start in mhc2 tag");
-            }
-
-            int lutAbsOffset = mhc2Offset + lutOffsetRel;
-            if (lutAbsOffset + 4096 > data.Length) throw new InvalidOperationException("LUT data exceeds file size");
-
-            // 4. Overwrite LUT
-            // Format: 16.16 Fixed Point (signed? usually unsigned for accumulation).
-            // 1.0 = 0x00010000 (65536)
-            for (int k = 0; k < 1024; k++)
-            {
-                double val = newLut[k];
-                int fixedPt = (int)(val * 65536.0);
-                WriteInt32BigEndian(data, lutAbsOffset + (k * 4), fixedPt); 
-                // ICC is Big Endian. Check if MHC2 is BE.
-                // Usually ICC tags are BE.
-            }
-            
-            // 5. Zero out Profile ID (bytes 84-99 inclusive: 16 bytes)
+            // Profile ID at bytes 84-99: must be zeroed because we just changed the body.
+            // Consumers that verify the MD5 would otherwise reject the patched profile.
             for (int z = 84; z < 100; z++) data[z] = 0;
 
             File.WriteAllBytes(outputPath, data);
         }
 
+        private static int FindLutStart(byte[] data, int mhc2Offset, int mhc2Size)
+        {
+            // Iterate 4-byte-aligned within the mhc2 tag. The count precedes the sample array.
+            int end = Math.Min(mhc2Offset + mhc2Size, data.Length) - LutBytes - 4;
+            for (int j = 0; j <= mhc2Size - 4 && mhc2Offset + j <= end; j += 4)
+            {
+                int valBe = ReadInt32BigEndian(data, mhc2Offset + j);
+                int valLe = ReadInt32LittleEndian(data, mhc2Offset + j);
+                if (valBe == 1024 || valLe == 1024)
+                {
+                    int candidate = mhc2Offset + j + 4;
+                    if (LooksLikeLut(data, candidate)) return candidate;
+                }
+            }
+            return -1;
+        }
+
+        /// <summary>
+        /// Cheap plausibility check on a candidate LUT location. A real 1024-point calibration
+        /// LUT is monotonically non-decreasing over a large stretch; random data from a
+        /// coincidentally-matching 1024 word typically isn't.
+        /// </summary>
+        private static bool LooksLikeLut(byte[] data, int offset)
+        {
+            if (offset + LutBytes > data.Length) return false;
+            int increases = 0;
+            int prev = ReadInt32BigEndian(data, offset);
+            for (int k = 1; k < 64; k++)
+            {
+                int cur = ReadInt32BigEndian(data, offset + k * 4);
+                if (cur >= prev) increases++;
+                prev = cur;
+            }
+            return increases >= 58; // allow a few equal/noisy samples near black
+        }
+
         private static int ReadInt32BigEndian(byte[] buf, int offset)
         {
             return (buf[offset] << 24) | (buf[offset + 1] << 16) | (buf[offset + 2] << 8) | buf[offset + 3];
+        }
+
+        private static int ReadInt32LittleEndian(byte[] buf, int offset)
+        {
+            return (buf[offset + 3] << 24) | (buf[offset + 2] << 16) | (buf[offset + 1] << 8) | buf[offset];
         }
 
         private static void WriteInt32BigEndian(byte[] buf, int offset, int val)

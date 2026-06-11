@@ -1,4 +1,5 @@
 using System;
+using HDRGammaController.Core;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -30,7 +31,19 @@ namespace HDRGammaController.Services
         public static int ExtractIcmProfiles()
         {
             var assembly = Assembly.GetExecutingAssembly();
+            // Prefer the app directory, but it is read-only for an unelevated process under
+            // Program Files - fall back to LocalAppData, which the profile installer also
+            // searches. Without the fallback a wiped app dir (e.g. a mirroring deploy)
+            // leaves NO templates anywhere and calibration apply fails.
             var appDir = AppDomain.CurrentDomain.BaseDirectory;
+            if (!IsWritable(appDir))
+            {
+                appDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "HDRGammaController");
+                Directory.CreateDirectory(appDir);
+                Log.Info($"ResourceExtractor: app dir not writable; extracting to {appDir}");
+            }
             int extractedCount = 0;
 
             foreach (var fileName in IcmProfiles)
@@ -40,7 +53,7 @@ namespace HDRGammaController.Services
                     var resourceName = FindResourceName(assembly, fileName);
                     if (resourceName == null)
                     {
-                        Console.WriteLine($"ResourceExtractor: Embedded resource not found for {fileName}");
+                        Log.Info($"ResourceExtractor: Embedded resource not found for {fileName}");
                         continue;
                     }
 
@@ -49,7 +62,7 @@ namespace HDRGammaController.Services
                     using var resourceStream = assembly.GetManifestResourceStream(resourceName);
                     if (resourceStream == null)
                     {
-                        Console.WriteLine($"ResourceExtractor: Failed to open resource stream for {resourceName}");
+                        Log.Info($"ResourceExtractor: Failed to open resource stream for {resourceName}");
                         continue;
                     }
 
@@ -66,11 +79,11 @@ namespace HDRGammaController.Services
                             // File exists and matches - no action needed
                             continue;
                         }
-                        Console.WriteLine($"ResourceExtractor: Updating {fileName} (hash mismatch)");
+                        Log.Info($"ResourceExtractor: Updating {fileName} (hash mismatch)");
                     }
                     else
                     {
-                        Console.WriteLine($"ResourceExtractor: Extracting {fileName} (not found)");
+                        Log.Info($"ResourceExtractor: Extracting {fileName} (not found)");
                     }
 
                     // Extract or update the file
@@ -79,7 +92,7 @@ namespace HDRGammaController.Services
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"ResourceExtractor: Error processing {fileName}: {ex.Message}");
+                    Log.Info($"ResourceExtractor: Error processing {fileName}: {ex.Message}");
                 }
             }
 
@@ -99,6 +112,21 @@ namespace HDRGammaController.Services
                 rn.EndsWith("." + fileName, StringComparison.OrdinalIgnoreCase) ||
                 rn.EndsWith("." + fileName.Replace(".icm", "_icm"), StringComparison.OrdinalIgnoreCase) ||
                 rn.Equals(fileName, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static bool IsWritable(string dir)
+        {
+            try
+            {
+                string probe = Path.Combine(dir, $".write_probe_{Guid.NewGuid():N}");
+                File.WriteAllBytes(probe, Array.Empty<byte>());
+                File.Delete(probe);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static byte[] ReadAllBytes(Stream stream)
@@ -128,10 +156,10 @@ namespace HDRGammaController.Services
         {
             var assembly = Assembly.GetExecutingAssembly();
             var names = assembly.GetManifestResourceNames();
-            Console.WriteLine($"ResourceExtractor: Found {names.Length} embedded resources:");
+            Log.Info($"ResourceExtractor: Found {names.Length} embedded resources:");
             foreach (var name in names)
             {
-                Console.WriteLine($"  - {name}");
+                Log.Info($"  - {name}");
             }
         }
     }

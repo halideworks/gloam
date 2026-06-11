@@ -42,6 +42,46 @@ namespace HDRGammaController.Tests
             Assert.True(perceptual > linear);
         }
 
+        [Fact]
+        public void ApplyDimmingNits_MatchesSdrDimmingAtWhiteLevel()
+        {
+            // The headroom curve must meet the SDR curve exactly at the SDR white level,
+            // otherwise the LUT has a brightness shelf at the SDR/HDR boundary.
+            const double sdrWhite = 200.0;
+            foreach (double brightness in new[] { 90.0, 50.0, 20.0 })
+            {
+                double sdrSide = ColorAdjustments.ApplyDimming(1.0, brightness) * sdrWhite;
+                double hdrSide = ColorAdjustments.ApplyDimmingNits(sdrWhite, brightness, sdrWhite);
+                Assert.Equal(sdrSide, hdrSide, 6);
+            }
+        }
+
+        [Fact]
+        public void ApplyDimmingNits_MonotonicInNits()
+        {
+            const double sdrWhite = 200.0;
+            double prev = 0;
+            for (double nits = 0; nits <= 10000; nits += 50)
+            {
+                double dimmed = ColorAdjustments.ApplyDimmingNits(nits, 50.0, sdrWhite);
+                Assert.True(dimmed >= prev, $"Dimming not monotonic at {nits} nits: {prev} -> {dimmed}");
+                prev = dimmed;
+            }
+        }
+
+        [Fact]
+        public void ApplyDimmingNits_ReducesHighlights()
+        {
+            // A 1000-nit highlight at 50% brightness must come down meaningfully,
+            // but not below the dimmed SDR white.
+            const double sdrWhite = 200.0;
+            double dimmed = ColorAdjustments.ApplyDimmingNits(1000.0, 50.0, sdrWhite);
+            double dimmedWhite = ColorAdjustments.ApplyDimming(1.0, 50.0) * sdrWhite;
+
+            Assert.True(dimmed < 1000.0, $"Highlight not dimmed: {dimmed}");
+            Assert.True(dimmed > dimmedWhite, $"Highlight crushed below dimmed white: {dimmed} <= {dimmedWhite}");
+        }
+
         #endregion
 
         #region Temperature Tests - Standard (Helland)

@@ -29,14 +29,18 @@ namespace HDRGammaController.Core
                 
             if (lat.HasValue && lon.HasValue)
             {
-                var (sunrise, sunset) = SunCalculator.CalculateToday(lat.Value, lon.Value);
-                var baseTime = (TriggerType == ScheduleTriggerType.Sunrise) ? sunrise : sunset;
-                return baseTime.Add(TimeSpan.FromMinutes(OffsetMinutes));
+                var result = SunCalculator.CalculateTodayDetailed(lat.Value, lon.Value);
+                if (result.HasValidTimes)
+                {
+                    var baseTime = (TriggerType == ScheduleTriggerType.Sunrise) ? result.Sunrise : result.Sunset;
+                    return baseTime.Add(TimeSpan.FromMinutes(OffsetMinutes));
+                }
+                // Polar day/night: fall through to the 7am/7pm fallback rather than
+                // scheduling at the (0,0) or (0,24h) sentinels that confuse the fade logic.
             }
-            
-            // Fallback if no location
-            return (TriggerType == ScheduleTriggerType.Sunrise) 
-                ? new TimeSpan(7, 0, 0) 
+
+            return (TriggerType == ScheduleTriggerType.Sunrise)
+                ? new TimeSpan(7, 0, 0)
                 : new TimeSpan(19, 0, 0);
         }
     }

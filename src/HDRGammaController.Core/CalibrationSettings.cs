@@ -1,4 +1,5 @@
 using System;
+using HDRGammaController.Core.Calibration;
 
 namespace HDRGammaController.Core
 {
@@ -8,12 +9,27 @@ namespace HDRGammaController.Core
     public class CalibrationSettings
     {
         /// <summary>
+        /// Optional 3D LUT from colorimeter calibration to use as the base correction.
+        /// User adjustments (temp, tint, brightness) are applied on top of this.
+        /// </summary>
+        public Lut3D? MeasuredCorrectionLut { get; set; }
+
+        /// <summary>
+        /// Optional reference to the calibration profile that generated the correction LUT.
+        /// </summary>
+        public Guid? CalibrationProfileId { get; set; }
+
+        /// <summary>
         /// Brightness level (10-100%). Uses perceptual compression to preserve shadows.
         /// </summary>
         public double Brightness { get; set; } = 100.0;
         
         /// <summary>
-        /// Color temperature adjustment (-50 to +50).
+        /// Color temperature adjustment. The UI slider uses -50..+50 (mapped to 2700K..10000K
+        /// around a 6500K neutral, 70 K per unit), but the field itself accepts an extended
+        /// range down to about -65.7 so night-mode schedules and per-monitor offsets can stack
+        /// past the slider without being clipped mid-pipeline. <see cref="GetTemperatureMultipliers"/>
+        /// re-clamps to 1000..10000 K when resolving the RGB multipliers.
         /// Negative = warmer (more red/yellow), Positive = cooler (more blue).
         /// </summary>
         public double Temperature { get; set; } = 0.0;
@@ -79,6 +95,7 @@ namespace HDRGammaController.Core
         /// Returns true if any adjustments are applied (non-default values).
         /// </summary>
         public bool HasAdjustments =>
+            MeasuredCorrectionLut != null ||
             Math.Abs(Brightness - 100.0) > 0.01 ||
             Math.Abs(Temperature) > 0.01 ||
             Math.Abs(TemperatureOffset) > 0.01 ||
@@ -89,6 +106,11 @@ namespace HDRGammaController.Core
             Math.Abs(RedOffset) > 0.001 ||
             Math.Abs(GreenOffset) > 0.001 ||
             Math.Abs(BlueOffset) > 0.001;
+
+        /// <summary>
+        /// Returns true if a measured 3D LUT calibration is applied.
+        /// </summary>
+        public bool HasMeasuredCalibration => MeasuredCorrectionLut != null;
         
         /// <summary>
         /// Creates a default (no adjustment) calibration.
@@ -100,6 +122,8 @@ namespace HDRGammaController.Core
         /// </summary>
         public CalibrationSettings Clone() => new CalibrationSettings
         {
+            MeasuredCorrectionLut = this.MeasuredCorrectionLut, // Reference, not deep copy
+            CalibrationProfileId = this.CalibrationProfileId,
             Brightness = this.Brightness,
             UseLinearBrightness = this.UseLinearBrightness,
             Temperature = this.Temperature,
@@ -132,12 +156,13 @@ namespace HDRGammaController.Core
             int rOffsetKey = (int)Math.Round(RedOffset * 1000);
             int gOffsetKey = (int)Math.Round(GreenOffset * 1000);
             int bOffsetKey = (int)Math.Round(BlueOffset * 1000);
+            int lutKey = CalibrationProfileId?.GetHashCode() ?? 0;
 
             return HashCode.Combine(
                 HashCode.Combine(brightnessKey, tempKey, tempOffsetKey, tintKey),
                 HashCode.Combine(rGainKey, gGainKey, bGainKey),
                 HashCode.Combine(rOffsetKey, gOffsetKey, bOffsetKey),
-                HashCode.Combine((int)Algorithm, UseLinearBrightness, UseUltraWarmMode)
+                HashCode.Combine((int)Algorithm, UseLinearBrightness, UseUltraWarmMode, lutKey)
             );
         }
     }

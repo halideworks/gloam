@@ -1,5 +1,6 @@
 using Microsoft.Win32;
 using System;
+using HDRGammaController.Core;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
@@ -48,17 +49,17 @@ namespace HDRGammaController.Services
                         }
                         
                         key.SetValue(AppName, $"\"{exePath}\"");
-                        Console.WriteLine($"StartupManager: Enabled startup with path: {exePath}");
+                        Log.Info($"StartupManager: Enabled startup with path: {exePath}");
                     }
                     else
                     {
                         key.DeleteValue(AppName, false);
-                        Console.WriteLine("StartupManager: Disabled startup");
+                        Log.Info("StartupManager: Disabled startup");
                     }
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"StartupManager: Error: {ex.Message}");
+                    Log.Info($"StartupManager: Error: {ex.Message}");
                 }
             }
         }

@@ -1,4 +1,5 @@
 using System;
+using HDRGammaController.Core;
 using System.Windows;
 using System.Windows.Interop;
 using HDRGammaController.Interop;
@@ -14,24 +15,24 @@ namespace HDRGammaController
 
         public MainWindow()
         {
-            Console.WriteLine("MainWindow: Constructor started.");
+            Log.Info("MainWindow: Constructor started.");
             InitializeComponent();
             
             // Set Icon from executable (requires net8.0-windows)
             try {
                 MyNotifyIcon.Icon = System.Drawing.Icon.ExtractAssociatedIcon(System.Reflection.Assembly.GetEntryAssembly()!.Location);
-            } catch (Exception ex) { Console.WriteLine("MainWindow: Failed to set icon: " + ex.Message); }
+            } catch (Exception ex) { Log.Info("MainWindow: Failed to set icon: " + ex.Message); }
 
             // Force Handle creation early
-            Console.WriteLine("MainWindow: Ensuring Handle...");
+            Log.Info("MainWindow: Ensuring Handle...");
             var helper = new WindowInteropHelper(this);
             helper.EnsureHandle(); 
             
             // Initialize services with handle
-            Console.WriteLine("MainWindow: Initializing HotkeyManager...");
+            Log.Info("MainWindow: Initializing HotkeyManager...");
             _hotkeyManager = new HotkeyManager(helper.Handle);
             
-            Console.WriteLine("MainWindow: Initializing TrayViewModel...");
+            Log.Info("MainWindow: Initializing TrayViewModel...");
             _trayViewModel = new TrayViewModel(_hotkeyManager);
             
             // Subscribe to notifications
@@ -45,7 +46,7 @@ namespace HDRGammaController
 
             // Hook message loop for system events (Display Change, Power)
             HwndSource.FromHwnd(helper.Handle)!.AddHook(WndProc);
-            Console.WriteLine("MainWindow: Constructor finished.");
+            Log.Info("MainWindow: Constructor finished.");
         }
 
         private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -72,6 +73,7 @@ namespace HDRGammaController
         
         protected override void OnClosed(EventArgs e)
         {
+            _trayViewModel?.Dispose();
             _hotkeyManager?.Dispose();
             base.OnClosed(e);
         }

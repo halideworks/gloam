@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Concurrent;
-using System.Linq;
+using HDRGammaController.Core.Calibration;
 
 namespace HDRGammaController.Core
 {
@@ -20,12 +20,19 @@ namespace HDRGammaController.Core
     /// </remarks>
     public static class LutGenerator
     {
-        // Cache for computed LUTs to avoid redundant computation
+        // Cache for computed LUTs to avoid redundant computation.
         // Key: (GammaMode, WhiteLevel rounded to nearest 10, CalibrationHash, IsHdr)
-        private static readonly ConcurrentDictionary<(GammaMode, int, int, bool), (double[], double[], double[], double[])> _lutCache = new();
+        //
+        // CONTRACT: Cached arrays are READ-ONLY. Callers must not mutate them — the cache
+        // hands out shared references directly to avoid 32 KB of per-call allocation at
+        // slider-drag frequencies. Any write to a returned array corrupts future lookups.
+        private static readonly ConcurrentDictionary<(GammaMode, int, int, bool), (double[] R, double[] G, double[] B, double[] Grey)> _lutCache = new();
 
-        // Maximum cache size to prevent unbounded memory growth
-        private const int MaxCacheSize = 50;
+        // Cache ceiling. When we cross it we clear the entire cache at once rather than try to
+        // approximate LRU from ConcurrentDictionary.Keys (which has no defined order, so the
+        // prior "evict oldest" loop was effectively random). A full flush is simpler and the
+        // next few slider ticks repopulate hot entries.
+        private const int MaxCacheSize = 100;
 
         /// <summary>
         /// Generates a 1024-point 1D LUT for HDR gamma correction (single channel, no calibration).
@@ -63,42 +70,21 @@ namespace HDRGammaController.Core
             int calibrationHash = calibration.GetHashCode();
             var cacheKey = (gammaMode, whiteLevelKey, calibrationHash, isHdr);
 
-            // Try to get from cache
             if (_lutCache.TryGetValue(cacheKey, out var cachedLut))
             {
-                // Return copies to prevent modification of cached data
-                return (
-                    (double[])cachedLut.Item1.Clone(),
-                    (double[])cachedLut.Item2.Clone(),
-                    (double[])cachedLut.Item3.Clone(),
-                    (double[])cachedLut.Item4.Clone()
-                );
+                return cachedLut;
             }
 
-            // Generate new LUT
             var result = GenerateLutInternal(gammaMode, sdrWhiteLevel, calibration, isHdr);
 
-            // Add to cache (evict oldest entries if cache is full)
+            // Flush on overflow rather than pretending to LRU over an unordered dictionary.
             if (_lutCache.Count >= MaxCacheSize)
             {
-                // Simple eviction: clear half the cache when full
-                // A more sophisticated LRU could be implemented if needed
-                var keysToRemove = _lutCache.Keys.Take(MaxCacheSize / 2).ToArray();
-                foreach (var key in keysToRemove)
-                {
-                    _lutCache.TryRemove(key, out _);
-                }
+                _lutCache.Clear();
             }
 
             _lutCache.TryAdd(cacheKey, result);
-
-            // Return copies
-            return (
-                (double[])result.Item1.Clone(),
-                (double[])result.Item2.Clone(),
-                (double[])result.Item3.Clone(),
-                (double[])result.Item4.Clone()
-            );
+            return result;
         }
 
         /// <summary>
@@ -159,8 +145,14 @@ namespace HDRGammaController.Core
                 GammaMode.Gamma22 => 2.2,
                 _ => 1.0 // WindowsDefault with calibration
             };
-            
+
             double blackLevel = 0.0;
+
+            // Precompute the PQ-signal position of SDR white. The headroom blend runs in
+            // PQ-signal space (perceptually uniform) rather than linear-nit space — with the
+            // old linear blend a 1000-nit specular was only ~8% toward passthrough, so most
+            // real HDR highlights stayed fully calibrated regardless of the user's intent.
+            double pqSdrWhite = TransferFunctions.PqInverseEotf(sdrWhiteLevel);
 
             for (int i = 0; i < 1024; i++)
             {
@@ -170,7 +162,7 @@ namespace HDRGammaController.Core
                 double linear = TransferFunctions.PqEotf(normalized);
 
                 double outputR, outputG, outputB;
-                
+
                 if (gammaMode == GammaMode.WindowsDefault)
                 {
                     // No gamma correction, just apply calibration
@@ -186,7 +178,7 @@ namespace HDRGammaController.Core
 
                     // 4. Scale to output nits
                     double outputLinear = blackLevel + (sdrWhiteLevel - blackLevel) * gammaApplied;
-                    
+
                     outputR = outputG = outputB = outputLinear;
                 }
 
@@ -197,26 +189,21 @@ namespace HDRGammaController.Core
                     double normR = Math.Clamp(outputR / sdrWhiteLevel, 0, 1);
                     double normG = Math.Clamp(outputG / sdrWhiteLevel, 0, 1);
                     double normB = Math.Clamp(outputB / sdrWhiteLevel, 0, 1);
-                    
+
                     var (adjR, adjG, adjB) = ColorAdjustments.ApplyCalibration(normR, normG, normB, calibration);
-                    
+
                     // Scale back to nits
                     outputR = adjR * sdrWhiteLevel;
                     outputG = adjG * sdrWhiteLevel;
                     outputB = adjB * sdrWhiteLevel;
                 }
 
-                // 6. Encode to PQ
+                // 6. Encode fully-calibrated output to PQ
                 double pqR = TransferFunctions.PqInverseEotf(outputR);
                 double pqG = TransferFunctions.PqInverseEotf(outputG);
                 double pqB = TransferFunctions.PqInverseEotf(outputB);
                 double pqGrey = TransferFunctions.PqInverseEotf((outputR + outputG + outputB) / 3.0);
 
-                // 7. HDR Headroom Preservation
-                // For content below SDR white level: apply full calibration
-                // For HDR headroom (above SDR white): blend toward passthrough
-                // This ensures bright HDR highlights aren't affected by calibration (e.g., warm temperature)
-                // while SDR-range content gets the full calibration treatment.
                 if (linear <= sdrWhiteLevel)
                 {
                     lutR[i] = pqR;
@@ -226,22 +213,222 @@ namespace HDRGammaController.Core
                 }
                 else
                 {
-                    // Blend toward passthrough in HDR headroom
-                    // At sdrWhiteLevel: 100% calibrated output
-                    // At 10000 nits: 100% passthrough (original signal = normalized)
-                    // This preserves HDR highlight detail and color accuracy from source content
-                    double headroomRange = 10000.0 - sdrWhiteLevel;
-                    double headroomPosition = (linear - sdrWhiteLevel) / headroomRange;
-                    double blendFactor = Math.Min(1.0, headroomPosition);
+                    // HDR headroom: blend the fully-calibrated output toward a
+                    // "dim-only passthrough". This preserves the creative grade of
+                    // HDR highlights (no re-gamma, no temperature tint on a 2000-nit
+                    // specular) while still honoring the brightness slider — so a
+                    // user dimming the screen sees highlights come down too.
+                    double headroomSignal = ComputeHeadroomTarget(linear, calibration, sdrWhiteLevel);
 
-                    lutR[i] = pqR + (normalized - pqR) * blendFactor;
-                    lutG[i] = pqG + (normalized - pqG) * blendFactor;
-                    lutB[i] = pqB + (normalized - pqB) * blendFactor;
-                    lutGrey[i] = pqGrey + (normalized - pqGrey) * blendFactor;
+                    // Blend in PQ-signal space (perceptually uniform) with a smoothstep
+                    // for C¹ continuity at the SDR/HDR boundary, eliminating the visible
+                    // slope-kink the old linear blend produced in smooth gradients.
+                    double t = (normalized - pqSdrWhite) / Math.Max(1.0 - pqSdrWhite, 1e-9);
+                    t = Math.Clamp(t, 0.0, 1.0);
+                    double blendFactor = t * t * (3.0 - 2.0 * t);
+
+                    lutR[i] = pqR + (headroomSignal - pqR) * blendFactor;
+                    lutG[i] = pqG + (headroomSignal - pqG) * blendFactor;
+                    lutB[i] = pqB + (headroomSignal - pqB) * blendFactor;
+                    lutGrey[i] = pqGrey + (headroomSignal - pqGrey) * blendFactor;
                 }
             }
 
             return (lutR, lutG, lutB, lutGrey);
         }
+
+        /// <summary>
+        /// Target the headroom blend fades toward. We preserve HDR creative intent
+        /// (no gamma/temp/tint on highlights) but keep brightness dimming active — otherwise
+        /// dimming the screen leaves HDR highlights at full brightness, which the user
+        /// experiences as specular bloom punching through a dimmed UI.
+        /// </summary>
+        private static double ComputeHeadroomTarget(double linearNits, CalibrationSettings calibration, double sdrWhiteLevel)
+        {
+            if (calibration.Brightness >= 100.0)
+            {
+                // No dimming — target is pure passthrough. Re-encode original linear nits
+                // to PQ. For i at the upper end this equals the input signal, matching the
+                // old identity-passthrough behavior where no dimming is requested.
+                return TransferFunctions.PqInverseEotf(linearNits);
+            }
+
+            double dimmed = ColorAdjustments.ApplyDimmingNits(
+                linearNits, calibration.Brightness, sdrWhiteLevel, calibration.UseLinearBrightness);
+            return TransferFunctions.PqInverseEotf(dimmed);
+        }
+
+        #region Calibrated LUT Generation
+
+        /// <summary>
+        /// Generates per-channel 1D LUTs using measured display characteristics.
+        /// This provides accurate gamma compensation based on actual colorimeter measurements.
+        /// </summary>
+        /// <param name="targetGamma">The desired output gamma (2.2, 2.4, etc.).</param>
+        /// <param name="profile">The calibration profile with measured tone curves.</param>
+        /// <param name="calibration">Additional calibration settings (temperature, tint, etc.).</param>
+        /// <param name="sdrWhiteLevel">SDR white level in nits.</param>
+        /// <param name="isHdr">Whether the display is in HDR mode.</param>
+        /// <returns>Per-channel LUTs that compensate for the display's actual response.</returns>
+        public static (double[] R, double[] G, double[] B, double[] Grey) GenerateCalibratedLut(
+            double targetGamma,
+            DisplayCalibrationProfile profile,
+            CalibrationSettings calibration,
+            double sdrWhiteLevel,
+            bool isHdr = true)
+        {
+            // Convert profile to characterization
+            var characterization = profile.ToCharacterization();
+            return GenerateCalibratedLut(targetGamma, characterization, calibration, sdrWhiteLevel, isHdr);
+        }
+
+        /// <summary>
+        /// Generates per-channel 1D LUTs using measured display characteristics.
+        /// </summary>
+        public static (double[] R, double[] G, double[] B, double[] Grey) GenerateCalibratedLut(
+            double targetGamma,
+            DisplayCharacterization characterization,
+            CalibrationSettings calibration,
+            double sdrWhiteLevel,
+            bool isHdr = true)
+        {
+            double[] lutR = new double[1024];
+            double[] lutG = new double[1024];
+            double[] lutB = new double[1024];
+            double[] lutGrey = new double[1024];
+
+            // Get the measured tone curves (what the display actually does)
+            var measuredR = characterization.RedToneCurve ?? ToneCurve.CreateGamma(characterization.MeasuredGamma);
+            var measuredG = characterization.GreenToneCurve ?? ToneCurve.CreateGamma(characterization.MeasuredGamma);
+            var measuredB = characterization.BlueToneCurve ?? ToneCurve.CreateGamma(characterization.MeasuredGamma);
+
+            if (!isHdr)
+            {
+                // SDR Mode: Compute compensation curves
+                // For each input signal level, find what signal to send to get the target output
+                for (int i = 0; i < 1024; i++)
+                {
+                    double input = i / 1023.0;
+
+                    // What linear light level do we WANT for this input?
+                    // (Input represents the encoded signal, target gamma defines the desired decoding)
+                    double targetLinear = Math.Pow(input, targetGamma);
+
+                    // Apply calibration adjustments to the target
+                    var (adjR, adjG, adjB) = ColorAdjustments.ApplyCalibration(
+                        targetLinear, targetLinear, targetLinear, calibration);
+
+                    // What signal must we send to the display to get this output?
+                    // Use the INVERSE of the measured response
+                    lutR[i] = measuredR.InverseLookup(Math.Clamp(adjR, 0, 1));
+                    lutG[i] = measuredG.InverseLookup(Math.Clamp(adjG, 0, 1));
+                    lutB[i] = measuredB.InverseLookup(Math.Clamp(adjB, 0, 1));
+                    lutGrey[i] = (lutR[i] + lutG[i] + lutB[i]) / 3.0;
+                }
+                return (lutR, lutG, lutB, lutGrey);
+            }
+
+            // HDR Mode with calibration-aware compensation
+            double blackLevel = characterization.BlackLevel;
+            double pqSdrWhite = TransferFunctions.PqInverseEotf(sdrWhiteLevel);
+
+            for (int i = 0; i < 1024; i++)
+            {
+                double normalized = i / 1023.0;
+
+                // 1. PQ EOTF -> linear nits
+                double linear = TransferFunctions.PqEotf(normalized);
+
+                double outputR, outputG, outputB;
+
+                if (Math.Abs(targetGamma - 1.0) < 0.01)
+                {
+                    // Linear mode (no gamma correction, just calibration)
+                    outputR = outputG = outputB = linear;
+                }
+                else
+                {
+                    // 2. Compute what linear output we want based on target gamma
+                    double srgbNormalized = TransferFunctions.SrgbInverseEotf(linear, sdrWhiteLevel, blackLevel);
+                    double gammaApplied = Math.Pow(srgbNormalized, targetGamma);
+                    double targetLinear = blackLevel + (sdrWhiteLevel - blackLevel) * gammaApplied;
+                    outputR = outputG = outputB = targetLinear;
+                }
+
+                // 3. Apply calibration adjustments
+                if (calibration.HasAdjustments)
+                {
+                    double normR = Math.Clamp(outputR / sdrWhiteLevel, 0, 1);
+                    double normG = Math.Clamp(outputG / sdrWhiteLevel, 0, 1);
+                    double normB = Math.Clamp(outputB / sdrWhiteLevel, 0, 1);
+
+                    var (adjR, adjG, adjB) = ColorAdjustments.ApplyCalibration(normR, normG, normB, calibration);
+
+                    outputR = adjR * sdrWhiteLevel;
+                    outputG = adjG * sdrWhiteLevel;
+                    outputB = adjB * sdrWhiteLevel;
+                }
+
+                // 4. Compensate for display's actual response
+                // Convert target linear to the signal level that produces it on THIS display
+                double targetNormR = Math.Clamp(outputR / sdrWhiteLevel, 0, 1);
+                double targetNormG = Math.Clamp(outputG / sdrWhiteLevel, 0, 1);
+                double targetNormB = Math.Clamp(outputB / sdrWhiteLevel, 0, 1);
+
+                double compensatedR = measuredR.InverseLookup(targetNormR) * sdrWhiteLevel;
+                double compensatedG = measuredG.InverseLookup(targetNormG) * sdrWhiteLevel;
+                double compensatedB = measuredB.InverseLookup(targetNormB) * sdrWhiteLevel;
+
+                // 5. Encode to PQ
+                double pqR = TransferFunctions.PqInverseEotf(compensatedR);
+                double pqG = TransferFunctions.PqInverseEotf(compensatedG);
+                double pqB = TransferFunctions.PqInverseEotf(compensatedB);
+                double pqGrey = TransferFunctions.PqInverseEotf((compensatedR + compensatedG + compensatedB) / 3.0);
+
+                if (linear <= sdrWhiteLevel)
+                {
+                    lutR[i] = pqR;
+                    lutG[i] = pqG;
+                    lutB[i] = pqB;
+                    lutGrey[i] = pqGrey;
+                }
+                else
+                {
+                    // Headroom: blend toward a dim-aware passthrough in PQ-signal space
+                    // with a smoothstep. See GenerateLutInternal for rationale.
+                    double headroomSignal = ComputeHeadroomTarget(linear, calibration, sdrWhiteLevel);
+
+                    double t = (normalized - pqSdrWhite) / Math.Max(1.0 - pqSdrWhite, 1e-9);
+                    t = Math.Clamp(t, 0.0, 1.0);
+                    double blendFactor = t * t * (3.0 - 2.0 * t);
+
+                    lutR[i] = pqR + (headroomSignal - pqR) * blendFactor;
+                    lutG[i] = pqG + (headroomSignal - pqG) * blendFactor;
+                    lutB[i] = pqB + (headroomSignal - pqB) * blendFactor;
+                    lutGrey[i] = pqGrey + (headroomSignal - pqGrey) * blendFactor;
+                }
+            }
+
+            return (lutR, lutG, lutB, lutGrey);
+        }
+
+        /// <summary>
+        /// Checks if a calibration profile is available and valid for the given gamma mode.
+        /// </summary>
+        public static bool CanUseCalibratedLut(DisplayCalibrationProfile? profile)
+        {
+            if (profile == null)
+                return false;
+
+            // Check if the profile has valid tone curve data
+            bool hasToneCurves = profile.RedToneCurve != null &&
+                                 profile.GreenToneCurve != null &&
+                                 profile.BlueToneCurve != null &&
+                                 profile.RedToneCurve.Length > 0;
+
+            return hasToneCurves || profile.MeasuredGamma > 0;
+        }
+
+        #endregion
     }
 }

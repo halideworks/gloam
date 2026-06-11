@@ -39,5 +39,38 @@ namespace HDRGammaController.Core
         public uint OutputId { get; set; } // Index in EnumOutputs
         public IntPtr HMonitor { get; set; }
         public Dxgi.RECT MonitorBounds { get; set; }
+
+        /// <summary>Panel HDR range from DXGI (display-reported metadata), nits. 0 = unknown.</summary>
+        public double HdrPeakNits { get; set; }
+        public double HdrMinNits { get; set; }
+
+        // DisplayConfig identity (adapter LUID + source id) — required by the Advanced Color
+        // profile association APIs, which is the association list Windows uses in HDR.
+        public bool HasDisplayConfigIds { get; set; }
+        public Dxgi.LUID DisplayConfigAdapterId { get; set; }
+        public uint DisplayConfigSourceId { get; set; }
+
+        /// <summary>
+        /// The display's reported gamut from its EDID color-characteristics block, if parsed.
+        /// Lets the calibration UI recommend reachable targets BEFORE measuring (the
+        /// colorimeter still measures the true gamut during calibration).
+        /// </summary>
+        public EdidColorInfo? EdidColor { get; set; }
+    }
+
+    /// <summary>
+    /// Display chromaticities (CIE 1931 xy) reported in the EDID color-characteristics block.
+    /// Manufacturer-reported, so approximate — good enough to pre-filter calibration targets.
+    /// </summary>
+    public class EdidColorInfo
+    {
+        public double RedX { get; init; }
+        public double RedY { get; init; }
+        public double GreenX { get; init; }
+        public double GreenY { get; init; }
+        public double BlueX { get; init; }
+        public double BlueY { get; init; }
+        public double WhiteX { get; init; }
+        public double WhiteY { get; init; }
     }
 }

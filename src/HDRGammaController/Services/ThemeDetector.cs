@@ -1,4 +1,5 @@
 using System;
+using HDRGammaController.Core;
 using Microsoft.Win32;
 
 namespace HDRGammaController.Services
@@ -28,7 +29,7 @@ namespace HDRGammaController.Services
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"ThemeDetector: Failed to read theme: {ex.Message}");
+                Log.Info($"ThemeDetector: Failed to read theme: {ex.Message}");
             }
             
             // Default to light mode if we can't detect

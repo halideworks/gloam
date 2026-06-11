@@ -9,7 +9,14 @@
     <RollForward>LatestMajor</RollForward>
     <ApplicationIcon>app.ico</ApplicationIcon>
     <PublishTrimmed>false</PublishTrimmed>
+    <!-- Stamped at compile time; UpdateService compares it against the GitHub
+         release published_at, since the rolling 'latest' tag has no semver. -->
+    <BuildTimestampUtc>$([System.DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"))</BuildTimestampUtc>
   </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="BuildTimestampUtc" Value="$(BuildTimestampUtc)" />
+  </ItemGroup>
 
   <ItemGroup>
     <Resource Include="app.ico" />
@@ -23,6 +30,19 @@
     <EmbeddedResource Include="..\..\srgb_to_gamma2p2_400_mhc2.icm" Link="Resources\srgb_to_gamma2p2_400_mhc2.icm" />
     <EmbeddedResource Include="..\..\srgb_to_gamma2p2_sdr.icm" Link="Resources\srgb_to_gamma2p2_sdr.icm" />
     <EmbeddedResource Include="..\..\srgb_to_gamma2p2_unspecified.icm" Link="Resources\srgb_to_gamma2p2_unspecified.icm" />
+  </ItemGroup>
+
+  <!-- Also ship the templates in the build/publish output. Runtime extraction cannot
+       write to Program Files (unelevated), and a mirroring deploy (robocopy /MIR)
+       deletes anything not in the publish folder - which silently removed previously
+       extracted templates and broke calibration apply ("No MHC2 template found"). -->
+  <ItemGroup>
+    <None Include="..\..\srgb_to_gamma2p2_100_mhc2.icm" Link="srgb_to_gamma2p2_100_mhc2.icm" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\srgb_to_gamma2p2_200_mhc2.icm" Link="srgb_to_gamma2p2_200_mhc2.icm" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\srgb_to_gamma2p2_300_mhc2.icm" Link="srgb_to_gamma2p2_300_mhc2.icm" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\srgb_to_gamma2p2_400_mhc2.icm" Link="srgb_to_gamma2p2_400_mhc2.icm" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\srgb_to_gamma2p2_sdr.icm" Link="srgb_to_gamma2p2_sdr.icm" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\srgb_to_gamma2p2_unspecified.icm" Link="srgb_to_gamma2p2_unspecified.icm" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

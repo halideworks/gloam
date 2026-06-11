@@ -21,7 +21,6 @@ namespace HDRGammaController.Services
     {
         private const string RepoOwner = "davidtorcivia";
         private const string RepoName = "win11hdr-gamma-adjuster";
-        private const string CurrentVersion = "1.0.0"; // Should match AssemblyInfo
 
         // Rate limiting to prevent excessive API calls
         private static DateTime _lastCheckTime = DateTime.MinValue;
@@ -90,18 +89,20 @@ namespace HDRGammaController.Services
                     string tagName = tagNameProp.GetString() ?? "";
                     string htmlUrl = root.TryGetProperty("html_url", out var htmlUrlProp) ? htmlUrlProp.GetString() ?? "" : "";
                     string publishedAtStr = root.TryGetProperty("published_at", out var publishedProp) ? publishedProp.GetString() ?? "" : "";
-                    DateTime publishedAt = DateTime.TryParse(publishedAtStr, out var date) ? date : DateTime.MinValue;
+                    // Parse as UTC: the old default parse converted to local time while the
+                    // build date was UTC, skewing the comparison by the timezone offset.
+                    DateTime publishedAt = DateTime.TryParse(publishedAtStr,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal,
+                        out var date) ? date : DateTime.MinValue;
 
                     result.Version = tagName;
                     result.ReleaseUrl = htmlUrl;
                     result.PublishedAt = publishedAt;
 
-                    // Simple check: If the remote build is newer than our build time?
-                    // Or since we don't have auto-incrementing versions yet, simply notify if the release is very recent?
-                    // For now, let's assume we want to notify if the release is newer than 24 hours AND we haven't seen it?
-                    // Actually, best way with "latest" tag is to check published_at > BuildDate.
-
-                    DateTime buildDate = GetLinkerTime(Assembly.GetExecutingAssembly());
+                    // The auto-build is a rolling 'latest' tag with no comparable semver,
+                    // so "newer" means published after this binary was compiled.
+                    DateTime buildDate = GetBuildTimeUtc(Assembly.GetExecutingAssembly());
 
                     // Allow 1 hour buffer for build server time differences
                     if (publishedAt > buildDate.AddHours(1))
@@ -122,26 +123,24 @@ namespace HDRGammaController.Services
             return result;
         }
         
-        // Helper to get build timestamp from assembly
-        private static DateTime GetLinkerTime(Assembly assembly)
+        private static DateTime GetBuildTimeUtc(Assembly assembly)
         {
-            const string BuildVersionMetadataPrefix = "+build";
-            
-            var attribute = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>();
-            if (attribute?.InformationalVersion != null)
+            // Preferred: the BuildTimestampUtc assembly metadata stamped at compile
+            // time (see the csproj). Reliable across copies and CI builds.
+            foreach (var attr in assembly.GetCustomAttributes<AssemblyMetadataAttribute>())
             {
-                var value = attribute.InformationalVersion;
-                var index = value.IndexOf(BuildVersionMetadataPrefix);
-                if (index > 0)
+                if (attr.Key == "BuildTimestampUtc" &&
+                    DateTime.TryParse(attr.Value,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal,
+                        out var stamped))
                 {
-                     // Use semantic versioning metadata if available? 
-                     // Currently we don't stamp it.
+                    return stamped;
                 }
             }
-            
-            // Fallback to file creation time as a rough proxy for local dev, 
-            // but for CI builds we might need a better way. 
-            // Return a default date if we can't determine.
+
+            // Fallback: file write time — fragile (any file copy refreshes it, which
+            // suppresses update notifications until the next real build).
             try
             {
                 string location = assembly.Location;
@@ -151,7 +150,7 @@ namespace HDRGammaController.Services
                 }
             }
             catch {}
-            
+
             return DateTime.MinValue;
         }
     }

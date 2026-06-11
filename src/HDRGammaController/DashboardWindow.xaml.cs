@@ -19,6 +19,19 @@ namespace HDRGammaController
 {
     public partial class DashboardWindow : Window, INotifyPropertyChanged
     {
+        // Frozen brushes: WPF can short-circuit thread-affinity checks on frozen Freezables
+        // and skip per-use validation. Allocating a fresh SolidColorBrush every RefreshMonitors()
+        // otherwise produced steady GC pressure on live night-mode updates.
+        private static readonly Brush HdrBadgeBrush = CreateFrozen(Color.FromRgb(0, 120, 212));
+        private static readonly Brush SdrBadgeBrush = CreateFrozen(Color.FromRgb(100, 100, 100));
+
+        private static Brush CreateFrozen(Color c)
+        {
+            var b = new SolidColorBrush(c);
+            b.Freeze();
+            return b;
+        }
+
         private readonly MonitorManager _monitorManager;
         private readonly SettingsManager _settingsManager;
         private readonly NightModeService _nightModeService;
@@ -39,9 +52,10 @@ namespace HDRGammaController
             get => _settingsManager.NightMode.Enabled;
             set
             {
-                // We update settings via manager, then notify
-                // But SettingsManager updates are separate.
-                // We'll update the display when refreshing monitors or manual trigger
+                if (value == _settingsManager.NightMode.Enabled) return;
+                var updated = _settingsManager.NightMode;
+                updated.Enabled = value;
+                _settingsManager.SetNightMode(updated);
                 OnPropertyChanged(nameof(IsNightModeEnabled));
             }
         }
@@ -139,9 +153,7 @@ namespace HDRGammaController
                 // Determine display properties
                 bool isHdr = m.IsHdrActive;
                 string badgeText = isHdr ? "HDR" : "SDR";
-                Brush badgeColor = isHdr 
-                    ? new SolidColorBrush(Color.FromRgb(0, 120, 212)) // Blue
-                    : new SolidColorBrush(Color.FromRgb(100, 100, 100)); // Grey
+                Brush badgeColor = isHdr ? HdrBadgeBrush : SdrBadgeBrush;
                 
                 double brightness = profile?.Brightness ?? 100;
                 GammaMode gamma = profile?.GammaMode ?? m.CurrentGamma;
