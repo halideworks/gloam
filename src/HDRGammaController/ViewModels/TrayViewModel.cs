@@ -180,10 +180,21 @@ namespace HDRGammaController.ViewModels
         
         private MonitorInfo? GetFocusedMonitor()
         {
-            IntPtr hwnd = User32.GetForegroundWindow();
-            if (hwnd == IntPtr.Zero) return null;
-
-            IntPtr hMonitor = User32.MonitorFromWindow(hwnd, User32.MONITOR_DEFAULTTONEAREST);
+            // A global hotkey should act on the monitor the user is pointing at: the
+            // mouse cursor. The focused window's monitor is only the fallback - using
+            // it first meant the hotkey always hit wherever the active window lived
+            // (usually the primary), regardless of where the user actually was.
+            IntPtr hMonitor = IntPtr.Zero;
+            if (User32.GetCursorPos(out var cursor))
+            {
+                hMonitor = User32.MonitorFromPoint(cursor, User32.MONITOR_DEFAULTTONEAREST);
+            }
+            if (hMonitor == IntPtr.Zero)
+            {
+                IntPtr hwnd = User32.GetForegroundWindow();
+                if (hwnd == IntPtr.Zero) return null;
+                hMonitor = User32.MonitorFromWindow(hwnd, User32.MONITOR_DEFAULTTONEAREST);
+            }
 
             // First try handle identity (cheap), but HMONITOR values captured at DXGI
             // enumeration go stale after display-configuration changes while the
