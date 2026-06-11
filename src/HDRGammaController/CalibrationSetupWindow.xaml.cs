@@ -49,17 +49,11 @@ namespace HDRGammaController
 
         private readonly SettingsManager? _settingsManager;
 
-        // TEMPORARY: only consumed by the HDR sanity check so it can bypass ramps through
-        // the app's shared DispwinRunner. Strip along with HdrSanityCheckWindow.
-        private readonly HDRGammaController.Core.Calibration.CalibrationStateManager? _stateManager;
-
-        public CalibrationSetupWindow(List<MonitorInfo> monitors, SettingsManager? settingsManager = null,
-            HDRGammaController.Core.Calibration.CalibrationStateManager? stateManager = null)
+        public CalibrationSetupWindow(List<MonitorInfo> monitors, SettingsManager? settingsManager = null)
         {
             InitializeComponent();
             _monitors = monitors;
             _settingsManager = settingsManager;
-            _stateManager = stateManager;
 
             PopulateCorrectionFiles();
 
@@ -173,19 +167,6 @@ namespace HDRGammaController
             var monitor = (MonitorComboBox.SelectedItem as MonitorComboItem)?.Monitor;
             if (monitor == null) return;
             new ProfileManagerWindow(monitor, _settingsManager) { Owner = this }.ShowDialog();
-        }
-
-        // TEMPORARY: strip after the HDR-range math is confirmed (see HdrSanityCheckWindow).
-        private void HdrSanityCheck_Click(object sender, RoutedEventArgs e)
-        {
-            var monitor = (MonitorComboBox.SelectedItem as MonitorComboItem)?.Monitor;
-            if (monitor == null || _colorimeterService == null)
-            {
-                MessageBox.Show("Select a monitor and wait for the colorimeter to initialize first.",
-                    "HDR Sanity Check", MessageBoxButton.OK, MessageBoxImage.Information);
-                return;
-            }
-            new HdrSanityCheckWindow(monitor, _colorimeterService, _settingsManager, _stateManager) { Owner = this }.Show();
         }
 
         private void BrowseCorrection_Click(object sender, RoutedEventArgs e)

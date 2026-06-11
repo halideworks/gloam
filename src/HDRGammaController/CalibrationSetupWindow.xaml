@@ -304,10 +304,6 @@
                             <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                                 <Button x:Name="ManageProfilesButton" Content="Manage installed calibration profiles…"
                                         Padding="10,4" Background="#3D3D3D" Click="ManageProfiles_Click"/>
-                                <!-- TEMPORARY: strip after the HDR-range math is confirmed -->
-                                <Button x:Name="HdrSanityCheckButton" Content="HDR sanity check (temp)"
-                                        Padding="10,4" Margin="8,0,0,0" Background="#3D3D3D"
-                                        Click="HdrSanityCheck_Click"/>
                             </StackPanel>
                         </StackPanel>
                     </Border>

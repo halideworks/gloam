@@ -310,11 +310,7 @@ namespace HDRGammaController.ViewModels
 
         private void OpenCalibration()
         {
-            // The state manager handed to setup is only for the TEMPORARY HDR sanity check
-            // (it must clear ramps through the SHARED DispwinRunner or the 10s ramp guard
-            // restores the user's curve mid-test). Calibration itself gets its own below.
-            var setupWindow = new CalibrationSetupWindow(_activeMonitors, _settingsManager,
-                new CalibrationStateManager(_dispwinRunner, _nightModeService));
+            var setupWindow = new CalibrationSetupWindow(_activeMonitors, _settingsManager);
             var dialogResult = setupWindow.ShowDialog();
 
             if (dialogResult == true &&
