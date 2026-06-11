@@ -303,7 +303,7 @@
                         <Button Content="Refresh" Margin="16,0,0,0" Click="Refresh_Click" Padding="8,4" Background="#444"/>
                     </StackPanel>
                     
-                    <ToggleButton x:Name="NightModeToggle" Grid.Column="2" Content="🌙 Night Mode" 
+                    <ToggleButton x:Name="NightModeToggle" Grid.Column="2" Content="Night Mode" 
                                   Width="320" Height="36" Padding="20,0" HorizontalAlignment="Right"
                                   IsChecked="{Binding IsNightModeEnabled, Mode=OneWay}"
                                   Click="NightModeToggle_Click" MouseRightButtonUp="NightModeToggle_RightClick">

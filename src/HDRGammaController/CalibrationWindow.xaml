@@ -357,7 +357,7 @@
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
-                            <TextBlock Text="⚠" FontSize="18" Foreground="{StaticResource WarningBrush}"
+                            <TextBlock Text="!" FontSize="18" FontWeight="Bold" Foreground="{StaticResource WarningBrush}"
                                        VerticalAlignment="Top" Margin="0,0,10,0"/>
                             <TextBlock Grid.Column="1" TextWrapping="Wrap" Foreground="#FFD699">
                                 <Run FontWeight="SemiBold">Windowed mode may reduce measurement accuracy.</Run>
@@ -525,7 +525,7 @@
             <Border x:Name="WindowedModeBanner" Background="{StaticResource WarningBackgroundBrush}"
                     VerticalAlignment="Top" Padding="8,6" Visibility="Collapsed" Panel.ZIndex="100">
                 <TextBlock HorizontalAlignment="Center" Foreground="#FFD699" FontSize="12">
-                    <Run FontWeight="SemiBold">⚠ Windowed Mode</Run>
+                    <Run FontWeight="SemiBold">Windowed Mode</Run>
                     <Run> - Reduced accuracy. Full-screen recommended.</Run>
                 </TextBlock>
             </Border>
@@ -600,11 +600,11 @@
 
                         <!-- Control Buttons -->
                         <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Center">
-                            <Button x:Name="PauseButton" Content="⏸ Pause" Style="{StaticResource SubtleButton}"
+                            <Button x:Name="PauseButton" Content="Pause" Style="{StaticResource SubtleButton}"
                                     Click="Pause_Click" Margin="0,0,8,0"/>
-                            <Button x:Name="CancelMeasurementButton" Content="✕ Cancel" Style="{StaticResource SubtleButton}"
+                            <Button x:Name="CancelMeasurementButton" Content="Cancel" Style="{StaticResource SubtleButton}"
                                     Click="CancelMeasurement_Click" Margin="0,0,8,0"/>
-                            <Button x:Name="MuteButton" Content="🔊 Sound on" Style="{StaticResource SubtleButton}"
+                            <Button x:Name="MuteButton" Content="Sound: On" Style="{StaticResource SubtleButton}"
                                     Click="Mute_Click" ToolTip="Mute or unmute capture and completion sounds"/>
                         </StackPanel>
                     </Grid>
@@ -614,14 +614,13 @@
             <!-- Pause Overlay -->
             <Grid x:Name="PauseOverlay" Background="#CC1A1A1A" Visibility="Collapsed">
                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                    <TextBlock Text="⏸" FontSize="48" HorizontalAlignment="Center" Margin="0,0,0,16"/>
                     <TextBlock Text="Calibration Paused" FontSize="24" FontWeight="SemiBold" HorizontalAlignment="Center"/>
                     <TextBlock x:Name="ResumeCountdownText" Text="Click Resume to continue"
                                Foreground="{StaticResource TextDim}" HorizontalAlignment="Center" Margin="0,8,0,24"/>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                        <Button x:Name="ResumeButton" Content="▶ Resume" Style="{StaticResource ModernButton}"
+                        <Button x:Name="ResumeButton" Content="Resume" Style="{StaticResource ModernButton}"
                                 Click="Resume_Click" Margin="0,0,8,0"/>
-                        <Button Content="✕ Cancel" Style="{StaticResource SubtleButton}"
+                        <Button Content="Cancel" Style="{StaticResource SubtleButton}"
                                 Click="CancelMeasurement_Click"/>
                     </StackPanel>
                 </StackPanel>

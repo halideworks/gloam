@@ -66,7 +66,7 @@ namespace HDRGammaController.ViewModels
                 
                 // Add settings option
                 SubItems.Add(new ActionViewModel("───────────", null));
-                SubItems.Add(new ActionViewModel("⚙ Settings...", new RelayCommand(_ => OpenSettings())));
+                SubItems.Add(new ActionViewModel("Settings...", new RelayCommand(_ => OpenSettings())));
             }
             else
             {
@@ -75,7 +75,7 @@ namespace HDRGammaController.ViewModels
                  
                 // Add settings option
                 SubItems.Add(new ActionViewModel("───────────", null));
-                SubItems.Add(new ActionViewModel("⚙ Settings...", new RelayCommand(_ => OpenSettings())));
+                SubItems.Add(new ActionViewModel("Settings...", new RelayCommand(_ => OpenSettings())));
             }
         }
         

@@ -58,7 +58,6 @@
             <Border Grid.Row="0" Background="#252525" CornerRadius="8,8,0,0" MouseLeftButtonDown="TitleBar_MouseDown">
                 <Grid Margin="16,0">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Text="🔌" FontSize="14" Margin="0,0,8,0"/>
                         <TextBlock Text="USB Driver Required" FontWeight="Medium" FontSize="14"/>
                     </StackPanel>
                 </Grid>
@@ -96,7 +95,7 @@
                     <Border Background="#3D2D1D" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1"
                             CornerRadius="4" Padding="10">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="⚠" Foreground="{StaticResource WarningBrush}" FontSize="16" Margin="0,0,8,0"/>
+                            <TextBlock Text="!" FontWeight="Bold" Foreground="{StaticResource WarningBrush}" FontSize="16" Margin="0,0,8,0"/>
                             <TextBlock Text="Note: X-Rite's own software (i1Profiler) may stop working after this. You can uninstall the ArgyllCMS driver later to restore it."
                                        TextWrapping="Wrap" Foreground="{StaticResource WarningBrush}" FontSize="11"/>
                         </StackPanel>
@@ -105,7 +104,6 @@
 
                 <!-- Installing state -->
                 <StackPanel x:Name="InstallingPanel" Visibility="Collapsed" VerticalAlignment="Center" HorizontalAlignment="Center">
-                    <TextBlock Text="⏳" FontSize="48" HorizontalAlignment="Center" Margin="0,0,0,16"/>
                     <TextBlock Text="Waiting for driver installer..." FontWeight="Medium" FontSize="16" HorizontalAlignment="Center"/>
                     <TextBlock Text="Complete the installation in the ArgyllCMS window"
                                Foreground="{StaticResource TextDim}" FontSize="12" HorizontalAlignment="Center" Margin="0,8,0,0"/>

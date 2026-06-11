@@ -60,8 +60,8 @@ namespace HDRGammaController
             }
 
             var nudges = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
-            nudges.Children.Add(Make("◀ Green", 0, +Step));
-            nudges.Children.Add(Make("Magenta ▶", 0, -Step));
+            nudges.Children.Add(Make("< Green", 0, +Step));
+            nudges.Children.Add(Make("Magenta >", 0, -Step));
             nudges.Children.Add(new Border { Width = 16 });
             nudges.Children.Add(Make("Warmer", +Step, +Step * 0.35));
             nudges.Children.Add(Make("Cooler", -Step, -Step * 0.35));
@@ -97,7 +97,7 @@ namespace HDRGammaController
             var hint = new TextBlock
             {
                 Text = "Compare this gray against your reference display, then nudge until they match. " +
-                       "Each step rebuilds the profile live (~1 second). Arrows: ←→ green/magenta, ↑↓ cooler/warmer.",
+                       "Each step rebuilds the profile live (~1 second). Arrow keys: Left/Right green/magenta, Up/Down cooler/warmer.",
                 FontSize = 12,
                 Foreground = Brushes.Black,
                 Opacity = 0.65,

@@ -954,12 +954,12 @@ namespace HDRGammaController
                 {
                     case CalibrationState.Paused:
                         PauseOverlay.Visibility = Visibility.Visible;
-                        PauseButton.Content = "⏸ Paused";
+                        PauseButton.Content = "Paused";
                         PauseButton.IsEnabled = false;
                         break;
                     case CalibrationState.Running:
                         PauseOverlay.Visibility = Visibility.Collapsed;
-                        PauseButton.Content = "⏸ Pause";
+                        PauseButton.Content = "Pause";
                         PauseButton.IsEnabled = true;
                         break;
                 }
@@ -1021,14 +1021,14 @@ namespace HDRGammaController
         }
 
         private void UpdateMuteButton() =>
-            MuteButton.Content = CalibrationSounds.Muted ? "🔇 Muted" : "🔊 Sound on";
+            MuteButton.Content = CalibrationSounds.Muted ? "Sound: Muted" : "Sound: On";
 
         private void Pause_Click(object sender, RoutedEventArgs e)
         {
             _isPaused = true;
             _orchestrator?.Pause();
             PauseOverlay.Visibility = Visibility.Visible;
-            PauseButton.Content = "⏸ Paused";
+            PauseButton.Content = "Paused";
             PauseButton.IsEnabled = false;
         }
 
@@ -1044,7 +1044,7 @@ namespace HDRGammaController
             _isPaused = false;
             _orchestrator?.Resume();
             PauseOverlay.Visibility = Visibility.Collapsed;
-            PauseButton.Content = "⏸ Pause";
+            PauseButton.Content = "Pause";
             PauseButton.IsEnabled = true;
             ResumeCountdownText.Text = "Click Resume to continue";
         }
