@@ -121,6 +121,10 @@ namespace HDRGammaController
             {
                 await Task.Delay(settleMs);
                 var m = await _colorimeter.MeasureAsync(patch, hdrMode: true);
+                if (!m.IsValid)
+                    throw new InvalidOperationException(
+                        $"Probe read failed: {m.ErrorMessage ?? "no error detail from the meter"}. " +
+                        "If the meter reports a sensor-position error, swing the i1's ambient diffuser arm away from the lens.");
                 return m.Xyz;
             }
 
