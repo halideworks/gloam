@@ -301,9 +301,14 @@
                             <TextBlock Foreground="{StaticResource TextDim}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"
                                        Text="A correction file (.ccss/.ccmx) matched to this exact panel makes the colorimeter read it truthfully. Essential on QD-OLED, where generic corrections shift the white point green/magenta by several ΔE. Use Find online to get one from the DisplayCAL community database. Remembered per monitor."/>
 
-                            <Button x:Name="ManageProfilesButton" Content="Manage installed calibration profiles…"
-                                    HorizontalAlignment="Left" Margin="0,12,0,0" Padding="10,4"
-                                    Background="#3D3D3D" Click="ManageProfiles_Click"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                <Button x:Name="ManageProfilesButton" Content="Manage installed calibration profiles…"
+                                        Padding="10,4" Background="#3D3D3D" Click="ManageProfiles_Click"/>
+                                <!-- TEMPORARY: strip after the HDR-range math is confirmed -->
+                                <Button x:Name="HdrSanityCheckButton" Content="HDR sanity check (temp)"
+                                        Padding="10,4" Margin="8,0,0,0" Background="#3D3D3D"
+                                        Click="HdrSanityCheck_Click"/>
+                            </StackPanel>
                         </StackPanel>
                     </Border>
 

@@ -169,6 +169,19 @@ namespace HDRGammaController
             new ProfileManagerWindow(monitor, _settingsManager) { Owner = this }.ShowDialog();
         }
 
+        // TEMPORARY: strip after the HDR-range math is confirmed (see HdrSanityCheckWindow).
+        private void HdrSanityCheck_Click(object sender, RoutedEventArgs e)
+        {
+            var monitor = (MonitorComboBox.SelectedItem as MonitorComboItem)?.Monitor;
+            if (monitor == null || _colorimeterService == null)
+            {
+                MessageBox.Show("Select a monitor and wait for the colorimeter to initialize first.",
+                    "HDR Sanity Check", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            new HdrSanityCheckWindow(monitor, _colorimeterService, _settingsManager) { Owner = this }.Show();
+        }
+
         private void BrowseCorrection_Click(object sender, RoutedEventArgs e)
         {
             var dialog = new Microsoft.Win32.OpenFileDialog
