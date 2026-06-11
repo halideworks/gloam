@@ -30,15 +30,18 @@ namespace HDRGammaController
         private readonly MonitorInfo _monitor;
         private readonly ColorimeterService _colorimeter;
         private readonly SettingsManager? _settings;
+        private readonly CalibrationStateManager? _stateManager;
         private readonly TextBox _output;
         private readonly Button _runButton;
         private TaskCompletionSource<bool>? _positionDone;
 
-        public HdrSanityCheckWindow(MonitorInfo monitor, ColorimeterService colorimeter, SettingsManager? settings)
+        public HdrSanityCheckWindow(MonitorInfo monitor, ColorimeterService colorimeter, SettingsManager? settings,
+            CalibrationStateManager? stateManager = null)
         {
             _monitor = monitor;
             _colorimeter = colorimeter;
             _settings = settings;
+            _stateManager = stateManager;
 
             Title = $"HDR Sanity Check (temporary) - {monitor.FriendlyName}";
             Width = 780;
@@ -61,9 +64,9 @@ namespace HDRGammaController
                 BorderBrush = new SolidColorBrush(Color.FromRgb(0x3f, 0x3f, 0x3f)),
                 Margin = new Thickness(0, 0, 0, 10),
                 Text = "Place the probe on the display, then press Run.\r\n\r\n" +
-                       "For the SDR-mapping check, set this monitor's gamma to Windows Default and turn " +
-                       "night mode off first (the renderer checks are insensitive to the ramp; the " +
-                       "mapping-curve check is not).",
+                       "The test automatically disables the installed calibration profile, the GPU gamma " +
+                       "ramp and night mode so it measures the naked panel + Windows pipeline, and " +
+                       "restores everything when it finishes.",
             };
 
             _runButton = new Button
@@ -128,10 +131,12 @@ namespace HDRGammaController
                 return m.Xyz;
             }
 
+            string? restoreProfileName = null;
+            bool bypassed = false;
             try
             {
                 var prefs = _settings?.GetMonitorProfile(_monitor.MonitorDevicePath);
-                if (prefs?.GammaMode is { } gm && gm != GammaMode.WindowsDefault)
+                if (_stateManager == null && prefs?.GammaMode is { } gm && gm != GammaMode.WindowsDefault)
                     Say($"WARNING: gamma mode is {gm}, not Windows Default - the SDR-mapping check below will be contaminated.");
 
                 Say($"Monitor: {_monitor.FriendlyName}  SDR white {_monitor.SdrWhiteLevel:F0} nits  panel peak {_monitor.HdrPeakNits:F0} nits");
@@ -160,6 +165,26 @@ namespace HDRGammaController
                 const int size = 600;
                 int px = b.Left + (b.Right - b.Left - size) / 2 + (int)surround.OffsetX;
                 int py = b.Top + (b.Bottom - b.Top - size) / 2 + (int)surround.OffsetY;
+
+                // PRISTINE STATE: every check must see the naked panel + Windows pipeline.
+                // The first run on the MAG measured THROUGH the installed MHC2 profile
+                // (matrix scale + PQ LUTs), which read as parity/range failures. Disable the
+                // profile and clear the GPU ramp via the SHARED DispwinRunner (so the 10s
+                // ramp guard maintains identity instead of restoring the user's curve
+                // mid-run); night mode pauses with it. All of it is restored in finally.
+                if (_stateManager != null)
+                {
+                    _stateManager.EnterBypassMode(_monitor,
+                        prefs?.GammaMode ?? _monitor.CurrentGamma, prefs?.ToCalibrationSettings());
+                    bypassed = true;
+                    Say("Cleared GPU gamma ramp and paused night mode for the test.");
+                }
+                restoreProfileName = prefs?.Mhc2ProfileName;
+                CalibrationProfileInstaller.DisableAllForMonitor(_monitor);
+                Say(string.IsNullOrEmpty(restoreProfileName)
+                    ? "No calibration profile recorded for this monitor; cleared any stale associations."
+                    : $"Disabled calibration profile '{restoreProfileName}' for the test (restored automatically afterwards).");
+                await Task.Delay(800);   // let the compositor drop the profile before measuring
 
                 await _colorimeter.BeginMeasurementSessionAsync(hdrMode: true);
 
@@ -245,6 +270,22 @@ namespace HDRGammaController
                 try { await _colorimeter.EndMeasurementSessionAsync(); } catch { }
                 renderer?.Dispose();
                 surround?.Close();
+
+                // Put the display back exactly as we found it: profile first, then ramp.
+                if (!string.IsNullOrEmpty(restoreProfileName))
+                {
+                    bool ok = false;
+                    try { ok = CalibrationProfileInstaller.Reenable(_monitor, restoreProfileName, hdrMode: true); }
+                    catch (Exception ex) { Log.Info($"HdrSanityCheck: profile restore threw: {ex.Message}"); }
+                    Say(ok
+                        ? $"Restored calibration profile '{restoreProfileName}'."
+                        : $"COULD NOT restore profile '{restoreProfileName}' - re-enable it from the profile manager.");
+                }
+                if (bypassed)
+                {
+                    try { _stateManager!.RestorePreviousState(); Say("Restored gamma ramp / night mode state."); }
+                    catch (Exception ex) { Say($"Gamma state restore failed: {ex.Message}"); }
+                }
                 _runButton.IsEnabled = true;
             }
         }
