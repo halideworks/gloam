@@ -643,6 +643,7 @@ namespace HDRGammaController
             PositioningPanel.Visibility = Visibility.Collapsed;
             PositioningWindowedBanner.Visibility = Visibility.Collapsed;
             MeasurementPanel.Visibility = Visibility.Visible;
+            UpdateMuteButton();
 
             // Carry the patch placement chosen during positioning into the measurement patch.
             ApplyPatchOffset();
@@ -1012,6 +1013,15 @@ namespace HDRGammaController
         }
 
         #endregion
+
+        private void Mute_Click(object sender, RoutedEventArgs e)
+        {
+            CalibrationSounds.Muted = !CalibrationSounds.Muted;
+            UpdateMuteButton();
+        }
+
+        private void UpdateMuteButton() =>
+            MuteButton.Content = CalibrationSounds.Muted ? "🔇 Muted" : "🔊 Sound on";
 
         private void Pause_Click(object sender, RoutedEventArgs e)
         {

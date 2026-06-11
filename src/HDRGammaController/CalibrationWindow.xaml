@@ -603,7 +603,9 @@
                             <Button x:Name="PauseButton" Content="⏸ Pause" Style="{StaticResource SubtleButton}"
                                     Click="Pause_Click" Margin="0,0,8,0"/>
                             <Button x:Name="CancelMeasurementButton" Content="✕ Cancel" Style="{StaticResource SubtleButton}"
-                                    Click="CancelMeasurement_Click"/>
+                                    Click="CancelMeasurement_Click" Margin="0,0,8,0"/>
+                            <Button x:Name="MuteButton" Content="🔊 Sound on" Style="{StaticResource SubtleButton}"
+                                    Click="Mute_Click" ToolTip="Mute or unmute capture and completion sounds"/>
                         </StackPanel>
                     </Grid>
                 </Border>

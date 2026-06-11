@@ -30,12 +30,20 @@ namespace HDRGammaController
                 (440, 0.00, 0.25, 0.15, 0.10),
                 (330, 0.22, 0.33, 0.15, 0.12))));
 
+        /// <summary>
+        /// Session-wide mute, toggled from the live calibration screen. Overrides every
+        /// caller (capture, completion, failure, verify pass) without each having to check -
+        /// the sounds may be welcome at the desk but not in a shared room.
+        /// </summary>
+        public static bool Muted { get; set; }
+
         public static void PlayCapture() => SafePlay(Capture);
         public static void PlayCompletion() => SafePlay(Completion);
         public static void PlayFailure() => SafePlay(Failure);
 
         private static void SafePlay(Lazy<SoundPlayer> player)
         {
+            if (Muted) return;
             try { player.Value.Play(); } // async, fire-and-forget
             catch { /* sound is best-effort; never break calibration over it */ }
         }
