@@ -41,6 +41,35 @@ namespace HDRGammaController.Interop
         public const int MONITOR_DEFAULTTONULL = 0;
         public const int MONITOR_DEFAULTTOPRIMARY = 1;
         public const int MONITOR_DEFAULTTONEAREST = 2;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MONITORINFO
+        {
+            public int cbSize;
+            public Dxgi.RECT rcMonitor;
+            public Dxgi.RECT rcWork;
+            public uint dwFlags;
+        }
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+
+        /// <summary>
+        /// Desktop bounds of a live HMONITOR. Lets callers match a current monitor
+        /// handle against bounds captured at enumeration time, since HMONITOR values
+        /// go stale across display-configuration changes.
+        /// </summary>
+        public static bool TryGetMonitorBounds(IntPtr hMonitor, out Dxgi.RECT bounds)
+        {
+            var mi = new MONITORINFO { cbSize = Marshal.SizeOf(typeof(MONITORINFO)) };
+            if (hMonitor != IntPtr.Zero && GetMonitorInfo(hMonitor, ref mi))
+            {
+                bounds = mi.rcMonitor;
+                return true;
+            }
+            bounds = default;
+            return false;
+        }
         
         public const int DISPLAY_DEVICE_ATTACHED_TO_DESKTOP = 0x1;
         public const int DISPLAY_DEVICE_PRIMARY_DEVICE = 0x4;

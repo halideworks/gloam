@@ -5,6 +5,7 @@ using System.Windows.Interop;
 using HDRGammaController.Interop;
 using HDRGammaController.Services;
 using HDRGammaController.ViewModels;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace HDRGammaController
 {
@@ -32,8 +33,11 @@ namespace HDRGammaController
             Log.Info("MainWindow: Initializing HotkeyManager...");
             _hotkeyManager = new HotkeyManager(helper.Handle);
             
+            // HotkeyManager needs this window's handle, so it cannot live in the
+            // container; ActivatorUtilities resolves the shared singletons from
+            // App.Services and passes the HotkeyManager explicitly.
             Log.Info("MainWindow: Initializing TrayViewModel...");
-            _trayViewModel = new TrayViewModel(_hotkeyManager);
+            _trayViewModel = ActivatorUtilities.CreateInstance<TrayViewModel>(App.Services, _hotkeyManager);
             
             // Subscribe to notifications
             _trayViewModel.NotificationRequested += (title, msg) => 

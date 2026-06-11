@@ -4,7 +4,7 @@
         Title="ArgyllCMS Download"
         Height="280" Width="450"
         WindowStartupLocation="CenterOwner"
-        Background="#1E1E1E"
+        Background="Transparent"
         Foreground="White"
         WindowStyle="None"
         AllowsTransparency="True"

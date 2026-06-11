@@ -415,6 +415,16 @@ namespace HDRGammaController.Core.Calibration
 
                 var measurement = await MeasurePatchWithRetryAsync(patch, cancellationToken);
 
+                // If the user paused while this patch was in flight, the reading is suspect
+                // (the probe or panel may have been disturbed mid-pause) - and recording it
+                // also played the capture sound during the pause/resume countdown. Discard
+                // it, wait out the pause (top of loop), and re-measure the same patch.
+                if (_isPaused)
+                {
+                    _currentPatchIndex--;
+                    continue;
+                }
+
                 // Store measurement
                 _measurements!.Add(measurement);
                 MeasurementTaken?.Invoke(this, new MeasurementEventArgs(measurement));

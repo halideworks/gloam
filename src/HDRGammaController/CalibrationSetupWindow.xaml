@@ -4,13 +4,14 @@
         Title="Calibration Setup"
         Height="740" Width="600"
         WindowStartupLocation="CenterScreen"
-        Background="#1E1E1E"
+        Background="Transparent"
         Foreground="White"
         WindowStyle="None"
         AllowsTransparency="True"
         ResizeMode="NoResize">
 
     <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
         <SolidColorBrush x:Key="AccentBrush" Color="#0078D4"/>
         <SolidColorBrush x:Key="CardBackground" Color="#2D2D2D"/>
         <SolidColorBrush x:Key="CardBorder" Color="#3F3F3F"/>
@@ -216,7 +217,7 @@
                     <TextBlock Text="Display Calibration Setup" VerticalAlignment="Center" FontWeight="Medium" FontSize="14"/>
                     <Button Content="✕" HorizontalAlignment="Right" VerticalAlignment="Center"
                             Background="Transparent" Foreground="#888" Padding="8,4"
-                            Click="Close_Click"/>
+                            Command="{Binding CancelCommand}"/>
                 </Grid>
             </Border>
 
@@ -234,9 +235,9 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <ComboBox x:Name="MonitorComboBox" Grid.Column="0"/>
-                        <Button x:Name="IdentifyButton" Grid.Column="1" Content="Identify"
-                                Click="IdentifyButton_Click" Margin="8,0,0,0" Padding="14,6"
+                        <ComboBox Grid.Column="0" ItemsSource="{Binding Monitors}" SelectedItem="{Binding SelectedMonitor}"/>
+                        <Button Grid.Column="1" Content="Identify"
+                                Command="{Binding IdentifyCommand}" Margin="8,0,0,0" Padding="14,6"
                                 ToolTip="Flash a number on the selected display"/>
                     </Grid>
 
@@ -244,34 +245,44 @@
                     <TextBlock Text="Display Type" FontWeight="SemiBold" FontSize="13" Margin="0,0,0,8"/>
                     <Border Background="{StaticResource CardBackground}" CornerRadius="6" Padding="12" Margin="0,0,0,20">
                         <StackPanel>
-                            <RadioButton x:Name="DisplayTypeLcdLed" GroupName="DisplayType" IsChecked="True">
+                            <RadioButton GroupName="DisplayType" IsChecked="{Binding IsLcdLed}">
                                 <StackPanel>
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="LCD (LED backlight)" FontWeight="Medium"/>
-                                        <Border Background="{StaticResource AccentBrush}" CornerRadius="2"
-                                                Padding="5,1" Margin="8,0,0,0" VerticalAlignment="Center">
-                                            <TextBlock Text="MOST COMMON" FontSize="9" FontWeight="SemiBold"/>
-                                        </Border>
-                                    </StackPanel>
+                                    <TextBlock Text="LCD (LED backlight)" FontWeight="Medium"/>
                                     <TextBlock Text="Most modern monitors and TVs"
                                                Foreground="{StaticResource TextDim}" FontSize="11"/>
                                 </StackPanel>
                             </RadioButton>
-                            <RadioButton x:Name="DisplayTypeOled" GroupName="DisplayType" Margin="0,8,0,0">
+                            <RadioButton GroupName="DisplayType" IsChecked="{Binding IsOled}" Margin="0,8,0,0">
                                 <StackPanel>
-                                    <TextBlock Text="OLED" FontWeight="Medium"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="OLED" FontWeight="Medium"/>
+                                        <Border Background="{StaticResource SuccessBrush}" CornerRadius="2"
+                                                Padding="5,1" Margin="8,0,0,0" VerticalAlignment="Center"
+                                                Visibility="{Binding IsOledDetected, Converter={StaticResource BoolToVis}}"
+                                                ToolTip="Identified by name, or by a wide gamut with a reported true-black HDR floor">
+                                            <TextBlock Text="DETECTED" FontSize="9" FontWeight="SemiBold" Foreground="#1E1E1E"/>
+                                        </Border>
+                                    </StackPanel>
                                     <TextBlock Text="Self-emissive pixels, deep blacks"
                                                Foreground="{StaticResource TextDim}" FontSize="11"/>
                                 </StackPanel>
                             </RadioButton>
-                            <RadioButton x:Name="DisplayTypeWideGamut" GroupName="DisplayType" Margin="0,8,0,0">
+                            <RadioButton GroupName="DisplayType" IsChecked="{Binding IsLcdWideGamut}" Margin="0,8,0,0">
                                 <StackPanel>
-                                    <TextBlock Text="LCD (Wide Gamut LED)" FontWeight="Medium"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="LCD (Wide Gamut LED)" FontWeight="Medium"/>
+                                        <Border Background="{StaticResource SuccessBrush}" CornerRadius="2"
+                                                Padding="5,1" Margin="8,0,0,0" VerticalAlignment="Center"
+                                                Visibility="{Binding IsWideGamutDetected, Converter={StaticResource BoolToVis}}"
+                                                ToolTip="This panel's EDID primaries span well past sRGB and it reports an LCD-like black floor">
+                                            <TextBlock Text="DETECTED" FontSize="9" FontWeight="SemiBold" Foreground="#1E1E1E"/>
+                                        </Border>
+                                    </StackPanel>
                                     <TextBlock Text="Professional monitors with extended color"
                                                Foreground="{StaticResource TextDim}" FontSize="11"/>
                                 </StackPanel>
                             </RadioButton>
-                            <RadioButton x:Name="DisplayTypeCcfl" GroupName="DisplayType" Margin="0,8,0,0">
+                            <RadioButton GroupName="DisplayType" IsChecked="{Binding IsLcdCcfl}" Margin="0,8,0,0">
                                 <StackPanel>
                                     <TextBlock Text="LCD (CCFL backlight)" FontWeight="Medium"/>
                                     <TextBlock Text="Older LCD monitors (pre-2012)"
@@ -279,7 +290,7 @@
                                 </StackPanel>
                             </RadioButton>
 
-                            <Border x:Name="OledWarmupHint" Visibility="Collapsed"
+                            <Border Visibility="{Binding IsOledHintVisible, Converter={StaticResource BoolToVis}}"
                                     Background="#2a2418" CornerRadius="4" Padding="10,8" Margin="0,10,0,0">
                                 <TextBlock Foreground="#d9c184" FontSize="11" TextWrapping="Wrap"
                                            Text="OLED tip: calibrate with the panel WARM (30+ minutes of normal use). OLED white drifts a couple of dE while cold and through panel-compensation cycles; calibrating cold bakes the cold state into the profile."/>
@@ -292,10 +303,16 @@
                                     <ColumnDefinition Width="Auto"/>
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
-                                <ComboBox x:Name="CorrectionCombo"/>
-                                <Button x:Name="FindCorrectionButton" Grid.Column="1" Content="Find online…"
+                                <ComboBox ItemsSource="{Binding Corrections}" SelectedItem="{Binding SelectedCorrection}">
+                                    <ComboBox.ItemContainerStyle>
+                                        <Style TargetType="ComboBoxItem" BasedOn="{StaticResource {x:Type ComboBoxItem}}">
+                                            <Setter Property="ToolTip" Value="{Binding Path}"/>
+                                        </Style>
+                                    </ComboBox.ItemContainerStyle>
+                                </ComboBox>
+                                <Button Grid.Column="1" Content="Find online…"
                                         Margin="6,0,0,0" Padding="10,2" Click="FindCorrection_Click"/>
-                                <Button x:Name="BrowseCorrectionButton" Grid.Column="2" Content="Browse…"
+                                <Button Grid.Column="2" Content="Browse…"
                                         Margin="6,0,0,0" Padding="10,2" Click="BrowseCorrection_Click"/>
                             </Grid>
                             <TextBlock Foreground="{StaticResource TextDim}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"
@@ -304,34 +321,9 @@
                             <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                                 <Button x:Name="ManageProfilesButton" Content="Manage installed calibration profiles…"
                                         Padding="10,4" Background="#3D3D3D" Click="ManageProfiles_Click"/>
+                                <Button x:Name="PastReportsButton" Content="Past reports…"
+                                        Padding="10,4" Background="#3D3D3D" Margin="8,0,0,0" Click="PastReports_Click"/>
                             </StackPanel>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- Calibration Workflow -->
-                    <TextBlock Text="Calibration Workflow" FontWeight="SemiBold" FontSize="13" Margin="0,0,0,8"/>
-                    <Border Background="{StaticResource CardBackground}" CornerRadius="6" Padding="12" Margin="0,0,0,20">
-                        <StackPanel>
-                            <RadioButton x:Name="WorkflowFlexible" GroupName="Workflow" IsChecked="True">
-                                <StackPanel>
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="Flexible Calibration" FontWeight="Medium"/>
-                                        <Border Background="{StaticResource AccentBrush}" CornerRadius="2"
-                                                Padding="5,1" Margin="8,0,0,0" VerticalAlignment="Center">
-                                            <TextBlock Text="RECOMMENDED" FontSize="9" FontWeight="SemiBold"/>
-                                        </Border>
-                                    </StackPanel>
-                                    <TextBlock Text="Change gamma anytime without recalibrating. Best for everyday use."
-                                               Foreground="{StaticResource TextDim}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0"/>
-                                </StackPanel>
-                            </RadioButton>
-                            <RadioButton x:Name="WorkflowReference" GroupName="Workflow" Margin="0,8,0,0">
-                                <StackPanel>
-                                    <TextBlock Text="Reference Calibration (Color Critical)" FontWeight="Medium"/>
-                                    <TextBlock Text="Bakes gamma into LUT for maximum accuracy. Requires recalibration to change gamma."
-                                               Foreground="{StaticResource TextDim}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0"/>
-                                </StackPanel>
-                            </RadioButton>
                         </StackPanel>
                     </Border>
 
@@ -339,14 +331,30 @@
                     <TextBlock Text="Calibration Target" FontWeight="SemiBold" FontSize="13" Margin="0,0,0,8"/>
                     <Border Background="{StaticResource CardBackground}" CornerRadius="6" Padding="12" Margin="0,0,0,20">
                         <StackPanel>
-                            <RadioButton x:Name="Target709G22" Content="Rec.709 Gamma 2.2 (sRGB)" IsChecked="True" GroupName="Target"/>
-                            <RadioButton x:Name="Target709G24" Content="Rec.709 Gamma 2.4 (BT.1886)" GroupName="Target"/>
-                            <RadioButton x:Name="TargetP3D65" Content="DCI-P3 D65" GroupName="Target"/>
-                            <RadioButton x:Name="Target2020SDR" Content="BT.2020 SDR (Gamma 2.4)" GroupName="Target"/>
-                            <RadioButton x:Name="TargetHdrPq" Content="HDR Desktop PQ (sRGB gamut) - recommended for HDR" GroupName="Target"/>
-                            <RadioButton x:Name="Target2020PQ" Content="BT.2020 PQ (HDR)" GroupName="Target"/>
+                            <ItemsControl ItemsSource="{Binding Targets}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <RadioButton GroupName="Target" Content="{Binding Label}"
+                                                     IsChecked="{Binding IsSelected}"
+                                                     IsEnabled="{Binding IsEnabled}"
+                                                     ToolTip="{Binding DisabledReason}"
+                                                     ToolTipService.ShowOnDisabled="True">
+                                            <RadioButton.Style>
+                                                <Style TargetType="RadioButton" BasedOn="{StaticResource {x:Type RadioButton}}">
+                                                    <Style.Triggers>
+                                                        <Trigger Property="IsEnabled" Value="False">
+                                                            <Setter Property="Opacity" Value="0.45"/>
+                                                        </Trigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </RadioButton.Style>
+                                        </RadioButton>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
 
-                            <CheckBox x:Name="WhitePointOnlyCheck" Margin="0,12,0,0"
+                            <CheckBox Margin="0,12,0,0" Foreground="White"
+                                      IsChecked="{Binding WhitePointOnly}"
                                       Content="White point correction only (skip gamut re-mapping)"/>
                             <TextBlock Foreground="{StaticResource TextDim}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"
                                        Text="Corrects white point and tone but leaves the panel's color gamut untouched. Recommended when the native gamut already measures close to the target, or on OLEDs in HDR, where the panel's own processing makes full gamut correction overshoot. Auto-suggested for OLED."/>
@@ -357,19 +365,19 @@
                     <TextBlock Text="Calibration Preset" FontWeight="SemiBold" FontSize="13" Margin="0,0,0,8"/>
                     <Border Background="{StaticResource CardBackground}" CornerRadius="6" Padding="12" Margin="0,0,0,20">
                         <StackPanel>
-                            <RadioButton x:Name="PresetQuick" GroupName="Preset">
+                            <RadioButton GroupName="Preset" IsChecked="{Binding IsPresetQuick}">
                                 <StackPanel>
                                     <TextBlock Text="Quick (125 patches)" FontWeight="Medium"/>
                                     <TextBlock Text="~8 minutes • Good accuracy" Foreground="{StaticResource TextDim}" FontSize="11"/>
                                 </StackPanel>
                             </RadioButton>
-                            <RadioButton x:Name="PresetStandard" IsChecked="True" GroupName="Preset" Margin="0,8,0,0">
+                            <RadioButton GroupName="Preset" IsChecked="{Binding IsPresetStandard}" Margin="0,8,0,0">
                                 <StackPanel>
                                     <TextBlock Text="Standard (343 patches)" FontWeight="Medium"/>
                                     <TextBlock Text="~20 minutes • Very good accuracy" Foreground="{StaticResource TextDim}" FontSize="11"/>
                                 </StackPanel>
                             </RadioButton>
-                            <RadioButton x:Name="PresetThorough" GroupName="Preset" Margin="0,8,0,0">
+                            <RadioButton GroupName="Preset" IsChecked="{Binding IsPresetThorough}" Margin="0,8,0,0">
                                 <StackPanel>
                                     <TextBlock Text="Thorough (729 patches)" FontWeight="Medium"/>
                                     <TextBlock Text="~45 minutes • Excellent accuracy" Foreground="{StaticResource TextDim}" FontSize="11"/>
@@ -387,14 +395,14 @@
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <Ellipse x:Name="StatusIndicator" Width="12" Height="12" Fill="{StaticResource WarningBrush}"
+                            <Ellipse Width="12" Height="12" Fill="{Binding StatusBrush}"
                                      VerticalAlignment="Center" Margin="0,0,12,0"/>
                             <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                <TextBlock x:Name="StatusText" Text="Checking..." FontWeight="Medium"/>
-                                <TextBlock x:Name="ColorimeterModelText" Text="" Foreground="{StaticResource TextDim}" FontSize="11"/>
+                                <TextBlock Text="{Binding StatusText}" FontWeight="Medium"/>
+                                <TextBlock Text="{Binding StatusDetailText}" Foreground="{StaticResource TextDim}" FontSize="11"/>
                             </StackPanel>
                             <Button Grid.Column="2" Content="Refresh" Background="#444" Padding="12,6"
-                                    Click="Refresh_Click" VerticalAlignment="Center"/>
+                                    Command="{Binding RefreshColorimeterCommand}" VerticalAlignment="Center"/>
                         </Grid>
                     </Border>
                 </StackPanel>
@@ -408,8 +416,8 @@
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <Button Grid.Column="1" Content="Cancel" Background="#444" Click="Cancel_Click" Margin="0,0,12,0"/>
-                    <Button x:Name="StartButton" Grid.Column="2" Content="Start Calibration" Click="Start_Click" IsEnabled="False"/>
+                    <Button Grid.Column="1" Content="Cancel" Background="#444" Command="{Binding CancelCommand}" Margin="0,0,12,0"/>
+                    <Button Grid.Column="2" Content="Start Calibration" Command="{Binding StartCommand}" IsEnabled="{Binding CanStart}"/>
                 </Grid>
             </Border>
         </Grid>

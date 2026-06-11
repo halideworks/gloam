@@ -44,6 +44,27 @@ namespace HDRGammaController.Core.Calibration
             _nightModeService = nightModeService ?? throw new ArgumentNullException(nameof(nightModeService));
         }
 
+        // Static registry of device paths currently measuring with corrections bypassed,
+        // so UI surfaces (dashboard cards) can label the monitor as mid-calibration
+        // instead of showing its saved profile values as if they were applied.
+        private static readonly object ActiveBypassLock = new();
+        private static readonly HashSet<string> ActiveBypassPaths = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Whether a calibration currently has this display's corrections bypassed.</summary>
+        public static bool IsDeviceInBypass(string? devicePath)
+        {
+            if (string.IsNullOrEmpty(devicePath)) return false;
+            lock (ActiveBypassLock) return ActiveBypassPaths.Contains(devicePath);
+        }
+
+        private void UnregisterActiveBypass()
+        {
+            lock (ActiveBypassLock)
+            {
+                foreach (var path in _savedStates.Keys) ActiveBypassPaths.Remove(path);
+            }
+        }
+
         /// <summary>
         /// Saves the current correction state for a monitor and enters bypass mode.
         /// All color corrections (gamma, night mode, etc.) are disabled for accurate measurement.
@@ -84,6 +105,7 @@ namespace HDRGammaController.Core.Calibration
             }
 
             _wasBypassActive = true;
+            lock (ActiveBypassLock) ActiveBypassPaths.Add(devicePath);
         }
 
         /// <summary>
@@ -137,6 +159,7 @@ namespace HDRGammaController.Core.Calibration
 
             // Resume night mode service
             ResumeNightMode();
+            UnregisterActiveBypass();
             _wasBypassActive = false;
         }
 
@@ -216,6 +239,7 @@ namespace HDRGammaController.Core.Calibration
         public void ExitBypassMode()
         {
             ResumeNightMode();
+            UnregisterActiveBypass();
             _savedStates.Clear();
             _wasBypassActive = false;
         }

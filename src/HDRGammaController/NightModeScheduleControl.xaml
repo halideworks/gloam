@@ -6,6 +6,7 @@
              mc:Ignorable="d" 
              d:DesignHeight="400" d:DesignWidth="480">
     <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
         <!-- Re-use styles from SettingsWindow if possible, or define local ones -->
         <SolidColorBrush x:Key="AccentBrush" Color="#0078D4"/>
         <SolidColorBrush x:Key="CardBorder" Color="#3F3F3F"/>
@@ -81,9 +82,9 @@
                  
                  <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                      <TextBlock Text="Lat:" Foreground="#666" FontSize="11" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                     <TextBox x:Name="LatBox" Width="50" Background="#333" Foreground="#DDD" BorderThickness="0" Padding="4,2" FontSize="11" LostFocus="Location_LostFocus"/>
+                     <TextBox Text="{Binding LatitudeText, UpdateSourceTrigger=PropertyChanged}" Width="50" Background="#333" Foreground="#DDD" BorderThickness="0" Padding="4,2" FontSize="11" LostFocus="Location_LostFocus"/>
                      <TextBlock Text="Lon:" Foreground="#666" FontSize="11" VerticalAlignment="Center" Margin="8,0,4,0"/>
-                     <TextBox x:Name="LonBox" Width="50" Background="#333" Foreground="#DDD" BorderThickness="0" Padding="4,2" FontSize="11" LostFocus="Location_LostFocus"/>
+                     <TextBox Text="{Binding LongitudeText, UpdateSourceTrigger=PropertyChanged}" Width="50" Background="#333" Foreground="#DDD" BorderThickness="0" Padding="4,2" FontSize="11" LostFocus="Location_LostFocus"/>
                  </StackPanel>
             </StackPanel>
         </Grid>
@@ -99,12 +100,13 @@
                         SizeChanged="GraphCanvas_SizeChanged"/>
                         
                  <!-- Drag Readout Popup (In-Canvas Overlay) -->
-                 <Border x:Name="DragOverlay" HorizontalAlignment="Left" VerticalAlignment="Top" 
-                         Background="#202020" BorderBrush="White" BorderThickness="1" CornerRadius="4" 
-                         Padding="8" IsHitTestVisible="False" Visibility="Collapsed">
+                 <Border x:Name="DragOverlay" HorizontalAlignment="Left" VerticalAlignment="Top"
+                         Background="#202020" BorderBrush="White" BorderThickness="1" CornerRadius="4"
+                         Padding="8" IsHitTestVisible="False"
+                         Visibility="{Binding IsDragOverlayVisible, Converter={StaticResource BoolToVis}}">
                      <StackPanel>
-                         <TextBlock x:Name="OverlayTime" Text="22:00" Foreground="White" FontWeight="Bold"/>
-                         <TextBlock x:Name="OverlayTemp" Text="3500K" Foreground="#FFB400"/>
+                         <TextBlock Text="{Binding OverlayTimeText}" Foreground="White" FontWeight="Bold"/>
+                         <TextBlock Text="{Binding OverlayTempText}" Foreground="#FFB400"/>
                      </StackPanel>
                  </Border>
             </Grid>
@@ -121,7 +123,7 @@
                 <Button Content="Reset Default" Click="Reset_Click" Style="{StaticResource SmallBtn}"/>
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                <CheckBox x:Name="UltraWarmCheck" Checked="UltraWarm_Changed" Unchecked="UltraWarm_Changed"
+                <CheckBox IsChecked="{Binding UseUltraWarmMode}"
                           VerticalAlignment="Center" Margin="0,0,6,0"/>
                 <TextBlock Foreground="#CCC" FontSize="11" VerticalAlignment="Center">
                     <Run Text="Ultra Warm" FontWeight="SemiBold"/>
@@ -132,7 +134,8 @@
 
         <!-- List -->
         <!-- Use standard ScrollViewer in parent, allow Grid to auto-size -->
-        <DataGrid x:Name="PointsGrid" Grid.Row="3" Background="#252525" BorderThickness="0" 
+        <DataGrid ItemsSource="{Binding Points}" SelectedItem="{Binding SelectedPoint}"
+                  Grid.Row="3" Background="#252525" BorderThickness="0"
                   AutoGenerateColumns="False" CanUserAddRows="False" HeadersVisibility="Column"
                   GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="#444"
                   RowBackground="Transparent" Foreground="White"
@@ -177,7 +180,7 @@
                     </DataGridTemplateColumn.CellTemplate>
                     <DataGridTemplateColumn.CellEditingTemplate>
                         <DataTemplate>
-                            <ComboBox SelectedItem="{Binding TriggerType}" ItemsSource="{Binding RelativeSource={RelativeSource AncestorType=UserControl}, Path=TriggerTypes}"/>
+                            <ComboBox SelectedItem="{Binding TriggerType}" ItemsSource="{Binding RelativeSource={RelativeSource AncestorType=UserControl}, Path=Vm.TriggerTypes}"/>
                         </DataTemplate>
                     </DataGridTemplateColumn.CellEditingTemplate>
                 </DataGridTemplateColumn>

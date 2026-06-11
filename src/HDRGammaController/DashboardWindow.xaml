@@ -9,13 +9,14 @@
         MaxHeight="900" 
         MinWidth="800" MinHeight="600"
         WindowStartupLocation="CenterScreen"
-        Background="#1E1E1E"
+        Background="Transparent"
         Foreground="White"
         WindowStyle="None"
         AllowsTransparency="True"
         ResizeMode="CanResizeWithGrip">
 
     <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
         <!-- Reusing styles from SettingsWindow for consistency -->
         <SolidColorBrush x:Key="AccentBrush" Color="#0078D4"/>
         <SolidColorBrush x:Key="CardBackground" Color="#2D2D2D"/>
@@ -36,12 +37,48 @@
         <Style TargetType="Button">
             <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
             <Setter Property="Foreground" Value="White"/>
+            <Setter Property="Padding" Value="12,6"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}" CornerRadius="4" Padding="12,6">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Dark checkbox: default WPF chrome renders a light box that clashes with the theme -->
+        <Style TargetType="CheckBox">
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <StackPanel Orientation="Horizontal" Background="Transparent">
+                            <Border x:Name="Box" Width="16" Height="16" CornerRadius="3"
+                                    Background="#3D3D3D" BorderBrush="#666666" BorderThickness="1"
+                                    VerticalAlignment="Center">
+                                <Path x:Name="Check" Data="M3,8 L7,12 L13,4"
+                                      Stroke="White" StrokeThickness="2"
+                                      Visibility="Collapsed"/>
+                            </Border>
+                            <ContentPresenter Margin="6,0,0,0" VerticalAlignment="Center" RecognizesAccessKey="True"/>
+                        </StackPanel>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Box" Property="Background" Value="{StaticResource AccentBrush}"/>
+                                <Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+                                <Setter TargetName="Check" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Box" Property="BorderBrush" Value="#999999"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
@@ -71,6 +108,72 @@
              <Setter Property="BorderThickness" Value="1"/>
              <Setter Property="Padding" Value="6"/>
              <Setter Property="Margin" Value="0,0,8,0"/>
+             <!-- Full template override: the default chrome draws a light dropdown popup
+                  and a light toggle field regardless of Background, so restyling only the
+                  items left the list bright white. -->
+             <Setter Property="Template">
+                 <Setter.Value>
+                     <ControlTemplate TargetType="ComboBox">
+                         <Grid>
+                             <Grid.ColumnDefinitions>
+                                 <ColumnDefinition Width="*"/>
+                                 <ColumnDefinition Width="22"/>
+                             </Grid.ColumnDefinitions>
+
+                             <Border Grid.ColumnSpan="2"
+                                     Background="{TemplateBinding Background}"
+                                     BorderBrush="{TemplateBinding BorderBrush}"
+                                     BorderThickness="{TemplateBinding BorderThickness}"
+                                     CornerRadius="4"/>
+
+                             <ToggleButton Grid.ColumnSpan="2" Focusable="False" ClickMode="Press"
+                                           IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                                 <ToggleButton.Template>
+                                     <ControlTemplate TargetType="ToggleButton">
+                                         <Border Background="Transparent">
+                                             <Path HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                   Margin="0,0,8,0" Data="M0,0 L4,4 L8,0"
+                                                   Stroke="#AAAAAA" StrokeThickness="1.5"/>
+                                         </Border>
+                                     </ControlTemplate>
+                                 </ToggleButton.Template>
+                             </ToggleButton>
+
+                             <ContentPresenter x:Name="ContentSite" Grid.Column="0" IsHitTestVisible="False"
+                                               Content="{TemplateBinding SelectionBoxItem}"
+                                               ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                               Margin="{TemplateBinding Padding}"
+                                               VerticalAlignment="Center" HorizontalAlignment="Left"/>
+
+                             <TextBox x:Name="PART_EditableTextBox" Grid.Column="0" Visibility="Hidden"
+                                      Margin="{TemplateBinding Padding}" Padding="0" BorderThickness="0"
+                                      Background="Transparent" Foreground="White" CaretBrush="White"
+                                      VerticalAlignment="Center" HorizontalAlignment="Stretch"
+                                      Focusable="True" IsReadOnly="{TemplateBinding IsReadOnly}"/>
+
+                             <Popup x:Name="PART_Popup" Grid.ColumnSpan="2" Placement="Bottom"
+                                    IsOpen="{TemplateBinding IsDropDownOpen}"
+                                    AllowsTransparency="True" Focusable="False" PopupAnimation="Fade">
+                                 <Border MaxHeight="{TemplateBinding MaxDropDownHeight}"
+                                         MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
+                                         Background="#2D2D2D"
+                                         BorderBrush="{StaticResource CardBorder}" BorderThickness="1"
+                                         CornerRadius="4" Margin="0,2,0,0">
+                                     <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                         <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained"/>
+                                     </ScrollViewer>
+                                 </Border>
+                             </Popup>
+                         </Grid>
+                         <ControlTemplate.Triggers>
+                             <Trigger Property="IsEditable" Value="True">
+                                 <Setter TargetName="PART_EditableTextBox" Property="Visibility" Value="Visible"/>
+                                 <Setter TargetName="ContentSite" Property="Visibility" Value="Hidden"/>
+                             </Trigger>
+                         </ControlTemplate.Triggers>
+                     </ControlTemplate>
+                 </Setter.Value>
+             </Setter>
              <Setter Property="ItemContainerStyle">
                  <Setter.Value>
                      <Style TargetType="ComboBoxItem">
@@ -163,16 +266,32 @@
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Text="{Binding FriendlyName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
-                        <Border Grid.Column="1" Background="{Binding BadgeColor}" CornerRadius="4" Padding="6,2">
-                            <TextBlock Text="{Binding BadgeText}" FontSize="10" FontWeight="Bold"/>
-                        </Border>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal">
+                            <Border Background="#F59E0B" CornerRadius="4" Padding="6,2" Margin="0,0,6,0"
+                                    Visibility="{Binding IsCalibrating, Converter={StaticResource BoolToVis}}"
+                                    ToolTip="A calibration is measuring this display; its gamma, brightness and temperature settings are bypassed until it finishes">
+                                <TextBlock Text="CALIBRATING" FontSize="10" FontWeight="Bold" Foreground="#1E1E1E"/>
+                            </Border>
+                            <Border Background="{Binding BadgeColor}" CornerRadius="4" Padding="6,2">
+                                <TextBlock Text="{Binding BadgeText}" FontSize="10" FontWeight="Bold"/>
+                            </Border>
+                        </StackPanel>
                     </Grid>
-                    
-                    <!-- Stats -->
+
+                    <!-- Stats (faded while a calibration has this monitor's settings bypassed) -->
                     <StackPanel Grid.Row="1" Margin="0,12,0,0">
+                        <StackPanel.Style>
+                            <Style TargetType="StackPanel">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsCalibrating}" Value="True">
+                                        <Setter Property="Opacity" Value="0.35"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </StackPanel.Style>
                         <TextBlock Text="Gamma Mode:" Foreground="{StaticResource TextDim}" FontSize="11"/>
                         <TextBlock Text="{Binding CurrentGamma}" Margin="0,0,0,8"/>
-                        
+
                         <TextBlock Text="Brightness:" Foreground="{StaticResource TextDim}" FontSize="11"/>
                         <ProgressBar Value="{Binding CurrentBrightness}" Height="4" Margin="0,2,0,4" Background="#444" Foreground="{StaticResource AccentBrush}"/>
                         <TextBlock Text="{Binding CurrentBrightness, StringFormat={}{0}%}" FontSize="12" Margin="0,0,0,8"/>
@@ -180,9 +299,22 @@
                         <TextBlock Text="Color Temp:" Foreground="{StaticResource TextDim}" FontSize="11"/>
                         <TextBlock Text="{Binding CurrentTemperatureText}" FontSize="12"/>
                     </StackPanel>
-                    
+
                     <!-- Actions -->
-                    <Button Grid.Row="2" Content="Configure Settings" Click="Configure_Click" Tag="{Binding}"/>
+                    <Button Grid.Row="2" Content="Configure Settings"
+                            Command="{Binding DataContext.ConfigureMonitorCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                            CommandParameter="{Binding}">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsCalibrating}" Value="True">
+                                        <Setter Property="IsEnabled" Value="False"/>
+                                        <Setter Property="Opacity" Value="0.5"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
                 </Grid>
             </Border>
         </DataTemplate>
@@ -214,7 +346,8 @@
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
                             
-                            <ComboBox x:Name="AppSelector" IsEditable="True" ItemsSource="{Binding RunningApps}" Text="Select running app..." 
+                            <ComboBox IsEditable="True" ItemsSource="{Binding RunningApps}"
+                                      Text="{Binding NewAppText, UpdateSourceTrigger=PropertyChanged}"
                                       Foreground="White" AllowDrop="False" BorderBrush="{StaticResource CardBorder}">
                                 <ComboBox.Resources>
                                     <Style TargetType="TextBox">
@@ -226,7 +359,9 @@
                                 </ComboBox.Resources>
                             </ComboBox>
                                       
-                            <Button Grid.Column="1" Content="Add" Click="AddExcludedApp_Click" CommandParameter="{Binding ElementName=AppSelector}"/>
+                            <Button Grid.Column="1" Content="Add"
+                                    Command="{Binding DataContext.AddExcludedAppCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                    CommandParameter="{Binding}"/>
                         </Grid>
 
                         <!-- List -->
@@ -234,28 +369,26 @@
                                  ScrollViewer.VerticalScrollBarVisibility="Auto">
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
-                                    <Grid Margin="0,4" Background="Transparent">
+                                    <Grid Margin="0,4" Height="28" Background="Transparent">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
+                                        <!-- Same FontSize as the checkbox label: mixed sizes center fine but
+                                             their baselines drift visibly apart in a shared row -->
                                         <TextBlock Text="{Binding AppName}" VerticalAlignment="Center" Margin="8,0" FontSize="12" Foreground="White" FontWeight="Medium"/>
-                                        
-                                        <!-- Full/Global Checkbox -->
-                                        <CheckBox Grid.Column="1" Content="Block All Screens" IsChecked="{Binding FullDisable}" 
-                                                  VerticalAlignment="Center" Margin="0,0,12,0" Foreground="#AAA" FontSize="11"
-                                                  Click="ExcludedAppMode_Click"/>
 
-                                        <Button Grid.Column="2" Content="✕" Width="24" Height="24" 
-                                                Padding="0" Background="#333" Foreground="#FFF" BorderThickness="0"
-                                                Cursor="Hand" Click="RemoveExcludedApp_Click" Tag="{Binding AppName}">
-                                                 <Button.Resources>
-                                                     <Style TargetType="Border">
-                                                         <Setter Property="CornerRadius" Value="12"/>
-                                                     </Style>
-                                                 </Button.Resources>
-                                        </Button>
+                                        <!-- Full/Global Checkbox -->
+                                        <CheckBox Grid.Column="1" Content="Block All Screens" IsChecked="{Binding FullDisable}"
+                                                  VerticalAlignment="Center" Margin="0,0,12,0" Foreground="#AAA" FontSize="12"
+                                                  Command="{Binding DataContext.SaveExcludedAppsCommand, RelativeSource={RelativeSource AncestorType=Window}}"/>
+
+                                        <Button Grid.Column="2" Content="✕" Width="24" Height="24"
+                                                Padding="0" Background="#4A4A4A" Foreground="#FFF" BorderThickness="0"
+                                                Cursor="Hand" VerticalAlignment="Center"
+                                                Command="{Binding DataContext.RemoveExcludedAppCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                CommandParameter="{Binding}"/>
                                     </Grid>
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
@@ -299,20 +432,19 @@
                     </Grid.ColumnDefinitions>
                     
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Text="Active Monitors" FontSize="18" FontWeight="SemiBold"/>
-                        <Button Content="Refresh" Margin="16,0,0,0" Click="Refresh_Click" Padding="8,4" Background="#444"/>
-                    </StackPanel>
-                    
-                    <ToggleButton x:Name="NightModeToggle" Grid.Column="2" Content="Night Mode" 
-                                  Width="320" Height="36" Padding="20,0" HorizontalAlignment="Right"
-                                  IsChecked="{Binding IsNightModeEnabled, Mode=OneWay}"
-                                  Click="NightModeToggle_Click" MouseRightButtonUp="NightModeToggle_RightClick">
+                        <TextBlock Text="Active Monitors" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        <Button Content="Refresh" Margin="16,0,0,0" Command="{Binding RefreshCommand}" Padding="8,4" Background="#444" VerticalAlignment="Center"/>
+
+                    <ToggleButton x:Name="NightModeToggle" Content="Night Mode"
+                                  Margin="8,0,0,0" Height="28" Padding="16,0" VerticalAlignment="Center"
+                                  IsChecked="{Binding IsNightModeEnabled}"
+                                  MouseRightButtonUp="NightModeToggle_RightClick">
                          <ToggleButton.Style>
                              <Style TargetType="ToggleButton">
                                  <Setter Property="Template">
                                      <Setter.Value>
                                          <ControlTemplate TargetType="ToggleButton">
-                                             <Border x:Name="border" Background="#444" CornerRadius="4">
+                                             <Border x:Name="border" Background="#444" CornerRadius="4" Padding="{TemplateBinding Padding}">
                                                  <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                              </Border>
                                              <ControlTemplate.Triggers>
@@ -329,17 +461,18 @@
                          </ToggleButton.Style>
                          <ToggleButton.ContextMenu>
                              <ContextMenu>
-                                 <MenuItem Header="Pause for 1 Hour" Click="Pause1h_Click"/>
-                                 <MenuItem Header="Pause for 4 Hours" Click="Pause4h_Click"/>
-                                 <MenuItem Header="Pause Until Morning" Click="PauseUntilMorning_Click"/>
+                                 <MenuItem Header="Pause for 1 Hour" Command="{Binding Pause1hCommand}"/>
+                                 <MenuItem Header="Pause for 4 Hours" Command="{Binding Pause4hCommand}"/>
+                                 <MenuItem Header="Pause Until Morning" Command="{Binding PauseUntilMorningCommand}"/>
                              </ContextMenu>
                          </ToggleButton.ContextMenu>
                     </ToggleButton>
+                    </StackPanel>
                 </Grid>
 
                 <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
                     <StackPanel>
-                        <ItemsControl x:Name="MonitorList">
+                        <ItemsControl ItemsSource="{Binding Items}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
                                     <WrapPanel />

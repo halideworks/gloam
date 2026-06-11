@@ -1,0 +1,726 @@
+using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.IO;
+using System.Linq;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Input;
+using System.Windows.Media;
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using HDRGammaController.Core;
+using HDRGammaController.Core.Calibration;
+using HDRGammaController.Services;
+using static HDRGammaController.Core.Calibration.PatchSetGenerator;
+
+namespace HDRGammaController.ViewModels
+{
+    /// <summary>One selectable calibration target with gamut/HDR availability state.</summary>
+    public class TargetOption : ObservableObject
+    {
+        public string Label { get; }
+        public CalibrationTarget Target { get; }
+        public bool RequiresHdr { get; }
+
+        private bool _isSelected;
+        public bool IsSelected
+        {
+            get => _isSelected;
+            set => SetProperty(ref _isSelected, value);
+        }
+
+        private bool _isEnabled = true;
+        public bool IsEnabled
+        {
+            get => _isEnabled;
+            set => SetProperty(ref _isEnabled, value);
+        }
+
+        private string? _disabledReason;
+        public string? DisabledReason
+        {
+            get => _disabledReason;
+            set => SetProperty(ref _disabledReason, value);
+        }
+
+        public TargetOption(string label, CalibrationTarget target, bool requiresHdr)
+        {
+            Label = label;
+            Target = target;
+            RequiresHdr = requiresHdr;
+        }
+    }
+
+    /// <summary>A meter correction file choice; null Path means the built-in correction.</summary>
+    public class CorrectionChoice
+    {
+        public string Label { get; }
+        public string? Path { get; }
+
+        public CorrectionChoice(string label, string? path)
+        {
+            Label = label;
+            Path = path;
+        }
+
+        // Templated ComboBoxes render the closed-state selection box via ToString().
+        public override string ToString() => Label;
+    }
+
+    public class CalibrationSetupViewModel : ObservableObject
+    {
+        private static readonly Brush SuccessBrush = CreateFrozen(Color.FromRgb(0x22, 0xC5, 0x5E));
+        private static readonly Brush WarningBrush = CreateFrozen(Color.FromRgb(0xF5, 0x9E, 0x0B));
+        private static readonly Brush ErrorBrush = CreateFrozen(Color.FromRgb(0xEF, 0x44, 0x44));
+
+        private static Brush CreateFrozen(Color c)
+        {
+            var b = new SolidColorBrush(c);
+            b.Freeze();
+            return b;
+        }
+
+        private readonly List<MonitorInfo> _monitors;
+        private readonly SettingsManager? _settingsManager;
+        private bool _loadingPrefs;
+
+        public ObservableCollection<MonitorChoice> Monitors { get; }
+        public ObservableCollection<TargetOption> Targets { get; }
+        public ObservableCollection<CorrectionChoice> Corrections { get; } = new();
+
+        public ICommand IdentifyCommand { get; }
+        public ICommand RefreshColorimeterCommand { get; }
+        public ICommand StartCommand { get; }
+        public ICommand CancelCommand { get; }
+
+        /// <summary>Raised when the dialog should close, with the DialogResult to set.</summary>
+        public event Action<bool>? CloseRequested;
+
+        /// <summary>
+        /// Set by the view: shows the Argyll download dialog for the given reason and
+        /// returns whether the download succeeded.
+        /// </summary>
+        public Func<string, bool>? OfferArgyllDownload { get; set; }
+
+        public ColorimeterService? ColorimeterService { get; private set; }
+
+        // Results read by the caller after the dialog closes with true.
+        public CalibrationTarget? ResultTarget { get; private set; }
+        public CalibrationPreset ResultPreset { get; private set; }
+        public MonitorInfo? ResultMonitor { get; private set; }
+        public DisplayType ResultDisplayType { get; private set; }
+
+        /// <summary>
+        /// User's drop-folder for meter correction files; created so there's an obvious
+        /// place to put downloaded .ccss/.ccmx files.
+        /// </summary>
+        public static string CorrectionsFolder => System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "HDRGammaController", "corrections");
+
+        public CalibrationSetupViewModel(List<MonitorInfo> monitors, SettingsManager? settingsManager)
+        {
+            _monitors = monitors;
+            _settingsManager = settingsManager;
+
+            Targets = new ObservableCollection<TargetOption>
+            {
+                new("Rec.709 Gamma 2.2 (sRGB)", StandardTargets.SrgbGamma22, requiresHdr: false) { IsSelected = true },
+                new("Rec.709 Gamma 2.4 (BT.1886)", StandardTargets.Rec709Gamma24, requiresHdr: false),
+                new("DCI-P3 D65", StandardTargets.P3D65Gamma22, requiresHdr: false),
+                new("BT.2020 SDR (Gamma 2.4)", StandardTargets.Rec2020Gamma24, requiresHdr: false),
+                new("HDR Desktop PQ (sRGB gamut) - recommended for HDR", StandardTargets.Rec709Pq, requiresHdr: true),
+                new("BT.2020 PQ (HDR)", StandardTargets.Rec2020Pq, requiresHdr: true),
+            };
+
+            PopulateCorrectionFiles();
+
+            Monitors = new ObservableCollection<MonitorChoice>(monitors.Select(m => new MonitorChoice(m)));
+            _selectedMonitor = Monitors.FirstOrDefault();
+            if (_selectedMonitor != null)
+            {
+                LoadPrefsForSelectedMonitor();
+            }
+
+            IdentifyCommand = new RelayCommand(IdentifySelectedMonitor);
+            RefreshColorimeterCommand = new AsyncRelayCommand(RefreshColorimeterAsync);
+            StartCommand = new RelayCommand(Start);
+            CancelCommand = new RelayCommand(() => CloseRequested?.Invoke(false));
+        }
+
+        /// <summary>Identify flash + colorimeter detection; called once from the view's Loaded.</summary>
+        public async Task OnLoadedAsync()
+        {
+            IdentifySelectedMonitor();
+            await InitializeColorimeterAsync();
+        }
+
+        private MonitorChoice? _selectedMonitor;
+        public MonitorChoice? SelectedMonitor
+        {
+            get => _selectedMonitor;
+            set
+            {
+                if (value == null || ReferenceEquals(value, _selectedMonitor)) return;
+                _selectedMonitor = value;
+                OnPropertyChanged();
+
+                // Flash a big "this is the display" overlay on the chosen monitor whenever the
+                // selection changes, so it's unambiguous which physical screen will be
+                // calibrated - critical when two identical displays are attached.
+                IdentifySelectedMonitor();
+                LoadPrefsForSelectedMonitor();
+            }
+        }
+
+        #region Display type
+
+        private DisplayType _displayType = DisplayType.LcdLed;
+
+        public bool IsLcdLed { get => _displayType == DisplayType.LcdLed; set { if (value) SetDisplayType(DisplayType.LcdLed); } }
+        public bool IsOled { get => _displayType == DisplayType.Oled; set { if (value) SetDisplayType(DisplayType.Oled); } }
+        public bool IsLcdWideGamut { get => _displayType == DisplayType.LcdWideGamut; set { if (value) SetDisplayType(DisplayType.LcdWideGamut); } }
+        public bool IsLcdCcfl { get => _displayType == DisplayType.LcdCcfl; set { if (value) SetDisplayType(DisplayType.LcdCcfl); } }
+
+        public bool IsOledHintVisible => _displayType == DisplayType.Oled;
+
+        private DisplayType? _detectedDisplayType;
+
+        /// <summary>What the panel looks like from EDID; drives the DETECTED badges.</summary>
+        public DisplayType? DetectedDisplayType
+        {
+            get => _detectedDisplayType;
+            private set
+            {
+                if (SetProperty(ref _detectedDisplayType, value))
+                {
+                    OnPropertyChanged(nameof(IsOledDetected));
+                    OnPropertyChanged(nameof(IsWideGamutDetected));
+                }
+            }
+        }
+
+        public bool IsOledDetected => _detectedDisplayType == DisplayType.Oled;
+        public bool IsWideGamutDetected => _detectedDisplayType == DisplayType.LcdWideGamut;
+
+        /// <summary>
+        /// Best-effort panel-type detection from what the monitor reports about itself.
+        /// OLED: the EDID name says so, OR the panel is wide gamut AND reports a
+        /// true-black HDR floor (emissive; LCDs report a real backlight floor - measured
+        /// examples: MAG 271QPX QD-OLED 0.000 nits vs M27Q P IPS 0.384 nits). Wide
+        /// gamut: EDID primaries span well past sRGB (P3-class is ~1.35x the sRGB
+        /// triangle). SDR-mode OLED TVs are undetectable: they report Rec.709 primaries
+        /// and no HDR metadata until switched to HDR.
+        /// </summary>
+        private static DisplayType? DetectPanelType(MonitorInfo monitor)
+        {
+            DisplayType? result = null;
+
+            double areaRatio = 0;
+            var g = monitor.EdidColor;
+            if (g != null)
+            {
+                const double srgbArea = 0.11205; // sRGB primaries triangle in xy
+                areaRatio = TriangleArea(g.RedX, g.RedY, g.GreenX, g.GreenY, g.BlueX, g.BlueY) / srgbArea;
+            }
+
+            if (monitor.FriendlyName?.IndexOf("OLED", StringComparison.OrdinalIgnoreCase) >= 0)
+                result = DisplayType.Oled;
+            else if (areaRatio >= 1.2 && monitor.HdrPeakNits > 0 && monitor.HdrMinNits <= 0.05)
+                result = DisplayType.Oled; // wide gamut + true black = emissive
+            else if (areaRatio >= 1.2)
+                result = DisplayType.LcdWideGamut;
+
+            Log.Info($"CalibrationSetup: panel detect '{monitor.FriendlyName}': gamut {areaRatio:F2}x sRGB, " +
+                     $"HDR range {monitor.HdrMinNits:F3}-{monitor.HdrPeakNits:F0} nits -> {(result?.ToString() ?? "no detection")}");
+            return result;
+        }
+
+        private static double TriangleArea(double x1, double y1, double x2, double y2, double x3, double y3)
+            => Math.Abs(x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2)) / 2.0;
+
+        private void SetDisplayType(DisplayType type)
+        {
+            if (_displayType == type) return;
+            _displayType = type;
+            OnPropertyChanged(nameof(IsLcdLed));
+            OnPropertyChanged(nameof(IsOled));
+            OnPropertyChanged(nameof(IsLcdWideGamut));
+            OnPropertyChanged(nameof(IsLcdCcfl));
+            OnPropertyChanged(nameof(IsOledHintVisible));
+
+            // OLED panels in HDR overshoot with full gamut correction (their processing is
+            // nonlinear); suggest white-point-only when the user picks OLED. Suggestion only:
+            // the user can still untick it.
+            if (type == DisplayType.Oled && !_loadingPrefs)
+            {
+                WhitePointOnly = true;
+            }
+        }
+
+        #endregion
+
+        #region Preset
+
+        private CalibrationPreset _preset = CalibrationPreset.Standard;
+
+        public bool IsPresetQuick { get => _preset == CalibrationPreset.Quick; set { if (value) SetPreset(CalibrationPreset.Quick); } }
+        public bool IsPresetStandard { get => _preset == CalibrationPreset.Standard; set { if (value) SetPreset(CalibrationPreset.Standard); } }
+        public bool IsPresetThorough { get => _preset == CalibrationPreset.Thorough; set { if (value) SetPreset(CalibrationPreset.Thorough); } }
+
+        private void SetPreset(CalibrationPreset preset)
+        {
+            if (_preset == preset) return;
+            _preset = preset;
+            OnPropertyChanged(nameof(IsPresetQuick));
+            OnPropertyChanged(nameof(IsPresetStandard));
+            OnPropertyChanged(nameof(IsPresetThorough));
+        }
+
+        #endregion
+
+        private bool _whitePointOnly;
+        public bool WhitePointOnly
+        {
+            get => _whitePointOnly;
+            set => SetProperty(ref _whitePointOnly, value);
+        }
+
+        private CorrectionChoice? _selectedCorrection;
+        public CorrectionChoice? SelectedCorrection
+        {
+            get => _selectedCorrection;
+            set => SetProperty(ref _selectedCorrection, value);
+        }
+
+        #region Colorimeter status
+
+        private string _statusText = "Checking...";
+        public string StatusText
+        {
+            get => _statusText;
+            set => SetProperty(ref _statusText, value);
+        }
+
+        private string _statusDetailText = "";
+        public string StatusDetailText
+        {
+            get => _statusDetailText;
+            set => SetProperty(ref _statusDetailText, value);
+        }
+
+        private Brush _statusBrush = WarningBrush;
+        public Brush StatusBrush
+        {
+            get => _statusBrush;
+            set => SetProperty(ref _statusBrush, value);
+        }
+
+        private bool _canStart;
+        public bool CanStart
+        {
+            get => _canStart;
+            set => SetProperty(ref _canStart, value);
+        }
+
+        #endregion
+
+        /// <summary>
+        /// Fills the meter-correction list with every .ccss/.ccmx found in the usual
+        /// places: our corrections folder, Argyll's per-user instrument data (where
+        /// oeminst installs converted X-Rite EDRs), and the app directory.
+        /// </summary>
+        private void PopulateCorrectionFiles()
+        {
+            Corrections.Clear();
+            Corrections.Add(new CorrectionChoice("(Built-in for display type)", null));
+
+            var dirs = new[]
+            {
+                CorrectionsFolder,
+                System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ArgyllCMS"),
+                AppContext.BaseDirectory,
+            };
+            try { Directory.CreateDirectory(CorrectionsFolder); } catch { }
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var dir in dirs)
+            {
+                try
+                {
+                    if (!Directory.Exists(dir)) continue;
+                    foreach (var pattern in new[] { "*.ccss", "*.ccmx" })
+                        foreach (var file in Directory.GetFiles(dir, pattern, SearchOption.AllDirectories))
+                            if (seen.Add(file))
+                                Corrections.Add(new CorrectionChoice(System.IO.Path.GetFileName(file), file));
+                }
+                catch { /* unreadable dir - skip */ }
+            }
+            _selectedCorrection = Corrections[0];
+        }
+
+        /// <summary>
+        /// Selects the given correction path in the list, optionally adding it when it's
+        /// a file we haven't discovered (fresh download or manual browse).
+        /// </summary>
+        public void SelectCorrectionPath(string? path, bool addIfMissing)
+        {
+            if (string.IsNullOrEmpty(path))
+            {
+                SelectedCorrection = Corrections[0];
+                return;
+            }
+            var existing = Corrections.FirstOrDefault(c => string.Equals(c.Path, path, StringComparison.OrdinalIgnoreCase));
+            if (existing != null)
+            {
+                SelectedCorrection = existing;
+            }
+            else if (addIfMissing && File.Exists(path))
+            {
+                var choice = new CorrectionChoice(System.IO.Path.GetFileName(path), path);
+                Corrections.Add(choice);
+                SelectedCorrection = choice;
+            }
+            else
+            {
+                SelectedCorrection = Corrections[0];
+            }
+        }
+
+        /// <summary>
+        /// Restores the monitor's last calibration-setup choices: meter correction file,
+        /// display type, and white-point-only scope. Users shouldn't have to re-pick OLED
+        /// and the CCSS for the same panel every session.
+        /// </summary>
+        private void LoadPrefsForSelectedMonitor()
+        {
+            var monitor = _selectedMonitor?.Model;
+            if (monitor != null)
+            {
+                UpdateTargetAvailability(monitor);
+            }
+
+            var prefs = monitor != null && _settingsManager != null
+                ? _settingsManager.GetMonitorProfile(monitor.MonitorDevicePath ?? "")
+                : null;
+
+            SelectCorrectionPath(prefs?.MeterCorrectionPath, addIfMissing: !string.IsNullOrEmpty(prefs?.MeterCorrectionPath));
+
+            DetectedDisplayType = monitor != null ? DetectPanelType(monitor) : null;
+
+            _loadingPrefs = true;
+            try
+            {
+                if (Enum.TryParse(prefs?.CalibDisplayType, out DisplayType savedType))
+                {
+                    // A saved explicit choice wins over detection.
+                    SetDisplayType(savedType);
+                }
+                else if (DetectedDisplayType is DisplayType detected)
+                {
+                    SetDisplayType(detected);
+                    // First time on a detected OLED: apply the white-point-only
+                    // suggestion the manual OLED pick would have made.
+                    if (detected == DisplayType.Oled)
+                    {
+                        WhitePointOnly = true;
+                    }
+                }
+
+                // A saved explicit white-point-only choice wins over the OLED suggestion.
+                if (prefs?.CalibWhitePointOnly is bool savedWpOnly)
+                {
+                    WhitePointOnly = savedWpOnly;
+                }
+            }
+            finally
+            {
+                _loadingPrefs = false;
+            }
+        }
+
+        private void IdentifySelectedMonitor()
+        {
+            if (_selectedMonitor == null) return;
+            DisplayIdentify.Flash(_selectedMonitor.Model, Monitors.IndexOf(_selectedMonitor) + 1);
+            UpdateTargetAvailability(_selectedMonitor.Model);
+        }
+
+        /// <summary>
+        /// Greys out calibration targets the selected display can't reach (per its EDID gamut),
+        /// and HDR-only targets when the display isn't in HDR - so the user only picks settings
+        /// that will actually apply, before spending a calibration on them.
+        /// </summary>
+        private void UpdateTargetAvailability(MonitorInfo monitor)
+        {
+            var gamut = monitor.EdidColor;
+            bool hdr = monitor.IsHdrActive;
+
+            foreach (var option in Targets)
+            {
+                string? reason = null;
+                if (option.RequiresHdr && !hdr)
+                    reason = "Requires the display to be in HDR mode.";
+                else if (!option.RequiresHdr && hdr)
+                    reason = "This is an SDR target; switch the display to SDR to use it.";
+                else if (gamut != null && !TargetFitsGamut(option.Target, gamut))
+                    reason = "Exceeds this display's gamut - it can't reproduce these primaries.";
+
+                option.IsEnabled = reason == null;
+                option.DisabledReason = reason;
+            }
+
+            // If the currently-checked target just got disabled, fall back to the first target
+            // that is still enabled (sRGB in SDR mode, the HDR desktop target in HDR mode).
+            var selected = Targets.FirstOrDefault(t => t.IsSelected);
+            if (selected != null && !selected.IsEnabled)
+            {
+                var fallback = Targets.FirstOrDefault(t => t.IsEnabled);
+                if (fallback != null) fallback.IsSelected = true;
+            }
+        }
+
+        /// <summary>
+        /// Whether the display can reasonably reach the target, using the SAME drive-value
+        /// metric as the apply-time gamut guard (so setup and apply agree). We build the
+        /// display's RGB→XYZ from its EDID primaries, derive the correction matrix toward the
+        /// target, and ask how hard it drives the channels for the target's primaries/white.
+        /// A small overshoot (e.g. a 98%-P3 panel reaching for P3's green corner) is fine; only
+        /// a genuinely wider gamut (Rec.2020 on a P3 panel) blows past the limit.
+        /// </summary>
+        private static bool TargetFitsGamut(CalibrationTarget t, EdidColorInfo g)
+        {
+            try
+            {
+                var displayRgbToXyz = ColorMath.CalculateRgbToXyzMatrix(
+                    new Chromaticity(g.RedX, g.RedY), new Chromaticity(g.GreenX, g.GreenY),
+                    new Chromaticity(g.BlueX, g.BlueY), new Chromaticity(g.WhiteX, g.WhiteY));
+                // Same ABSOLUTE construction as Mhc2ProfileBuilder.BuildGamutMatrix, so setup
+                // and apply measure the same drive values.
+                var matrix = ColorMath.MultiplyMatrices(ColorMath.Invert3x3(displayRgbToXyz), t.RgbToXyzMatrix);
+
+                double max = 0;
+                (double, double, double)[] contents = { (1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 1) };
+                foreach (var (a, b, c) in contents)
+                    for (int r = 0; r < 3; r++)
+                        max = Math.Max(max, matrix[r, 0] * a + matrix[r, 1] * b + matrix[r, 2] * c);
+                // Matches the installer's gamut guard threshold so setup and apply never disagree.
+                return max <= 1.3;
+            }
+            catch
+            {
+                return true; // if the EDID is unusable, don't block - the apply guard still protects.
+            }
+        }
+
+        #region Colorimeter init
+
+        private async Task InitializeColorimeterAsync()
+        {
+            StatusText = "Finding ArgyllCMS...";
+            StatusBrush = WarningBrush;
+            StatusDetailText = "";
+
+            try
+            {
+                string? argyllBinPath;
+
+                // First check if we have our own downloaded version (preferred)
+                if (ArgyllDownloader.IsInstalled())
+                {
+                    argyllBinPath = ArgyllDownloader.LocalArgyllBinDir;
+                    Log.Info($"CalibrationSetupViewModel: Using our downloaded ArgyllCMS from {argyllBinPath}");
+                }
+                else
+                {
+                    // Check if there's any ArgyllCMS available (might be old version from DisplayCAL)
+                    argyllBinPath = ArgyllPathFinder.FindArgyllBinPath();
+
+                    if (string.IsNullOrEmpty(argyllBinPath))
+                    {
+                        // No ArgyllCMS found at all - offer to download
+                        OfferDownload("ArgyllCMS (required for colorimeter calibration) was not found.");
+                    }
+                    else
+                    {
+                        // Found some ArgyllCMS, but it might be old - check the version
+                        string versionInfo = ExtractVersionFromPath(argyllBinPath);
+                        if (IsOldVersion(versionInfo))
+                        {
+                            Log.Info($"CalibrationSetupViewModel: Found old ArgyllCMS version: {versionInfo}");
+                            OfferDownload(
+                                $"Found ArgyllCMS {versionInfo}, but a newer version ({ArgyllDownloader.ArgyllVersion}) is recommended for better compatibility.");
+                        }
+                    }
+
+                    // After potential download, prefer our version if now installed
+                    argyllBinPath = ArgyllDownloader.IsInstalled()
+                        ? ArgyllDownloader.LocalArgyllBinDir
+                        : ArgyllPathFinder.FindArgyllBinPath();
+
+                    if (string.IsNullOrEmpty(argyllBinPath))
+                    {
+                        StatusText = "ArgyllCMS not installed";
+                        StatusBrush = ErrorBrush;
+                        StatusDetailText = "Click Refresh to try downloading again";
+                        CanStart = false;
+                        return;
+                    }
+                }
+
+                // Show that we found ArgyllCMS and log the version info
+                StatusText = "Searching for colorimeter...";
+                string binDirName = System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(argyllBinPath) ?? argyllBinPath);
+                StatusDetailText = $"Using: {binDirName}";
+                Log.Info($"CalibrationSetupViewModel: Using ArgyllCMS from {argyllBinPath}");
+
+                ColorimeterService = new ColorimeterService(argyllBinPath);
+
+                // Add timeout for initialization
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                try
+                {
+                    await ColorimeterService.InitializeAsync(cts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    StatusText = "Detection timed out";
+                    StatusBrush = ErrorBrush;
+                    StatusDetailText = "Check colorimeter connection and USB drivers";
+                    CanStart = false;
+                    return;
+                }
+
+                UpdateColorimeterStatus();
+            }
+            catch (Exception ex)
+            {
+                StatusText = $"Error: {ex.Message}";
+                StatusBrush = ErrorBrush;
+                StatusDetailText = "Check console for details";
+                Log.Info($"Colorimeter initialization error: {ex}");
+                CanStart = false;
+            }
+        }
+
+        private void OfferDownload(string reason)
+        {
+            // Already have our version installed, nothing to do
+            if (ArgyllDownloader.IsInstalled()) return;
+            if (OfferArgyllDownload == null) return;
+
+            if (OfferArgyllDownload(reason))
+            {
+                StatusText = "Download complete";
+                StatusBrush = SuccessBrush;
+                StatusDetailText = "ArgyllCMS installed successfully";
+            }
+            else
+            {
+                Log.Info("ArgyllCMS download was cancelled or failed");
+            }
+        }
+
+        private async Task RefreshColorimeterAsync()
+        {
+            StatusText = "Searching...";
+            StatusBrush = WarningBrush;
+            StatusDetailText = "";
+            CanStart = false;
+
+            if (ColorimeterService != null)
+            {
+                await ColorimeterService.InitializeAsync();
+                UpdateColorimeterStatus();
+            }
+            else
+            {
+                await InitializeColorimeterAsync();
+            }
+        }
+
+        private void UpdateColorimeterStatus()
+        {
+            if (ColorimeterService == null)
+            {
+                StatusText = "Colorimeter service unavailable";
+                StatusBrush = ErrorBrush;
+                StatusDetailText = "";
+                CanStart = false;
+                return;
+            }
+
+            if (ColorimeterService.IsReady)
+            {
+                StatusText = "Connected and ready";
+                StatusBrush = SuccessBrush;
+                StatusDetailText = ColorimeterService.ConnectedColorimeter?.Model ?? "Unknown model";
+                CanStart = true;
+            }
+            else
+            {
+                StatusText = "No colorimeter detected";
+                StatusBrush = WarningBrush;
+                StatusDetailText = "Connect your colorimeter and click Refresh";
+                CanStart = false;
+            }
+        }
+
+        #endregion
+
+        /// <summary>
+        /// Extracts version string from ArgyllCMS path (e.g., "V2.3.1" from path containing "Argyll_V2.3.1").
+        /// </summary>
+        private static string ExtractVersionFromPath(string path)
+        {
+            var match = Regex.Match(path, @"Argyll_V?(\d+\.\d+\.?\d*)", RegexOptions.IgnoreCase);
+            if (match.Success)
+                return "V" + match.Groups[1].Value;
+            return "unknown";
+        }
+
+        /// <summary>
+        /// Checks if the given version is older than our minimum recommended version (V3.0.0).
+        /// </summary>
+        private static bool IsOldVersion(string versionInfo)
+        {
+            if (versionInfo == "unknown")
+                return true;
+
+            var match = Regex.Match(versionInfo, @"V?(\d+)\.(\d+)");
+            if (!match.Success)
+                return true;
+
+            int major = int.Parse(match.Groups[1].Value);
+            // V3.0.0+ is considered modern
+            return major < 3;
+        }
+
+        private void Start()
+        {
+            ResultMonitor = _selectedMonitor?.Model ?? (_monitors.Count > 0 ? _monitors[0] : null);
+
+            var target = Targets.FirstOrDefault(t => t.IsSelected)?.Target ?? StandardTargets.SrgbGamma22;
+            ResultTarget = WhitePointOnly ? target.AsWhitePointOnly() : target;
+            ResultPreset = _preset;
+            ResultDisplayType = _displayType;
+            ColorimeterService?.SetDisplayType(_displayType);
+
+            // Meter spectral correction: applied to this session; all setup choices are
+            // remembered per monitor for the next session.
+            string? correction = SelectedCorrection?.Path;
+            ColorimeterService?.SetCorrectionFile(correction);
+            if (ResultMonitor != null)
+                _settingsManager?.SetCalibrationPrefs(
+                    ResultMonitor.MonitorDevicePath, correction,
+                    _displayType.ToString(), WhitePointOnly);
+
+            Log.Info($"CalibrationSetup.Start: Monitor={ResultMonitor?.FriendlyName ?? "null"}, Target={ResultTarget?.Name ?? "null"}, DisplayType={_displayType}, " +
+                     $"Correction={(correction != null ? System.IO.Path.GetFileName(correction) : "built-in")}, Colorimeter={(ColorimeterService != null ? "present" : "null")}");
+
+            CloseRequested?.Invoke(true);
+        }
+    }
+}

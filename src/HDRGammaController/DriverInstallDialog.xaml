@@ -4,7 +4,7 @@
         Title="Install USB Drivers"
         Height="340" Width="500"
         WindowStartupLocation="CenterOwner"
-        Background="#1E1E1E"
+        Background="Transparent"
         Foreground="White"
         WindowStyle="None"
         AllowsTransparency="True"

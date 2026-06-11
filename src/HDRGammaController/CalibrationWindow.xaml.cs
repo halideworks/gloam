@@ -11,6 +11,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using HDRGammaController.Core;
 using HDRGammaController.Core.Calibration;
+using HDRGammaController.ViewModels;
 using static HDRGammaController.Core.Calibration.PatchSetGenerator;
 
 namespace HDRGammaController
@@ -80,7 +81,6 @@ namespace HDRGammaController
         private bool _bypassApplied;
         private bool _measuredInHdr;
 
-        private bool _isFullScreenMode = true;
         private int _patchSize = 600;
         // FP16 scRGB renderer for HDR wire-ladder patches (ColorPatch.Nits). Created lazily
         // over the WPF patch area when the first wire patch displays; disposed when a normal
@@ -113,6 +113,9 @@ namespace HDRGammaController
         // default to a few rounds so calibration produces a real before/after.
         private int _refinementRounds = 3;
 
+        // Animated "Shutting down calibration..." wait dialog while a cancel drains
+        private BusyDialog? _shutdownDialog;
+
         // Patch placement offset (shared by positioning + measurement patches)
         private double _patchOffsetX, _patchOffsetY;
         private bool _isDraggingPatch;
@@ -133,6 +136,12 @@ namespace HDRGammaController
         /// </summary>
         public event EventHandler? CalibrationCancelled;
 
+        /// <summary>
+        /// Raised when the user wants to go back to the setup window to adjust choices.
+        /// The window closes itself after raising this.
+        /// </summary>
+        public event EventHandler? BackRequested;
+
         #endregion
 
         #region Constructor
@@ -140,11 +149,15 @@ namespace HDRGammaController
         public CalibrationWindow()
         {
             InitializeComponent();
+            DataContext = Vm;
             // Keep the patch opaque if the user (or a stray hover) triggers Aero Peek mid-run,
             // so the probe never reads the desktop instead of the patch.
             Services.WindowTheme.ExcludeFromPeek(this);
             _calibrationPreset = CalibrationPreset.Standard;
         }
+
+        /// <summary>All display state the XAML binds to.</summary>
+        public CalibrationViewModel Vm { get; } = new CalibrationViewModel();
 
         public CalibrationWindow(ColorimeterService colorimeterService, CalibrationTarget target, CalibrationPreset preset)
             : this()
@@ -158,8 +171,8 @@ namespace HDRGammaController
             _totalPatches = _patches.Count;
 
             // Update UI
-            PatchCountText.Text = $"{_totalPatches} patches";
-            EstimatedTimeText.Text = FormatEstimatedTime(_totalPatches);
+            Vm.PatchCountText = $"{_totalPatches} patches";
+            Vm.EstimatedTimeText = FormatEstimatedTime(_totalPatches);
         }
 
         /// <summary>
@@ -185,7 +198,7 @@ namespace HDRGammaController
             // Show bypass warning in the setup panel
             if (_previousGammaMode != GammaMode.WindowsDefault || previousSettings?.HasAdjustments == true)
             {
-                BypassWarningPanel.Visibility = Visibility.Visible;
+                Vm.ShowBypassWarning = true;
             }
         }
 
@@ -212,13 +225,8 @@ namespace HDRGammaController
         {
             if (_isCalibrationRunning && !_isCancelled)
             {
-                var result = MessageBox.Show(
-                    "Calibration is in progress. Are you sure you want to cancel?",
-                    "Cancel Calibration",
-                    MessageBoxButton.YesNo,
-                    MessageBoxImage.Warning);
-
-                if (result == MessageBoxResult.No)
+                if (!ConfirmDialog.Confirm(this, "Cancel Calibration",
+                        "Calibration is in progress. Are you sure you want to cancel?"))
                 {
                     e.Cancel = true;
                     return;
@@ -263,8 +271,7 @@ namespace HDRGammaController
         {
             // Arrow keys nudge the patch while positioning or measuring, so the user can
             // fine-tune alignment to a fixed-hanging probe without the mouse.
-            bool placingPatch = PositioningPanel.Visibility == Visibility.Visible
-                                 || MeasurementPanel.Visibility == Visibility.Visible;
+            bool placingPatch = Vm.IsPositioningVisible || Vm.IsMeasurementVisible;
             if (placingPatch && TryNudgePatch(e.Key, (Keyboard.Modifiers & ModifierKeys.Shift) != 0))
             {
                 e.Handled = true;
@@ -323,24 +330,12 @@ namespace HDRGammaController
 
         #region Display Mode Handling
 
-        private void DisplayMode_Changed(object sender, RoutedEventArgs e)
-        {
-            // Guard against being called during XAML initialization before controls are created
-            if (FullScreenModeRadio == null || WindowedWarning == null)
-                return;
-
-            _isFullScreenMode = FullScreenModeRadio.IsChecked == true;
-            WindowedWarning.Visibility = _isFullScreenMode ? Visibility.Collapsed : Visibility.Visible;
-        }
-
-        // CalibrationMode_Changed removed - calibration mode is now selected in CalibrationSetupWindow
-
         private void ApplyDisplayMode()
         {
             // Note: Window has AllowsTransparency=True, so WindowStyle must remain None
             // We keep the chromeless look and just change size/position
 
-            if (_isFullScreenMode)
+            if (Vm.IsFullScreenMode)
             {
                 // Store current window state
                 _previousLeft = Left;
@@ -409,7 +404,7 @@ namespace HDRGammaController
                     }
                 }
 
-                WindowedModeBanner.Visibility = Visibility.Collapsed;
+                Vm.ShowWindowedModeBanner = false;
                 Topmost = true;
             }
             else
@@ -425,8 +420,8 @@ namespace HDRGammaController
                 Left = (SystemParameters.PrimaryScreenWidth - Width) / 2;
                 Top = (SystemParameters.PrimaryScreenHeight - Height) / 2;
 
-                WindowedModeBanner.Visibility = Visibility.Visible;
-                Topmost = AlwaysOnTopCheck.IsChecked == true;
+                Vm.ShowWindowedModeBanner = true;
+                Topmost = Vm.AlwaysOnTop;
             }
 
             // Update patch size
@@ -466,26 +461,19 @@ namespace HDRGammaController
         {
             if (_colorimeterService == null)
             {
-                ColorimeterStatusIndicator.Fill = new SolidColorBrush(Color.FromRgb(244, 67, 54));
-                ColorimeterStatusText.Text = "Colorimeter service not available";
-                ColorimeterModelText.Text = "";
-                StartButton.IsEnabled = false;
+                Vm.SetColorimeterStatus(CalibrationViewModel.ErrorBrush, "Colorimeter service not available", "", canStart: false);
                 return;
             }
 
             if (_colorimeterService.IsReady)
             {
-                ColorimeterStatusIndicator.Fill = new SolidColorBrush(Color.FromRgb(76, 175, 80));
-                ColorimeterStatusText.Text = "Connected and ready";
-                ColorimeterModelText.Text = _colorimeterService.ConnectedColorimeter?.Model ?? "";
-                StartButton.IsEnabled = true;
+                Vm.SetColorimeterStatus(CalibrationViewModel.SuccessBrush, "Connected and ready",
+                    _colorimeterService.ConnectedColorimeter?.Model ?? "", canStart: true);
             }
             else
             {
-                ColorimeterStatusIndicator.Fill = new SolidColorBrush(Color.FromRgb(255, 165, 0));
-                ColorimeterStatusText.Text = "No colorimeter detected";
-                ColorimeterModelText.Text = "Connect your i1 Display Plus and click Refresh";
-                StartButton.IsEnabled = false;
+                Vm.SetColorimeterStatus(CalibrationViewModel.WarningBrush, "No colorimeter detected",
+                    "Connect your i1 Display Plus and click Refresh", canStart: false);
             }
         }
 
@@ -496,25 +484,25 @@ namespace HDRGammaController
                 switch (e.Status)
                 {
                     case ColorimeterStatus.Ready:
-                        ColorimeterStatusIndicator.Fill = new SolidColorBrush(Color.FromRgb(76, 175, 80));
-                        ColorimeterStatusText.Text = "Connected and ready";
-                        StartButton.IsEnabled = true;
+                        Vm.ColorimeterBrush = CalibrationViewModel.SuccessBrush;
+                        Vm.ColorimeterStatusText = "Connected and ready";
+                        Vm.CanStart = true;
                         break;
                     case ColorimeterStatus.Searching:
-                        ColorimeterStatusIndicator.Fill = new SolidColorBrush(Color.FromRgb(255, 165, 0));
-                        ColorimeterStatusText.Text = "Searching...";
-                        StartButton.IsEnabled = false;
+                        Vm.ColorimeterBrush = CalibrationViewModel.WarningBrush;
+                        Vm.ColorimeterStatusText = "Searching...";
+                        Vm.CanStart = false;
                         break;
                     case ColorimeterStatus.NotConnected:
                     case ColorimeterStatus.NotFound:
-                        ColorimeterStatusIndicator.Fill = new SolidColorBrush(Color.FromRgb(244, 67, 54));
-                        ColorimeterStatusText.Text = e.Message;
-                        StartButton.IsEnabled = false;
+                        Vm.ColorimeterBrush = CalibrationViewModel.ErrorBrush;
+                        Vm.ColorimeterStatusText = e.Message;
+                        Vm.CanStart = false;
                         break;
                     case ColorimeterStatus.Error:
-                        ColorimeterStatusIndicator.Fill = new SolidColorBrush(Color.FromRgb(244, 67, 54));
-                        ColorimeterStatusText.Text = $"Error: {e.Message}";
-                        StartButton.IsEnabled = false;
+                        Vm.ColorimeterBrush = CalibrationViewModel.ErrorBrush;
+                        Vm.ColorimeterStatusText = $"Error: {e.Message}";
+                        Vm.CanStart = false;
                         break;
                 }
             });
@@ -524,10 +512,7 @@ namespace HDRGammaController
         {
             if (_colorimeterService == null) return;
 
-            ColorimeterStatusIndicator.Fill = new SolidColorBrush(Color.FromRgb(255, 165, 0));
-            ColorimeterStatusText.Text = "Searching for colorimeter...";
-            ColorimeterModelText.Text = "";
-            StartButton.IsEnabled = false;
+            Vm.SetColorimeterStatus(CalibrationViewModel.WarningBrush, "Searching for colorimeter...", "", canStart: false);
 
             // async void: surface failures instead of letting them escape to the
             // global dispatcher handler, which would swallow them with no feedback.
@@ -538,7 +523,7 @@ namespace HDRGammaController
             catch (Exception ex)
             {
                 Log.Error($"CalibrationWindow.RefreshColorimeter: {ex.Message}");
-                ColorimeterStatusText.Text = "Colorimeter search failed";
+                Vm.ColorimeterStatusText = "Colorimeter search failed";
             }
             UpdateColorimeterStatus();
         }
@@ -563,14 +548,14 @@ namespace HDRGammaController
             UpdatePositioningPatchSize();
 
             // Show windowed mode banner if applicable
-            if (!_isFullScreenMode)
+            if (Vm.IsWindowedMode)
             {
-                PositioningWindowedBanner.Visibility = Visibility.Visible;
+                Vm.ShowPositioningWindowedBanner = true;
             }
 
             // Show positioning panel for user to place colorimeter
-            SetupPanel.Visibility = Visibility.Collapsed;
-            PositioningPanel.Visibility = Visibility.Visible;
+            Vm.IsSetupVisible = false;
+            Vm.IsPositioningVisible = true;
         }
 
         private void UpdatePositioningPatchSize()
@@ -583,13 +568,13 @@ namespace HDRGammaController
         private void PositioningBack_Click(object sender, RoutedEventArgs e)
         {
             // Go back to setup panel
-            PositioningPanel.Visibility = Visibility.Collapsed;
-            PositioningWindowedBanner.Visibility = Visibility.Collapsed;
-            SetupPanel.Visibility = Visibility.Visible;
+            Vm.IsPositioningVisible = false;
+            Vm.ShowPositioningWindowedBanner = false;
+            Vm.IsSetupVisible = true;
 
-            // Restore to original setup window size (as defined in XAML: 700x700)
+            // Restore to original setup window size (as defined in XAML: 600x700)
             ResizeMode = ResizeMode.CanResizeWithGrip;
-            Width = 700;
+            Width = 600;
             Height = 700;
             Topmost = false;
 
@@ -640,9 +625,9 @@ namespace HDRGammaController
             }
 
             // Hide positioning, show measurement panel
-            PositioningPanel.Visibility = Visibility.Collapsed;
-            PositioningWindowedBanner.Visibility = Visibility.Collapsed;
-            MeasurementPanel.Visibility = Visibility.Visible;
+            Vm.IsPositioningVisible = false;
+            Vm.ShowPositioningWindowedBanner = false;
+            Vm.IsMeasurementVisible = true;
             UpdateMuteButton();
 
             // Carry the patch placement chosen during positioning into the measurement patch.
@@ -673,17 +658,15 @@ namespace HDRGammaController
             {
                 // Verification/refinement passes report "Phase: i/N". Restart the progress bar
                 // at 0 for each pass instead of leaving it pinned at ~99% from the measure pass.
-                PhaseText.Text = label;
+                Vm.PhaseText = label;
                 int slash = label.LastIndexOf('/');
                 int colon = label.LastIndexOf(':');
                 if (slash > colon && colon >= 0
                     && int.TryParse(label.AsSpan(colon + 1, slash - colon - 1).Trim(), out int cur)
                     && int.TryParse(label.AsSpan(slash + 1).Trim(), out int total) && total > 0)
                 {
-                    double pct = cur * 100.0 / total;
-                    CalibrationProgressBar.Value = pct;
-                    ProgressPercentText.Text = $"{pct:F0}%";
-                    PatchInfoText.Text = label;
+                    Vm.ProgressPercent = cur * 100.0 / total;
+                    Vm.PatchInfoText = label;
                 }
             });
 
@@ -759,7 +742,7 @@ namespace HDRGammaController
                     // Generate the 3D LUT from measurements
                     Dispatcher.Invoke(() =>
                     {
-                        PhaseText.Text = "Generating LUT...";
+                        Vm.PhaseText = "Generating LUT...";
                     });
 
                     // 33³ is the standard "high quality" 3D-LUT grid (the size Resolve/most
@@ -776,9 +759,8 @@ namespace HDRGammaController
                     {
                         Dispatcher.Invoke(() =>
                         {
-                            // Update progress for LUT generation phase (scaled from calibration 100% to 110%)
-                            CalibrationProgressBar.Value = 100;
-                            ProgressPercentText.Text = "Generating...";
+                            Vm.ProgressPercent = 100;
+                            Vm.SetProgressLabel("Generating...");
                         });
                     });
 
@@ -830,7 +812,7 @@ namespace HDRGammaController
                     {
                         ShowCompletion(false, $"Calibration failed: {_calibrationResult.Message}");
 
-                        if (SoundNotificationsCheck.IsChecked == true)
+                        if (Vm.SoundOnCompletion)
                             CalibrationSounds.PlayFailure();
                     });
 
@@ -890,7 +872,7 @@ namespace HDRGammaController
                 {
                     ShowCompletion(false, $"Calibration failed: {ex.Message}");
 
-                    if (SoundNotificationsCheck.IsChecked == true)
+                    if (Vm.SoundOnCompletion)
                         CalibrationSounds.PlayFailure();
                 });
 
@@ -901,6 +883,14 @@ namespace HDRGammaController
                 _isCalibrationRunning = false;
                 _elapsedTimer.Stop();
                 UnwireOrchestratorEvents();
+
+                // Teardown is done (state restored, session closed) - release the
+                // "Shutting down calibration..." wait dialog if a cancel opened it.
+                Dispatcher.Invoke(() =>
+                {
+                    _shutdownDialog?.Dismiss();
+                    _shutdownDialog = null;
+                });
             }
         }
 
@@ -921,26 +911,20 @@ namespace HDRGammaController
                 _currentPatchIndex = e.CurrentIndex;
                 _totalPatches = e.TotalPatches;
 
-                CalibrationProgressBar.Value = e.ProgressPercent;
-                ProgressPercentText.Text = $"{e.ProgressPercent:F0}%";
-                PatchInfoText.Text = $"Patch {e.CurrentIndex + 1} of {e.TotalPatches}";
+                Vm.ProgressPercent = e.ProgressPercent;
+                Vm.PatchInfoText = $"Patch {e.CurrentIndex + 1} of {e.TotalPatches}";
 
                 if (e.CurrentPatch != null)
                 {
-                    CurrentPatchText.Text = e.CurrentPatch.Name ?? GetPatchDescription(e.CurrentPatch);
-                    PhaseText.Text = e.CurrentPatch.Category.ToString();
+                    Vm.CurrentPatchText = e.CurrentPatch.Name ?? GetPatchDescription(e.CurrentPatch);
+                    Vm.PhaseText = e.CurrentPatch.Category.ToString();
                 }
 
-                if (e.NextPatch != null)
-                {
-                    NextPatchText.Text = e.NextPatch.Name ?? GetPatchDescription(e.NextPatch);
-                }
-                else
-                {
-                    NextPatchText.Text = "(last patch)";
-                }
+                Vm.NextPatchText = e.NextPatch != null
+                    ? e.NextPatch.Name ?? GetPatchDescription(e.NextPatch)
+                    : "(last patch)";
 
-                TimeInfoText.Text = $"Elapsed: {FormatElapsedTime(e.Elapsed)} • Remaining: ~{FormatElapsedTime(e.EstimatedRemaining)}";
+                Vm.TimeInfoText = $"Elapsed: {FormatElapsedTime(e.Elapsed)} • Remaining: ~{FormatElapsedTime(e.EstimatedRemaining)}";
             });
         }
 
@@ -953,14 +937,14 @@ namespace HDRGammaController
                 switch (e.NewState)
                 {
                     case CalibrationState.Paused:
-                        PauseOverlay.Visibility = Visibility.Visible;
-                        PauseButton.Content = "Paused";
-                        PauseButton.IsEnabled = false;
+                        Vm.IsPauseOverlayVisible = true;
+                        Vm.PauseButtonText = "Paused";
+                        Vm.IsPauseEnabled = false;
                         break;
                     case CalibrationState.Running:
-                        PauseOverlay.Visibility = Visibility.Collapsed;
-                        PauseButton.Content = "Pause";
-                        PauseButton.IsEnabled = true;
+                        Vm.IsPauseOverlayVisible = false;
+                        Vm.PauseButtonText = "Pause";
+                        Vm.IsPauseEnabled = true;
                         break;
                 }
             });
@@ -971,7 +955,7 @@ namespace HDRGammaController
             // Could update UI with measurement details if needed
             Dispatcher.Invoke(() =>
             {
-                if (CaptureSoundCheck.IsChecked == true)
+                if (Vm.SoundOnCapture)
                     CalibrationSounds.PlayCapture();
                 // Optional: Show measurement info
             });
@@ -989,7 +973,7 @@ namespace HDRGammaController
                 else
                 {
                     // Show retry message temporarily
-                    TimeInfoText.Text = e.Message;
+                    Vm.TimeInfoText = e.Message;
                 }
             });
         }
@@ -1021,15 +1005,15 @@ namespace HDRGammaController
         }
 
         private void UpdateMuteButton() =>
-            MuteButton.Content = CalibrationSounds.Muted ? "Sound: Muted" : "Sound: On";
+            Vm.MuteButtonText = CalibrationSounds.Muted ? "Sound: Muted" : "Sound: On";
 
         private void Pause_Click(object sender, RoutedEventArgs e)
         {
             _isPaused = true;
             _orchestrator?.Pause();
-            PauseOverlay.Visibility = Visibility.Visible;
-            PauseButton.Content = "Paused";
-            PauseButton.IsEnabled = false;
+            Vm.IsPauseOverlayVisible = true;
+            Vm.PauseButtonText = "Paused";
+            Vm.IsPauseEnabled = false;
         }
 
         private async void Resume_Click(object sender, RoutedEventArgs e)
@@ -1037,28 +1021,31 @@ namespace HDRGammaController
             // Countdown before resuming
             for (int i = 3; i > 0; i--)
             {
-                ResumeCountdownText.Text = $"Resuming in {i}...";
+                Vm.ResumeCountdownText = $"Resuming in {i}...";
                 await Task.Delay(1000);
             }
 
             _isPaused = false;
             _orchestrator?.Resume();
-            PauseOverlay.Visibility = Visibility.Collapsed;
-            PauseButton.Content = "Pause";
-            PauseButton.IsEnabled = true;
-            ResumeCountdownText.Text = "Click Resume to continue";
+            Vm.IsPauseOverlayVisible = false;
+            Vm.PauseButtonText = "Pause";
+            Vm.IsPauseEnabled = true;
+            Vm.ResumeCountdownText = "Click Resume to continue";
         }
 
         private void CancelMeasurement_Click(object sender, RoutedEventArgs e)
         {
-            var result = MessageBox.Show(
-                "Are you sure you want to cancel the calibration?\nAll progress will be lost.",
-                "Cancel Calibration",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Warning);
-
-            if (result == MessageBoxResult.Yes)
+            if (ConfirmDialog.Confirm(this, "Cancel Calibration",
+                    "Are you sure you want to cancel the calibration?\nAll progress will be lost."))
             {
+                // Shutdown takes several seconds with no other visible change: the
+                // in-flight read completes, the spotread session shuts down gracefully
+                // (releases the meter's USB handle) and the display state is restored.
+                // Keep an animated wait dialog up until RunCalibrationAsync finishes.
+                Vm.IsPauseEnabled = false;
+                Vm.IsCancelEnabled = false;
+                _shutdownDialog ??= BusyDialog.Open(this, "Shutting down calibration...");
+
                 _isCancelled = true;
                 _orchestrator?.Cancel();
                 _cancellationTokenSource?.Cancel();
@@ -1088,18 +1075,24 @@ namespace HDRGammaController
             }
 
             _isCancelled = false;
-            MeasurementPanel.Visibility = Visibility.Collapsed;
-            CompletionOverlay.Visibility = Visibility.Collapsed;
-            PauseOverlay.Visibility = Visibility.Collapsed;
-            PositioningPanel.Visibility = Visibility.Collapsed;
-            PositioningWindowedBanner.Visibility = Visibility.Collapsed;
-            WindowedModeBanner.Visibility = Visibility.Collapsed;
-            SetupPanel.Visibility = Visibility.Visible;
+            Vm.IsMeasurementVisible = false;
+            Vm.IsCompletionVisible = false;
+            Vm.IsPauseOverlayVisible = false;
+            Vm.IsPositioningVisible = false;
+            Vm.ShowPositioningWindowedBanner = false;
+            Vm.ShowWindowedModeBanner = false;
+            Vm.IsSetupVisible = true;
+
+            // Re-arm the measurement controls for the next run
+            Vm.IsCancelEnabled = true;
+            Vm.IsPauseEnabled = true;
+            Vm.PauseButtonText = "Pause";
+            Vm.ResumeCountdownText = "Click Resume to continue";
 
             // Same window restore as PositioningBack_Click: original setup chrome.
             ResizeMode = ResizeMode.CanResizeWithGrip;
             WindowState = WindowState.Normal;
-            Width = 700;
+            Width = 600;
             Height = 700;
             Topmost = false;
             Left = (SystemParameters.PrimaryScreenWidth - Width) / 2;
@@ -1109,6 +1102,23 @@ namespace HDRGammaController
         private void Cancel_Click(object sender, RoutedEventArgs e)
         {
             Close();
+        }
+
+        private void Back_Click(object sender, RoutedEventArgs e)
+        {
+            BackRequested?.Invoke(this, EventArgs.Empty);
+            Close();
+        }
+
+        protected override void OnStateChanged(EventArgs e)
+        {
+            base.OnStateChanged(e);
+            // The window background is transparent for true rounded corners; when
+            // maximized for full-screen measurement the rounding would leave see-through
+            // notches at the screen corners, so square it off.
+            bool maximized = WindowState == WindowState.Maximized;
+            RootBorder.CornerRadius = new CornerRadius(maximized ? 0 : 8);
+            RootBorder.BorderThickness = new Thickness(maximized ? 0 : 1);
         }
 
         private void Close_Click(object sender, RoutedEventArgs e)
@@ -1191,11 +1201,6 @@ namespace HDRGammaController
             return true;
         }
 
-        private void Minimize_Click(object sender, RoutedEventArgs e)
-        {
-            WindowState = WindowState.Minimized;
-        }
-
         private bool _reportOpened;
 
         private void ViewReport_Click(object sender, RoutedEventArgs e)
@@ -1222,6 +1227,7 @@ namespace HDRGammaController
                 Target = _calibrationTarget,
                 LutSize = _generatedLut?.Size ?? 33,
                 PatchCount = _calibrationResult.Measurements?.Count ?? 0,
+                MeasurementTime = _calibrationResult.TotalTime,
                 ColorimeterModel = _colorimeterService?.ConnectedColorimeter?.Model,
                 LastCalibratedAt = DateTime.UtcNow,
                 PostCalibrationDeltaE = _calibrationMetrics?.AverageDeltaE,
@@ -1299,7 +1305,7 @@ namespace HDRGammaController
                     PatchSize: _patchSize,
                     PatchOffsetX: _patchOffsetX,
                     PatchOffsetY: _patchOffsetY,
-                    CaptureSounds: CaptureSoundCheck.IsChecked == true));
+                    CaptureSounds: Vm.SoundOnCapture));
 
                 // Hands-free: the report applies the profile and verifies on open.
                 reportWindow.AutoApplyOnLoad = true;
@@ -1365,11 +1371,8 @@ namespace HDRGammaController
 
         private void UpdateProgress()
         {
-            double progress = _totalPatches > 0 ? (_currentPatchIndex * 100.0 / _totalPatches) : 0;
-            CalibrationProgressBar.Value = progress;
-            ProgressPercentText.Text = $"{progress:F0}%";
-
-            PatchInfoText.Text = $"Patch {_currentPatchIndex + 1} of {_totalPatches}";
+            Vm.ProgressPercent = _totalPatches > 0 ? (_currentPatchIndex * 100.0 / _totalPatches) : 0;
+            Vm.PatchInfoText = $"Patch {_currentPatchIndex + 1} of {_totalPatches}";
 
             var elapsed = _elapsedTimer.Elapsed;
             var estimatedTotal = _currentPatchIndex > 0
@@ -1378,53 +1381,53 @@ namespace HDRGammaController
             var remaining = estimatedTotal - elapsed;
             if (remaining < TimeSpan.Zero) remaining = TimeSpan.Zero;
 
-            TimeInfoText.Text = $"Elapsed: {FormatElapsedTime(elapsed)} • Remaining: ~{FormatElapsedTime(remaining)}";
+            Vm.TimeInfoText = $"Elapsed: {FormatElapsedTime(elapsed)} • Remaining: ~{FormatElapsedTime(remaining)}";
 
             if (_patches != null && _currentPatchIndex < _patches.Count)
             {
                 var currentPatch = _patches[_currentPatchIndex];
-                CurrentPatchText.Text = currentPatch.Name ?? GetPatchDescription(currentPatch);
-                PhaseText.Text = currentPatch.Category.ToString();
+                Vm.CurrentPatchText = currentPatch.Name ?? GetPatchDescription(currentPatch);
+                Vm.PhaseText = currentPatch.Category.ToString();
 
                 if (_currentPatchIndex + 1 < _patches.Count)
                 {
                     var nextPatch = _patches[_currentPatchIndex + 1];
-                    NextPatchText.Text = nextPatch.Name ?? GetPatchDescription(nextPatch);
+                    Vm.NextPatchText = nextPatch.Name ?? GetPatchDescription(nextPatch);
                 }
                 else
                 {
-                    NextPatchText.Text = "(last patch)";
+                    Vm.NextPatchText = "(last patch)";
                 }
             }
         }
 
         private void ShowCompletion(bool success, string message)
         {
-            CompletionOverlay.Visibility = Visibility.Visible;
-            PauseOverlay.Visibility = Visibility.Collapsed;
+            Vm.IsCompletionVisible = true;
+            Vm.IsPauseOverlayVisible = false;
 
             if (success)
             {
-                CompletionIcon.Text = "✓";
-                CompletionIcon.Foreground = FindResource("SuccessBrush") as SolidColorBrush;
-                CompletionTitle.Text = "Calibration Complete";
-                ViewReportButton.Visibility = Visibility.Visible;
+                Vm.CompletionIcon = "✓";
+                Vm.CompletionIconBrush = FindResource("SuccessBrush") as SolidColorBrush ?? CalibrationViewModel.SuccessBrush;
+                Vm.CompletionTitle = "Calibration Complete";
+                Vm.IsViewReportVisible = true;
 
                 // Show display mode options if bypass was applied
                 if (_bypassApplied && _stateManager != null)
                 {
-                    DisplayModeOptionsPanel.Visibility = Visibility.Visible;
+                    Vm.ShowDisplayModeOptions = true;
                     // Default to calibration only view
-                    ViewCalibrationOnlyRadio.IsChecked = true;
+                    Vm.IsViewCalibrationOnly = true;
                 }
             }
             else
             {
-                CompletionIcon.Text = "✕";
-                CompletionIcon.Foreground = FindResource("ErrorBrush") as SolidColorBrush;
-                CompletionTitle.Text = "Calibration Failed";
-                ViewReportButton.Visibility = Visibility.Collapsed;
-                DisplayModeOptionsPanel.Visibility = Visibility.Collapsed;
+                Vm.CompletionIcon = "✕";
+                Vm.CompletionIconBrush = FindResource("ErrorBrush") as SolidColorBrush ?? CalibrationViewModel.ErrorBrush;
+                Vm.CompletionTitle = "Calibration Failed";
+                Vm.IsViewReportVisible = false;
+                Vm.ShowDisplayModeOptions = false;
 
                 // Restore previous settings on failure
                 if (_bypassApplied && _stateManager != null)
@@ -1441,7 +1444,7 @@ namespace HDRGammaController
                 }
             }
 
-            CompletionMessage.Text = message;
+            Vm.CompletionMessage = message;
         }
 
         private void DisplayModeOption_Changed(object sender, RoutedEventArgs e)
@@ -1451,13 +1454,13 @@ namespace HDRGammaController
 
             try
             {
-                if (ViewCalibrationOnlyRadio.IsChecked == true)
+                if (Vm.IsViewCalibrationOnly)
                 {
                     // Apply calibration LUT only (no additional corrections)
                     _stateManager.ApplyCalibrationOnly(_targetMonitor, _generatedLut);
                     Log.Info("CalibrationWindow: Switched to calibration-only view");
                 }
-                else if (ViewWithPreviousSettingsRadio.IsChecked == true)
+                else
                 {
                     // Apply calibration with previous gamma/night mode settings
                     _stateManager.ApplyCalibrationWithPreviousSettings(_targetMonitor, _generatedLut);
@@ -1559,21 +1562,20 @@ namespace HDRGammaController
                 }
 
                 // Reset UI state
-                MeasurementPanel.Visibility = Visibility.Visible;
-                CompletionOverlay.Visibility = Visibility.Collapsed;
+                Vm.IsCompletionVisible = false;
                 _isCancelled = false;
                 _isPaused = false;
 
                 // Restart calibration by going back to positioning
-                PositioningPanel.Visibility = Visibility.Visible;
-                MeasurementPanel.Visibility = Visibility.Collapsed;
+                Vm.IsPositioningVisible = true;
+                Vm.IsMeasurementVisible = false;
             }
             else
             {
                 // User doesn't want to retry - show failure message
                 ShowCompletion(false, "USB driver installation required.\n\nInstall the ArgyllCMS USB drivers and try again.");
 
-                if (SoundNotificationsCheck.IsChecked == true)
+                if (Vm.SoundOnCompletion)
                     CalibrationSounds.PlayFailure();
 
                 CalibrationCompleted?.Invoke(this, new CalibrationCompleteEventArgs(false, "USB driver error"));
@@ -1582,45 +1584,6 @@ namespace HDRGammaController
 
         #endregion
 
-        #region Public Methods for External Control
-
-        /// <summary>
-        /// Sets the current patch color programmatically.
-        /// </summary>
-        public void SetPatchColor(double r, double g, double b)
-        {
-            Dispatcher.Invoke(() =>
-            {
-                byte br = (byte)(Math.Clamp(r, 0, 1) * 255);
-                byte bg = (byte)(Math.Clamp(g, 0, 1) * 255);
-                byte bb = (byte)(Math.Clamp(b, 0, 1) * 255);
-                ColorPatchBorder.Background = new SolidColorBrush(Color.FromRgb(br, bg, bb));
-            });
-        }
-
-        /// <summary>
-        /// Updates progress from external orchestrator.
-        /// </summary>
-        public void UpdateExternalProgress(int currentPatch, int totalPatches, string phaseName,
-            string currentPatchName, string nextPatchName, TimeSpan elapsed, TimeSpan remaining)
-        {
-            Dispatcher.Invoke(() =>
-            {
-                _currentPatchIndex = currentPatch;
-                _totalPatches = totalPatches;
-
-                double progress = totalPatches > 0 ? (currentPatch * 100.0 / totalPatches) : 0;
-                CalibrationProgressBar.Value = progress;
-                ProgressPercentText.Text = $"{progress:F0}%";
-                PatchInfoText.Text = $"Patch {currentPatch + 1} of {totalPatches}";
-                PhaseText.Text = phaseName;
-                CurrentPatchText.Text = currentPatchName;
-                NextPatchText.Text = nextPatchName;
-                TimeInfoText.Text = $"Elapsed: {FormatElapsedTime(elapsed)} • Remaining: ~{FormatElapsedTime(remaining)}";
-            });
-        }
-
-        #endregion
     }
 
     #region Event Args

@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
@@ -7,19 +6,18 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using HDRGammaController.Core;
+using HDRGammaController.ViewModels;
 
 namespace HDRGammaController
 {
     public partial class NightModeScheduleControl : UserControl
     {
-        public List<ScheduleTriggerType> TriggerTypes { get; } = Enum.GetValues(typeof(ScheduleTriggerType)).Cast<ScheduleTriggerType>().ToList();
+        public NightModeScheduleViewModel Vm { get; } = new NightModeScheduleViewModel();
 
         public event Action? ScheduleChanged;
         public event Func<int?, Task>? PreviewTemperatureRequested;
 
         private NightModeSettings _settings = null!; // Set by Initialize
-        private double? _lat;
-        private double? _lon;
 
         private bool _isDragging = false;
         private SchedulePointViewModel? _dragItem = null;
@@ -36,24 +34,16 @@ namespace HDRGammaController
         public NightModeScheduleControl()
         {
             InitializeComponent();
+            DataContext = Vm;
+            Vm.SettingsEdited += NotifyChange;
+            Vm.PointEdited += OnPointEdited;
         }
 
         public void Initialize(NightModeSettings settings)
         {
             _settings = settings;
-            _lat = settings.Latitude;
-            _lon = settings.Longitude;
+            Vm.Initialize(settings);
 
-            if (_lat.HasValue) LatBox.Text = _lat.Value.ToString("F2");
-            if (_lon.HasValue) LonBox.Text = _lon.Value.ToString("F2");
-
-            // Initialize ultra warm checkbox
-            UltraWarmCheck.IsChecked = settings.UseUltraWarmMode;
-
-            // Ensure schedule exists
-            _settings.EnsureSchedule(_lat, _lon);
-
-            RefreshList();
             DrawGrid();
             DrawCurve();
         }
@@ -63,20 +53,9 @@ namespace HDRGammaController
             ScheduleChanged?.Invoke();
         }
 
-        private void UltraWarm_Changed(object sender, RoutedEventArgs e)
-        {
-            if (_settings == null) return;
-            _settings.UseUltraWarmMode = UltraWarmCheck.IsChecked == true;
-            NotifyChange();
-        }
-
         private void Location_LostFocus(object sender, RoutedEventArgs e)
         {
-            if (double.TryParse(LatBox.Text, out double lat)) _lat = lat;
-            if (double.TryParse(LonBox.Text, out double lon)) _lon = lon;
-
-            _settings.Latitude = _lat;
-            _settings.Longitude = _lon;
+            Vm.CommitLocation();
 
             DrawGrid();
             DrawCurve();
@@ -90,25 +69,27 @@ namespace HDRGammaController
                 using var client = new System.Net.Http.HttpClient();
                 client.Timeout = TimeSpan.FromSeconds(5);
                 var response = await client.GetStringAsync("http://ip-api.com/json/?fields=lat,lon");
-                
+
                 var latMatch = System.Text.RegularExpressions.Regex.Match(response, "\"lat\":([\\d.-]+)");
                 var lonMatch = System.Text.RegularExpressions.Regex.Match(response, "\"lon\":([\\d.-]+)");
-                
+
                 if (latMatch.Success && lonMatch.Success)
                 {
-                    if (double.TryParse(latMatch.Groups[1].Value, out double lat)) 
+                    // The API response is invariant-format JSON; culture-aware parsing
+                    // misreads "40.67" on comma-decimal locales.
+                    if (double.TryParse(latMatch.Groups[1].Value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double lat))
                     {
-                        _lat = lat;
-                        LatBox.Text = lat.ToString("F2");
+                        Vm.Latitude = lat;
+                        Vm.LatitudeText = lat.ToString("F2");
                     }
-                    if (double.TryParse(lonMatch.Groups[1].Value, out double lon)) 
+                    if (double.TryParse(lonMatch.Groups[1].Value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double lon))
                     {
-                        _lon = lon;
-                        LonBox.Text = lon.ToString("F2");
+                        Vm.Longitude = lon;
+                        Vm.LongitudeText = lon.ToString("F2");
                     }
-                    
-                    _settings.Latitude = _lat;
-                    _settings.Longitude = _lon;
+
+                    _settings.Latitude = Vm.Latitude;
+                    _settings.Longitude = Vm.Longitude;
 
                     // Auto-convert default schedule to Sunset/Sunrise if simple
                     if (_settings.Schedule.Count == 2)
@@ -116,36 +97,31 @@ namespace HDRGammaController
                          // Heuristic: If close to default 21:00 / 07:00
                          var p1 = _settings.Schedule[0];
                          var p2 = _settings.Schedule[1];
-                         
+
                          p1.TriggerType = ScheduleTriggerType.Sunset;
                          p2.TriggerType = ScheduleTriggerType.Sunrise;
-                         
+
                          // Reset offsets logic? Just set types.
                     }
-                    
-                    RefreshList();
+
+                    Vm.RefreshPoints();
                     DrawGrid();
                     DrawCurve();
                     NotifyChange();
                 }
+                else
+                {
+                    Log.Error($"NightModeScheduleControl.Detect_Click: unexpected ip-api response: {response}");
+                }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Log.Error($"NightModeScheduleControl.Detect_Click: location detect failed: {ex.Message}");
+            }
         }
 
-        private void RefreshList()
-        {
-            // Sort points chronologically by their resolved time of day
-            var sortedPoints = _settings.Schedule
-                .Select(p => new { Point = p, Time = p.GetTimeOfDay(_lat, _lon) })
-                .OrderBy(x => x.Time)
-                .Select(x => new SchedulePointViewModel(x.Point) { Parent = this })
-                .ToList();
-
-            PointsGrid.ItemsSource = sortedPoints;
-        }
-        
-        // Internal method for ViewModel to notify
-        public void OnPointChanged()
+        // A schedule row was edited in the grid (or programmatically) - redraw and save
+        private void OnPointEdited()
         {
             DrawCurve();
             NotifyChange();
@@ -158,26 +134,26 @@ namespace HDRGammaController
 
             double w = GridCanvas.ActualWidth;
             double h = GridCanvas.ActualHeight;
-            
+
             // Draw Grid
             var gridBrush = new SolidColorBrush(Color.FromRgb(60, 60, 60));
             // ... (rest of grid drawing logic targeting GridCanvas)
             var midBrush = new SolidColorBrush(Color.FromRgb(100, 100, 100)); // Lighter/Grey for midnight
             var textBrush = new SolidColorBrush(Color.FromRgb(150, 150, 150));
-            
+
             // Draw Vertical Time Lines (every 4 hours starting from GraphStartHour?)
             // We want to cover 24 hours. 0 to 24 relative to Start.
             for (int i = 0; i <= 24; i += 2) // Every 2 hours
             {
                 double x = (i / 24.0) * w;
                 int actualHour = (GraphStartHour + i) % 24;
-                
+
                 bool isMajor = (actualHour % 6 == 0); // 0, 6, 12, 18
                 bool isMidnight = (actualHour == 0);
-                
+
                 var brush = isMidnight ? midBrush : gridBrush;
                 var dash = isMidnight ? new DoubleCollection { 4, 2 } : (isMajor ? null : new DoubleCollection { 2, 4 });
-                
+
                 if (isMidnight || isMajor)
                 {
                     var line = new Line { X1 = x, Y1 = 0, X2 = x, Y2 = h, Stroke = brush, StrokeThickness = isMidnight ? 2 : 1 };
@@ -190,7 +166,7 @@ namespace HDRGammaController
                     GridCanvas.Children.Add(tb);
                 }
             }
-            
+
             // Temp Lines (6500 down to 2000)
             int[] temps = { 6500, 5000, 3500, 2000 };
             foreach (var k in temps)
@@ -198,7 +174,7 @@ namespace HDRGammaController
                 double y = TempToY(k, h);
                 var line = new Line { X1 = 0, Y1 = y, X2 = w, Y2 = y, Stroke = gridBrush, StrokeThickness = 1, StrokeDashArray = new DoubleCollection { 2, 4 } };
                 GridCanvas.Children.Add(line);
-                
+
                 var tb = new TextBlock { Text = $"{k}K", FontSize = 9, Foreground = textBrush };
                 Canvas.SetLeft(tb, 4);
                 Canvas.SetTop(tb, y - 6);
@@ -214,10 +190,10 @@ namespace HDRGammaController
             double h = CurveCanvas.ActualHeight;
 
             // Resolve points once
-            var resolved = _settings.Schedule.Select(p => 
+            var resolved = _settings.Schedule.Select(p =>
             {
-                var time = p.GetTimeOfDay(_lat, _lon);
-                return (Time: time, Point: p); 
+                var time = p.GetTimeOfDay(Vm.Latitude, Vm.Longitude);
+                return (Time: time, Point: p);
             }).OrderBy(x => x.Time).ToList();
 
             // 1. Update/Create Polyline
@@ -238,7 +214,7 @@ namespace HDRGammaController
             }
 
             var points = new PointCollection();
-            
+
             // Helper to get temp at time T (minutes from 0 to 1440)
             // (Inlined or efficient reuse of service logic)
             Func<double, double> getTemp = (minutes) =>
@@ -246,9 +222,9 @@ namespace HDRGammaController
                 TimeSpan t = TimeSpan.FromMinutes(minutes);
                 int idx = -1;
                 for(int i=0; i<resolved.Count; i++) if (resolved[i].Time.TotalMinutes <= minutes) idx = i;
-                
+
                 (TimeSpan Time, NightModeSchedulePoint Point) curr, prev;
-                
+
                 if (idx == -1)
                 {
                     if (resolved.Count == 0) return 6500;
@@ -262,20 +238,20 @@ namespace HDRGammaController
                 {
                     curr = resolved[idx];
                     if (idx > 0) prev = resolved[idx-1];
-                    else 
+                    else
                     {
                         var last = resolved.Last();
                         prev = (last.Time - TimeSpan.FromHours(24), last.Point);
                     }
                 }
-                
+
                 double elapsed = (t - curr.Time).TotalMinutes;
                 if (elapsed < 0) elapsed += 1440;
-                
+
                 double trg = curr.Point.TargetKelvin;
                 double str = prev.Point.TargetKelvin;
                 double fade = curr.Point.FadeMinutes;
-                
+
                 if (elapsed < fade && fade > 0)
                 {
                      double p = elapsed / fade;
@@ -287,11 +263,11 @@ namespace HDRGammaController
             // Optimization: Sample fewer points if dragging? No, 288 is fine if we just update PointCollection.
             // Actually PointCollection is a Freezeable?
             // Creating new PointCollection is fast.
-            for (double relM = 0; relM <= 1440; relM += 5) 
+            for (double relM = 0; relM <= 1440; relM += 5)
             {
                 double absM = relM + GraphStartMins;
                 if (absM >= 1440) absM -= 1440;
-                
+
                 double k = getTemp(absM);
                 points.Add(new Point( (relM/1440.0)*w, TempToY(k, h) ));
             }
@@ -306,7 +282,7 @@ namespace HDRGammaController
                  // Full rebuild if mismatch
                  CurveCanvas.Children.Clear();
                  CurveCanvas.Children.Add(poly);
-                 
+
                  foreach (var r in resolved)
                  {
                      var el = new Ellipse
@@ -318,7 +294,7 @@ namespace HDRGammaController
                      el.MouseLeftButtonUp += GraphCanvas_MouseUp;
                      CurveCanvas.Children.Add(el);
                  }
-                 
+
                  // Now Line
                  var nowLine = new Line { Stroke = Brushes.Red, StrokeThickness = 1, Opacity = 0.5 };
                  CurveCanvas.Children.Add(nowLine);
@@ -337,7 +313,7 @@ namespace HDRGammaController
                     el.Tag = r.Point; // Ensure Tag is updated if order changed? Tag refers to object reference, safe.
                 }
             }
-            
+
             // Sync Now Line
             if (CurveCanvas.Children.Count > 0 && CurveCanvas.Children[CurveCanvas.Children.Count-1] is Line nl)
             {
@@ -354,7 +330,7 @@ namespace HDRGammaController
             double tNorm = (k - 1900) / (6500 - 1900); // 0 (1900) to 1 (6500)
             return h - (tNorm * (h * 0.8) + (h * 0.1));
         }
-        
+
         private double TimeToX(TimeSpan t, double w)
         {
             double m = t.TotalMinutes;
@@ -362,7 +338,7 @@ namespace HDRGammaController
             if (relM < 0) relM += 1440;
             return (relM / 1440.0) * w;
         }
-        
+
         private TimeSpan XToTime(double x, double w)
         {
             double relM = (x / w) * 1440;
@@ -371,7 +347,7 @@ namespace HDRGammaController
             if (absM < 0) absM += 1440; // Safety
             return TimeSpan.FromMinutes(absM);
         }
-        
+
         private double YToTemp(double y, double h)
         {
             double tNorm = (h - y - (h * 0.1)) / (h * 0.8);
@@ -383,7 +359,7 @@ namespace HDRGammaController
         {
             if (sender is Ellipse el && el.Tag is NightModeSchedulePoint p)
             {
-                var vm = (PointsGrid.ItemsSource as List<SchedulePointViewModel>)?.FirstOrDefault(v => v.Model == p);
+                var vm = Vm.Points.FirstOrDefault(v => v.Model == p);
                 if (vm != null)
                 {
                     _dragItem = vm;
@@ -393,10 +369,10 @@ namespace HDRGammaController
                     e.Handled = true;
 
                     // Select row in grid
-                    PointsGrid.SelectedItem = vm;
+                    Vm.SelectedPoint = vm;
 
                     // Show Overlay
-                    DragOverlay.Visibility = Visibility.Visible;
+                    Vm.IsDragOverlayVisible = true;
                     UpdateOverlay(e.GetPosition(CurveCanvas), CurveCanvas.ActualWidth, vm);
 
                     // Start Preview
@@ -405,21 +381,21 @@ namespace HDRGammaController
                 }
             }
         }
-        
+
         private void UpdateOverlay(Point pos, double containerWidth, SchedulePointViewModel vm)
         {
-            try 
+            try
             {
-                OverlayTime.Text = vm.DisplayTime;
-                OverlayTemp.Text = $"{vm.TargetKelvin}K";
-                
+                Vm.OverlayTimeText = vm.DisplayTime;
+                Vm.OverlayTempText = $"{vm.TargetKelvin}K";
+
                 // Smart Positioning
                 double left = pos.X + 15;
                 if (left + 100 > containerWidth) // Assuming tooltip width ~100
                 {
                     left = pos.X - 115; // Shift to left side
                 }
-                
+
                 DragOverlay.Margin = new Thickness(left, pos.Y - 40, 0, 0);
             }
             catch {}
@@ -516,16 +492,16 @@ namespace HDRGammaController
                 _dragItem = null;
                 Mouse.Capture(null); // Release capture global
 
-                DragOverlay.Visibility = Visibility.Collapsed;
+                Vm.IsDragOverlayVisible = false;
 
                 // Stop preview, revert to schedule logic (which is now updated)
                 PreviewTemperatureRequested?.Invoke(null);
 
-                RefreshList(); // Sync grid
+                Vm.RefreshPoints(); // Sync grid
                 NotifyChange(); // NOW we save
             }
         }
-        
+
         private void GraphCanvas_MouseDown(object sender, MouseButtonEventArgs e)
         {
             // Click on empty space creates point?
@@ -540,20 +516,20 @@ namespace HDRGammaController
                 var pos = e.GetPosition(CurveCanvas);
                 double w = CurveCanvas.ActualWidth;
                 double h = CurveCanvas.ActualHeight;
-                
+
                 double temp = YToTemp(pos.Y, h);
-                
+
                 TimeSpan time = XToTime(Math.Clamp(pos.X, 0, w), w);
-                
+
                 var p = new NightModeSchedulePoint
                 {
                     TriggerType = ScheduleTriggerType.FixedTime,
                     Time = time,
                     TargetKelvin = (int)temp
                 };
-                
+
                 _settings.Schedule.Add(p);
-                 RefreshList();
+                Vm.RefreshPoints();
                 DrawCurve();
                 NotifyChange();
             }
@@ -573,22 +549,22 @@ namespace HDRGammaController
                 return;
             }
 
-            _settings.Schedule.Add(new NightModeSchedulePoint 
-            { 
-                Time = DateTime.Now.TimeOfDay, 
-                TargetKelvin = 3000, 
-                FadeMinutes = 30 
+            _settings.Schedule.Add(new NightModeSchedulePoint
+            {
+                Time = DateTime.Now.TimeOfDay,
+                TargetKelvin = 3000,
+                FadeMinutes = 30
             });
-            RefreshList();
+            Vm.RefreshPoints();
             DrawCurve();
             NotifyChange();
         }
-        
+
         private void Reset_Click(object sender, RoutedEventArgs e)
         {
              _settings.Schedule.Clear();
-             _settings.EnsureSchedule(_lat, _lon);
-             RefreshList();
+             _settings.EnsureSchedule(Vm.Latitude, Vm.Longitude);
+             Vm.RefreshPoints();
              DrawCurve();
              NotifyChange();
         }
@@ -601,7 +577,7 @@ namespace HDRGammaController
                 if (ShowDeleteConfirmation(vm.DisplayTime, vm.TargetKelvin))
                 {
                     _settings.Schedule.Remove(vm.Model);
-                    RefreshList();
+                    Vm.RefreshPoints();
                     DrawCurve();
                     NotifyChange();
                 }
@@ -717,120 +693,6 @@ namespace HDRGammaController
 
             dialog.ShowDialog();
             return confirmed;
-        }
-    }
-
-    public class SchedulePointViewModel
-    {
-        public NightModeScheduleControl Parent { get; set; } = null!; // Set by RefreshList
-        public NightModeSchedulePoint Model { get; }
-
-        /// <summary>
-        /// When true, property setters don't trigger change notifications.
-        /// Used during drag operations to avoid redundant updates.
-        /// </summary>
-        public bool SuppressNotifications { get; set; }
-
-        public SchedulePointViewModel(NightModeSchedulePoint model)
-        {
-            Model = model;
-        }
-
-        public ScheduleTriggerType TriggerType
-        {
-            get => Model.TriggerType;
-            set { Model.TriggerType = value; Notify(); }
-        }
-
-        public string DisplayTime
-        {
-            get
-            {
-                if (Model.TriggerType == ScheduleTriggerType.FixedTime)
-                    return Model.Time.ToString(@"hh\:mm");
-                else
-                    return (Model.OffsetMinutes >= 0 ? "+" : "") + Model.OffsetMinutes + "m";
-            }
-            set
-            {
-                if (Model.TriggerType == ScheduleTriggerType.FixedTime)
-                {
-                    var parsed = ParseTimeInput(value);
-                    if (parsed.HasValue)
-                        Model.Time = parsed.Value;
-                }
-                else
-                {
-                    if (double.TryParse(value.Replace("m", ""), out var d)) Model.OffsetMinutes = d;
-                }
-                Notify();
-            }
-        }
-
-        /// <summary>
-        /// Parses time input flexibly. Accepts formats like:
-        /// "23:00", "2300", "23", "9:30", "930", "9"
-        /// </summary>
-        private static TimeSpan? ParseTimeInput(string input)
-        {
-            if (string.IsNullOrWhiteSpace(input))
-                return null;
-
-            input = input.Trim();
-
-            // Standard format with colon (23:00, 9:30)
-            if (TimeSpan.TryParse(input, out var t))
-                return t;
-
-            // Try parsing as a number
-            if (int.TryParse(input, out int num))
-            {
-                // Single or double digit: treat as hours (e.g., "9" -> 09:00, "23" -> 23:00)
-                if (num >= 0 && num <= 24)
-                {
-                    return TimeSpan.FromHours(num == 24 ? 0 : num);
-                }
-
-                // 3-4 digit format: HHMM or HMM (e.g., "2300" -> 23:00, "930" -> 09:30)
-                if (num >= 100 && num <= 2400)
-                {
-                    int hours = num / 100;
-                    int minutes = num % 100;
-
-                    if (hours >= 0 && hours <= 24 && minutes >= 0 && minutes < 60)
-                    {
-                        if (hours == 24) { hours = 0; }
-                        return new TimeSpan(hours, minutes, 0);
-                    }
-                }
-            }
-
-            return null;
-        }
-
-        public int TargetKelvin
-        {
-            get => Model.TargetKelvin;
-            set { Model.TargetKelvin = value; Notify(); }
-        }
-
-        public int FadeMinutes
-        {
-            get => Model.FadeMinutes;
-            set { Model.FadeMinutes = value; Notify(); }
-        }
-
-        public void RefreshDisplay()
-        {
-            // Used to force UI update if backing fields change
-        }
-
-        private void Notify()
-        {
-            if (!SuppressNotifications)
-            {
-                Parent?.OnPointChanged();
-            }
         }
     }
 }

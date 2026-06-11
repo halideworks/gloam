@@ -34,6 +34,11 @@ namespace HDRGammaController
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             Background = new SolidColorBrush(Color.FromRgb(0x1e, 0x1e, 0x1e));
             Foreground = new SolidColorBrush(Color.FromRgb(0xe0, 0xe0, 0xe0));
+            Resources.MergedDictionaries.Add(new ResourceDictionary
+            {
+                Source = new Uri("/Themes/DarkControls.xaml", UriKind.Relative),
+            });
+            Services.DarkTitleBar.Apply(this);
 
             _query = new TextBox
             {
@@ -123,7 +128,7 @@ namespace HDRGammaController
         {
             Content = content,
             Padding = new Thickness(14, 5, 14, 5),
-            Background = new SolidColorBrush(Color.FromRgb(0x08, 0x91, 0xb2)),
+            Background = new SolidColorBrush(Color.FromRgb(0x00, 0x78, 0xD4)), // app accent
             Foreground = Brushes.White,
             BorderThickness = new Thickness(0),
         };

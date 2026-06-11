@@ -12,6 +12,8 @@
         Foreground="#e0e0e0">
 
     <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+
         <!-- Styles -->
         <Style x:Key="SectionHeader" TargetType="TextBlock">
             <Setter Property="FontSize" Value="16"/>
@@ -158,16 +160,16 @@
 
                 <StackPanel Grid.Column="0">
                     <TextBlock Text="Calibration Report" FontSize="22" FontWeight="SemiBold" Foreground="#e0e0e0"/>
-                    <TextBlock x:Name="MonitorNameText" Text="Monitor Name" FontSize="13" Foreground="#a0a0a0" Margin="0,4,0,0"/>
-                    <TextBlock x:Name="CalibrationDateText" Text="Calibrated: Today" FontSize="12" Foreground="#707070" Margin="0,2,0,0"/>
+                    <TextBlock Text="{Binding MonitorNameText}" FontSize="13" Foreground="#a0a0a0" Margin="0,4,0,0"/>
+                    <TextBlock Text="{Binding CalibrationDateText}" FontSize="12" Foreground="#707070" Margin="0,2,0,0"/>
                 </StackPanel>
 
                 <!-- Grade Display (the letter in a colored disc is self-evidently a grade) -->
                 <StackPanel Grid.Column="1" Margin="0,0,8,0">
-                    <Border Width="84" Height="84" CornerRadius="42" x:Name="GradeBorder" Background="#164e63">
-                        <TextBlock x:Name="GradeText" Style="{StaticResource GradeText}" Foreground="#22d3ee"/>
+                    <Border Width="84" Height="84" CornerRadius="42" Background="{Binding GradeBackground}">
+                        <TextBlock Text="{Binding GradeText}" Style="{StaticResource GradeText}" Foreground="{Binding GradeBrush}"/>
                     </Border>
-                    <TextBlock x:Name="GradeScopeText" Text="uncorrected panel" FontSize="10" Foreground="#808080"
+                    <TextBlock Text="{Binding GradeScopeText}" FontSize="10" Foreground="#808080"
                                HorizontalAlignment="Center" Margin="0,4,0,0"/>
                 </StackPanel>
             </Grid>
@@ -175,7 +177,9 @@
 
         <!-- Main Content -->
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="20">
-            <StackPanel>
+            <!-- Export Report does NOT print this dark UI: ReportPrintBuilder rebuilds the
+                 report as a light, printer-friendly FlowDocument from the same view model. -->
+            <StackPanel x:Name="ReportContent">
                 <!-- Summary Section: before/after accuracy table -->
                 <Border Style="{StaticResource CardBorder}">
                     <StackPanel>
@@ -205,36 +209,37 @@
 
                             <!-- Before: native panel -->
                             <TextBlock Grid.Row="1" Grid.Column="0" Text="Native (before)" Style="{StaticResource MetricLabel}" FontSize="13" VerticalAlignment="Center"/>
-                            <TextBlock Grid.Row="1" Grid.Column="1" x:Name="AvgDeltaEText" Text="-" Style="{StaticResource MetricValue}" FontSize="22" HorizontalAlignment="Center"/>
-                            <TextBlock Grid.Row="1" Grid.Column="2" x:Name="MaxDeltaEText" Text="-" Style="{StaticResource MetricValue}" FontSize="22" HorizontalAlignment="Center"/>
-                            <TextBlock Grid.Row="1" Grid.Column="3" x:Name="GrayscaleDeltaEText" Text="-" Style="{StaticResource MetricValue}" FontSize="22" HorizontalAlignment="Center"/>
-                            <TextBlock Grid.Row="1" Grid.Column="4" x:Name="PrimaryDeltaEText" Text="-" Style="{StaticResource MetricValue}" FontSize="22" HorizontalAlignment="Center"/>
+                            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding AvgDeltaEText}" Foreground="{Binding AvgDeltaEBrush}" Style="{StaticResource MetricValue}" FontSize="22" HorizontalAlignment="Center"/>
+                            <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding MaxDeltaEText}" Foreground="{Binding MaxDeltaEBrush}" Style="{StaticResource MetricValue}" FontSize="22" HorizontalAlignment="Center"/>
+                            <TextBlock Grid.Row="1" Grid.Column="3" Text="{Binding GrayscaleDeltaEText}" Foreground="{Binding GrayscaleDeltaEBrush}" Style="{StaticResource MetricValue}" FontSize="22" HorizontalAlignment="Center"/>
+                            <TextBlock Grid.Row="1" Grid.Column="4" Text="{Binding PrimaryDeltaEText}" Foreground="{Binding PrimaryDeltaEBrush}" Style="{StaticResource MetricValue}" FontSize="22" HorizontalAlignment="Center"/>
 
                             <!-- After: re-measured through the applied correction -->
                             <TextBlock Grid.Row="2" Grid.Column="0" Text="Calibrated (after)" Style="{StaticResource MetricLabel}" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                            <TextBlock Grid.Row="2" Grid.Column="1" x:Name="AfterAvgText" Text="-" Style="{StaticResource MetricValue}" FontSize="22" FontWeight="Bold" HorizontalAlignment="Center"/>
-                            <TextBlock Grid.Row="2" Grid.Column="2" x:Name="AfterMaxText" Text="-" Style="{StaticResource MetricValue}" FontSize="22" FontWeight="Bold" HorizontalAlignment="Center"/>
-                            <TextBlock Grid.Row="2" Grid.Column="3" x:Name="AfterGrayscaleText" Text="-" Style="{StaticResource MetricValue}" FontSize="22" FontWeight="Bold" HorizontalAlignment="Center"/>
-                            <TextBlock Grid.Row="2" Grid.Column="4" x:Name="AfterPrimaryText" Text="-" Style="{StaticResource MetricValue}" FontSize="22" FontWeight="Bold" HorizontalAlignment="Center"/>
+                            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding AfterAvgText}" Foreground="{Binding AfterAvgBrush}" Style="{StaticResource MetricValue}" FontSize="22" FontWeight="Bold" HorizontalAlignment="Center"/>
+                            <TextBlock Grid.Row="2" Grid.Column="2" Text="{Binding AfterMaxText}" Foreground="{Binding AfterMaxBrush}" Style="{StaticResource MetricValue}" FontSize="22" FontWeight="Bold" HorizontalAlignment="Center"/>
+                            <TextBlock Grid.Row="2" Grid.Column="3" Text="{Binding AfterGrayscaleText}" Foreground="{Binding AfterGrayscaleBrush}" Style="{StaticResource MetricValue}" FontSize="22" FontWeight="Bold" HorizontalAlignment="Center"/>
+                            <TextBlock Grid.Row="2" Grid.Column="4" Text="{Binding AfterPrimaryText}" Foreground="{Binding AfterPrimaryBrush}" Style="{StaticResource MetricValue}" FontSize="22" FontWeight="Bold" HorizontalAlignment="Center"/>
                         </Grid>
 
                         <!-- Verify detail: grayscale tone/color decomposition + dE ITP -->
-                        <TextBlock x:Name="VerifyDetailText" Visibility="Collapsed"
+                        <TextBlock Text="{Binding VerifyDetailText}"
+                                   Visibility="{Binding IsVerifyDetailVisible, Converter={StaticResource BoolToVis}}"
                                    FontSize="12" Foreground="#a0a0a0" TextWrapping="Wrap" Margin="0,10,0,0"/>
 
                         <!-- Closed-loop grey-ramp refinement note (a different, narrower metric than
                              the table: 1D grey-axis tracking only, measured during calibration) -->
-                        <TextBlock x:Name="BeforeAfterNoteText" Visibility="Collapsed"
+                        <TextBlock Text="{Binding BeforeAfterNoteText}"
+                                   Visibility="{Binding IsBeforeAfterNoteVisible, Converter={StaticResource BoolToVis}}"
                                    FontSize="12" Foreground="#909090" TextWrapping="Wrap" Margin="0,10,0,0"/>
 
-                        <TextBlock x:Name="SummaryText"
-                                   Text="Calibration completed successfully."
+                        <TextBlock Text="{Binding SummaryText}"
                                    FontSize="13"
                                    Foreground="#a0a0a0"
                                    TextWrapping="Wrap"
                                    Margin="0,16,0,0"/>
 
-                        <Border x:Name="PerceptualNotePanel" Visibility="Collapsed"
+                        <Border Visibility="{Binding IsPerceptualNoteVisible, Converter={StaticResource BoolToVis}}"
                                 Background="#22303a" CornerRadius="6" Padding="12,10" Margin="0,12,0,0">
                             <TextBlock FontSize="12" Foreground="#a8c5d8" TextWrapping="Wrap"
                                        Text="Final step: trust your eyes. Instruments and eyes weigh light spectra differently, so two display technologies can measure identical yet look slightly different side by side (observer metamerism). If this display does not quite match your reference, nudge the Tint/Temperature trims in the monitor dashboard while comparing a gray image. Small trims are a normal part of professional workflows; they ride on top of this profile and never affect the measurements above."/>
@@ -262,56 +267,58 @@
                             <!-- Peak Luminance -->
                             <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,0,12">
                                 <TextBlock Text="Peak Luminance" Style="{StaticResource MetricLabel}"/>
-                                <TextBlock x:Name="PeakLuminanceText" Text="-- cd/m2" Style="{StaticResource MetricValue}"/>
+                                <TextBlock Text="{Binding PeakLuminanceText}" Style="{StaticResource MetricValue}"/>
                             </StackPanel>
 
                             <!-- Black Level -->
                             <StackPanel Grid.Row="0" Grid.Column="1" Margin="0,0,0,12">
                                 <TextBlock Text="Black Level" Style="{StaticResource MetricLabel}"/>
-                                <TextBlock x:Name="BlackLevelText" Text="-- cd/m2" Style="{StaticResource MetricValue}"/>
+                                <TextBlock Text="{Binding BlackLevelText}" Style="{StaticResource MetricValue}"/>
                             </StackPanel>
 
                             <!-- Contrast Ratio -->
                             <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,0,0,12">
                                 <TextBlock Text="Contrast Ratio" Style="{StaticResource MetricLabel}"/>
-                                <TextBlock x:Name="ContrastRatioText" Text="--:1" Style="{StaticResource MetricValue}"/>
+                                <TextBlock Text="{Binding ContrastRatioText}" Style="{StaticResource MetricValue}"/>
                             </StackPanel>
 
                             <!-- Measured Gamma -->
                             <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,0,0,12">
                                 <TextBlock Text="Measured Gamma" Style="{StaticResource MetricLabel}"/>
-                                <TextBlock x:Name="MeasuredGammaText" Text="--" Style="{StaticResource MetricValue}"/>
+                                <TextBlock Text="{Binding MeasuredGammaText}" Style="{StaticResource MetricValue}"/>
                             </StackPanel>
 
                             <!-- White Point CCT -->
                             <StackPanel Grid.Row="2" Grid.Column="0" Margin="0,0,0,12">
                                 <TextBlock Text="White Point CCT" Style="{StaticResource MetricLabel}"/>
-                                <TextBlock x:Name="WhitePointCctText" Text="-- K" Style="{StaticResource MetricValue}"/>
+                                <TextBlock Text="{Binding WhitePointCctText}" Style="{StaticResource MetricValue}"/>
                             </StackPanel>
 
                             <!-- White Point Duv -->
                             <StackPanel Grid.Row="2" Grid.Column="1" Margin="0,0,0,12">
                                 <TextBlock Text="White Point Duv" Style="{StaticResource MetricLabel}"/>
-                                <TextBlock x:Name="WhitePointDuvText" Text="--" Style="{StaticResource MetricValue}"/>
+                                <TextBlock Text="{Binding WhitePointDuvText}" Style="{StaticResource MetricValue}"/>
                             </StackPanel>
 
                             <!-- Gamut Coverage -->
                             <StackPanel Grid.Row="3" Grid.Column="0">
                                 <TextBlock Text="sRGB Coverage" Style="{StaticResource MetricLabel}"/>
-                                <TextBlock x:Name="SrgbCoverageText" Text="--%" Style="{StaticResource MetricValue}"/>
+                                <TextBlock Text="{Binding SrgbCoverageText}" Style="{StaticResource MetricValue}"/>
                             </StackPanel>
 
                             <!-- Target -->
                             <StackPanel Grid.Row="3" Grid.Column="1">
                                 <TextBlock Text="Calibration Target" Style="{StaticResource MetricLabel}"/>
-                                <TextBlock x:Name="TargetText" Text="--" Style="{StaticResource MetricValue}"/>
+                                <TextBlock Text="{Binding TargetText}" Style="{StaticResource MetricValue}"/>
                             </StackPanel>
                         </Grid>
                     </StackPanel>
                 </Border>
 
-                <!-- Charts -->
-                <Border Style="{StaticResource CardBorder}">
+                <!-- Charts (collapsed for historical reports: the curves need the raw
+                     measurements, which aren't persisted in saved reports) -->
+                <Border Style="{StaticResource CardBorder}"
+                        Visibility="{Binding AreChartsVisible, Converter={StaticResource BoolToVis}}">
                     <StackPanel>
                         <TextBlock Text="Tone Response &amp; Gamut" Style="{StaticResource SectionHeader}"/>
                         <Grid>
@@ -357,6 +364,16 @@
                     </StackPanel>
                 </Border>
 
+                <!-- Shown in place of the charts for historical reports -->
+                <Border Style="{StaticResource CardBorder}"
+                        Visibility="{Binding IsChartsNoteVisible, Converter={StaticResource BoolToVis}}">
+                    <StackPanel>
+                        <TextBlock Text="Tone Response &amp; Gamut" Style="{StaticResource SectionHeader}"/>
+                        <TextBlock Text="Charts are generated at calibration time and aren't stored in saved reports."
+                                   FontSize="12" Foreground="#808080" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
+
                 <!-- Primaries Comparison -->
                 <Border Style="{StaticResource CardBorder}">
                     <StackPanel>
@@ -385,27 +402,27 @@
 
                             <!-- Red -->
                             <TextBlock Grid.Row="1" Grid.Column="0" Text="Red" Foreground="#ef4444" Style="{StaticResource MetricValue}"/>
-                            <TextBlock Grid.Row="1" Grid.Column="1" x:Name="RedMeasuredText" Text="(0.640, 0.330)" Style="{StaticResource MetricValue}"/>
-                            <TextBlock Grid.Row="1" Grid.Column="2" x:Name="RedTargetText" Text="(0.640, 0.330)" Style="{StaticResource MetricValue}"/>
-                            <TextBlock Grid.Row="1" Grid.Column="3" x:Name="RedErrorText" Text="0.000" Style="{StaticResource MetricValue}"/>
+                            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding RedMeasuredText}" Style="{StaticResource MetricValue}"/>
+                            <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding RedTargetText}" Style="{StaticResource MetricValue}"/>
+                            <TextBlock Grid.Row="1" Grid.Column="3" Text="{Binding RedErrorText}" Style="{StaticResource MetricValue}"/>
 
                             <!-- Green -->
                             <TextBlock Grid.Row="2" Grid.Column="0" Text="Green" Foreground="#22c55e" Style="{StaticResource MetricValue}"/>
-                            <TextBlock Grid.Row="2" Grid.Column="1" x:Name="GreenMeasuredText" Text="(0.300, 0.600)" Style="{StaticResource MetricValue}"/>
-                            <TextBlock Grid.Row="2" Grid.Column="2" x:Name="GreenTargetText" Text="(0.300, 0.600)" Style="{StaticResource MetricValue}"/>
-                            <TextBlock Grid.Row="2" Grid.Column="3" x:Name="GreenErrorText" Text="0.000" Style="{StaticResource MetricValue}"/>
+                            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding GreenMeasuredText}" Style="{StaticResource MetricValue}"/>
+                            <TextBlock Grid.Row="2" Grid.Column="2" Text="{Binding GreenTargetText}" Style="{StaticResource MetricValue}"/>
+                            <TextBlock Grid.Row="2" Grid.Column="3" Text="{Binding GreenErrorText}" Style="{StaticResource MetricValue}"/>
 
                             <!-- Blue -->
                             <TextBlock Grid.Row="3" Grid.Column="0" Text="Blue" Foreground="#3b82f6" Style="{StaticResource MetricValue}"/>
-                            <TextBlock Grid.Row="3" Grid.Column="1" x:Name="BlueMeasuredText" Text="(0.150, 0.060)" Style="{StaticResource MetricValue}"/>
-                            <TextBlock Grid.Row="3" Grid.Column="2" x:Name="BlueTargetText" Text="(0.150, 0.060)" Style="{StaticResource MetricValue}"/>
-                            <TextBlock Grid.Row="3" Grid.Column="3" x:Name="BlueErrorText" Text="0.000" Style="{StaticResource MetricValue}"/>
+                            <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding BlueMeasuredText}" Style="{StaticResource MetricValue}"/>
+                            <TextBlock Grid.Row="3" Grid.Column="2" Text="{Binding BlueTargetText}" Style="{StaticResource MetricValue}"/>
+                            <TextBlock Grid.Row="3" Grid.Column="3" Text="{Binding BlueErrorText}" Style="{StaticResource MetricValue}"/>
 
                             <!-- White -->
                             <TextBlock Grid.Row="4" Grid.Column="0" Text="White" Style="{StaticResource MetricValue}"/>
-                            <TextBlock Grid.Row="4" Grid.Column="1" x:Name="WhiteMeasuredText" Text="(0.313, 0.329)" Style="{StaticResource MetricValue}"/>
-                            <TextBlock Grid.Row="4" Grid.Column="2" x:Name="WhiteTargetText" Text="(0.313, 0.329)" Style="{StaticResource MetricValue}"/>
-                            <TextBlock Grid.Row="4" Grid.Column="3" x:Name="WhiteErrorText" Text="0.000" Style="{StaticResource MetricValue}"/>
+                            <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding WhiteMeasuredText}" Style="{StaticResource MetricValue}"/>
+                            <TextBlock Grid.Row="4" Grid.Column="2" Text="{Binding WhiteTargetText}" Style="{StaticResource MetricValue}"/>
+                            <TextBlock Grid.Row="4" Grid.Column="3" Text="{Binding WhiteErrorText}" Style="{StaticResource MetricValue}"/>
                         </Grid>
                     </StackPanel>
                 </Border>
@@ -428,27 +445,27 @@
 
                             <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,0,12">
                                 <TextBlock Text="Patches Measured" Style="{StaticResource MetricLabel}"/>
-                                <TextBlock x:Name="PatchCountText" Text="--" Style="{StaticResource MetricValue}"/>
+                                <TextBlock Text="{Binding PatchCountText}" Style="{StaticResource MetricValue}"/>
                             </StackPanel>
 
                             <StackPanel Grid.Row="0" Grid.Column="1" Margin="0,0,0,12">
                                 <TextBlock Text="Measurement Time" Style="{StaticResource MetricLabel}"/>
-                                <TextBlock x:Name="MeasurementTimeText" Text="--" Style="{StaticResource MetricValue}"/>
+                                <TextBlock Text="{Binding MeasurementTimeText}" Style="{StaticResource MetricValue}"/>
                             </StackPanel>
 
                             <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,0,0,12">
                                 <TextBlock Text="Colorimeter" Style="{StaticResource MetricLabel}"/>
-                                <TextBlock x:Name="ColorimeterText" Text="--" Style="{StaticResource MetricValue}"/>
+                                <TextBlock Text="{Binding ColorimeterText}" Style="{StaticResource MetricValue}"/>
                             </StackPanel>
 
                             <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,0,0,12">
                                 <TextBlock Text="LUT Size" Style="{StaticResource MetricLabel}"/>
-                                <TextBlock x:Name="LutSizeText" Text="--" Style="{StaticResource MetricValue}"/>
+                                <TextBlock Text="{Binding LutSizeText}" Style="{StaticResource MetricValue}"/>
                             </StackPanel>
 
                             <StackPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2">
                                 <TextBlock Text="Profile Location" Style="{StaticResource MetricLabel}"/>
-                                <TextBlock x:Name="ProfilePathText" Text="--" Style="{StaticResource MetricValue}" TextWrapping="Wrap" FontSize="11"/>
+                                <TextBlock Text="{Binding ProfilePathText}" Style="{StaticResource MetricValue}" TextWrapping="Wrap" FontSize="11"/>
                             </StackPanel>
                         </Grid>
                     </StackPanel>
@@ -458,7 +475,7 @@
                 <Border Style="{StaticResource CardBorder}" x:Name="RecommendationsPanel">
                     <StackPanel>
                         <TextBlock Text="Recommendations" Style="{StaticResource SectionHeader}"/>
-                        <ItemsControl x:Name="RecommendationsList">
+                        <ItemsControl ItemsSource="{Binding Recommendations}">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
                                     <StackPanel Orientation="Horizontal" Margin="0,4">
@@ -483,47 +500,50 @@
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
-                <TextBlock Grid.Column="0" x:Name="StatusText"
-                           Text="Profile is active and applied."
-                           Foreground="#22c55e"
-                           VerticalAlignment="Center"
-                           FontSize="13"/>
-
                 <Button Grid.Column="1"
+                        x:Name="ExportReportButton"
+                        Content="Export Report"
+                        ToolTip="Print or save as PDF via Microsoft Print to PDF"
+                        Style="{StaticResource SecondaryButton}"
+                        Margin="0,0,10,0"
+                        Click="ExportReportButton_Click"/>
+
+                <Button Grid.Column="2"
                         x:Name="ExportButton"
                         Content="Export LUT"
                         Style="{StaticResource SecondaryButton}"
                         Margin="0,0,10,0"
                         Click="ExportButton_Click"/>
 
-                <Button Grid.Column="2"
-                        x:Name="ApplyButton"
-                        Content="Apply Profile"
+                <Button Grid.Column="3"
+                        Content="{Binding ApplyButtonContent}"
+                        IsEnabled="{Binding IsApplyEnabled}"
                         Style="{StaticResource ActionButton}"
                         Margin="0,0,10,0"
                         Click="ApplyButton_Click"/>
 
-                <Button Grid.Column="3"
-                        x:Name="VerifyButton"
-                        Content="Re-verify"
+                <Button Grid.Column="4"
+                        Content="{Binding VerifyButtonContent}"
+                        IsEnabled="{Binding IsVerifyEnabled}"
                         ToolTip="Re-measure a quick patch sweep through the applied profile to refresh the 'after' numbers. Place the probe on the display first."
                         Style="{StaticResource SecondaryButton}"
                         Margin="0,0,10,0"
                         Click="VerifyButton_Click"/>
 
-                <Button Grid.Column="4"
-                        x:Name="WhiteToolsButton"
+                <Button Grid.Column="5"
                         Content="White Tools"
+                        IsEnabled="{Binding IsWhiteToolsEnabled}"
                         ToolTip="Re-anchor white with a quick measurement (drift fix), or trim the target white by eye against a reference display."
                         Style="{StaticResource SecondaryButton}"
                         Margin="0,0,10,0"
                         Click="WhiteToolsButton_Click"/>
 
-                <Button Grid.Column="5"
-                        x:Name="CloseButton"
+                <Button Grid.Column="6"
                         Content="Close"
+                        IsEnabled="{Binding IsCloseEnabled}"
                         Style="{StaticResource SecondaryButton}"
                         Click="CloseButton_Click"/>
             </Grid>

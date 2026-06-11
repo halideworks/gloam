@@ -7,6 +7,8 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using HDRGammaController.Core;
 using HDRGammaController.Core.Calibration;
 using HDRGammaController.Services;
@@ -14,7 +16,7 @@ using HDRGammaController.Interop;
 
 namespace HDRGammaController.ViewModels
 {
-    public class TrayViewModel : IDisposable
+    public class TrayViewModel : ObservableObject, IDisposable
     {
         public event Action<string, string>? NotificationRequested;
 
@@ -44,22 +46,31 @@ namespace HDRGammaController.ViewModels
         public ICommand DashboardCommand { get; }
         public ICommand CalibrateCommand { get; }
 
-        public TrayViewModel(HotkeyManager? hotkeyManager = null)
+        public TrayViewModel(
+            MonitorManager monitorManager,
+            SettingsManager settingsManager,
+            NightModeService nightModeService,
+            ProfileManager profileManager,
+            DispwinRunner dispwinRunner,
+            GammaApplyService applyService,
+            AppDetectionService appDetectionService,
+            UpdateService updateService,
+            HotkeyManager? hotkeyManager = null)
         {
-            // Construct everything before starting any service: NightModeService and
+            // Dependencies are constructed by the DI container (App.ConfigureServices)
+            // and must all be assigned before starting any service: NightModeService and
             // AppDetectionService both fire their events synchronously from Start(),
-            // and those handlers reach the apply service.
-            _monitorManager = new MonitorManager();
-            _settingsManager = new SettingsManager();
-            _nightModeService = new NightModeService(_settingsManager.NightMode);
-
-            // Assumes template is in the same directory (needs to be sourced by user)
-            string profileTemplatePath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "srgb_to_gamma2p2_100_mhc2.icm");
-            _profileManager = new ProfileManager(profileTemplatePath);
-            _dispwinRunner = new DispwinRunner(); // Auto-detects
+            // and those handlers reach the apply service. The wiring/start order in
+            // this constructor body is load-bearing; do not reorder it.
+            _monitorManager = monitorManager;
+            _settingsManager = settingsManager;
+            _nightModeService = nightModeService;
+            _profileManager = profileManager;
+            _dispwinRunner = dispwinRunner;
             _hotkeyManager = hotkeyManager;
-
-            _applyService = new GammaApplyService(_dispwinRunner, _settingsManager, _nightModeService);
+            _applyService = applyService;
+            _appDetectionService = appDetectionService;
+            _updateService = updateService;
 
             _dispwinRunner.DispwinUnavailable += () =>
                 Application.Current.Dispatcher.Invoke(() =>
@@ -75,14 +86,13 @@ namespace HDRGammaController.ViewModels
             };
             _settingsManager.NightModeChanged += (newSettings) => _nightModeService.UpdateSettings(newSettings);
 
-            _appDetectionService = new AppDetectionService();
             _appDetectionService.ForegroundAppChanged += OnForegroundAppChanged;
 
-            ExitCommand = new RelayCommand(_ => Application.Current.Shutdown());
-            RefreshCommand = new RelayCommand(_ => RefreshMonitors());
-            StartupCommand = new RelayCommand(_ => ToggleStartup());
-            DashboardCommand = new RelayCommand(_ => OpenDashboard());
-            CalibrateCommand = new RelayCommand(_ => OpenCalibration());
+            ExitCommand = new RelayCommand(() => Application.Current.Shutdown());
+            RefreshCommand = new RelayCommand(RefreshMonitors);
+            StartupCommand = new RelayCommand(ToggleStartup);
+            DashboardCommand = new RelayCommand(OpenDashboard);
+            CalibrateCommand = new RelayCommand(OpenCalibration);
 
             RefreshMonitors();
 
@@ -98,7 +108,6 @@ namespace HDRGammaController.ViewModels
                 _hotkeyManager.HotkeyPressed += OnHotkeyPressed;
             }
 
-            _updateService = new UpdateService();
             CheckForUpdates();
         }
         
@@ -173,16 +182,39 @@ namespace HDRGammaController.ViewModels
         {
             IntPtr hwnd = User32.GetForegroundWindow();
             if (hwnd == IntPtr.Zero) return null;
-            
+
             IntPtr hMonitor = User32.MonitorFromWindow(hwnd, User32.MONITOR_DEFAULTTONEAREST);
-            
-            foreach(var item in TrayItems)
+
+            // First try handle identity (cheap), but HMONITOR values captured at DXGI
+            // enumeration go stale after display-configuration changes while the
+            // window's handle is current - so fall back to matching the monitor's
+            // desktop bounds, which are stable across re-enumeration.
+            foreach (var item in TrayItems)
             {
                 if (item is MonitorViewModel vm && vm.Model.HMonitor == hMonitor)
                 {
                     return vm.Model;
                 }
             }
+
+            if (User32.TryGetMonitorBounds(hMonitor, out var rect))
+            {
+                foreach (var item in TrayItems)
+                {
+                    if (item is MonitorViewModel vm)
+                    {
+                        var b = vm.Model.MonitorBounds;
+                        if (b.Left == rect.Left && b.Top == rect.Top &&
+                            b.Right == rect.Right && b.Bottom == rect.Bottom)
+                        {
+                            Log.Info($"TrayViewModel: focused monitor matched by bounds (stale HMONITOR) for {vm.Model.FriendlyName}");
+                            return vm.Model;
+                        }
+                    }
+                }
+            }
+
+            Log.Info($"TrayViewModel: no focused monitor match for HMONITOR {hMonitor} among {TrayItems.OfType<MonitorViewModel>().Count()} monitors");
             return null;
         }
 
@@ -345,6 +377,11 @@ namespace HDRGammaController.ViewModels
                         RefreshMonitors();
                     }
                 };
+
+                // Back: reopen the setup dialog after this window finishes closing
+                // (BeginInvoke so the modal setup doesn't block the close).
+                calibrationWindow.BackRequested += (s, e) =>
+                    Application.Current.Dispatcher.BeginInvoke(new Action(OpenCalibration));
 
                 // When the calibration window closes, re-assert the correct live gamma through
                 // the apply path. This composes any freshly-installed MHC2 calibration with the

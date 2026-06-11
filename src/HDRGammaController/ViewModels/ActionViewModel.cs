@@ -1,18 +1,32 @@
 using System.Windows.Input;
+using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace HDRGammaController.ViewModels
 {
-    public class ActionViewModel
+    public class ActionViewModel : ObservableObject
     {
-        public string Header { get; }
+        private string _header;
+        public string Header
+        {
+            get => _header;
+            set => SetProperty(ref _header, value);
+        }
+
         public ICommand? Command { get; }
         public bool IsSeparator { get; }
 
-        public ActionViewModel(string header, ICommand? command)
+        /// <summary>
+        /// Keep the tray menu open when this item is clicked, so gamma modes
+        /// can be swapped quickly without reopening the menu.
+        /// </summary>
+        public bool StaysOpenOnClick { get; }
+
+        public ActionViewModel(string header, ICommand? command, bool staysOpenOnClick = false)
         {
-            Header = header;
+            _header = header;
             Command = command;
             IsSeparator = false;
+            StaysOpenOnClick = staysOpenOnClick;
         }
 
         public System.Collections.IEnumerable? SubItems => null;
@@ -20,7 +34,7 @@ namespace HDRGammaController.ViewModels
         public ActionViewModel(bool isSeparator)
         {
             IsSeparator = true;
-            Header = string.Empty;
+            _header = string.Empty;
             Command = null!;
         }
     }

@@ -119,6 +119,7 @@
             <Setter Property="Foreground" Value="{DynamicResource MenuForeground}"/>
             <Setter Property="Header" Value="{Binding Header}" />
             <Setter Property="Command" Value="{Binding Command}" />
+            <Setter Property="StaysOpenOnClick" Value="{Binding StaysOpenOnClick}" />
             <Setter Property="Template" Value="{StaticResource SimpleMenuItemTemplate}"/>
         </Style>
     </Window.Resources>

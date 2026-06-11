@@ -7,7 +7,7 @@
         Width="520" Height="750"
         MinWidth="500" MinHeight="600"
         WindowStartupLocation="CenterScreen"
-        Background="#1E1E1E"
+        Background="Transparent"
         Foreground="White"
         WindowStyle="None"
         AllowsTransparency="True"
@@ -446,7 +446,8 @@
                 <!-- Monitor Selector Header -->
                 <StackPanel Grid.Row="0" Margin="0,0,0,16">
                     <TextBlock Text="Monitor" Style="{StaticResource FieldLabel}" Margin="0,0,0,4"/>
-                    <ComboBox x:Name="MonitorSelector" SelectionChanged="MonitorSelector_Changed"/>
+                    <ComboBox ItemsSource="{Binding Monitors}" DisplayMemberPath="Label"
+                              SelectedItem="{Binding SelectedMonitor}"/>
                 </StackPanel>
                 
                 <!-- Scrollable Content -->
@@ -457,8 +458,8 @@
                         <Border Style="{StaticResource SectionCard}">
                             <StackPanel>
                                 <TextBlock Text="Gamma" Style="{StaticResource SectionHeader}"/>
-                                <ComboBox x:Name="GammaModeCombo" SelectionChanged="GammaModeCombo_Changed">
-                                    <ComboBoxItem Content="Gamma 2.2" IsSelected="True"/>
+                                <ComboBox SelectedIndex="{Binding GammaModeIndex}">
+                                    <ComboBoxItem Content="Gamma 2.2"/>
                                     <ComboBoxItem Content="Gamma 2.4"/>
                                     <ComboBoxItem Content="Windows Default"/>
                                 </ComboBox>
@@ -470,24 +471,24 @@
                             <StackPanel>
                                 <Grid>
                                     <TextBlock Text="Brightness" Style="{StaticResource SectionHeader}"/>
-                                    <TextBlock x:Name="BrightnessValue" Text="100%" Style="{StaticResource ValueDisplay}"/>
+                                    <TextBlock Text="{Binding Value, ElementName=BrightnessSlider, StringFormat={}{0:F0}%}" Style="{StaticResource ValueDisplay}"/>
                                 </Grid>
                                 <Slider x:Name="BrightnessSlider" IsSnapToTickEnabled="True" TickFrequency="1" Style="{StaticResource ModernSlider}"
-                                        Minimum="10" Maximum="100" Value="100" 
-                                        ValueChanged="BrightnessSlider_ValueChanged"/>
-                                <CheckBox x:Name="EnhanceShadowsCheck" Content="Enhance shadow detail (Recommended)" 
+                                        Minimum="10" Maximum="100"
+                                        Value="{Binding Brightness}"/>
+                                <CheckBox Content="Enhance shadow detail (Recommended)"
                                           ToolTip="When dimming, slightly lifts shadows to prevent them from becoming invisible (black crush)."
                                           Style="{StaticResource ModernToggle}" Margin="0,8,0,0"
-                                          IsChecked="True" Checked="EnhanceShadows_Changed" Unchecked="EnhanceShadows_Changed"/>
-                                
+                                          IsChecked="{Binding EnhanceShadows}"/>
+
                                 <!-- Quick Presets -->
                                 <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-                                    <Button Content="100%" Style="{StaticResource ModernButton}" 
-                                            Click="Brightness100_Click" Margin="0,0,8,0"/>
-                                    <Button Content="75%" Style="{StaticResource ModernButton}" 
-                                            Click="Brightness75_Click" Margin="0,0,8,0"/>
-                                    <Button Content="50%" Style="{StaticResource ModernButton}" 
-                                            Click="Brightness50_Click"/>
+                                    <Button Content="100%" Style="{StaticResource ModernButton}"
+                                            Command="{Binding SetBrightnessCommand}" CommandParameter="100" Margin="0,0,8,0"/>
+                                    <Button Content="75%" Style="{StaticResource ModernButton}"
+                                            Command="{Binding SetBrightnessCommand}" CommandParameter="75" Margin="0,0,8,0"/>
+                                    <Button Content="50%" Style="{StaticResource ModernButton}"
+                                            Command="{Binding SetBrightnessCommand}" CommandParameter="50"/>
                                 </StackPanel>
                             </StackPanel>
                         </Border>
@@ -504,12 +505,12 @@
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <Slider x:Name="TemperatureSlider" IsSnapToTickEnabled="True" TickFrequency="1" Grid.Column="0" Style="{StaticResource CenteredSlider}"
-                                            Minimum="-50" Maximum="50" Value="0"
+                                            Minimum="-50" Maximum="50"
+                                            Value="{Binding Temperature}"
                                             behaviors:SliderDetent.IsEnabled="True"
                                             behaviors:SliderDetent.DetentValue="0"
-                                            behaviors:SliderDetent.SnapThreshold="2"
-                                            ValueChanged="TemperatureSlider_ValueChanged"/>
-                                    <TextBlock x:Name="TemperatureValue" Grid.Column="1" Text="0"
+                                            behaviors:SliderDetent.SnapThreshold="2"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding Value, ElementName=TemperatureSlider, StringFormat={}{0:F0}}"
                                                Style="{StaticResource EditableValue}" Width="40"
                                                behaviors:ClickToEdit.TargetSlider="{Binding ElementName=TemperatureSlider}"/>
                                 </Grid>
@@ -527,12 +528,12 @@
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <Slider x:Name="TintSlider" IsSnapToTickEnabled="True" TickFrequency="1" Grid.Column="0" Style="{StaticResource CenteredSlider}"
-                                            Minimum="-50" Maximum="50" Value="0"
+                                            Minimum="-50" Maximum="50"
+                                            Value="{Binding Tint}"
                                             behaviors:SliderDetent.IsEnabled="True"
                                             behaviors:SliderDetent.DetentValue="0"
-                                            behaviors:SliderDetent.SnapThreshold="2"
-                                            ValueChanged="TintSlider_ValueChanged"/>
-                                    <TextBlock x:Name="TintValue" Grid.Column="1" Text="0"
+                                            behaviors:SliderDetent.SnapThreshold="2"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding Value, ElementName=TintSlider, StringFormat={}{0:F0}}"
                                                Style="{StaticResource EditableValue}" Width="40"
                                                behaviors:ClickToEdit.TargetSlider="{Binding ElementName=TintSlider}"/>
                                 </Grid>
@@ -566,12 +567,12 @@
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <Slider x:Name="TempOffsetSlider" IsSnapToTickEnabled="True" TickFrequency="1" Grid.Column="0" Style="{StaticResource CenteredSlider}"
-                                            Minimum="-20" Maximum="20" Value="0"
+                                            Minimum="-20" Maximum="20"
+                                            Value="{Binding TemperatureOffset}"
                                             behaviors:SliderDetent.IsEnabled="True"
                                             behaviors:SliderDetent.DetentValue="0"
-                                            behaviors:SliderDetent.SnapThreshold="1"
-                                            ValueChanged="TempOffsetSlider_ValueChanged"/>
-                                    <TextBlock x:Name="TempOffsetValue" Grid.Column="1" Text="0"
+                                            behaviors:SliderDetent.SnapThreshold="1"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding Value, ElementName=TempOffsetSlider, StringFormat={}{0:F0}}"
                                                Style="{StaticResource EditableValue}" Width="40"
                                                behaviors:ClickToEdit.TargetSlider="{Binding ElementName=TempOffsetSlider}"/>
                                 </Grid>
@@ -597,12 +598,12 @@
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
                                         <Slider x:Name="RedGainSlider" Grid.Column="0" Style="{StaticResource RgbSlider}"
-                                                Minimum="0.5" Maximum="1.5" Value="1.0" TickFrequency="0.01"
+                                                Minimum="0.5" Maximum="1.5" TickFrequency="0.01"
+                                                Value="{Binding RedGain}"
                                                 behaviors:SliderDetent.IsEnabled="True"
                                                 behaviors:SliderDetent.DetentValue="1.0"
-                                                behaviors:SliderDetent.SnapThreshold="0.03"
-                                                ValueChanged="RgbSlider_ValueChanged"/>
-                                        <TextBlock x:Name="RedGainValue" Grid.Column="1" Text="1.00"
+                                                behaviors:SliderDetent.SnapThreshold="0.03"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Value, ElementName=RedGainSlider, StringFormat={}{0:F2}}"
                                                    Style="{StaticResource EditableValue}" Width="40"
                                                    behaviors:ClickToEdit.TargetSlider="{Binding ElementName=RedGainSlider}"/>
                                     </Grid>
@@ -615,12 +616,12 @@
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
                                         <Slider x:Name="GreenGainSlider" Grid.Column="0" Style="{StaticResource RgbSlider}"
-                                                Minimum="0.5" Maximum="1.5" Value="1.0" TickFrequency="0.01"
+                                                Minimum="0.5" Maximum="1.5" TickFrequency="0.01"
+                                                Value="{Binding GreenGain}"
                                                 behaviors:SliderDetent.IsEnabled="True"
                                                 behaviors:SliderDetent.DetentValue="1.0"
-                                                behaviors:SliderDetent.SnapThreshold="0.03"
-                                                ValueChanged="RgbSlider_ValueChanged"/>
-                                        <TextBlock x:Name="GreenGainValue" Grid.Column="1" Text="1.00"
+                                                behaviors:SliderDetent.SnapThreshold="0.03"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Value, ElementName=GreenGainSlider, StringFormat={}{0:F2}}"
                                                    Style="{StaticResource EditableValue}" Width="40"
                                                    behaviors:ClickToEdit.TargetSlider="{Binding ElementName=GreenGainSlider}"/>
                                     </Grid>
@@ -633,18 +634,18 @@
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
                                         <Slider x:Name="BlueGainSlider" Grid.Column="0" Style="{StaticResource RgbSlider}"
-                                                Minimum="0.5" Maximum="1.5" Value="1.0" TickFrequency="0.01"
+                                                Minimum="0.5" Maximum="1.5" TickFrequency="0.01"
+                                                Value="{Binding BlueGain}"
                                                 behaviors:SliderDetent.IsEnabled="True"
                                                 behaviors:SliderDetent.DetentValue="1.0"
-                                                behaviors:SliderDetent.SnapThreshold="0.03"
-                                                ValueChanged="RgbSlider_ValueChanged"/>
-                                        <TextBlock x:Name="BlueGainValue" Grid.Column="1" Text="1.00"
+                                                behaviors:SliderDetent.SnapThreshold="0.03"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Value, ElementName=BlueGainSlider, StringFormat={}{0:F2}}"
                                                    Style="{StaticResource EditableValue}" Width="40"
                                                    behaviors:ClickToEdit.TargetSlider="{Binding ElementName=BlueGainSlider}"/>
                                     </Grid>
                                     
-                                    <Button Content="Reset RGB" Style="{StaticResource ModernButton}" 
-                                            Click="ResetRgb_Click" Margin="0,12,0,0" HorizontalAlignment="Left"/>
+                                    <Button Content="Reset RGB" Style="{StaticResource ModernButton}"
+                                            Command="{Binding ResetRgbCommand}" Margin="0,12,0,0" HorizontalAlignment="Left"/>
                                 </StackPanel>
                             </Expander>
                         </Border>
@@ -654,18 +655,28 @@
                 
                 <!-- Footer Buttons -->
                 <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
-                    <CheckBox x:Name="LivePreviewToggle" Content="Live Preview" 
+                    <CheckBox Content="Live Preview"
                               Foreground="White" VerticalAlignment="Center" Margin="0,0,16,0"
-                              IsChecked="True" Checked="LivePreviewToggle_Changed" Unchecked="LivePreviewToggle_Changed"/>
-                    <Button x:Name="ApplyButton" Content="Apply" Style="{StaticResource ModernButton}" 
-                            Click="Apply_Click" Margin="0,0,8,0" Visibility="Collapsed"/>
-                    <Button x:Name="CompareButton" Content="Compare (Hold)" Style="{StaticResource SecondaryButton}" 
+                              IsChecked="{Binding IsLivePreview}"/>
+                    <Button Content="Apply" Command="{Binding ApplyCommand}" Margin="0,0,8,0">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource ModernButton}">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsLivePreview}" Value="False">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    <Button Content="Compare (Hold)" Style="{StaticResource SecondaryButton}"
                             PreviewMouseDown="Compare_MouseDown" PreviewMouseUp="Compare_MouseUp"
                             Margin="0,0,8,0"/>
-                    <Button Content="Reset All" Style="{StaticResource SecondaryButton}" 
-                            Click="ResetAll_Click" Margin="0,0,8,0"/>
-                    <Button Content="Save &amp; Close" Style="{StaticResource ModernButton}" 
-                            Click="SaveAndClose_Click"/>
+                    <Button Content="Reset All" Style="{StaticResource SecondaryButton}"
+                            Command="{Binding ResetAllCommand}" Margin="0,0,8,0"/>
+                    <Button Content="Save &amp; Close" Style="{StaticResource ModernButton}"
+                            Command="{Binding SaveAndCloseCommand}"/>
                 </StackPanel>
             </Grid>
         </Grid>
