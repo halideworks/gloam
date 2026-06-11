@@ -44,9 +44,7 @@ namespace HDRGammaController.Core.Calibration
         private bool _sessionHdrMode;
 
         // Log file for debugging spotread communication
-        private static readonly string LogFilePath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "HDRGammaController", "colorimeter.log");
+        private static readonly string LogFilePath = Path.Combine(AppPaths.DataDir, "colorimeter.log");
 
         private static void Log(string message)
         {
@@ -637,9 +635,7 @@ namespace HDRGammaController.Core.Calibration
         private static string GetUsbDriverInstallerPath()
         {
             // Check our downloaded ArgyllCMS first
-            string localArgyllDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "HDRGammaController", "Argyll");
+            string localArgyllDir = Path.Combine(AppPaths.DataDir, "Argyll");
 
             string installerPath = Path.Combine(localArgyllDir, "usb", "ArgyllCMS_install_USB.exe");
             if (File.Exists(installerPath))

@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:HDRGammaController"
         xmlns:vm="clr-namespace:HDRGammaController.ViewModels"
-        Title="HDR Gamma Controller - Dashboard" 
+        Title="Gloam - Dashboard"
         Height="Auto" Width="1000"
         SizeToContent="Height"
         MaxHeight="900" 

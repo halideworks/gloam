@@ -390,10 +390,8 @@ namespace HDRGammaController.Core.Calibration
                 yield return dir.FullName;
 
             // ResourceExtractor's fallback when the app dir is read-only (unelevated under
-            // Program Files): %LocalAppData%\HDRGammaController.
-            yield return Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "HDRGammaController");
+            // Program Files): %LocalAppData%\Gloam.
+            yield return AppPaths.DataDir;
         }
 
         /// <summary>

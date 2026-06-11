@@ -1,4 +1,6 @@
-# HDR Gamma Controller
+# Gloam
+
+*Formerly HDR Gamma Controller (win11hdr-gamma-adjuster).*
 
 A Windows System Tray application to manage HDR Gamma settings on a per-monitor basis. This tool addresses the "washed out" or incorrect dark levels often experienced when using Windows HDR on OLED and Mini-LED displays.
 
@@ -43,20 +45,20 @@ A Windows System Tray application to manage HDR Gamma settings on a per-monitor 
 
 There are two versions available:
 
-1.  **Full Version (`HDRGammaController_Full.zip`)**:
+1.  **Full Version (`Gloam_Full.zip`)**:
     *   **Recommended for most users.**
     *   **Self-Contained**: Does *not* require .NET Runtime to be installed.
     *   **Bundled Dependencies**: Includes ArgyllCMS (`dispwin.exe`) so it works immediately offline.
     *   **Size**: ~160 MB.
 
-2.  **Lite Version (`HDRGammaController_Lite.zip`)**:
+2.  **Lite Version (`Gloam_Lite.zip`)**:
     *   **Requires**: [.NET 8.0 Desktop Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/8.0).
     *   **ArgyllCMS**: Not needed for gamma correction; downloaded automatically if you use colorimeter calibration.
     *   **Size**: ~200 KB.
 
 **Instructions:**
-1.  Extract the ZIP file to your preferred location (e.g., `C:\Program Files\HDRGammaController`).
-2.  Run `HDRGammaController.exe`.
+1.  Extract the ZIP file to your preferred location (e.g., `C:\Program Files\Gloam`).
+2.  Run `Gloam.exe`.
 3.  Right-click the tray icon and enable "Start with Windows" for auto-start.
 
 ### Option 2: Build from Source
@@ -73,8 +75,8 @@ This script will generate both Lite and Full packages in the root directory.
 #### Manual Build
 ```powershell
 # Clone the repository
-git clone https://github.com/davidtorcivia/win11hdr-gamma-adjuster.git
-cd win11hdr-gamma-adjuster
+git clone https://github.com/davidtorcivia/gloam.git
+cd gloam
 
 # Build minimal (requires .NET 8 runtime)
 dotnet publish src/HDRGammaController -c Release --self-contained false -o publish-minimal

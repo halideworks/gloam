@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:HDRGammaController"
         xmlns:behaviors="clr-namespace:HDRGammaController.Behaviors"
-        Title="HDR Gamma Controller - Settings"
+        Title="Gloam - Settings"
         Width="520" Height="750"
         MinWidth="500" MinHeight="600"
         WindowStartupLocation="CenterScreen"

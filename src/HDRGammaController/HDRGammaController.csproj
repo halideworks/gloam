@@ -3,6 +3,12 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
+    <!-- User-facing brand is Gloam; the project file name and RootNamespace stay
+         HDRGammaController internally. -->
+    <AssemblyName>Gloam</AssemblyName>
+    <RootNamespace>HDRGammaController</RootNamespace>
+    <Product>Gloam</Product>
+    <AssemblyTitle>Gloam</AssemblyTitle>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>

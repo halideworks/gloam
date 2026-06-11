@@ -117,8 +117,7 @@ namespace HDRGammaController.ViewModels
         /// place to put downloaded .ccss/.ccmx files.
         /// </summary>
         public static string CorrectionsFolder => System.IO.Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "HDRGammaController", "corrections");
+            AppPaths.DataDir, "corrections");
 
         public CalibrationSetupViewModel(List<MonitorInfo> monitors, SettingsManager? settingsManager)
         {

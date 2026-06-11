@@ -69,7 +69,7 @@ function Create-Package {
     }
 
     # 4. Zip
-    $zipFile = "HDRGammaController_${Name}.zip"
+    $zipFile = "Gloam_${Name}.zip"
     if (Test-Path $zipFile) { Remove-Item $zipFile }
     
     Write-Host "Creating $zipFile..."

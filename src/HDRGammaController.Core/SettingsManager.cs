@@ -169,9 +169,7 @@ namespace HDRGammaController.Core
     public class SettingsManager
     {
         // Use LocalApplicationData to avoid Resilio Sync corruption
-        private static readonly string AppDataPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "HDRGammaController");
+        private static readonly string AppDataPath = AppPaths.DataDir;
         
         private static readonly string SettingsFilePath = Path.Combine(AppDataPath, "settings.json");
         

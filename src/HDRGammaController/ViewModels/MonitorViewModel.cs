@@ -136,7 +136,7 @@ namespace HDRGammaController.ViewModels
              {
                  System.Windows.MessageBox.Show(
                      $"Failed to apply gamma:\n\n{ex.Message}",
-                     "HDR Gamma Controller - Error",
+                     "Gloam - Error",
                      System.Windows.MessageBoxButton.OK,
                      System.Windows.MessageBoxImage.Error);
              }

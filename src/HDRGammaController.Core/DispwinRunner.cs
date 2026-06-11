@@ -543,8 +543,8 @@ namespace HDRGammaController.Core
             // Argyll CAL format - must start with "CAL" identifier
             sb.AppendLine("CAL    ");
             sb.AppendLine();
-            sb.AppendLine("DESCRIPTOR \"HDRGammaController Generated Calibration\"");
-            sb.AppendLine("ORIGINATOR \"HDRGammaController\"");
+            sb.AppendLine("DESCRIPTOR \"Gloam Generated Calibration\"");
+            sb.AppendLine("ORIGINATOR \"Gloam\"");
             sb.AppendLine($"CREATED \"{DateTime.Now:ddd MMM dd HH:mm:ss yyyy}\"");
             sb.AppendLine("DEVICE_CLASS \"DISPLAY\"");
             sb.AppendLine("COLOR_REP \"RGB\"");

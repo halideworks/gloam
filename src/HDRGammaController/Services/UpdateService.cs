@@ -19,8 +19,10 @@ namespace HDRGammaController.Services
 
     public class UpdateService
     {
+        // The GitHub repo is being renamed for the Gloam rebrand. Until the rename
+        // lands, the check 404s and logs - acceptable.
         private const string RepoOwner = "davidtorcivia";
-        private const string RepoName = "win11hdr-gamma-adjuster";
+        private const string RepoName = "gloam";
 
         // Rate limiting to prevent excessive API calls
         private static DateTime _lastCheckTime = DateTime.MinValue;
@@ -42,7 +44,7 @@ namespace HDRGammaController.Services
             try
             {
                 using var client = new HttpClient();
-                client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("HDRGammaController", "1.0"));
+                client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Gloam", "1.0"));
                 client.Timeout = TimeSpan.FromSeconds(30);
 
                 // Get the release tagged 'latest' (our Auto-Build)

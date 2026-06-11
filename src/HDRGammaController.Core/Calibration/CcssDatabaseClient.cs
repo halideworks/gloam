@@ -27,7 +27,7 @@ namespace HDRGammaController.Core.Calibration
         {
             var client = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
             // The server rejects generic/bot user agents with 403.
-            client.DefaultRequestHeaders.UserAgent.ParseAdd("HDRGammaController/1.0");
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("Gloam/1.0");
             return client;
         }
 

@@ -16,9 +16,7 @@ namespace HDRGammaController.Core.Calibration
         public static string? GetDriverInstallerPath()
         {
             // Check our downloaded ArgyllCMS first
-            string localArgyllDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "HDRGammaController", "Argyll");
+            string localArgyllDir = Path.Combine(AppPaths.DataDir, "Argyll");
 
             string installerPath = Path.Combine(localArgyllDir, "usb", "ArgyllCMS_install_USB.exe");
             if (File.Exists(installerPath))

@@ -127,7 +127,7 @@ namespace HDRGammaController.ViewModels
                 {
                      PendingUpdateUrl = !string.IsNullOrEmpty(info.ReleaseUrl)
                          ? info.ReleaseUrl
-                         : $"https://github.com/davidtorcivia/win11hdr-gamma-adjuster/releases";
+                         : $"https://github.com/davidtorcivia/gloam/releases";
                      NotificationRequested?.Invoke("Update Available",
                          $"A new version ({info.Version}) is available.\nClick here to download.");
                 }
@@ -359,7 +359,7 @@ namespace HDRGammaController.ViewModels
         private void PanicAll()
         {
             _applyService.ClearAll(TrayItems.OfType<MonitorViewModel>().Select(vm => vm.Model));
-            MessageBox.Show("Panic Mode Activated: All gamma tables cleared.", "HDR Gamma Controller", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show("Panic Mode Activated: All gamma tables cleared.", "Gloam", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         private void ToggleStartup()

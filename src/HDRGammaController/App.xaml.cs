@@ -50,6 +50,11 @@ namespace HDRGammaController
 
         protected override void OnStartup(StartupEventArgs e)
         {
+            // One-time rebrand migration: move %LocalAppData%\HDRGammaController (and
+            // the roaming profile folder) to Gloam. Must run before Log.Initialize,
+            // which would otherwise create the new folder and block the move.
+            var migrationMessages = AppPaths.MigrateLegacyData();
+
             // Enable the file sink first: a WinExe's console output is discarded, so
             // without this no diagnostics from the tray app survive anywhere.
             Log.Initialize();
@@ -57,6 +62,10 @@ namespace HDRGammaController
             try
             {
                 Log.Info("App.OnStartup: Starting...");
+                foreach (var message in migrationMessages)
+                {
+                    Log.Info(message);
+                }
                 base.OnStartup(e);
 
                 // Extract embedded ICM profiles if missing or updated

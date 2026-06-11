@@ -332,13 +332,11 @@ namespace HDRGammaController.Core.Calibration
 
         /// <summary>
         /// Gets the directory where calibration report snapshots are saved
-        /// (%LocalAppData%\HDRGammaController\reports).
+        /// (%LocalAppData%\Gloam\reports).
         /// </summary>
         public static string GetReportsDirectory()
         {
-            string dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "HDRGammaController", "reports");
+            string dir = Path.Combine(AppPaths.DataDir, "reports");
             Directory.CreateDirectory(dir);
             return dir;
         }
@@ -348,9 +346,7 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public static string GetProfileDirectory()
         {
-            string dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "HDRGammaController", "Profiles");
+            string dir = Path.Combine(AppPaths.RoamingDataDir, "Profiles");
             Directory.CreateDirectory(dir);
             return dir;
         }

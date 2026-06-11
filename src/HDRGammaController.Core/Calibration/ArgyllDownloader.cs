@@ -42,9 +42,7 @@ namespace HDRGammaController.Core.Calibration
         /// <summary>
         /// Gets the local directory where ArgyllCMS is installed.
         /// </summary>
-        public static string LocalArgyllDir => Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "HDRGammaController", "Argyll");
+        public static string LocalArgyllDir => Path.Combine(AppPaths.DataDir, "Argyll");
 
         /// <summary>
         /// Gets the bin directory path.

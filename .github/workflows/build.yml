@@ -32,22 +32,22 @@ jobs:
       - name: Upload Lite Package
         uses: actions/upload-artifact@v4
         with:
-          name: HDRGammaController_Lite
-          path: HDRGammaController_Lite.zip
+          name: Gloam_Lite
+          path: Gloam_Lite.zip
 
       - name: Upload Full Package
         uses: actions/upload-artifact@v4
         with:
-          name: HDRGammaController_Full
-          path: HDRGammaController_Full.zip
+          name: Gloam_Full
+          path: Gloam_Full.zip
 
       - name: Create Tagged Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            HDRGammaController_Lite.zip
-            HDRGammaController_Full.zip
+            Gloam_Lite.zip
+            Gloam_Full.zip
           draft: false
           prerelease: false
 
@@ -59,7 +59,7 @@ jobs:
           tag_name: latest
           name: Latest Auto-Build
           files: |
-            HDRGammaController_Lite.zip
-            HDRGammaController_Full.zip
+            Gloam_Lite.zip
+            Gloam_Full.zip
           draft: false
           prerelease: true
