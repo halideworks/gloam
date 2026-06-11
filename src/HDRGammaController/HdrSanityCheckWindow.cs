@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
@@ -140,6 +141,16 @@ namespace HDRGammaController
                     Say($"WARNING: gamma mode is {gm}, not Windows Default - the SDR-mapping check below will be contaminated.");
 
                 Say($"Monitor: {_monitor.FriendlyName}  SDR white {_monitor.SdrWhiteLevel:F0} nits  panel peak {_monitor.HdrPeakNits:F0} nits");
+
+                // The cached SDR white level dates from app launch; the slider may have moved
+                // since. The June 10 MAG run hinted the real value differed (~256 vs 240).
+                double sdrWhiteOs = _monitor.SdrWhiteLevel;
+                if (HDRGammaController.Interop.DisplayConfig.TryGetSdrWhiteLevelNits(_monitor.DeviceName) is { } liveSdr)
+                {
+                    if (Math.Abs(liveSdr - sdrWhiteOs) > 0.5)
+                        Say($"NOTE: live SDR white level is {liveSdr:F0} nits (app cached {sdrWhiteOs:F0} at launch).");
+                    sdrWhiteOs = liveSdr;
+                }
                 Say(new string('-', 86));
 
                 // POSITIONING PHASE: same drag interaction as the calibration window — the
@@ -209,9 +220,15 @@ namespace HDRGammaController
                 double ratio = fp16Same.Y / Math.Max(sdrWhite.Y, 1e-6);
                 double dx = Math.Abs(fp16Same.ToChromaticity().X - sdrWhite.ToChromaticity().X);
                 double dy = Math.Abs(fp16Same.ToChromaticity().Y - sdrWhite.ToChromaticity().Y);
-                bool parity = ratio is > 0.90 and < 1.10 && dx < 0.006 && dy < 0.006;
+                // Parity is judged on CHROMATICITY only: identical xy proves both content
+                // types traverse the same color transform. The luminance ratio mixes in the
+                // OS's SDR-white wire mapping (an assumption we are NOT going to rely on) and
+                // the panel's uniform HDR gain - check 5 separates those.
+                bool chromaParity = dx < 0.006 && dy < 0.006;
                 Say($"    FP16 same level  : {fp16Same.Y,7:F1} nits  ({fp16Same.ToChromaticity().X:F4}, {fp16Same.ToChromaticity().Y:F4})  ratio {ratio:F3}  Δxy ({dx:F4},{dy:F4})");
-                Say($"    PARITY: {(parity ? "PASS - profile applies to FP16 identically" : "FAIL - FP16 takes a different pipeline path!")}");
+                Say($"    PARITY (chromaticity): {(chromaParity ? "PASS - same color pipeline for SDR and FP16" : "FAIL - FP16 takes a different color path!")}");
+                if (ratio is < 0.90 or > 1.10)
+                    Say($"    luminance ratio {ratio:F3} deviates - interpreted after check 5 (panel gain vs SDR-white mapping).");
 
                 // ---- 3. Range ---------------------------------------------------------------
                 double high = Math.Min(sdrWhite.Y * 2.0, _monitor.HdrPeakNits > 50 ? _monitor.HdrPeakNits * 0.9 : sdrWhite.Y * 2.0);
@@ -247,17 +264,39 @@ namespace HDRGammaController
                 Say("[5] PQ tracking via FP16 (exact wire positions, no mapping assumption)…");
                 surround.SetColor(0, 0, 0);
                 renderer = new HdrPatchRenderer(px, py, size, size);
+                var ratios = new System.Collections.Generic.List<double>();
                 foreach (double nits in new[] { sdrWhite.Y * 0.25, sdrWhite.Y * 0.5, sdrWhite.Y, high })
                 {
                     renderer.PresentNits(nits, nits, nits);
                     surround.SetProgress(5, 5, $"FP16 {nits:F0} nits");
                     var m = await Measure();
+                    ratios.Add(m.Y / nits);
                     Say($"    requested {nits,6:F1} nits -> measured {m.Y,6:F1} nits  ({m.Y / nits:P1} of request)");
                 }
 
+                // What HDR-range calibration actually requires is not that the panel hits the
+                // PQ spec (that's what the calibration CORRECTS) but that FP16 wire positions
+                // behave consistently - i.e. measured/requested is a smooth function of level,
+                // here approximated as flat-within-tolerance. A wild spread would mean the
+                // wire positions can't be trusted.
+                double rMin = ratios.Min(), rMax = ratios.Max(), rAvg = ratios.Average();
+                double spread = rMax / Math.Max(rMin, 1e-9) - 1.0;
+                bool flat = spread < 0.08;
+                Say($"    panel HDR gain: {rAvg:P1} of PQ spec, spread {spread:P1} across the range");
+                Say($"    TRACKING: {(flat ? "PASS - wire positions are exact; the uniform gain is panel-side and exactly what the LUT corrects" : "FAIL - response is not a consistent scale; wire positioning suspect")}");
+
+                // Resolve the check-2 luminance question: where does SDR white REALLY land on
+                // the wire? Invert the measured panel gain.
+                double inferredSdrWire = sdrWhite.Y / Math.Max(rAvg, 1e-9);
+                Say($"    inferred SDR-white wire position ≈ {inferredSdrWire:F0} nits (OS reports {sdrWhiteOs:F0})");
+                if (Math.Abs(ratio - rAvg) < 0.05)
+                    Say($"    check-2 luminance gap RESOLVED: FP16 at {sdrWhite.Y:F0} nits behaved exactly like every other wire point " +
+                        $"(ratio {ratio:F3} vs panel gain {rAvg:F3}); the gap is the OS SDR-white value, not the FP16 path.");
+
                 Say(new string('-', 86));
-                Say(parity && range
-                    ? "VERDICT: HDR-range patches are trustworthy on this system. Ready to build HDR-range calibration."
+                Say(chromaParity && range && flat
+                    ? "VERDICT: HDR-range patches are trustworthy on this system. Ready to build HDR-range calibration " +
+                      "(the builder must MEASURE the SDR-white wire position, not assume the OS value)."
                     : "VERDICT: NOT ready - see failures above before building on this path.");
             }
             catch (Exception ex)
