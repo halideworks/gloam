@@ -788,6 +788,13 @@ namespace HDRGammaController.Core.Calibration
         /// <summary>ΔE ITP (BT.2124) per patch, absolute-luminance HDR metric. ~3× ΔE2000 scale.</summary>
         public List<double> ItpDeltaEs { get; } = new();
 
+        /// <summary>
+        /// Per-patch results in measurement order (name, category, ΔE2000). Populated by
+        /// <see cref="CalibrationVerifier.ComputeMetrics"/> for the detailed-verification
+        /// analysis; other metric producers may leave it empty.
+        /// </summary>
+        public List<PatchDeltaE> PatchResults { get; } = new();
+
         /// <summary>Average grayscale tone-axis (lightness) error.</summary>
         public double AverageGrayscaleToneDeltaE => GrayscaleToneDeltaEs.Count > 0 ? GrayscaleToneDeltaEs.Average() : 0;
 

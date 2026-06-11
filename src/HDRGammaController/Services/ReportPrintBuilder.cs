@@ -41,6 +41,16 @@ namespace HDRGammaController.Services
         public readonly record struct ChartFigure(string Title, ImageSource Image);
 
         /// <summary>
+        /// Everything the printed Detailed Verification section needs: the two re-rendered
+        /// light-palette figures (histogram + per-patch), the worst patches and the category
+        /// breakdown line. Null when no detailed sweep data exists.
+        /// </summary>
+        public sealed record DetailedPrintSection(
+            IReadOnlyList<ChartFigure> Charts,
+            IReadOnlyList<HDRGammaController.Core.Calibration.PatchDeltaE> WorstPatches,
+            string CategoryBreakdownText);
+
+        /// <summary>
         /// Creates a fresh offscreen canvas at the print figure size, already measured and
         /// arranged so the chart code sees a real ActualWidth/ActualHeight. Draw into it,
         /// then hand it to <see cref="RenderPrintCanvas"/>.
@@ -83,7 +93,8 @@ namespace HDRGammaController.Services
         public static FlowDocument Build(
             CalibrationReportViewModel vm,
             bool isHistorical,
-            IReadOnlyList<ChartFigure>? charts)
+            IReadOnlyList<ChartFigure>? charts,
+            DetailedPrintSection? detailed = null)
         {
             var doc = new FlowDocument
             {
@@ -99,6 +110,8 @@ namespace HDRGammaController.Services
             AddCharacteristicsSection(doc, vm);
             AddPrimariesSection(doc, vm);
             AddChartsSection(doc, charts, isHistorical);
+            if (detailed != null)
+                AddDetailedSection(doc, detailed);
             AddDetailsSection(doc, vm);
             AddRecommendationsSection(doc, vm);
             AddFooter(doc);
@@ -324,6 +337,61 @@ namespace HDRGammaController.Services
             };
             cell.Blocks.Add(new BlockUIContainer(image) { Margin = new Thickness(0) });
             return cell;
+        }
+
+        private static void AddDetailedSection(FlowDocument doc, DetailedPrintSection detailed)
+        {
+            doc.Blocks.Add(SectionHeading("Detailed Verification"));
+
+            // Two-up figure grid, same layout as the main charts section.
+            if (detailed.Charts.Count > 0)
+            {
+                var figures = BareTable(new[] { 1.0, 1.0 });
+                var figureGroup = figures.RowGroups[0];
+                for (int i = 0; i < detailed.Charts.Count; i += 2)
+                {
+                    var row = new TableRow();
+                    row.Cells.Add(FigureCell(detailed.Charts[i]));
+                    row.Cells.Add(i + 1 < detailed.Charts.Count ? FigureCell(detailed.Charts[i + 1]) : new TableCell());
+                    figureGroup.Rows.Add(row);
+                }
+                doc.Blocks.Add(figures);
+            }
+
+            doc.Blocks.Add(new Paragraph(new Run(detailed.CategoryBreakdownText))
+            {
+                FontSize = 11,
+                Margin = new Thickness(0, 4, 0, 8),
+            });
+
+            if (detailed.WorstPatches.Count == 0) return;
+
+            doc.Blocks.Add(new Paragraph(new Run("Worst patches"))
+            {
+                FontSize = 11,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = Muted,
+                Margin = new Thickness(0, 0, 0, 2),
+                KeepWithNext = true,
+            });
+
+            var table = BareTable(new[] { 0.4, 2.6, 1.0 });
+            var group = table.RowGroups[0];
+            var header = HeaderRow("#", "Patch", "Delta E");
+            header.Cells[1].TextAlignment = TextAlignment.Left; // patch names print left-aligned
+            group.Rows.Add(header);
+            int rank = 1;
+            foreach (var patch in detailed.WorstPatches)
+            {
+                var row = new TableRow();
+                row.Cells.Add(Cell($"{rank++}", Muted, size: 10.5));
+                row.Cells.Add(Cell(patch.Name, Ink));
+                row.Cells.Add(Cell($"{patch.DeltaE:F2}",
+                    CalibrationReportViewModel.DeltaEPrintBrush(patch.DeltaE),
+                    bold: true, align: TextAlignment.Center));
+                group.Rows.Add(row);
+            }
+            doc.Blocks.Add(table);
         }
 
         private static void AddDetailsSection(FlowDocument doc, CalibrationReportViewModel vm)

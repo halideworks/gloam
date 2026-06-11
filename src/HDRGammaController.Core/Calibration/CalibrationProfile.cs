@@ -408,6 +408,29 @@ namespace HDRGammaController.Core.Calibration
         public double? AfterPrimaryDeltaE { get; set; }
         public string? GradeScopeLabel { get; set; }
         public string? SummaryText { get; set; }
+
+        // Detailed-verification results (all null unless a detailed sweep ran; nullable so
+        // report JSONs from before the feature load unchanged). The per-patch list is small
+        // (capped at VerificationPatchSets.DetailedPatchCount) and lets a re-opened report
+        // re-render the histogram, per-patch chart and worst-10 list.
+        public List<VerifiedPatchResult>? DetailedPatches { get; set; }
+        /// <summary>ΔE histogram counts in VerificationAnalysis bucket order (6 buckets).</summary>
+        public int[]? DetailedHistogram { get; set; }
+        public double? DetailedGrayscaleDeltaE { get; set; }
+        public double? DetailedPrimariesDeltaE { get; set; }
+        public double? DetailedSaturationDeltaE { get; set; }
+        public double? DetailedMemoryColorsDeltaE { get; set; }
+    }
+
+    /// <summary>
+    /// One persisted detailed-verification patch result. Category is stored as the
+    /// PatchCategory name (string, so unknown future values degrade gracefully).
+    /// </summary>
+    public class VerifiedPatchResult
+    {
+        public string Name { get; set; } = "";
+        public string? Category { get; set; }
+        public double DeltaE { get; set; }
     }
 
     /// <summary>

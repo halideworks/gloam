@@ -197,6 +197,9 @@ namespace HDRGammaController.Core.Calibration
         SkinTone,
 
         /// <summary>Saturated color patches throughout the gamut.</summary>
-        Saturated
+        Saturated,
+
+        /// <summary>Memory colors (ColorChecker-style skin, sky, foliage) for verification.</summary>
+        MemoryColor
     }
 }

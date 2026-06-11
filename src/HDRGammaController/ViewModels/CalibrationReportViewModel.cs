@@ -175,6 +175,26 @@ namespace HDRGammaController.ViewModels
 
         #endregion
 
+        #region Detailed verification
+
+        /// <summary>The "Detailed verification" toggle next to the Verify button.</summary>
+        private bool _isDetailedVerifyChecked;
+        public bool IsDetailedVerifyChecked { get => _isDetailedVerifyChecked; set => SetProperty(ref _isDetailedVerifyChecked, value); }
+
+        /// <summary>Shows the Detailed Verification card (live sweep or persisted history).</summary>
+        private bool _hasDetailedResults;
+        public bool HasDetailedResults { get => _hasDetailedResults; set => SetProperty(ref _hasDetailedResults, value); }
+
+        private string _categoryBreakdownText = "";
+        public string CategoryBreakdownText { get => _categoryBreakdownText; set => SetProperty(ref _categoryBreakdownText, value); }
+
+        /// <summary>One row of the worst-10 list: rank, patch name and color-coded ΔE.</summary>
+        public sealed record WorstPatchItem(string Rank, string Name, string DeltaEText, Brush DeltaEBrush);
+
+        public ObservableCollection<WorstPatchItem> WorstPatches { get; } = new();
+
+        #endregion
+
         #region Display characteristics
 
         private string _peakLuminanceText = "-- cd/m2";

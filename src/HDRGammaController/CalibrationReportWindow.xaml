@@ -374,6 +374,57 @@
                     </StackPanel>
                 </Border>
 
+                <!-- Detailed Verification (collapsed unless a detailed sweep ran; historical
+                     reports rebuild it from the persisted per-patch results) -->
+                <Border Style="{StaticResource CardBorder}"
+                        Visibility="{Binding HasDetailedResults, Converter={StaticResource BoolToVis}}">
+                    <StackPanel>
+                        <TextBlock Text="Detailed Verification" Style="{StaticResource SectionHeader}"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel Grid.Column="0" Margin="0,4,8,12">
+                                <TextBlock Text="ΔE distribution" Style="{StaticResource MetricLabel}"/>
+                                <Border Background="#181818" CornerRadius="4" Height="200">
+                                    <Canvas x:Name="HistogramCanvas"/>
+                                </Border>
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="1" Margin="8,4,0,12">
+                                <TextBlock Text="Per-patch ΔE (measurement order, hover for names)" Style="{StaticResource MetricLabel}"/>
+                                <Border Background="#181818" CornerRadius="4" Height="200">
+                                    <Canvas x:Name="PerPatchCanvas"/>
+                                </Border>
+                            </StackPanel>
+                        </Grid>
+
+                        <TextBlock Text="{Binding CategoryBreakdownText}"
+                                   FontSize="12" Foreground="#a0a0a0" TextWrapping="Wrap" Margin="0,0,0,12"/>
+
+                        <TextBlock Text="Worst patches" Style="{StaticResource MetricLabel}"/>
+                        <ItemsControl ItemsSource="{Binding WorstPatches}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="0,2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="28"/>
+                                            <ColumnDefinition Width="220"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="{Binding Rank}" FontSize="12" Foreground="#707070"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="12" Foreground="#e0e0e0"/>
+                                        <TextBlock Grid.Column="2" Text="{Binding DeltaEText}" FontSize="12" FontWeight="SemiBold"
+                                                   Foreground="{Binding DeltaEBrush}"/>
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
                 <!-- Primaries Comparison -->
                 <Border Style="{StaticResource CardBorder}">
                     <StackPanel>
@@ -501,6 +552,7 @@
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
                 <Button Grid.Column="1"
@@ -525,7 +577,16 @@
                         Margin="0,0,10,0"
                         Click="ApplyButton_Click"/>
 
-                <Button Grid.Column="4"
+                <CheckBox Grid.Column="4"
+                          Content="Detailed"
+                          IsChecked="{Binding IsDetailedVerifyChecked}"
+                          IsEnabled="{Binding IsVerifyEnabled}"
+                          ToolTip="Detailed verification: extends the sweep to a 21-step grayscale, R/G/B saturation ramps and the ColorChecker memory colors (39 patches), adding a ΔE distribution, per-patch chart, worst-10 list and category breakdown to the report. Takes several times longer than the standard verify."
+                          Foreground="#e0e0e0"
+                          VerticalAlignment="Center"
+                          Margin="0,0,10,0"/>
+
+                <Button Grid.Column="5"
                         Content="{Binding VerifyButtonContent}"
                         IsEnabled="{Binding IsVerifyEnabled}"
                         ToolTip="Re-measure a quick patch sweep through the applied profile to refresh the 'after' numbers. Place the probe on the display first."
@@ -533,7 +594,7 @@
                         Margin="0,0,10,0"
                         Click="VerifyButton_Click"/>
 
-                <Button Grid.Column="5"
+                <Button Grid.Column="6"
                         Content="White Tools"
                         IsEnabled="{Binding IsWhiteToolsEnabled}"
                         ToolTip="Re-anchor white with a quick measurement (drift fix), or trim the target white by eye against a reference display."
@@ -541,7 +602,7 @@
                         Margin="0,0,10,0"
                         Click="WhiteToolsButton_Click"/>
 
-                <Button Grid.Column="6"
+                <Button Grid.Column="7"
                         Content="Close"
                         IsEnabled="{Binding IsCloseEnabled}"
                         Style="{StaticResource SecondaryButton}"

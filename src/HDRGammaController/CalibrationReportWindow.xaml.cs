@@ -29,6 +29,11 @@ namespace HDRGammaController
         private IReadOnlyList<MeasurementResult>? _verifyMeasurements;
         private System.Threading.CancellationTokenSource? _verifyCts;
 
+        // Detailed-verification per-patch results (name, category, dE) in measurement order.
+        // Set by a detailed sweep, or rebuilt from the persisted summary for historical
+        // reports; everything the Detailed Verification section shows derives from this.
+        private IReadOnlyList<PatchDeltaE>? _detailedPatchResults;
+
         // Historical open (from the report browser): no metrics or measurements, just the
         // profile JSON loaded from disk. The accuracy table comes from ReportSummary and
         // the live tools stay disabled.
@@ -119,8 +124,8 @@ namespace HDRGammaController
                 PersistReportSummary(after: null);
 
             // Charts need real canvas sizes, which exist only after layout.
-            Loaded += (_, _) => RenderCharts();
-            SizeChanged += (_, _) => RenderCharts();
+            Loaded += (_, _) => { RenderCharts(); RenderDetailedCharts(); };
+            SizeChanged += (_, _) => { RenderCharts(); RenderDetailedCharts(); };
 
             Loaded += async (_, _) =>
             {
@@ -234,6 +239,18 @@ namespace HDRGammaController
                     Vm.GradeScopeText = s.GradeScopeLabel;
                 if (!string.IsNullOrEmpty(s.SummaryText))
                     Vm.SummaryText = s.SummaryText;
+
+                // Detailed verification survives into history: the persisted per-patch list
+                // is enough to rebuild the histogram, per-patch chart, worst-10 and the
+                // category breakdown (unlike the tone/gamut charts, which need raw XYZ).
+                if (s.DetailedPatches is { Count: > 0 } detailed)
+                {
+                    _detailedPatchResults = detailed.Select(d => new PatchDeltaE(
+                        d.Name,
+                        Enum.TryParse<PatchCategory>(d.Category, out var cat) ? cat : PatchCategory.General,
+                        d.DeltaE)).ToList();
+                    PresentDetailedResults();
+                }
             }
 
             Vm.AreChartsVisible = false;
@@ -257,6 +274,14 @@ namespace HDRGammaController
             if (_profile == null) return;
             try
             {
+                // Detailed sweep results (when one ran): per-patch list capped at the
+                // detailed set size, plus the derived histogram and category breakdown so
+                // the saved JSON is self-describing.
+                var detailed = _detailedPatchResults;
+                CategoryBreakdown? breakdown = detailed != null
+                    ? VerificationAnalysis.ComputeCategoryBreakdown(detailed)
+                    : null;
+
                 _profile.ReportSummary = new CalibrationReportSummary
                 {
                     AvgDeltaE = _metrics?.AverageDeltaE,
@@ -269,6 +294,22 @@ namespace HDRGammaController
                     AfterPrimaryDeltaE = after?.AveragePrimaryDeltaE,
                     GradeScopeLabel = Vm.GradeScopeText,
                     SummaryText = Vm.SummaryText,
+                    DetailedPatches = detailed?
+                        .Take(VerificationPatchSets.DetailedPatchCount)
+                        .Select(p => new VerifiedPatchResult
+                        {
+                            Name = p.Name,
+                            Category = p.Category.ToString(),
+                            DeltaE = Math.Round(p.DeltaE, 3),
+                        })
+                        .ToList(),
+                    DetailedHistogram = detailed != null
+                        ? VerificationAnalysis.HistogramCounts(detailed.Select(p => p.DeltaE))
+                        : null,
+                    DetailedGrayscaleDeltaE = breakdown?.GrayscaleDeltaE,
+                    DetailedPrimariesDeltaE = breakdown?.PrimariesDeltaE,
+                    DetailedSaturationDeltaE = breakdown?.SaturationDeltaE,
+                    DetailedMemoryColorsDeltaE = breakdown?.MemoryColorsDeltaE,
                 };
 
                 if (_reportSavePath == null)
@@ -637,7 +678,28 @@ namespace HDRGammaController
                     if (figures.Count > 0) charts = figures;
                 }
 
-                var document = ReportPrintBuilder.Build(Vm, _isHistorical, charts);
+                // Detailed verification prints whenever its data exists - including for
+                // historical reports, where the per-patch list persists in the summary and
+                // the charts are simply re-rendered from it (light palette, print size).
+                ReportPrintBuilder.DetailedPrintSection? detailedSection = null;
+                if (_detailedPatchResults is { Count: > 0 } detailedResults)
+                {
+                    var histogram = ReportPrintBuilder.CreatePrintCanvas();
+                    var perPatch = ReportPrintBuilder.CreatePrintCanvas();
+                    RenderDetailedCharts(histogram, perPatch, CalibrationCharts.ChartPalette.Light);
+
+                    var detailedFigures = new List<ReportPrintBuilder.ChartFigure>
+                    {
+                        new("Delta E Distribution", ReportPrintBuilder.RenderPrintCanvas(histogram)),
+                        new("Per-patch Delta E", ReportPrintBuilder.RenderPrintCanvas(perPatch)),
+                    };
+                    detailedSection = new ReportPrintBuilder.DetailedPrintSection(
+                        detailedFigures,
+                        VerificationAnalysis.WorstPatches(detailedResults),
+                        VerificationAnalysis.ComputeCategoryBreakdown(detailedResults).ToDisplayText());
+                }
+
+                var document = ReportPrintBuilder.Build(Vm, _isHistorical, charts, detailedSection);
 
                 const double margin = 48;
                 document.PageWidth = dialog.PrintableAreaWidth;
@@ -860,6 +922,60 @@ namespace HDRGammaController
                     (_characterization.WhitePoint.X, _characterization.WhitePoint.Y),
                     palette);
             }
+        }
+
+        /// <summary>
+        /// Fills the Detailed Verification section from <see cref="_detailedPatchResults"/>:
+        /// worst-10 list, category breakdown text, section visibility and both charts.
+        /// Works identically for a fresh detailed sweep and a historical restore.
+        /// </summary>
+        private void PresentDetailedResults()
+        {
+            if (_detailedPatchResults is not { Count: > 0 } results) return;
+
+            Vm.WorstPatches.Clear();
+            int rank = 1;
+            foreach (var p in VerificationAnalysis.WorstPatches(results))
+            {
+                Vm.WorstPatches.Add(new CalibrationReportViewModel.WorstPatchItem(
+                    $"{rank++}.", p.Name, $"{p.DeltaE:F2}",
+                    CalibrationReportViewModel.DeltaEBrush(p.DeltaE)));
+            }
+
+            Vm.CategoryBreakdownText =
+                VerificationAnalysis.ComputeCategoryBreakdown(results).ToDisplayText();
+            Vm.HasDetailedResults = true;
+
+            // The canvases may not be laid out yet (first show); the Loaded/SizeChanged
+            // render picks them up then, and this call covers the post-sweep refresh.
+            RenderDetailedCharts();
+        }
+
+        /// <summary>Draws the on-screen detailed charts with the dark report theme.</summary>
+        private void RenderDetailedCharts()
+            => RenderDetailedCharts(HistogramCanvas, PerPatchCanvas, CalibrationCharts.ChartPalette.Dark);
+
+        /// <summary>
+        /// Draws the ΔE histogram and per-patch strip chart into the given canvases with the
+        /// given palette - same parameterization as the four main charts, so the print export
+        /// re-renders them offscreen with the light palette.
+        /// </summary>
+        private void RenderDetailedCharts(
+            System.Windows.Controls.Canvas histogramCanvas,
+            System.Windows.Controls.Canvas perPatchCanvas,
+            CalibrationCharts.ChartPalette palette)
+        {
+            if (_detailedPatchResults is not { Count: > 0 } results) return;
+
+            CalibrationCharts.DrawDeltaEHistogram(
+                histogramCanvas,
+                VerificationAnalysis.HistogramCounts(results.Select(p => p.DeltaE)),
+                VerificationAnalysis.HistogramBucketLabels,
+                palette);
+            CalibrationCharts.DrawPerPatchDeltaE(
+                perPatchCanvas,
+                results.Select(p => (p.Name, p.DeltaE)).ToList(),
+                palette);
         }
 
         private string? _installedProfileName;
@@ -1429,7 +1545,13 @@ namespace HDRGammaController
                 patchWindow.AbortRequested += () => verifyCts.Cancel(); // Escape aborts the sweep
                 patchWindow.Show();
 
-                var patches = CalibrationVerifier.BuildVerificationPatches();
+                // Detailed mode swaps in the extended patch set (fine grayscale, saturation
+                // ramps, memory colors); everything downstream - progress, settle delays,
+                // metrics, the PQ ladder - is shared with the standard sweep.
+                bool detailedSweep = Vm.IsDetailedVerifyChecked;
+                var patches = detailedSweep
+                    ? VerificationPatchSets.Detailed(ctx.Target, ctx.HdrMode)
+                    : CalibrationVerifier.BuildVerificationPatches();
                 var results = new List<MeasurementResult>();
                 await colorimeter.BeginMeasurementSessionAsync(hdrMode: ctx.HdrMode, verifyCts.Token);
                 for (int i = 0; i < patches.Count; i++)
@@ -1482,6 +1604,21 @@ namespace HDRGammaController
                 if (pqSummary != null)
                     Vm.VerifyDetailText += "\n" + pqSummary;
                 Vm.IsVerifyDetailVisible = true;
+
+                // Detailed sweep: hand the per-patch results to the Detailed Verification
+                // section. A standard re-verify retires earlier detailed results instead of
+                // showing them next to "after" numbers they no longer describe.
+                if (detailedSweep)
+                {
+                    _detailedPatchResults = after.PatchResults.ToList();
+                    PresentDetailedResults();
+                }
+                else if (_detailedPatchResults != null)
+                {
+                    _detailedPatchResults = null;
+                    Vm.HasDetailedResults = false;
+                    Vm.WorstPatches.Clear();
+                }
 
                 // Refresh recommendations with verify-aware guidance.
                 PopulateRecommendations(afterGrade, after);
