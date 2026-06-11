@@ -111,6 +111,9 @@
             <Setter Property="Header" Value="{Binding Header}" />
             <Setter Property="Command" Value="{Binding Command}" />
             <Setter Property="ItemsSource" Value="{Binding SubItems}" />
+            <!-- Top-level toggles (Start with Windows, Refresh) keep the menu open;
+                 items without the property (MonitorViewModel) bind to default false. -->
+            <Setter Property="StaysOpenOnClick" Value="{Binding StaysOpenOnClick}" />
             <Setter Property="Template" Value="{StaticResource SubMenuItemTemplate}"/>
         </Style>
         
