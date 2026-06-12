@@ -4,59 +4,62 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Guides - Gloam</title>
-  <meta name="description" content="Quick-start guide and calibration best practices for Gloam, the HDR-native display calibration tool for Windows.">
+  <meta name="description" content="Quick-start guide and calibration best practices for Gloam, the free, open-source HDR-native display tool for Windows.">
   <link rel="stylesheet" href="style.css">
+  <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
 </head>
 <body>
+  <script>
+    (function() {
+      const storedTheme = localStorage.getItem('theme');
+      if (storedTheme === 'dark' || (!storedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        document.body.classList.add('dark-theme');
+      }
+    })();
+  </script>
 
-  <header class="site-header">
-    <div class="wrap">
-      <a class="brand" href="index.html"><span class="brand-dot" aria-hidden="true"></span>Gloam</a>
-      <nav class="site-nav" aria-label="Site">
-        <a href="index.html">Home</a>
-        <a href="guides.html" aria-current="page">Guides</a>
-        <a href="whitepaper.html">Whitepaper</a>
-        <a href="index.html#download">Download</a>
-        <a href="https://github.com/davidtorcivia/gloam">GitHub</a>
-      </nav>
-    </div>
-  </header>
+  <div class="container">
+    <!-- Header -->
+    <header class="site-header">
+      <div class="wrap">
+        <a class="brand" href="index.html">
+          <span class="brand-mark" aria-hidden="true"></span>
+          Gloam
+        </a>
+        <nav class="site-nav" aria-label="Site">
+          <a href="index.html">Home</a>
+          <a href="guides.html" aria-current="page">Guides</a>
+          <a href="whitepaper.html">Whitepaper</a>
+          <a href="index.html#download">Download</a>
+        </nav>
+        <button class="theme-toggle-btn" id="themeToggle" aria-label="Invert print colors">◐</button>
+      </div>
+    </header>
 
-  <main>
-
-    <section class="page-head">
-      <div class="wrap-narrow">
+    <main class="guides-page">
+      <section class="page-head" style="border: none; padding-bottom: 2rem;">
+        <span class="kicker">Documentation</span>
         <h1>Guides</h1>
         <p class="section-lede">
-          From a fresh download to a verified calibration. The quick start covers the whole flow;
-          the best-practices section is what separates a good measurement from a misleading one.
+          From a fresh download to a verified calibration. The quick start covers the whole flow; the best-practices section is what separates a good measurement from a misleading one.
         </p>
-      </div>
-    </section>
+      </section>
 
-    <!-- ============ Quick start ============ -->
-    <section id="quick-start">
-      <div class="wrap-narrow">
+      <section id="quick-start" style="padding-top: 3rem; border-bottom: none;">
         <span class="kicker">First hour</span>
-        <h2 style="margin-top: 0;">Quick start</h2>
+        <h2 style="margin-top: 0; margin-bottom: 3rem;">Quick start</h2>
 
         <ol class="steps">
-
-          <li>
+          <li data-step="01">
             <h3>Install</h3>
-            <p>Download the <a href="https://github.com/davidtorcivia/gloam/releases/latest">latest
-            release</a>. The Full build is self-contained and bundles ArgyllCMS; the Lite build is
-            tiny but requires the .NET 8 Desktop Runtime. Extract the ZIP to a folder of your
-            choice and run the executable. Gloam lives in the system tray.</p>
-            <p>Right-click the tray icon and enable <strong>Start with Windows</strong> so your
-            corrections restore automatically at every boot.</p>
+            <p>Download the <a href="https://github.com/davidtorcivia/gloam/releases/latest">latest release</a>. The Full build is self-contained and bundles ArgyllCMS; the Lite build is tiny but requires the .NET 8 Desktop Runtime. Extract the ZIP to a folder of your choice and run the executable. Gloam lives in the system tray.</p>
+            <p>Right-click the tray icon and enable <strong>Start with Windows</strong> so your corrections restore automatically at every boot.</p>
           </li>
 
-          <li>
+          <li data-step="02">
             <h3>Set your gamma (no meter needed)</h3>
-            <p>Right-click the tray icon: each monitor is listed with its real name. Pick a gamma
-            mode per monitor:</p>
-            <ul>
+            <p>Right-click the tray icon: each monitor is listed with its real name. Pick a gamma mode per monitor:</p>
+            <ul style="padding-left: 1.5rem; margin-bottom: 1.5rem;">
               <li><strong>Gamma 2.2</strong>: general PC use, most content. Start here.</li>
               <li><strong>Gamma 2.4</strong>: BT.1886, dark-room viewing, film mastering.</li>
               <li><strong>Windows Default</strong>: native piecewise sRGB (bypass).</li>
@@ -65,130 +68,117 @@
             <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>F1</kbd> for 2.2,
             <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>F2</kbd> for 2.4,
             <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>F3</kbd> for Windows default, and
-            <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>F4</kbd> for panic mode, which clears all gamma
-            tables immediately. <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd> toggles night mode.</p>
+            <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>F4</kbd> for panic mode, which clears all gamma tables immediately. <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd> toggles night mode.</p>
           </li>
 
-          <li>
+          <li data-step="03">
             <h3>Calibrate (colorimeter required)</h3>
             <p>Connect your meter and open <strong>Calibrate Display</strong> from the tray.</p>
-            <ul>
-              <li>Pick the monitor, the display type, and the target. For HDR displays use
-              <strong>HDR Desktop PQ (sRGB gamut)</strong>.</li>
-              <li>Select a <strong>meter spectral correction</strong> matched to your panel. The
-              "Find online" button searches the DisplayCAL community database and downloads the
-              file directly. Strongly recommended for QD-OLED and wide-gamut panels.</li>
-              <li>Start the run. Patches are measured with your existing corrections bypassed; a
-              mute button silences the capture sounds mid-run. On HDR displays the run also
-              measures an HDR wire ladder: true HDR-range patches far above SDR white, emitted
-              through a DirectX FP16 surface at exact PQ positions.</li>
+            <ul style="padding-left: 1.5rem; margin-bottom: 1.5rem;">
+              <li>Pick the monitor, the display type, and the target. For HDR displays use <strong>HDR Desktop PQ (sRGB gamut)</strong>.</li>
+              <li>Select a <strong>meter spectral correction</strong> matched to your panel. The "Find online" button searches the DisplayCAL community database and downloads the file directly. Strongly recommended for QD-OLED and wide-gamut panels.</li>
+              <li>Start the run. Patches are measured with your existing corrections bypassed; a mute button silences the capture sounds mid-run. On HDR displays the run also measures an HDR wire ladder: true HDR-range patches far above SDR white, emitted through a DirectX FP16 surface at exact PQ positions.</li>
             </ul>
           </li>
 
-          <li>
+          <li data-step="04">
             <h3>Verify</h3>
-            <p>When the run completes, Gloam applies the profile and re-measures through it
-            automatically, then opens the scored report: native vs. calibrated dE2000 (average,
-            max, grayscale, primaries), tone and gamut charts with the corrected response overlaid,
-            and on HDR displays a PQ tracking sweep graded in absolute nits against ST.2084.</p>
-            <p>Use the <strong>toggle button</strong> for an eyes-on A/B against the uncorrected
-            panel. Reports are kept in history and can be exported as a printer-friendly PDF.</p>
+            <p>When the run completes, Gloam applies the profile and re-measures through it automatically, then opens the scored report: native vs. calibrated dE2000 (average, max, grayscale, primaries), tone and gamut charts with the corrected response overlaid, and on HDR displays a PQ tracking sweep graded in absolute nits against ST.2084.</p>
+            <p>Use the <strong>toggle button</strong> for an eyes-on A/B against the uncorrected panel. Reports are kept in history and can be exported as a printer-friendly PDF.</p>
           </li>
 
-          <li>
+          <li data-step="05">
             <h3>Live with it</h3>
-            <p>Your gamma preference and night mode compose on top of the installed calibration.
-            Open Settings from the tray for night mode scheduling (sunset/sunrise at your
-            location, fade duration, app exclusions) and per-monitor temperature offsets for
-            visually matching displays to each other.</p>
-            <p>Settings are saved to <code>%LOCALAPPDATA%\HDRGammaController\settings.json</code>
-            and diagnostic logs to <code>app.log</code> in the same folder; include the log when
-            reporting issues.</p>
+            <p>Your gamma preference and night mode compose on top of the installed calibration. Open Settings from the tray for night mode scheduling (sunset/sunrise at your location, fade duration, app exclusions) and per-monitor temperature offsets for visually matching displays to each other.</p>
+            <p>Settings are saved to <code>%LOCALAPPDATA%\HDRGammaController\settings.json</code> and diagnostic logs to <code>app.log</code> in the same folder; include the log when reporting issues.</p>
           </li>
-
         </ol>
-      </div>
-    </section>
+      </section>
 
-    <!-- ============ Best practices ============ -->
-    <section id="best-practices">
-      <div class="wrap-narrow">
+      <section id="best-practices" style="padding-top: 3rem; border-bottom: none;">
         <span class="kicker">Measure well</span>
-        <h2 style="margin-top: 0;">Calibration best practices</h2>
-        <p class="section-lede">
-          A colorimeter reports what it sees. These habits make sure what it sees is your display's
-          steady-state behavior and not a transient, a reflection, or a meter artifact.
+        <h2 style="margin-top: 0; margin-bottom: 2rem;">Calibration best practices</h2>
+        <p class="section-lede" style="margin-bottom: 3rem;">
+          A colorimeter reports what it sees. These habits make sure what it sees is your display's steady-state behavior and not a transient, a reflection, or a meter artifact.
         </p>
 
         <h3>Warm the panel up</h3>
-        <p>Displays drift as they reach operating temperature, and OLEDs especially so: white point
-        and luminance can shift noticeably during the first stretch of operation. Run the panel for
-        at least 30 minutes showing varied content before measuring. Calibrating a cold OLED means
-        calibrating a state the panel will not be in an hour later.</p>
+        <p>Displays drift as they reach operating temperature, and OLEDs especially so: white point and luminance can shift noticeably during the first stretch of operation. Run the panel for at least 30 minutes showing varied content before measuring. Calibrating a cold OLED means calibrating a state the panel will not be in an hour later.</p>
 
         <h3>Darken the room</h3>
-        <p>Ambient light leaking around or through the meter contaminates dark-patch readings,
-        which is exactly where HDR calibration matters most. Measure in a dark room, kill direct
-        light sources facing the screen, and avoid light-colored clothing reflecting onto the panel
-        during the run.</p>
+        <p>Ambient light leaking around or through the meter contaminates dark-patch readings, which is exactly where HDR calibration matters most. Measure in a dark room, kill direct light sources facing the screen, and avoid light-colored clothing reflecting onto the panel during the run.</p>
 
         <h3>Place the probe properly</h3>
-        <ul>
-          <li>Center of the screen, flat against the panel. Use the meter's counterweighted strap
-          or a gentle tilt of the display so the sensor sits flush without pressure on the panel
-          (especially on OLED).</li>
-          <li>Let the meter itself warm up against the panel for a few minutes; some meters read
-          dark levels differently when cold.</li>
-          <li>Disable screen savers, sleep timers, and auto-brightness or ambient light sensors on
-          the monitor itself for the duration of the run.</li>
+        <ul style="padding-left: 1.5rem; margin-bottom: 1.5rem;">
+          <li style="margin-bottom: 0.5rem;">Center of the screen, flat against the panel. Use the meter's counterweighted strap or a gentle tilt of the display so the sensor sits flush without pressure on the panel (especially on OLED).</li>
+          <li style="margin-bottom: 0.5rem;">Let the meter itself warm up against the panel for a few minutes; some meters read dark levels differently when cold.</li>
+          <li style="margin-bottom: 0.5rem;">Disable screen savers, sleep timers, and auto-brightness or ambient light sensors on the monitor itself for the duration of the run.</li>
         </ul>
 
         <h3>Use the right spectral correction</h3>
-        <p>A three-filter colorimeter is only as accurate as the spectral correction matching the
-        panel's emission spectra. KSF/PFS phosphor LCDs and QD-OLEDs are pathological cases for
-        generic corrections; mismatched corrections have measured white point errors of around
-        11 tint steps in opposite directions on two panels with the same meter. Use the in-app
-        DisplayCAL corrections browser to fetch a .ccss matched to your panel. Gloam remembers the
-        correction per monitor.</p>
+        <p>A three-filter colorimeter is only as accurate as the spectral correction matching the panel's emission spectra. KSF/PFS phosphor LCDs and QD-OLEDs are pathological cases for generic corrections; mismatched corrections have measured white point errors of around 11 tint steps in opposite directions on two panels with the same meter. Use the in-app DisplayCAL corrections browser to fetch a .ccss matched to your panel. Gloam remembers the correction per monitor.</p>
 
         <h3>Know when to correct less</h3>
-        <p>If a panel already measures close to target natively (roughly 2.5 dE average or
-        better), full gamut correction has nothing real to fix, and verification will reliably come
-        back worse. Use the <strong>white point correction only</strong> mode, which Gloam
-        auto-suggests for OLED, or no correction at all. More correction is not more accuracy.</p>
+        <p>If a panel already measures close to target natively (roughly 2.5 dE average or better), full gamut correction has nothing real to fix, and verification will reliably come back worse. Use the <strong>white point correction only</strong> mode, which Gloam auto-suggests for OLED, or no correction at all. More correction is not more accuracy.</p>
 
         <h3>Verify in detail, then trust your eyes last</h3>
-        <p>Always read the detailed verification, not just the grade: the dE histograms and the
-        worst-patch list tell you whether residual error is broadly distributed measurement noise
-        or concentrated somewhere visible like the grayscale. On HDR displays, check the PQ
-        tracking sweep to confirm absolute luminance tracking across the range.</p>
-        <p>Finally, instruments and eyes weigh display spectra differently (observer metamerism):
-        two displays can measure identical and still look different side by side. A small final
-        Tint or Temperature trim against a reference display is normal, rides on top of the
-        profile, and never affects the measurements.</p>
+        <p>Always read the detailed verification, not just the grade: the dE histograms and the worst-patch list tell you whether residual error is broadly distributed measurement noise or concentrated somewhere visible like the grayscale. On HDR displays, check the PQ tracking sweep to confirm absolute luminance tracking across the range.</p>
+        <p>Finally, instruments and eyes weigh display spectra differently (observer metamerism): two displays can measure identical and still look different side by side. A small final Tint or Temperature trim against a reference display is normal, rides on top of the profile, and never affects the measurements.</p>
 
-        <aside class="note">
-          <span class="note-label">Escape hatch</span>
-          <p>If something ever looks wrong, <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>F4</kbd>
-          (panic mode) clears all gamma tables immediately, and the calibration report's toggle
-          button disables the installed profile for an instant A/B.</p>
-        </aside>
+        <div style="border: 2px solid var(--border); padding: 1.5rem; margin: 3.5rem 0; background: rgba(226, 43, 31, 0.03);">
+          <span style="font-family: var(--font-display); font-weight: 800; font-size: 0.8rem; text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 0.5rem;">Escape hatch</span>
+          <p style="margin-bottom: 0;">If something ever looks wrong, <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>F4</kbd> (panic mode) clears all gamma tables immediately, and the calibration report's toggle button disables the installed profile for an instant A/B.</p>
+        </div>
+      </section>
+    </main>
 
+    <!-- Footer -->
+    <footer class="site-footer">
+      <div class="wrap">
+        <span>Gloam. MIT licensed. Free for everyone.</span>
+        <span class="footer-links">
+          <a href="https://github.com/davidtorcivia/gloam">GitHub</a>
+          <a href="https://github.com/davidtorcivia/gloam/releases/latest">Releases</a>
+          <a href="whitepaper.html">Technical whitepaper</a>
+          <a href="guides.html">Guides</a>
+        </span>
       </div>
-    </section>
+    </footer>
+  </div>
 
-  </main>
+  <button class="back-to-top" id="backToTop">Back To Top</button>
 
-  <footer class="site-footer">
-    <div class="wrap">
-      <span>Gloam. MIT licensed. ArgyllCMS is AGPL v3 and runs as a separate process.</span>
-      <span class="footer-links">
-        <a href="https://github.com/davidtorcivia/gloam">GitHub</a>
-        <a href="https://github.com/davidtorcivia/gloam/releases/latest">Releases</a>
-        <a href="whitepaper.html">Technical whitepaper</a>
-      </span>
-    </div>
-  </footer>
+  <script>
+    // Theme toggle function
+    (function() {
+      const themeToggle = document.getElementById('themeToggle');
+      if (themeToggle) {
+        themeToggle.addEventListener('click', () => {
+          document.body.classList.toggle('dark-theme');
+          const nowDark = document.body.classList.contains('dark-theme');
+          try {
+            localStorage.setItem('theme', nowDark ? 'dark' : 'light');
+          } catch(e) {}
+        });
+      }
+    })();
 
+    // Back to top button
+    (function() {
+      const backToTop = document.getElementById('backToTop');
+      if (backToTop) {
+        window.addEventListener('scroll', () => {
+          if (window.scrollY > 400) {
+            backToTop.classList.add('visible');
+          } else {
+            backToTop.classList.remove('visible');
+          }
+        });
+        backToTop.addEventListener('click', () => {
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+      }
+    })();
+  </script>
 </body>
 </html>

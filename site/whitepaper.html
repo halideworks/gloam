@@ -6,23 +6,37 @@
   <title>Technical Whitepaper - Gloam</title>
   <meta name="description" content="The mathematics and engineering behind Gloam: the Windows SDR-in-HDR transfer function mismatch, PQ-domain correction LUTs, and the MHC2 colorimeter calibration pipeline.">
   <link rel="stylesheet" href="style.css">
+  <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
 </head>
 <body>
+  <script>
+    (function() {
+      const storedTheme = localStorage.getItem('theme');
+      if (storedTheme === 'dark' || (!storedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        document.body.classList.add('dark-theme');
+      }
+    })();
+  </script>
 
-  <header class="site-header">
-    <div class="wrap">
-      <a class="brand" href="index.html"><span class="brand-dot" aria-hidden="true"></span>Gloam</a>
-      <nav class="site-nav" aria-label="Site">
-        <a href="index.html">Home</a>
-        <a href="guides.html">Guides</a>
-        <a href="whitepaper.html" aria-current="page">Whitepaper</a>
-        <a href="index.html#download">Download</a>
-        <a href="https://github.com/davidtorcivia/gloam">GitHub</a>
-      </nav>
-    </div>
-  </header>
+  <div class="container">
+    <!-- Header -->
+    <header class="site-header">
+      <div class="wrap">
+        <a class="brand" href="index.html">
+          <span class="brand-mark" aria-hidden="true"></span>
+          Gloam
+        </a>
+        <nav class="site-nav" aria-label="Site">
+          <a href="index.html">Home</a>
+          <a href="guides.html">Guides</a>
+          <a href="whitepaper.html" aria-current="page">Whitepaper</a>
+          <a href="index.html#download">Download</a>
+        </nav>
+        <button class="theme-toggle-btn" id="themeToggle" aria-label="Invert print colors">◐</button>
+      </div>
+    </header>
 
-  <main class="paper-main">
+  <main class="whitepaper-page paper-main">
     <article class="whitepaper" id="top">
 
       <section>
@@ -1038,21 +1052,26 @@
     </article>
   </main>
 
-  <button class="back-to-top" id="backToTop" type="button" aria-label="Back to top">Top</button>
+  </div>
 
-  <footer class="site-footer">
-    <div class="wrap">
-      <span>Gloam. MIT licensed. ArgyllCMS is AGPL v3 and runs as a separate process.</span>
-      <span class="footer-links">
-        <a href="https://github.com/davidtorcivia/gloam">GitHub</a>
-        <a href="https://github.com/davidtorcivia/gloam/releases/latest">Releases</a>
-        <a href="index.html#download">Download</a>
-      </span>
-    </div>
-  </footer>
+  <button class="back-to-top" id="backToTop" type="button" aria-label="Back to top">Back To Top</button>
 
   <script>
-    // Minimal JS: show a back-to-top button once the reader is past the TOC.
+    // Theme toggle function
+    (function() {
+      const themeToggle = document.getElementById('themeToggle');
+      if (themeToggle) {
+        themeToggle.addEventListener('click', () => {
+          document.body.classList.toggle('dark-theme');
+          const nowDark = document.body.classList.contains('dark-theme');
+          try {
+            localStorage.setItem('theme', nowDark ? 'dark' : 'light');
+          } catch(e) {}
+        });
+      }
+    })();
+
+    // Back-to-top button
     (function () {
       var btn = document.getElementById("backToTop");
       window.addEventListener("scroll", function () {
