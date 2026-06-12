@@ -143,7 +143,7 @@
                   <line x1="50" y1="125" x2="470" y2="125" stroke-dasharray="2,2"/>
                   <line x1="260" y1="20" x2="260" y2="230" stroke-dasharray="2,2"/>
                 </g>
-                <path d="M 50 230 Q 300 220 450 30" fill="none" stroke="var(--accent)" stroke-width="3"/>
+                <path d="M 50 230 Q 270 120 450 30" fill="none" stroke="var(--accent)" stroke-width="3"/>
                 <text x="50" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">0.0 (Black)</text>
                 <text x="450" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">1.0 (White)</text>
                 <text x="40" y="30" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">10,000 Nits</text>
@@ -167,8 +167,11 @@
                 <polygon points="120,190 117,196 123,196" fill="var(--accent)"/>
                 <rect x="127" y="189" width="126" height="14" fill="var(--bg)"/>
                 <text x="130" y="200" font-family="monospace" font-size="10" fill="var(--accent)">Shadow Lift Mismatch</text>
-                <text x="50" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">0.0</text>
-                <text x="450" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">1.0</text>
+                <text x="40" y="30" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">10,000 Nits</text>
+                <text x="40" y="130" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">100 Nits</text>
+                <text x="40" y="230" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">0 Nits</text>
+                <text x="50" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">0.0 (Black)</text>
+                <text x="450" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">1.0 (White)</text>
               </svg>
 
               <!-- SVG 3: Apply Gamma -->
@@ -181,8 +184,11 @@
                 <!-- Gamma 2.2 curve -->
                 <path d="M 50 230 Q 300 210, 450 30" fill="none" stroke="var(--accent)" stroke-width="3"/>
                 <text x="260" y="60" font-family="monospace" font-size="11" fill="var(--accent)" text-anchor="middle" font-weight="bold">Target Power Gamma (γ = 2.2)</text>
-                <text x="50" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">0.0</text>
-                <text x="450" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">1.0</text>
+                <text x="40" y="30" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">10,000 Nits</text>
+                <text x="40" y="130" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">100 Nits</text>
+                <text x="40" y="230" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">0 Nits</text>
+                <text x="50" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">0.0 (Black)</text>
+                <text x="450" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">1.0 (White)</text>
               </svg>
 
               <!-- SVG 4: Protect Highlights -->
@@ -197,8 +203,11 @@
                 <path d="M 50 230 Q 180 200 280 120 T 450 30" fill="none" stroke="var(--accent)" stroke-width="3"/>
                 <text x="280" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">SDR White (100 Nits)</text>
                 <text x="370" y="120" font-family="monospace" font-size="10" fill="var(--accent)" text-anchor="middle">HDR Highlight Knee</text>
-                <text x="50" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">0.0</text>
-                <text x="450" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">1.0</text>
+                <text x="40" y="30" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">10,000 Nits</text>
+                <text x="40" y="130" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">100 Nits</text>
+                <text x="40" y="230" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">0 Nits</text>
+                <text x="50" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">0.0 (Black)</text>
+                <text x="450" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">1.0 (White)</text>
               </svg>
 
               <!-- SVG 5: Re-encode PQ -->
@@ -208,11 +217,14 @@
                   <line x1="50" y1="20" x2="50" y2="230"/>
                   <line x1="50" y1="230" x2="470" y2="230"/>
                 </g>
-                <!-- Final output curve -->
-                <path d="M 50 230 Q 300 220 450 30" fill="none" stroke="var(--accent)" stroke-width="3"/>
-                <text x="260" y="110" font-family="monospace" font-size="11" fill="var(--accent)" text-anchor="middle" font-weight="bold">GPU 1D LUT Ramp Injection</text>
-                <text x="50" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">0.0</text>
-                <text x="450" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">1.0</text>
+                <!-- Final corrected LUT curve: gamma 2.2 correction + highlight knee -->
+                <path d="M 50 230 Q 180 200 280 120 T 450 30" fill="none" stroke="var(--accent)" stroke-width="3"/>
+                <text x="170" y="58" font-family="monospace" font-size="11" fill="var(--accent)" text-anchor="middle" font-weight="bold">GPU 1D LUT Ramp Injection</text>
+                <text x="40" y="30" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">10,000 Nits</text>
+                <text x="40" y="130" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">100 Nits</text>
+                <text x="40" y="230" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">0 Nits</text>
+                <text x="50" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">0.0 (Black)</text>
+                <text x="450" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">1.0 (White)</text>
               </svg>
 
               <div class="diagram-caption" id="diagramCaption">Fig 1.0 - PQ input signal mapped to target display luminance (nits).</div>
