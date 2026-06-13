@@ -43,13 +43,13 @@
         <div class="hero-body">
           <span class="kicker">SDR-in-HDR Gamma Override</span>
           <h1>Fix the gray that Windows HDR casts over <span>everything.</span></h1>
-          <p class="hero-tagline">Gloam is a free, open-source Windows app that restores proper gamma to SDR content in HDR, with a night mode that follows the real sun.</p>
-          <p class="hero-summary">No colorimeter needed. No install wizard. No telemetry. Just a small tray app that repairs the tone curve Windows breaks, per monitor, and keeps it repaired while you play, watch, or work.</p>
+          <p class="hero-tagline">Gloam is a free, open-source Windows app that restores proper gamma to SDR content in HDR, with a color considered night mode.</p>
+          <p class="hero-summary">A simple small tray app, designed by a colorist, that repairs the broken Windows HDR tone curve, per monitor, while you play, watch, or work.</p>
           <div class="hero-actions">
             <a class="btn btn-primary" href="#download">Download Gloam</a>
             <a class="btn btn-secondary" href="guides.html">Read the quick-start guide</a>
           </div>
-          <p class="hero-meta">MIT licensed. Windows 10 and 11. Works on HDR and SDR displays. A colorimeter unlocks measurement-based calibration, but the core fix is pure math.</p>
+          <p class="hero-meta">MIT licensed. Windows 10 and 11. Works on HDR and SDR displays. Full calibration capable with most colorimeters.</p>
         </div>
       </section>
 
@@ -58,12 +58,12 @@
         <div class="problem-layout">
           <div class="problem-copy">
             <span class="kicker">01 / The problem</span>
-            <h2 id="problem-heading">Windows lifts shadows. Your eyes notice.</h2>
+            <h2 id="problem-heading">Windows lifts shadows and it's ugly.</h2>
             <p>
               When you enable HDR, Windows 11 decodes standard SDR window frames using a piecewise sRGB curve. Because almost all games, movies, and desktop assets are mastered for traditional gamma 2.2 screens, this curves mismatch dumps extra light directly into shadow regions.
             </p>
             <p>
-              In dark scenes—such as dark gameplay in Diablo IV—blacks turn into a flat gray haze, ruining ambient contrast in the areas where human vision is most sensitive:
+              In dark scenes, such as dark gameplay in Diablo IV, blacks turn into a flat gray haze, ruining ambient contrast in the areas where human vision is most sensitive:
             </p>
 
             <div class="stats">
@@ -80,8 +80,8 @@
                 <span class="stat-label">Extra light at 30% signal (average shadows)</span>
               </div>
               <div class="stat">
-                <span class="stat-value">sub-1.0</span>
-                <span class="stat-label">Grayscale Delta-E achieved after math fix</span>
+                <span class="stat-value">RUINED</span>
+                <span class="stat-label">Your perceptual visual experience.</span>
               </div>
             </div>
           </div>
@@ -238,7 +238,7 @@
         <div class="wrap" style="padding: 4rem 2rem 1rem;">
           <span class="kicker">03 / What it does</span>
           <h2 id="features-heading">One app. Three things Windows gets wrong.</h2>
-          <p class="section-lede">The gamma fix is the headline, but Gloam also replaces Night Light with a color-science-aware night mode and provides a full calibration path when you are ready to measure.</p>
+          <p class="section-lede">Gloam not only fixes HDR/SDR gamma, but also replaces Night Light with a color-science-aware night mode and provides a full HDR capable calibration path when you are ready to measure.</p>
         </div>
 
         <div class="feature-grid">
@@ -249,7 +249,7 @@
               </span>
               HDR gamma fix
             </h3>
-            <p>Per-monitor gamma 2.2, 2.4, or Windows default. Switchable globally on a hotkey. Self-healing ramp guard restores the correction if a game or driver resets it.</p>
+            <p>Per-monitor gamma 2.2, 2.4, or Windows default. Switchable per monitor with a hotkey. Self-healing ramp guard restores the correction if a game or driver resets it.</p>
           </article>
 
           <article class="feature-card">
@@ -259,7 +259,7 @@
               </span>
               Night mode, done right
             </h3>
-            <p>Temperature shifts are blended in linear light, where light physically mixes. Sunset and sunrise are computed from the sun's position at your location, with smooth fades and per-app exclusions.</p>
+            <p>Temperature shifts are blended in linear light, where light physically mixes so night mode <i>looks better</i>. Sunset and sunrise are computed from the sun's position at your location, with programmable smooth fades and per-app exclusions.</p>
           </article>
 
           <article class="feature-card">
@@ -279,7 +279,7 @@
               </span>
               Per-monitor dashboard
             </h3>
-            <p>Real EDID monitor names, HDR/SDR status, and current gamma mode for every connected display. Settings persist per monitor and restore on startup.</p>
+            <p>Real monitor names, HDR/SDR status, smart brightness levels, temp/tint and RGB adjustment, and live gamma mode readout for every connected display. Settings persist per monitor and restore on startup.</p>
           </article>
 
           <article class="feature-card">
@@ -312,10 +312,10 @@
             <span class="license-pill"><span class="dot" aria-hidden="true"></span>MIT licensed</span>
             <h2 id="opensource-heading">Free software, made to help.</h2>
             <p>
-              Gloam exists because a lot of people bought beautiful HDR displays and then watched Windows wash them out. The fix is straightforward enough to give away, and open enough that anyone can inspect it, improve it, or fork it.
+              Gloam exists because a lot of people bought beautiful HDR displays and then watched Windows wash them out. As a Windows user this bothers me but as a colorist this dismays me. The fix is straightforward enough to give away, and open enough that anyone can inspect it, improve it, or fork it.
             </p>
             <p>
-              The source is on GitHub. Builds are published through GitHub Releases. There is no paid tier, no subscription, no data collection, and no upsell. If you have a colorimeter, great. If you do not, the app still does the thing most people downloaded it for.
+              The source is on GitHub. Builds are published through GitHub Releases. There is no paid tier, no subscription, no data collection, and no upsell. If you have a colorimeter, great. If you do not, the app still will make SDR content look pristine on your HDR display.
             </p>
             <a class="btn btn-secondary" href="https://github.com/davidtorcivia/gloam">View source on GitHub</a>
           </div>
@@ -340,7 +340,7 @@
               </li>
               <li>
                 <span style="color: var(--accent); font-weight: bold; flex-shrink: 0; margin-right: 0.5rem;">→</span>
-                <span><strong>Extensible configuration.</strong> Customize gamma targets, temperature curves, and guard thread latencies via local JSON configuration profiles.</span>
+                <span><strong>Extensible configuration.</strong> Customize gamma targets, temperature curves, monitor brightness, tint and temp trim, and more.</span>
               </li>
               <li>
                 <span style="color: var(--accent); font-weight: bold; flex-shrink: 0; margin-right: 0.5rem;">→</span>
@@ -356,7 +356,7 @@
         <div class="wrap" style="padding: 2.5rem 2rem 1rem;">
           <span class="kicker">05 / Get it</span>
           <h2 id="download-heading">Download Packages</h2>
-          <p class="section-lede">Two builds, same application. Extract the ZIP, run the executable, and enable "Start with Windows" from the tray menu if you want it.</p>
+          <p class="section-lede">Two builds, same application. Extract the ZIP, run the executable, and enable "Start with Windows" from the tray menu if you want to correct your display on every boot.</p>
         </div>
 
         <div class="download-panel">
@@ -418,9 +418,9 @@
               <span style="font-size: 1.25rem;">+</span>
             </summary>
             <div class="faq-body" style="padding-top: 1rem; opacity: 0.85; max-width: 800px;">
-              <p>Three differences. First, the math: Gloam blends temperature in linear light, where light physically mixes, and its accurate CIE 1931 mode keeps the white point on the Planckian locus. Night Light is a compositor filter without that discipline.</p>
+              <p>Three differences. First, the math: Gloam blends temperature in linear light, where light physically mixes, and its accurate CIE 1931 mode keeps the white point on the Planckian locus. Night Light is a simple compositor filter that tints without discernment.</p>
               <p>Second, composition: Night Light fights other corrections for control of the pipeline. Gloam bakes the warm shift into the same high-precision LUTs as your gamma and calibration, so nothing bands or flickers.</p>
-              <p>Third, scheduling: sunset and sunrise are computed from the sun's actual position at your location, with configurable fades, per-app exclusions, and per-monitor temperature offsets.</p>
+              <p>Third, scheduling: sunset and sunrise are computed from the sun's actual position at your location, with configurable fades and levels (set different temps at different times), per-app exclusions, and per-monitor temperature offsets.</p>
             </div>
           </details>
 
@@ -440,8 +440,8 @@
               <span style="font-size: 1.25rem;">+</span>
             </summary>
             <div class="faq-body" style="padding-top: 1rem; opacity: 0.85; max-width: 800px;">
-              <p>For SDR desktop calibration, DisplayCAL is mature and excellent, and Calman is the professional standard for TV and mastering workflows. If those fit your use case, use them.</p>
-              <p>Gloam's focus is the HDR-native pipeline on Windows 11. Traditional tools apply corrections through the GPU gamma ramp and ICC profiles that the Advanced Color compositor largely ignores when HDR is on. Gloam builds a properly domain-wrapped MHC2 matrix plus PQ-domain tone LUTs, installs them through the association the HDR pipeline reads, and verifies by measuring through the applied profile.</p>
+              <p>For SDR desktop calibration, DisplayCAL is mature and excellent, and Calman is a professional standard for TV and mastering workflows. If those fit your use case, use them.</p>
+              <p>Gloam's focus is the HDR-native pipeline on Windows 11. Traditional tools apply corrections through the GPU gamma ramp and ICC profiles that the Advanced Color compositor largely ignores when HDR is on. Gloam builds a properly domain-wrapped MHC2 matrix plus PQ-domain tone LUTs, installs them through the association the HDR pipeline reads, and verifies by measuring through the applied profile. It's just a better option for most users using HDR without expensive professional software (though our math is built on the same principles).</p>
             </div>
           </details>
 

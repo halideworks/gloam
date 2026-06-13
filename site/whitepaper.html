@@ -869,21 +869,19 @@
           application mechanism, and Windows offers exactly one OS-native hook for it: an ICC profile
           carrying the <strong>MHC2 tag</strong>, from which the Desktop Window Manager extracts a 3×4
           matrix and three regamma LUTs and applies them at composition: persistently, system-wide, and
-          in both SDR and HDR. The findings in this section were each purchased with a failed on-screen
-          result and a colorimeter; they are documented here because almost none of them are written
-          down anywhere else.
+          in both SDR and HDR.
         </p>
 
         <h3 id="s10-1">10.1 The Matrix Slot Is an XYZ Transform</h3>
         <p>
-          The single most consequential discovery: Windows does not apply the MHC2 matrix to RGB
+          Windows does not apply the MHC2 matrix to RGB
           values. The engine evaluates it <strong>sandwiched between fixed conversions to and from CIE
           XYZ</strong>, using the wire primaries of the current mode: sRGB in SDR, BT.2020 in HDR:
         </p>
 <pre><code>wire = LUT( XYZ-&gt;wire_fixed . M_tag . wire-&gt;XYZ_fixed . linear_content )</code></pre>
         <p>
           The reference generator (MHC2Gen) acknowledges this only in a code comment, left-multiplying
-          its matrix by sRGB-to-XYZ with the note <em>"hack: eliminate fixed sRGB to XYZ."</em> Writing
+          its matrix by sRGB-to-XYZ. Writing
           a plain linear-RGB-to-RGB correction into the slot, as a naive implementation does, produces
           dramatic damage: on the test display the engine's sandwich turned a gentle warm correction
           into a white drive of (R 1.39, clipped; G 0.866; B 0.910), a violent magenta cast across the
@@ -909,7 +907,7 @@
           The tempting alternative, normalizing per channel and folding the residual gains into the
           tone LUTs, was implemented, measured, and rejected: per-channel gains form a diagonal matrix
           applied <em>after</em> the gamut matrix and re-tint every non-neutral color the matrix had
-          just placed. Verified consequence: primaries degraded from 1.39 to 2.46 ΔE2000 while neutrals
+          just placed and primaries degraded from 1.39 to 2.46 ΔE2000 while neutrals
           measured fine. Chromatic corrections must never be split across stages that compose
           multiplicatively per channel.
         </p>
@@ -920,13 +918,10 @@
           0-10,000 nits via ST.2084), and two physical constraints bound what they may attempt. First,
           calibration patches are SDR content, mapped by Windows onto the wire at
           <code>PQ(sdrWhite · sRGB(v))</code>: the measurements only cover the wire up to the SDR white
-          level (queried live via <code>DISPLAYCONFIG_SDR_WHITE_LEVEL</code>; the assumed 200-nit
-          default was off by 20% on the test system). Second, the upper portion of even that range sits
+          level (queried live via <code>DISPLAYCONFIG_SDR_WHITE_LEVEL</code>). Second, the upper portion of even that range sits
           inside the panel's own tone-mapping knee, where the wire-axis model is invalid, and, more
           subtly, where a strongly curved per-channel LUT distorts the channel ratios of unequal drive
-          values, which is precisely the matrix's corrected white. The first implementation corrected
-          aggressively to the top and measurably destroyed its own white point (189 nits at x = 0.301
-          instead of ~220 at D65). The fallback builder therefore corrects fully only below 50% of the
+          values, which is precisely the matrix's corrected white. The builder corrects fully only below 50% of the
           measured range, fades to identity by 80%, and passes the knee, and all true HDR highlights,
           through untouched. Microsoft's own HDR Calibration utility, dissected for reference, ships an
           identity matrix and two-entry identity LUTs: its entire payload is the MHC2 header's min/max
@@ -934,8 +929,7 @@
         </p>
         <p>
           <strong>Wire-exact measurement (the shipped HDR path).</strong> Both constraints above are
-          artifacts of measuring through Windows' SDR mapping, so the tool now removes the mapping from
-          the loop: HDR calibrations append a <strong>wire ladder</strong> of patches emitted through a
+          artifacts of measuring through Windows' SDR mapping, so the tool uses HDR calibrations to append a <strong>wire ladder</strong> of patches emitted through a
           DirectX 11 FP16 scRGB swapchain (<code>R16G16B16A16_FLOAT</code> +
           <code>DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709</code>, 1.0 corresponding to 80 nits), whose PQ
           wire position is exact, <code>PQ⁻¹(requested nits)</code>, and which reaches far above SDR
@@ -949,7 +943,7 @@
           tone-mapping knee (now just part of the measured response), and goes identity only above the
           panel's <em>reachable</em> peak, where no LUT can create luminance. On the QD-OLED test
           panel, which ran a uniform 86.7% of the PQ spec, this produced the project's first sub-1.0
-          grayscale result (0.77 ΔE2000 average, 1.12 overall).
+          grayscale result (0.57 ΔE2000 average).
         </p>
 
         <h3 id="s10-4">10.4 Advanced Color Association</h3>
@@ -971,10 +965,10 @@
           A three-filter colorimeter is only as accurate as the spectral correction matching the
           panel's emission spectra, and modern panels (KSF/PFS phosphor LCDs, QD-OLED) are pathological
           cases for generic corrections. Measured consequence on this project's two test panels:
-          opposite-signed white errors of roughly ±11 tint steps against a common WOLED reference, each
+          opposite-signed white errors of roughly ±11 tint steps against a common WOLED critical color reference grading display, each
           calibration faithfully reproducing its meter's misplaced D65. With panel-matched spectral
           samples (<code>.ccss</code>, applied via Argyll's <code>-X</code>), the KSF LCD's native
-          state measured nearly on-target (0.89 ΔE primaries), revealing that earlier corrections had
+          state measured nearly on-target (0.59 ΔE primaries), revealing that earlier corrections had
           been partly chasing a meter artifact. The application integrates the DisplayCAL community
           corrections database directly (searchable in-app; entries embed the full CGATS content) and
           remembers the correction per monitor.
@@ -991,7 +985,7 @@
           riding the measurement). When the profile was built from the wire ladder, verification adds a
           <strong>PQ tracking sweep</strong>: FP16 wire patches through the applied profile, graded in
           absolute nits against ST.2084 and in ΔE ITP (BT.2124) against D65 gray at each level. This is
-          the only honest way to grade a correction that claims absolute PQ tracking, and a check the
+          the correct way to grade a correction that claims absolute PQ tracking, and a check the
           SDR-range sweep is physically incapable of performing.
         </p>
         <p>
