@@ -34,7 +34,7 @@ namespace HDRGammaController
             {
                 Source = new Uri("pack://application:,,,/Gloam;component/Themes/DarkControls.xaml", UriKind.Absolute),
             });
-            Services.DarkTitleBar.Apply(this);
+            // Brutalist custom chrome (header + frame) is applied at the end of the ctor.
 
             _list = new ListView
             {
@@ -97,7 +97,7 @@ namespace HDRGammaController
             Grid.SetRow(buttons, 1);
             root.Children.Add(_list);
             root.Children.Add(buttons);
-            Content = root;
+            Services.BrutalistChrome.Apply(this, "Past Calibration Reports", root);
 
             Refresh();
         }

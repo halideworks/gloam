@@ -28,7 +28,7 @@ namespace HDRGammaController.Services
 
         // Print palette: ink on white with one accent, rules in light gray.
         private static readonly Brush Ink = Frozen(0x1A, 0x1A, 0x1A);
-        private static readonly Brush Accent = Frozen(0x00, 0x78, 0xD4);
+        private static readonly Brush Accent = Frozen(0xE2, 0x2B, 0x1F);
         private static readonly Brush Muted = Frozen(0x55, 0x55, 0x55);
         private static readonly Brush Rule = Frozen(0xDD, 0xDD, 0xDD);
 

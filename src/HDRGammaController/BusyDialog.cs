@@ -41,8 +41,8 @@ namespace HDRGammaController
             {
                 Width = runnerWidth,
                 Height = 4,
-                CornerRadius = new CornerRadius(2),
-                Background = new SolidColorBrush(Color.FromRgb(0x00, 0x78, 0xD4)),
+                CornerRadius = new CornerRadius(0),
+                Background = new SolidColorBrush(Color.FromRgb(0xFF, 0x3C, 0x2F)),
                 HorizontalAlignment = HorizontalAlignment.Left,
                 RenderTransform = transform,
             };
@@ -50,7 +50,7 @@ namespace HDRGammaController
             {
                 Width = trackWidth,
                 Height = 4,
-                CornerRadius = new CornerRadius(2),
+                CornerRadius = new CornerRadius(0),
                 Background = new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33)),
                 Margin = new Thickness(0, 16, 0, 0),
                 ClipToBounds = true,
@@ -63,10 +63,10 @@ namespace HDRGammaController
 
             Content = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(0x1E, 0x1E, 0x1E)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(0x3F, 0x3F, 0x3F)),
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(8),
+                Background = new SolidColorBrush(Color.FromRgb(0x14, 0x14, 0x14)),
+                BorderBrush = Brushes.White,
+                BorderThickness = new Thickness(2),
+                CornerRadius = new CornerRadius(0),
                 Child = stack,
             };
 

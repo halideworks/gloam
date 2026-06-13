@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Input;
 using System.Windows.Media;
 using HDRGammaController.Core;
 using HDRGammaController.Core.Calibration;
@@ -112,7 +113,6 @@ namespace HDRGammaController
         {
             InitializeComponent();
             DataContext = Vm;
-            WindowTheme.UseDarkTitleBar(this);
 
             _profile = profile;
             _metrics = metrics;
@@ -1541,6 +1541,18 @@ namespace HDRGammaController
 
         private void CloseButton_Click(object sender, RoutedEventArgs e)
         {
+            Close();
+        }
+
+        private void Header_MouseDown(object sender, MouseButtonEventArgs e)
+        {
+            if (e.ChangedButton == MouseButton.Left) DragMove();
+        }
+
+        // MouseDown (not Up) + Handled so clicking the glyph never reaches the header's DragMove.
+        private void CloseGlyph_Click(object sender, MouseButtonEventArgs e)
+        {
+            e.Handled = true;
             Close();
         }
 

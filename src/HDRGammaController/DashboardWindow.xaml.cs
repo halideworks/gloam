@@ -66,7 +66,7 @@ namespace HDRGammaController
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error opening settings: {ex.Message}\n\n{ex.StackTrace}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                ConfirmDialog.Info(this, "Error", $"Error opening settings: {ex.Message}\n\n{ex.StackTrace}");
             }
         }
 

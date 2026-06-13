@@ -9,9 +9,12 @@
         Width="960" Height="860"
         MinWidth="820" MinHeight="560"
         WindowStartupLocation="CenterScreen"
-        Background="#1e1e1e"
+        Background="Transparent"
         Foreground="#e0e0e0"
-        FontFamily="{DynamicResource BodyFont}">
+        FontFamily="{DynamicResource BodyFont}"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        ResizeMode="CanResizeWithGrip">
 
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVis"/>
@@ -148,6 +151,8 @@
         </Style>
     </Window.Resources>
 
+    <!-- Custom brutalist chrome: white frame + draggable header (no OS title bar) -->
+    <Border Background="#141414" BorderBrush="#FFFFFF" BorderThickness="2">
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -155,8 +160,9 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- Header -->
-        <Border Grid.Row="0" Background="#1a1a1a" BorderBrush="#FFFFFF" BorderThickness="0,0,0,3" Padding="20,16">
+        <!-- Header (drag bar) -->
+        <Border Grid.Row="0" Background="#1a1a1a" BorderBrush="#FFFFFF" BorderThickness="0,0,0,3" Padding="20,16"
+                MouseLeftButtonDown="Header_MouseDown">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
@@ -181,6 +187,22 @@
                     <TextBlock Text="{Binding GradeScopeText}" FontSize="10" Foreground="#808080"
                                HorizontalAlignment="Center" Margin="0,4,0,0"/>
                 </StackPanel>
+
+                <!-- Window close (custom chrome) -->
+                <TextBlock Grid.Column="1" Text="&#x2715;" FontSize="15" Cursor="Hand"
+                           HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-6,-6,0"
+                           MouseLeftButtonDown="CloseGlyph_Click">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="#888888"/>
+                            <Style.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter Property="Foreground" Value="#FF3C2F"/>
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
             </Grid>
         </Border>
 
@@ -637,4 +659,5 @@
             </Grid>
         </Border>
     </Grid>
+    </Border>
 </Window>

@@ -25,7 +25,7 @@ namespace HDRGammaController
         private static readonly Brush Surround = new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A));
         private static readonly Brush OverlayBg = new SolidColorBrush(Color.FromArgb(0xCC, 0x1A, 0x1A, 0x1A));
         private static readonly Brush BarBg = new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33));
-        private static readonly Brush Accent = new SolidColorBrush(Color.FromRgb(0x08, 0x91, 0xb2));
+        private static readonly Brush Accent = new SolidColorBrush(Color.FromRgb(0xFF, 0x3C, 0x2F));
         private static readonly Brush TextDim = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88));
         private static readonly Brush ButtonBg = new SolidColorBrush(Color.FromRgb(0x44, 0x44, 0x44));
         private static readonly Brush ButtonHoverBg = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55));

@@ -536,8 +536,7 @@ namespace HDRGammaController
         {
             if (_colorimeterService == null || _calibrationTarget == null)
             {
-                MessageBox.Show("Colorimeter or calibration target not configured.",
-                    "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                ConfirmDialog.Info(this, "Error", "Colorimeter or calibration target not configured.");
                 return;
             }
 
@@ -619,8 +618,7 @@ namespace HDRGammaController
                 }
                 catch (Exception ex)
                 {
-                    MessageBox.Show($"Failed to disable color corrections: {ex.Message}\n\nCalibration may be inaccurate.",
-                        "Warning", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    ConfirmDialog.Info(this, "Warning", $"Failed to disable color corrections: {ex.Message}\n\nCalibration may be inaccurate.");
                 }
             }
 
@@ -1207,8 +1205,7 @@ namespace HDRGammaController
         {
             if (_calibrationResult?.Success != true || _calibrationTarget == null)
             {
-                MessageBox.Show("No calibration data available.", "Error",
-                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                ConfirmDialog.Info(this, "Error", "No calibration data available.");
                 return;
             }
 

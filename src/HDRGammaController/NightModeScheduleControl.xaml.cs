@@ -528,7 +528,7 @@ namespace HDRGammaController
             {
                 if (_settings.Schedule.Count >= 12)
                 {
-                    MessageBox.Show("Maximum of 12 schedule points allowed.", "Limit Reached", MessageBoxButton.OK, MessageBoxImage.Information);
+                    ConfirmDialog.Info(Window.GetWindow(this), "Limit Reached", "Maximum of 12 schedule points allowed.");
                     return;
                 }
 

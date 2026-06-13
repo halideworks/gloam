@@ -47,7 +47,7 @@ namespace HDRGammaController
             {
                 Source = new Uri("pack://application:,,,/Gloam;component/Themes/DarkControls.xaml", UriKind.Absolute),
             });
-            Services.DarkTitleBar.Apply(this);
+            // Brutalist custom chrome (header + frame) is applied at the end of the ctor.
 
             _list = new ListView
             {
@@ -113,7 +113,7 @@ namespace HDRGammaController
             Grid.SetRow(buttons, 1);
             root.Children.Add(_list);
             root.Children.Add(buttons);
-            Content = root;
+            Services.BrutalistChrome.Apply(this, "Calibration Profiles", root);
 
             Refresh();
         }
@@ -224,8 +224,8 @@ namespace HDRGammaController
                 : $"Permanently delete these {rows.Count} profiles from the color store?\n\n" +
                   string.Join("\n", rows.Select(r => r.Name)) +
                   "\n\nThis cannot be undone.";
-            if (MessageBox.Show(message, rows.Count == 1 ? "Delete Profile" : "Delete Profiles",
-                    MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+            if (!ConfirmDialog.Confirm(this, rows.Count == 1 ? "Delete Profile" : "Delete Profiles",
+                    message, "Delete", "Cancel"))
                 return;
             foreach (var row in rows)
             {

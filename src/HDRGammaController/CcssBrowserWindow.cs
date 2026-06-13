@@ -38,7 +38,7 @@ namespace HDRGammaController
             {
                 Source = new Uri("pack://application:,,,/Gloam;component/Themes/DarkControls.xaml", UriKind.Absolute),
             });
-            Services.DarkTitleBar.Apply(this);
+            // Brutalist custom chrome (header + frame) is applied at the end of the ctor.
 
             _query = new TextBox
             {
@@ -123,7 +123,7 @@ namespace HDRGammaController
             root.Children.Add(topRow);
             root.Children.Add(_list);
             root.Children.Add(bottomRow);
-            Content = root;
+            Services.BrutalistChrome.Apply(this, "Find Meter Correction", root);
 
             Loaded += async (_, _) => await SearchAsync();
         }

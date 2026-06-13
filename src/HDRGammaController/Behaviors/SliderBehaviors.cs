@@ -200,10 +200,10 @@ namespace HDRGammaController.Behaviors
 
             var border = new Border
             {
-                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x3D, 0x3D, 0x3D)),
-                BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x00, 0x78, 0xD4)),
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(4),
+                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x1A, 0x1A, 0x1A)),
+                BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFF, 0x3C, 0x2F)),
+                BorderThickness = new Thickness(2),
+                CornerRadius = new CornerRadius(0),
                 Padding = new Thickness(4)
             };
 
@@ -211,12 +211,12 @@ namespace HDRGammaController.Behaviors
             {
                 Text = slider.Value.ToString("F2"),
                 Width = 80,
-                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x2D, 0x2D, 0x2D)),
+                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x1A, 0x1A, 0x1A)),
                 Foreground = System.Windows.Media.Brushes.White,
                 BorderThickness = new Thickness(0),
                 Padding = new Thickness(6, 4, 6, 4),
                 FontSize = 13,
-                SelectionBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x00, 0x78, 0xD4)),
+                SelectionBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFF, 0x3C, 0x2F)),
                 CaretBrush = System.Windows.Media.Brushes.White
             };
 
