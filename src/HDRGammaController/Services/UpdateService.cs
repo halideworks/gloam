@@ -22,7 +22,7 @@ namespace HDRGammaController.Services
         // 'vpk upload github' target MUST point at the same repo, or CheckForUpdatesAsync
         // 404s. The repo must actually be named 'gloam' (GitHub web-redirects the old
         // name, but release assets resolve under the canonical name).
-        private const string RepoUrl = "https://github.com/davidtorcivia/gloam";
+        private const string RepoUrl = "https://github.com/halideworks/gloam";
 
         private readonly UpdateManager _manager;
 

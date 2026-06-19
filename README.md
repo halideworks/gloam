@@ -41,7 +41,7 @@ A Windows System Tray application to manage HDR Gamma settings on a per-monitor 
 
 ### Option 1: Installer (Recommended)
 
-**Download `Gloam-<version>-Setup.exe` from the [Releases page](https://github.com/davidtorcivia/gloam/releases) and run it.**
+**Download `Gloam-<version>-Setup.exe` from the [Releases page](https://github.com/halideworks/gloam/releases) and run it.**
 
 - **Self-contained**: no .NET Runtime required, and ArgyllCMS (`dispwin.exe`) is bundled so calibration works offline.
 - **Per-user install**: installs into `%LocalAppData%\GloamApp` with no administrator prompt. Your settings, logs, and calibration reports live separately under `%LocalAppData%\Gloam` and survive an uninstall.
@@ -67,7 +67,7 @@ The script publishes a self-contained build, bundles ArgyllCMS, and packages it 
 #### Manual Build (run from source)
 ```powershell
 # Clone the repository
-git clone https://github.com/davidtorcivia/gloam.git
+git clone https://github.com/halideworks/gloam.git
 cd gloam
 
 # Run directly (auto-update is disabled unless launched from a Velopack install)
