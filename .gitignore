@@ -37,9 +37,15 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
+# Local marketing assets (before/after demo LUTs, scratch renders) - not shipped
+marketing-assets/
+
 # Packaging Artifacts
 argyll_cache/
 argyll_cache.zip
+argyll_cache_*/
+argyll_cache_*.zip
 HDRGammaController_*.zip
+Gloam_*.zip
 *.csv
 *.cal

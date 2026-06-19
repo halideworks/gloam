@@ -1,0 +1,64 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!--
+        Reusable overlay primitives shared by the themed ToastWindow and CrashDialog
+        (and any future transient overlay). Merge this dictionary into an overlay window's
+        Resources alongside Brutalist.xaml. Colours come from the Theme* tokens in
+        Tokens.xaml via DynamicResource, so overlays react to the light/dark swap.
+
+        Per-kind accent stripes: the accent colour for each ToastKind is bound directly to a
+        themed token brush in the window XAML via a DataTrigger keyed on the VM's Kind value.
+        See ToastWindow.xaml / CrashDialog.xaml — keeping the mapping in the view (not here)
+        avoids the awkward "DynamicResource a Color from a Brush" pattern and stays
+        reactive to the light/dark swap automatically.
+    -->
+
+    <!-- The brutalist overlay card: hard 2px border, square corners, surface fill, plus a
+         hard offset "shadow" (zero blur, 3px offset) in the border colour — matches the
+         BrutBtn hover shadow idiom so the card lifts off the desktop. -->
+    <Style x:Key="OverlayCard" TargetType="Border">
+        <Setter Property="Background" Value="{DynamicResource ThemeSurface}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource ThemeBorder}"/>
+        <Setter Property="BorderThickness" Value="2"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="SnapsToDevicePixels" Value="True"/>
+        <!-- Hard offset shadow (zero blur) in white: matches the dark-theme border colour and
+             the BrutBtn hover-shadow idiom, lifting the card off the desktop. In light theme
+             the white shadow is invisible against a light desktop, but the card's own black
+             2px border still fully defines it, so no information is lost. Tracking the swap
+             would require a Color resource + code-side swap, not worth it for a shadow tint. -->
+        <Setter Property="Effect">
+            <Setter.Value>
+                <DropShadowEffect Color="White"
+                                  BlurRadius="0" ShadowDepth="4" Direction="315"
+                                  Opacity="1" RenderingBias="Performance"/>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Overlay title text (uppercase, display font) -->
+    <Style x:Key="OverlayTitle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource DisplayFont}"/>
+        <Setter Property="FontWeight" Value="Bold"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="Foreground" Value="{DynamicResource ThemeText}"/>
+    </Style>
+
+    <!-- Overlay body message -->
+    <Style x:Key="OverlayMessage" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource BodyFont}"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="Foreground" Value="{DynamicResource ThemeTextDim}"/>
+        <Setter Property="TextWrapping" Value="Wrap"/>
+    </Style>
+
+    <!-- Overlay detail text (mono, for exception output) -->
+    <Style x:Key="OverlayDetail" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource MonoFont}"/>
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="Foreground" Value="{DynamicResource ThemeTextDim}"/>
+        <Setter Property="TextWrapping" Value="Wrap"/>
+    </Style>
+
+</ResourceDictionary>

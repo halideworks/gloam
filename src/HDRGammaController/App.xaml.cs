@@ -38,6 +38,7 @@ namespace HDRGammaController
                 sp.GetRequiredService<NightModeService>()));
             services.AddSingleton<AppDetectionService>();
             services.AddSingleton<UpdateService>();
+            services.AddSingleton<IToastService, ToastService>();
             // The live TrayViewModel is created by MainWindow through
             // ActivatorUtilities.CreateInstance, which pulls the singletons above and
             // passes the window-bound HotkeyManager explicitly. Resolving this
@@ -144,10 +145,43 @@ namespace HDRGammaController
             }
         }
 
+        // Once-per-session guard so a pathological handler that keeps throwing doesn't open a
+        // fresh dialog each time the previous one closes (a dialog-spam loop).
+        private bool _crashDialogShown;
+
         private void App_DispatcherUnhandledException(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
         {
             Log.Error("CRITICAL RUNTIME ERROR: " + e.Exception);
-            e.Handled = true; // Prevent crash if possible
+
+            // Show a themed dialog the first time so the user actually sees that something
+            // broke (the previous behavior swallowed every exception silently). If this one
+            // has already shown, fall back to swallowing-and-logging to avoid a loop.
+            if (_crashDialogShown)
+            {
+                e.Handled = true;
+                return;
+            }
+
+            _crashDialogShown = true;
+            string message = e.Exception?.Message ?? "An unexpected error occurred.";
+            string details = e.Exception == null ? "" : $"{e.Exception.GetType().FullName}: {e.Exception.Message}\n\n{e.Exception.StackTrace}";
+
+            Window? owner = MainWindow;
+            bool? exit = null;
+            // ShowDialog must run on the UI thread; we're already there for a Dispatcher
+            // unhandled exception. Guard with a try/catch so a dialog failure can't make
+            // things worse than the original error.
+            try
+            {
+                exit = CrashDialog.Show(owner, "Something went wrong", message, details);
+            }
+            catch (Exception dialogEx)
+            {
+                Log.Error($"App: crash dialog failed to show: {dialogEx}");
+            }
+
+            // Exit → let the exception propagate (crash). Continue (or dialog failure) → swallow.
+            e.Handled = exit != true;
         }
     }
 

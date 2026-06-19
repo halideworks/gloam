@@ -1,0 +1,100 @@
+<Window x:Class="HDRGammaController.ToastWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:HDRGammaController.ViewModels"
+        xmlns:sys="clr-namespace:System;assembly=mscorlib"
+        Title="Gloam"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ShowInTaskbar="False"
+        Topmost="True"
+        ShowActivated="False"
+        SizeToContent="WidthAndHeight"
+        MaxWidth="380"
+        ResizeMode="NoResize"
+        d:DataContext="{d:DesignInstance Type=vm:ToastViewModel}"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d">
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Themes/Brutalist.xaml"/>
+                <ResourceDictionary Source="Themes/Overlays.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+            <!-- Boolean → Visibility so HasAction drives the action button. -->
+            <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+        </ResourceDictionary>
+    </Window.Resources>
+
+    <!-- The card. Opacity animates in on Loaded (the fade-out on dismiss is driven from
+         code-behind so it can Close() after it completes). -->
+    <Border x:Name="Card" Style="{StaticResource OverlayCard}" Opacity="0">
+        <Border.Triggers>
+            <EventTrigger RoutedEvent="Loaded">
+                <BeginStoryboard>
+                    <Storyboard>
+                        <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                         From="0" To="1" Duration="0:0:0.15"/>
+                    </Storyboard>
+                </BeginStoryboard>
+            </EventTrigger>
+        </Border.Triggers>
+
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="4"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Accent stripe: colour comes from the Style below (default ThemeText, remapped
+                 per Kind by DataTriggers). The default MUST live in the Style, not inline —
+                 an inline/local property value has higher precedence than Style triggers and
+                 would prevent the Warning/Error colours from ever applying. -->
+            <Border x:Name="AccentStripe" Grid.Column="0">
+                <Border.Style>
+                    <Style TargetType="Border">
+                        <Setter Property="Background" Value="{DynamicResource ThemeText}"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding Kind}" Value="{x:Static vm:ToastKind.Warning}">
+                                <Setter Property="Background" Value="{DynamicResource ThemeAmber}"/>
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding Kind}" Value="{x:Static vm:ToastKind.Error}">
+                                <Setter Property="Background" Value="{DynamicResource ThemeAccent}"/>
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding Kind}" Value="{x:Static vm:ToastKind.Success}">
+                                <Setter Property="Background" Value="{DynamicResource ThemeText}"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+            </Border>
+
+            <Border Grid.Column="1" Padding="16,12">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0" Style="{StaticResource OverlayTitle}"
+                               Text="{Binding Title}" Margin="0,0,0,4"/>
+
+                    <TextBlock Grid.Row="1" Style="{StaticResource OverlayMessage}"
+                               Text="{Binding Message}"/>
+
+                    <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right"
+                                Margin="0,10,0,0"
+                                Visibility="{Binding HasAction, Converter={StaticResource BoolToVis}}">
+                        <Button Style="{StaticResource BrutBtnSecondary}"
+                                Content="{Binding ActionLabel}"
+                                Command="{Binding InvokeActionCommand}"
+                                Padding="14,6"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </Grid>
+    </Border>
+</Window>

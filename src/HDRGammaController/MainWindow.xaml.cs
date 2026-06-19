@@ -21,7 +21,9 @@ namespace HDRGammaController
             
             // Set Icon from executable (requires net8.0-windows)
             try {
-                MyNotifyIcon.Icon = System.Drawing.Icon.ExtractAssociatedIcon(System.Reflection.Assembly.GetEntryAssembly()!.Location);
+                string? exePath = Environment.ProcessPath;
+                if (!string.IsNullOrEmpty(exePath))
+                    MyNotifyIcon.Icon = System.Drawing.Icon.ExtractAssociatedIcon(exePath);
             } catch (Exception ex) { Log.Info("MainWindow: Failed to set icon: " + ex.Message); }
 
             // Force Handle creation early
@@ -39,15 +41,22 @@ namespace HDRGammaController
             Log.Info("MainWindow: Initializing TrayViewModel...");
             _trayViewModel = ActivatorUtilities.CreateInstance<TrayViewModel>(App.Services, _hotkeyManager);
             
-            // Subscribe to notifications
+            // Route themed notifications. The old OS balloon is replaced by the in-app
+            // ToastWindow; NotificationRequested is the Core→app boundary so Core code can
+            // request a toast without depending on WPF.
+            var toast = App.Services.GetService(typeof(IToastService)) as IToastService;
             _trayViewModel.NotificationRequested += (title, msg) =>
             {
-                MyNotifyIcon.ShowBalloonTip(title, msg, Hardcodet.Wpf.TaskbarNotification.BalloonIcon.Info);
+                toast?.Show(title, msg, ToastKind.Info);
             };
 
-            // Update balloons say "Click here to download"; honor that by opening
-            // the release page when the balloon is clicked.
-            MyNotifyIcon.TrayBalloonTipClicked += (s, e) => _trayViewModel?.OpenPendingUpdate();
+            // Update notifications carry a "Click here to download" action; route that
+            // through the toast's action button instead of relying on a balloon click.
+            _trayViewModel.UpdateNotificationRequested += info =>
+            {
+                toast?.Show("Update available", info.Version, ToastKind.Info, "Download",
+                    () => _trayViewModel?.OpenPendingUpdate());
+            };
             
             // Set DataContext for the specific bindings in XAML
             MyNotifyIcon.DataContext = _trayViewModel;

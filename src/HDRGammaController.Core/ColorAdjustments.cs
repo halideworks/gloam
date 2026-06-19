@@ -155,20 +155,46 @@ namespace HDRGammaController.Core
         /// <summary>
         /// Physically accurate conversion using CIE 1931 color space (Kang et al. approximation).
         /// Converts Kelvin -> xy Chromaticity -> XYZ -> sRGB.
+        /// Normalized against a 6500K reference computed through the same path so that, like
+        /// <see cref="GetStandardMultipliers"/>, 6500K returns exactly (1, 1, 1) — and the
+        /// neutral point doesn't shift when the user switches temperature algorithm.
         /// </summary>
         public static (double R, double G, double B) GetAccurateMultipliers(int kelvin)
+        {
+            var target = GetRawKelvinRGB_Accurate(kelvin);
+            var ref6500 = GetRawKelvinRGB_Accurate(6500);
+
+            // Normalize each to its own max (so the brightest channel = 1), then express the
+            // target as a ratio against the reference. At 6500K the ratio is exactly (1,1,1).
+            double targetMax = Math.Max(target.r, Math.Max(target.g, target.b));
+            double refMax = Math.Max(ref6500.r, Math.Max(ref6500.g, ref6500.b));
+            if (targetMax <= 0 || refMax <= 0) return (1.0, 1.0, 1.0);
+
+            double r = (target.r / targetMax) / (ref6500.r / refMax);
+            double g = (target.g / targetMax) / (ref6500.g / refMax);
+            double b = (target.b / targetMax) / (ref6500.b / refMax);
+
+            return (r, g, b);
+        }
+
+        /// <summary>
+        /// Raw (clamped) sRGB values for a Kelvin temperature via the Kang/XYZ path, before
+        /// any neutral-point normalization. Factored out so <see cref="GetAccurateMultipliers"/>
+        /// can compute a 6500K reference through the identical pipeline.
+        /// </summary>
+        private static (double r, double g, double b) GetRawKelvinRGB_Accurate(int kelvin)
         {
             double T = kelvin;
             double x, y;
 
             // Calculate x
             if (T <= 4000)
-                x = -0.2661239 * Math.Pow(10, 9) / Math.Pow(T, 3) 
-                    - 0.2343580 * Math.Pow(10, 6) / Math.Pow(T, 2) 
+                x = -0.2661239 * Math.Pow(10, 9) / Math.Pow(T, 3)
+                    - 0.2343580 * Math.Pow(10, 6) / Math.Pow(T, 2)
                     + 0.8776956 * Math.Pow(10, 3) / T + 0.179910;
             else
-                x = -3.0258469 * Math.Pow(10, 9) / Math.Pow(T, 3) 
-                    + 2.1070379 * Math.Pow(10, 6) / Math.Pow(T, 2) 
+                x = -3.0258469 * Math.Pow(10, 9) / Math.Pow(T, 3)
+                    + 2.1070379 * Math.Pow(10, 6) / Math.Pow(T, 2)
                     + 0.2226347 * Math.Pow(10, 3) / T + 0.240390;
 
             // Calculate y
@@ -194,20 +220,10 @@ namespace HDRGammaController.Core
             gL = Math.Clamp(gL, 0, 1);
             bL = Math.Clamp(bL, 0, 1);
 
-            // Gamma Correct (Linear -> sRGB) using proper sRGB transfer function
-            // IEC 61966-2-1:1999 specifies piecewise function, not simple 1/2.2 power
+            // Gamma Correct (Linear -> sRGB)
             double r = TransferFunctions.SrgbOetf(rL);
             double g = TransferFunctions.SrgbOetf(gL);
             double b = TransferFunctions.SrgbOetf(bL);
-
-            // Normalize to Max=1 to preserve brightness
-            double max = Math.Max(r, Math.Max(g, b));
-            if (max > 0) { r /= max; g /= max; b /= max; }
-
-            // Reference normalization to D65 (6500K)
-            // (Similar to standard, ensuring 6500K = 1,1,1 approximately)
-            // But since this IS D65-based XYZ-to-RGB, 6500K should naturally be close to white.
-            // We'll trust the output but normalize to ensure max brightness.
 
             return (r, g, b);
         }

@@ -20,6 +20,13 @@ namespace HDRGammaController.ViewModels
     {
         public event Action<string, string>? NotificationRequested;
 
+        /// <summary>
+        /// Raised (once) when an update is available, carrying the version label. The
+        /// subscriber attaches a "Download" action to the themed toast that opens the
+        /// release page — replacing the old click-the-balloon behavior.
+        /// </summary>
+        public event Action<UpdateInfo>? UpdateNotificationRequested;
+
         private readonly MonitorManager _monitorManager;
         private readonly ProfileManager _profileManager;
         private readonly DispwinRunner _dispwinRunner;
@@ -28,13 +35,17 @@ namespace HDRGammaController.ViewModels
         private readonly NightModeService _nightModeService;
         private readonly GammaApplyService _applyService;
         private readonly UpdateService _updateService;
+        private readonly IToastService? _toastService;
 
         private readonly Dictionary<int, Action<MonitorInfo>> _hotkeyActions = new Dictionary<int, Action<MonitorInfo>>();
         private int _panicId = -1;
         private int _nightModeToggleId = -1;
 
         private readonly AppDetectionService _appDetectionService;
+        // Guarded by _activeMonitorsLock: RefreshMonitors (UI thread) mutates this while
+        // OnForegroundAppChanged can enumerate it from the foreground-app hook thread.
         private List<MonitorInfo> _activeMonitors = new List<MonitorInfo>();
+        private readonly object _activeMonitorsLock = new();
 
         private Dictionary<string, MonitorInfo> _savedConfigs = new Dictionary<string, MonitorInfo>();
 
@@ -55,6 +66,7 @@ namespace HDRGammaController.ViewModels
             GammaApplyService applyService,
             AppDetectionService appDetectionService,
             UpdateService updateService,
+            IToastService? toastService = null,
             HotkeyManager? hotkeyManager = null)
         {
             // Dependencies are constructed by the DI container (App.ConfigureServices)
@@ -71,6 +83,7 @@ namespace HDRGammaController.ViewModels
             _applyService = applyService;
             _appDetectionService = appDetectionService;
             _updateService = updateService;
+            _toastService = toastService;
 
             _dispwinRunner.DispwinUnavailable += () =>
                 Application.Current.Dispatcher.Invoke(() =>
@@ -128,8 +141,13 @@ namespace HDRGammaController.ViewModels
                      PendingUpdateUrl = !string.IsNullOrEmpty(info.ReleaseUrl)
                          ? info.ReleaseUrl
                          : $"https://github.com/davidtorcivia/gloam/releases";
-                     NotificationRequested?.Invoke("Update Available",
-                         $"A new version ({info.Version}) is available.\nClick here to download.");
+                     // Raise for subscribers (e.g. MainWindow) that attach a Download action
+                     // to the themed toast. Fall back to a plain notification otherwise.
+                     if (_toastService != null)
+                         UpdateNotificationRequested?.Invoke(info);
+                     else
+                         NotificationRequested?.Invoke("Update Available",
+                             $"A new version ({info.Version}) is available.\nClick here to download.");
                 }
             }
             catch (Exception ex)
@@ -194,9 +212,14 @@ namespace HDRGammaController.ViewModels
             
             if (id == _nightModeToggleId)
             {
-                // Toggle night mode on/off
-                _applyService.NightModeManuallyDisabled = !_applyService.NightModeManuallyDisabled;
+                // Toggle night mode on/off. Not persisted across restarts (avoids a stuck-off
+                // footgun where night mode silently never returns); the toast makes the current
+                // state visible on every press.
+                bool nowDisabled = (_applyService.NightModeManuallyDisabled = !_applyService.NightModeManuallyDisabled);
                 ApplyAll(); // Re-apply all calibrations with night mode toggled
+                _toastService?.Show("Gloam",
+                    nowDisabled ? "Night warmth disabled — day mode" : "Night warmth enabled",
+                    nowDisabled ? ToastKind.Info : ToastKind.Success);
                 return;
             }
 
@@ -206,6 +229,12 @@ namespace HDRGammaController.ViewModels
                 if (monitor != null)
                 {
                      action(monitor);
+                }
+                else
+                {
+                    // #18: previously this dropped the apply silently. Tell the user why
+                    // nothing changed instead.
+                    _toastService?.Show("Gloam", "No monitor under cursor", ToastKind.Warning);
                 }
             }
         }
@@ -294,11 +323,20 @@ namespace HDRGammaController.ViewModels
 
         private void OnForegroundAppChanged(string appName, Dxgi.RECT? appBounds)
         {
-            try 
+            try
             {
+                // Snapshot the monitor list under the lock: RefreshMonitors (UI thread) can be
+                // rebuilding _activeMonitors while this handler runs on the foreground-app hook
+                // thread, and a concurrent List mutation throws / yields torn reads.
+                List<MonitorInfo> activeMonitors;
+                lock (_activeMonitorsLock)
+                {
+                    activeMonitors = _activeMonitors;
+                }
+
                 // Check if app is in exclusion list
                 var rule = _settingsManager.ExcludedApps.FirstOrDefault(r => r.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase));
-                
+
                 var newBlocked = new HashSet<IntPtr>();
 
                 if (rule != null)
@@ -306,13 +344,13 @@ namespace HDRGammaController.ViewModels
                     if (rule.FullDisable)
                     {
                         // Block ALL active monitors
-                        foreach(var m in _activeMonitors) newBlocked.Add(m.HMonitor);
+                        foreach(var m in activeMonitors) newBlocked.Add(m.HMonitor);
                     }
                     else if (appBounds.HasValue)
                     {
                         // Smart Mode: Block intersecting
                         var r1 = appBounds.Value;
-                        foreach (var monitor in _activeMonitors)
+                        foreach (var monitor in activeMonitors)
                         {
                             var r2 = monitor.MonitorBounds;
                             bool intersects = r1.Left < r2.Right && r2.Left < r1.Right &&
@@ -322,7 +360,7 @@ namespace HDRGammaController.ViewModels
                     }
                     else
                     {
-                        // Excluded but no bounds? Maybe block primary or all? 
+                        // Excluded but no bounds? Maybe block primary or all?
                         // Let's safe fallback to all if we can't detect bounds (e.g. minimized but active?)
                         // Or maybe just Ignore.
                         // For now, if no bounds, we assume it's not effectively on screen or we can't decide.
@@ -359,7 +397,10 @@ namespace HDRGammaController.ViewModels
         private void PanicAll()
         {
             _applyService.ClearAll(TrayItems.OfType<MonitorViewModel>().Select(vm => vm.Model));
-            MessageBox.Show("Panic Mode Activated: All gamma tables cleared.", "Gloam", MessageBoxButton.OK, MessageBoxImage.Information);
+            // #22: replaced a parentless MessageBox.Show (called from the hotkey hook thread,
+            // which could appear behind other windows / on the wrong monitor) with a themed,
+            // non-modal toast. It confirms the recovery without stealing focus.
+            _toastService?.Show("Gloam", "Gamma cleared — safe mode", ToastKind.Warning);
         }
 
         private ActionViewModel? _startupItem;
@@ -408,7 +449,9 @@ namespace HDRGammaController.ViewModels
                 return;
             }
 
-            var setupWindow = new CalibrationSetupWindow(_activeMonitors, _settingsManager);
+            List<MonitorInfo> activeMonitors;
+            lock (_activeMonitorsLock) { activeMonitors = _activeMonitors; }
+            var setupWindow = new CalibrationSetupWindow(activeMonitors, _settingsManager);
             var dialogResult = setupWindow.ShowDialog();
 
             if (dialogResult == true &&
@@ -476,8 +519,15 @@ namespace HDRGammaController.ViewModels
         {
             Log.Info("TrayViewModel: Refreshing monitors...");
             TrayItems.Clear();
-            _activeMonitors = _monitorManager.EnumerateMonitors();
-            var monitors = _activeMonitors;
+            var enumerated = _monitorManager.EnumerateMonitors();
+            // Publish the new list atomically: OnForegroundAppChanged may snapshot it from the
+            // foreground-app hook thread at any moment. A new list reference is published in
+            // one write, so readers never see a half-built list.
+            lock (_activeMonitorsLock)
+            {
+                _activeMonitors = enumerated;
+            }
+            var monitors = enumerated;
             Log.Info($"TrayViewModel: Enumerated {monitors.Count} monitors.");
             
             if (monitors.Count == 0)

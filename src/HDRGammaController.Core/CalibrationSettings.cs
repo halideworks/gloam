@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 using HDRGammaController.Core.Calibration;
 
 namespace HDRGammaController.Core
@@ -147,8 +148,11 @@ namespace HDRGammaController.Core
         {
             // Round values to reduce cache fragmentation
             int brightnessKey = (int)Math.Round(Brightness);
-            int tempKey = (int)Math.Round(Temperature * 10);
-            int tempOffsetKey = (int)Math.Round(TemperatureOffset * 10);
+            // Temperature units are 70 K. Tenths therefore collapse a fade into ~7 K
+            // plateaus even when the scheduler updates smoothly. Hundredths retain
+            // sub-kelvin resolution without using unstable raw floating-point bits.
+            int tempKey = (int)Math.Round(Temperature * 100);
+            int tempOffsetKey = (int)Math.Round(TemperatureOffset * 100);
             int tintKey = (int)Math.Round(Tint * 10);
             int rGainKey = (int)Math.Round(RedGain * 100);
             int gGainKey = (int)Math.Round(GreenGain * 100);
@@ -157,12 +161,19 @@ namespace HDRGammaController.Core
             int gOffsetKey = (int)Math.Round(GreenOffset * 1000);
             int bOffsetKey = (int)Math.Round(BlueOffset * 1000);
             int lutKey = CalibrationProfileId?.GetHashCode() ?? 0;
+            // Include the measured-correction LUT instance identity. Without this, two
+            // settings with identical scalars but a freshly-regenerated Lut3D (same profile
+            // id) would collide in LutGenerator's cache and return the stale LUT. Reference
+            // identity is sufficient and correct here: a different LUT instance must not be a
+            // false hit. A content hash over the 3D LUT is unnecessary (a suboptimal cache
+            // miss is harmless; a *wrong* hit is the failure we're closing).
+            int lutInstanceKey = RuntimeHelpers.GetHashCode(MeasuredCorrectionLut);
 
             return HashCode.Combine(
                 HashCode.Combine(brightnessKey, tempKey, tempOffsetKey, tintKey),
                 HashCode.Combine(rGainKey, gGainKey, bGainKey),
                 HashCode.Combine(rOffsetKey, gOffsetKey, bOffsetKey),
-                HashCode.Combine((int)Algorithm, UseLinearBrightness, UseUltraWarmMode, lutKey)
+                HashCode.Combine((int)Algorithm, UseLinearBrightness, UseUltraWarmMode, lutKey, lutInstanceKey)
             );
         }
     }

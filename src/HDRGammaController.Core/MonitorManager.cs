@@ -170,18 +170,24 @@ namespace HDRGammaController.Core
                         {
                              Marshal.Release(pOutput);
                         }
+                        if (output6 != null)
+                        {
+                            Marshal.ReleaseComObject(output6);
+                        }
 
                         outputIndex++;
                     }
 
                     // Done with Adapter
                     Marshal.Release(pAdapter);
+                    Marshal.ReleaseComObject(adapter);
                     adapterIndex++;
                 }
             }
             finally
             {
                 if (factory != null) Marshal.ReleaseComObject(factory);
+                Marshal.Release(pFactory);
             }
 
             return monitors;

@@ -3,9 +3,11 @@ $ErrorActionPreference = "Stop"
 
 $projectPath = "src\HDRGammaController\HDRGammaController.csproj"
 $publishRoot = "publish"
-$argyllUrl = "https://www.argyllcms.com/Argyll_V3.3.0_win64_exe.zip"
-$argyllZip = "argyll_cache.zip"
-$argyllExtractDir = "argyll_cache"
+$argyllVersion = "Argyll_V3.5.0"
+$argyllUrl = "https://www.argyllcms.com/${argyllVersion}_win64_exe.zip"
+$argyllZip = "argyll_cache_3.5.0.zip"
+$argyllExtractDir = "argyll_cache_3.5.0"
+$argyllSha256 = "C80F78BA30E715079A00A14C2E7C9F533C58E6C8FDBC27F2D32B3D7813F9D132"
 
 # Ensure clean state
 if (Test-Path $publishRoot) { Remove-Item -Path $publishRoot -Recurse -Force }
@@ -24,9 +26,17 @@ function Download-Argyll {
         Expand-Archive -Path $argyllZip -DestinationPath $argyllExtractDir
     }
     
-    # Locate dispwin.exe
-    $dispwin = Get-ChildItem -Path $argyllExtractDir -Recurse -Filter "dispwin.exe" | Select-Object -First 1
-    return $dispwin.FullName
+    $root = Join-Path $argyllExtractDir $argyllVersion
+    if (-not (Test-Path (Join-Path $root "bin\dispwin.exe")) -or
+        -not (Test-Path (Join-Path $root "bin\spotread.exe"))) {
+        throw "Argyll archive is missing dispwin.exe or spotread.exe"
+    }
+
+    $actualHash = (Get-FileHash $argyllZip -Algorithm SHA256).Hash
+    if ($actualHash -ne $argyllSha256) {
+        throw "Argyll archive integrity check failed (SHA-256 $actualHash)"
+    }
+    return $root
 }
 
 function Create-Package {
@@ -54,18 +64,11 @@ function Create-Package {
     
     # 3. Bundle Argyll (Full only)
     if ($IncludeArgyll) {
-        $dispwinPath = Download-Argyll
-        if ($dispwinPath) {
-            Write-Host "Bundling dispwin.exe from $dispwinPath"
-            # Current app logic looks in current directory OR bin/ subfolder. 
-            # Let's put it in bin/ to keep root clean, similar to DownloadArgyllAsync logic
-            # Actually, `DispwinRunner.cs` checks `AppDomain.CurrentDomain.BaseDirectory, "dispwin.exe"`
-            # So putting it in root is easiest.
-            Copy-Item $dispwinPath $outDir
-        }
-        else {
-            Write-Warning "Could not find dispwin.exe to bundle!"
-        }
+        $argyllRoot = Download-Argyll
+        $bundleRoot = Join-Path $outDir "argyll_cache\$argyllVersion"
+        Write-Host "Bundling $argyllVersion from $argyllRoot"
+        New-Item -ItemType Directory -Path (Split-Path $bundleRoot) -Force | Out-Null
+        Copy-Item $argyllRoot $bundleRoot -Recurse
     }
 
     # 4. Zip

@@ -122,11 +122,15 @@ namespace HDRGammaController.Core
 
         private static int ReadInt32BigEndian(byte[] buf, int offset)
         {
+            if ((uint)(offset + 3) >= (uint)buf.Length)
+                throw new ArgumentException("ICC profile read out of bounds.", nameof(buf));
             return (buf[offset] << 24) | (buf[offset + 1] << 16) | (buf[offset + 2] << 8) | buf[offset + 3];
         }
 
         private static int ReadInt32LittleEndian(byte[] buf, int offset)
         {
+            if ((uint)(offset + 3) >= (uint)buf.Length)
+                throw new ArgumentException("ICC profile read out of bounds.", nameof(buf));
             return (buf[offset + 3] << 24) | (buf[offset + 2] << 16) | (buf[offset + 1] << 8) | buf[offset];
         }
 

@@ -206,12 +206,13 @@ namespace HDRGammaController.Core
             ScheduleNextTick();
         }
 
-        // Tick fast only while a fade is actually interpolating; when idle, sleep until
-        // the next schedule trigger (capped at 60s so system clock changes can't strand
-        // us). The old constant 4s tick was ~21,600 wakeups/day of pure idle work.
-        private const double FadeTickMs = 4000;
+        // Tick adaptively while a fade is interpolating and sleep while idle. The cadence
+        // targets at most 1 K per update, so short and long transitions are both smooth.
+        private const double MinFadeTickMs = 1000.0 / 60.0;
+        private const double MaxFadeTickMs = 500;
         private const double IdleTickMs = 60000;
         private bool _inFadeWindow;
+        private double _fadeTickMs = MaxFadeTickMs;
         private double _msToNextTrigger = double.MaxValue;
 
         private void ScheduleNextTick()
@@ -219,8 +220,8 @@ namespace HDRGammaController.Core
             if (!_settings.Enabled) return;
 
             _timer.Interval = _inFadeWindow
-                ? FadeTickMs
-                : Math.Clamp(_msToNextTrigger, FadeTickMs, IdleTickMs);
+                ? _fadeTickMs
+                : Math.Clamp(_msToNextTrigger, MaxFadeTickMs, IdleTickMs);
             _timer.Start();
         }
         
@@ -245,8 +246,9 @@ namespace HDRGammaController.Core
 
             int targetKelvin = CalculateCurrentKelvin();
 
-            // Only update if changed significantly
-            if (Math.Abs(targetKelvin - _currentNightKelvin) > 5)
+            // Kelvin is integral, so equality is the only useful dedupe here. A larger
+            // threshold turns a gradual fade into periodic visible steps.
+            if (targetKelvin != _currentNightKelvin)
             {
                 _currentNightKelvin = targetKelvin;
                 BlendChanged?.Invoke(1.0);
@@ -262,6 +264,7 @@ namespace HDRGammaController.Core
 
             // Recomputed below; default to "no fade, nothing scheduled".
             _inFadeWindow = false;
+            _fadeTickMs = MaxFadeTickMs;
             _msToNextTrigger = double.MaxValue;
 
             // 1. Resolve all points to absolute TimeSpans for today
@@ -345,6 +348,7 @@ namespace HDRGammaController.Core
             if (timeSinceTrigger.TotalMinutes < fadeMinutes && fadeMinutes > 0)
             {
                 _inFadeWindow = true;
+                _fadeTickMs = CalculateFadeTickMilliseconds(startKelvin, endKelvin, fadeMinutes);
                 double progress = timeSinceTrigger.TotalMinutes / fadeMinutes;
                 progress = Math.Clamp(progress, 0.0, 1.0);
 
@@ -353,6 +357,15 @@ namespace HDRGammaController.Core
 
             // Otherwise we have arrived
             return endKelvin;
+        }
+
+        internal static double CalculateFadeTickMilliseconds(int startKelvin, int endKelvin, double fadeMinutes)
+        {
+            int distance = Math.Abs(endKelvin - startKelvin);
+            if (distance == 0 || fadeMinutes <= 0) return MaxFadeTickMs;
+
+            double millisecondsPerKelvin = fadeMinutes * 60_000.0 / distance;
+            return Math.Clamp(millisecondsPerKelvin, MinFadeTickMs, MaxFadeTickMs);
         }
 
         /// <returns>True if BlendChanged was fired.</returns>

@@ -21,12 +21,30 @@ namespace HDRGammaController.Core
     public static class LutGenerator
     {
         // Cache for computed LUTs to avoid redundant computation.
-        // Key: (GammaMode, WhiteLevel rounded to nearest 10, CalibrationHash, IsHdr)
+        // Key: (GammaMode, exact WhiteLevel, full calibration, IsHdr)
         //
         // CONTRACT: Cached arrays are READ-ONLY. Callers must not mutate them — the cache
         // hands out shared references directly to avoid 32 KB of per-call allocation at
         // slider-drag frequencies. Any write to a returned array corrupts future lookups.
-        private static readonly ConcurrentDictionary<(GammaMode, int, int, bool), (double[] R, double[] G, double[] B, double[] Grey)> _lutCache = new();
+        private static readonly ConcurrentDictionary<(GammaMode, double, CalibrationCacheKey, bool), (double[] R, double[] G, double[] B, double[] Grey)> _lutCache = new();
+
+        // A hash code alone is not identity: collisions returned a wrong cached LUT. Keep
+        // every input in the dictionary key so equality is checked field-by-field. The cache
+        // is bounded, so exact values are preferable to order-dependent approximate hits.
+        private readonly record struct CalibrationCacheKey(
+            double Brightness, double Temperature, double TemperatureOffset, double Tint,
+            double RedGain, double GreenGain, double BlueGain,
+            double RedOffset, double GreenOffset, double BlueOffset,
+            NightModeAlgorithm Algorithm, bool LinearBrightness, bool UltraWarm,
+            Guid? ProfileId, Lut3D? MeasuredLut)
+        {
+            public static CalibrationCacheKey From(CalibrationSettings value) => new(
+                value.Brightness, value.Temperature, value.TemperatureOffset, value.Tint,
+                value.RedGain, value.GreenGain, value.BlueGain,
+                value.RedOffset, value.GreenOffset, value.BlueOffset,
+                value.Algorithm, value.UseLinearBrightness, value.UseUltraWarmMode,
+                value.CalibrationProfileId, value.MeasuredCorrectionLut);
+        }
 
         // Cache ceiling. When we cross it we clear the entire cache at once rather than try to
         // approximate LRU from ConcurrentDictionary.Keys (which has no defined order, so the
@@ -65,10 +83,12 @@ namespace HDRGammaController.Core
             CalibrationSettings calibration,
             bool isHdr = true)
         {
-            // Create cache key (round white level to reduce cache fragmentation)
-            int whiteLevelKey = (int)Math.Round(sdrWhiteLevel / 10.0) * 10;
-            int calibrationHash = calibration.GetHashCode();
-            var cacheKey = (gammaMode, whiteLevelKey, calibrationHash, isHdr);
+            // Display white is part of the actual transfer function. Coarse bucketing made
+            // two monitors order-dependent: whichever generated a LUT first supplied its
+            // curve to the other.
+            double whiteLevelKey = sdrWhiteLevel;
+            var calibrationKey = CalibrationCacheKey.From(calibration);
+            var cacheKey = (gammaMode, whiteLevelKey, calibrationKey, isHdr);
 
             if (_lutCache.TryGetValue(cacheKey, out var cachedLut))
             {
@@ -117,20 +137,33 @@ namespace HDRGammaController.Core
 
             if (!isHdr)
             {
-                // SDR Generation logic: Gamma 2.2 Decode -> Calibrate -> Gamma 2.2 Encode
-                // This ensures linear operations (like tint/temp) are perceptually uniform
+                // SDR generation: decode the incoming signal using the TARGET gamma, do
+                // calibration in linear light, then re-encode for the display's assumed
+                // native ~2.2 response. Windows SDR content is mastered on a ~2.2 display,
+                // so the display decodes as gamma 2.2 regardless of what the user selects
+                // here — the gammaMode therefore controls the DECODE of the (re-)mapped
+                // signal, not the display. Gamma22/WindowsDefault net to a passthrough
+                // (decode 2.2 / encode 1/2.2); Gamma24 now correctly darkens shadows.
+                //
+                // This mirrors the SDR branch of GenerateCalibratedLut. Previously this path
+                // hardcoded 2.2 for both, silently making Gamma 2.4 selection a no-op on SDR.
+                double targetGamma = gammaMode switch
+                {
+                    GammaMode.Gamma24 => 2.4,
+                    _ => 2.2 // Gamma22 and WindowsDefault
+                };
+
                 for (int i = 0; i < 1024; i++)
                 {
                     double input = i / 1023.0;
-                    
-                    // 1. Decode generic Gamma 2.2 (Standard Windows SDR)
-                    // We assume the signal is sRGB/Gamma 2.2
-                    double linear = Math.Pow(input, 2.2);
-                    
-                    // 2. Apply Calibration
+
+                    // 1. Decode the signal with the target gamma into linear light.
+                    double linear = Math.Pow(input, targetGamma);
+
+                    // 2. Apply calibration (temp/tint/dimming/gains) in linear space.
                     var (r, g, b) = ColorAdjustments.ApplyCalibration(linear, linear, linear, calibration);
-                    
-                    // 3. Encode back to Gamma 2.2
+
+                    // 3. Re-encode for the display's native ~2.2 response.
                     lutR[i] = Math.Pow(r, 1.0 / 2.2);
                     lutG[i] = Math.Pow(g, 1.0 / 2.2);
                     lutB[i] = Math.Pow(b, 1.0 / 2.2);

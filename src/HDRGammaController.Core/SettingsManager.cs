@@ -113,7 +113,13 @@ namespace HDRGammaController.Core
             BlueGain = BlueGain,
             RedOffset = RedOffset,
             GreenOffset = GreenOffset,
-            BlueOffset = BlueOffset
+            BlueOffset = BlueOffset,
+            CalibrationProfileId = CalibrationProfileId,
+            UseCalibrationForGamma = UseCalibrationForGamma,
+            Mhc2ProfileName = Mhc2ProfileName,
+            MeterCorrectionPath = MeterCorrectionPath,
+            CalibDisplayType = CalibDisplayType,
+            CalibWhitePointOnly = CalibWhitePointOnly
         };
     }
     
@@ -170,19 +176,38 @@ namespace HDRGammaController.Core
     {
         // Use LocalApplicationData to avoid Resilio Sync corruption
         private static readonly string AppDataPath = AppPaths.DataDir;
-        
+
         private static readonly string SettingsFilePath = Path.Combine(AppDataPath, "settings.json");
-        
+
+        // SettingsManager is a DI singleton read/written from the UI thread, the night-mode
+        // timer's threadpool thread (via Dispatcher.Invoke → RequestApply), and any background
+        // calibration path. All access to _data and every Save() file-write must take this lock:
+        //   - it closes the temp-file + File.Move write race under concurrent saves,
+        //   - it stops ValidateAndClampSettings from enumerating MonitorProfiles.Values while a
+        //     Set* mutator is mid-insert (which threw InvalidOperationException).
+        // Reads that hand out mutable objects (GetMonitorProfile, ExcludedApps) return COPIES so
+        // callers can't mutate shared state out from under us after the lock releases.
+        private readonly object _dataLock = new();
+
         private SettingsData _data = new SettingsData();
 
-        public NightModeSettings NightMode => _data.NightMode.ToNightModeSettings();
+        public NightModeSettings NightMode
+        {
+            get
+            {
+                lock (_dataLock) { return _data.NightMode.ToNightModeSettings(); }
+            }
+        }
 
         /// <summary>UI theme override: true = dark, false = light, null = follow the OS.</summary>
-        public bool? DarkTheme => _data.DarkTheme;
+        public bool? DarkTheme
+        {
+            get { lock (_dataLock) { return _data.DarkTheme; } }
+        }
 
         public void SetDarkTheme(bool dark)
         {
-            _data.DarkTheme = dark;
+            lock (_dataLock) { _data.DarkTheme = dark; }
             Save();
         }
 
@@ -201,39 +226,48 @@ namespace HDRGammaController.Core
 
         public void Load()
         {
+            SettingsData? loaded = null;
             try
             {
                 if (File.Exists(SettingsFilePath))
                 {
                     string json = File.ReadAllText(SettingsFilePath);
-                    var options = new JsonSerializerOptions 
-                    { 
+                    var options = new JsonSerializerOptions
+                    {
                         Converters = { new JsonStringEnumConverter() },
                         PropertyNameCaseInsensitive = true
                     };
 
                     try
                     {
-                        _data = JsonSerializer.Deserialize<SettingsData>(json, options) ?? new SettingsData();
-                        ValidateAndClampSettings(_data);
+                        loaded = JsonSerializer.Deserialize<SettingsData>(json, options) ?? new SettingsData();
+                        ValidateAndClampSettings(loaded);
+                        Log.Info($"SettingsManager: Loaded {loaded.MonitorProfiles.Count} monitor profiles.");
                     }
                     catch (Exception ex)
                     {
                         // Fallback: Try defining a legacy structure or just reset ExcludedApps
                         Log.Info($"SettingsManager: Primary deserialization failed ({ex.Message}), attempting legacy migration...");
-                        try 
+                        try
                         {
                             var legacy = JsonSerializer.Deserialize<LegacySettingsData>(json, options);
                             if (legacy != null)
                             {
-                                _data = new SettingsData 
+                                loaded = new SettingsData
                                 {
                                     MonitorProfiles = legacy.MonitorProfiles,
                                     NightMode = legacy.NightMode,
                                     ExcludedApps = legacy.ExcludedApps?.Select(path => new AppExclusionRule { AppName = path, FullDisable = false }).ToList() ?? new List<AppExclusionRule>()
                                 };
                                 Log.Info("SettingsManager: Legacy migration successful.");
-                                Save(); // Save immediately in new format
+                                Log.Info($"SettingsManager: Loaded {loaded.MonitorProfiles.Count} monitor profiles.");
+                                // Persist in the new format under the lock to avoid racing another Load.
+                                lock (_dataLock)
+                                {
+                                    _data = loaded;
+                                }
+                                Save();
+                                return;
                             }
                         }
                         catch (Exception innerEx)
@@ -241,36 +275,49 @@ namespace HDRGammaController.Core
                             Log.Info($"SettingsManager: Legacy migration failed ({innerEx.Message}). Using defaults.");
                             // Backup corrupted file
                             try { File.Copy(SettingsFilePath, SettingsFilePath + $".bak-{DateTime.Now.Ticks}", true); } catch { }
-                            _data = new SettingsData();
+                            loaded = new SettingsData();
                         }
                     }
-                    
-                    Log.Info($"SettingsManager: Loaded {_data.MonitorProfiles.Count} monitor profiles.");
                 }
             }
             catch (Exception ex)
             {
                 Log.Info($"SettingsManager: Failed to load settings: {ex.Message}");
-                _data = new SettingsData();
+                loaded = new SettingsData();
+            }
+
+            lock (_dataLock)
+            {
+                _data = loaded ?? new SettingsData();
             }
         }
 
         public void Save()
         {
-            try
+            string json;
+            int profileCount;
+            lock (_dataLock)
             {
-                Directory.CreateDirectory(AppDataPath);
-                var options = new JsonSerializerOptions 
-                { 
+                var options = new JsonSerializerOptions
+                {
                     WriteIndented = true,
                     Converters = { new JsonStringEnumConverter() }
                 };
-                string json = JsonSerializer.Serialize(_data, options);
+                json = JsonSerializer.Serialize(_data, options);
+                profileCount = _data.MonitorProfiles.Count;
+            }
+
+            // File I/O happens OUTSIDE the lock — the serialize snapshot is already taken, so a
+            // concurrent mutator can't keep the lock held across a slow disk write (or, worse,
+            // deadlock against a re-entrant Save from a NightModeChanged handler).
+            try
+            {
+                Directory.CreateDirectory(AppDataPath);
                 // Write-then-rename so a crash mid-write can't leave a truncated settings.json.
                 string tempPath = SettingsFilePath + ".tmp";
                 File.WriteAllText(tempPath, json);
                 File.Move(tempPath, SettingsFilePath, overwrite: true);
-                Log.Info($"SettingsManager: Saved {_data.MonitorProfiles.Count} monitor profiles.");
+                Log.Info($"SettingsManager: Saved {profileCount} monitor profiles.");
             }
             catch (Exception ex)
             {
@@ -281,10 +328,13 @@ namespace HDRGammaController.Core
         public GammaMode? GetProfileForMonitor(string monitorDevicePath)
         {
             if (string.IsNullOrEmpty(monitorDevicePath)) return null;
-            
-            if (_data.MonitorProfiles.TryGetValue(monitorDevicePath, out var profile))
+
+            lock (_dataLock)
             {
-                return profile.GammaMode;
+                if (_data.MonitorProfiles.TryGetValue(monitorDevicePath, out var profile))
+                {
+                    return profile.GammaMode;
+                }
             }
             return null;
         }
@@ -293,28 +343,38 @@ namespace HDRGammaController.Core
         {
             if (string.IsNullOrEmpty(monitorDevicePath)) return;
 
-            if (!_data.MonitorProfiles.TryGetValue(monitorDevicePath, out var profile))
+            bool changed = false;
+            lock (_dataLock)
             {
-                profile = new MonitorProfileData();
-                _data.MonitorProfiles[monitorDevicePath] = profile;
+                if (!_data.MonitorProfiles.TryGetValue(monitorDevicePath, out var profile))
+                {
+                    profile = new MonitorProfileData();
+                    _data.MonitorProfiles[monitorDevicePath] = profile;
+                }
+                else if (profile.GammaMode == mode)
+                {
+                    // Called on every apply (including each night-mode fade step); skip the
+                    // serialize-and-write when nothing actually changed.
+                    return;
+                }
+                profile.GammaMode = mode;
+                changed = true;
             }
-            else if (profile.GammaMode == mode)
-            {
-                // Called on every apply (including each night-mode fade step); skip the
-                // serialize-and-write when nothing actually changed.
-                return;
-            }
-            profile.GammaMode = mode;
-            Save();
+            if (changed) Save();
         }
-        
+
         public MonitorProfileData? GetMonitorProfile(string monitorDevicePath)
         {
             if (string.IsNullOrEmpty(monitorDevicePath)) return null;
-            _data.MonitorProfiles.TryGetValue(monitorDevicePath, out var profile);
-            return profile;
+            // Return a clone so a caller can't mutate shared in-memory state after the lock
+            // releases (several call sites read+modify+write these fields).
+            lock (_dataLock)
+            {
+                _data.MonitorProfiles.TryGetValue(monitorDevicePath, out var profile);
+                return profile?.Clone();
+            }
         }
-        
+
         public void SetMonitorProfile(string monitorDevicePath, MonitorProfileData profile)
         {
             if (string.IsNullOrEmpty(monitorDevicePath)) return;
@@ -324,14 +384,21 @@ namespace HDRGammaController.Core
                 return;
             }
             Log.Info($"SettingsManager.SetMonitorProfile: Saving {monitorDevicePath} - Brightness={profile.Brightness}, Gamma={profile.GammaMode}");
-            _data.MonitorProfiles[monitorDevicePath] = profile;
+            lock (_dataLock)
+            {
+                _data.MonitorProfiles[monitorDevicePath] = profile;
+            }
             Save();
         }
-        
+
         public void SetNightMode(NightModeSettings settings)
         {
-            _data.NightMode = NightModeSettingsData.FromNightModeSettings(settings);
+            lock (_dataLock)
+            {
+                _data.NightMode = NightModeSettingsData.FromNightModeSettings(settings);
+            }
             Save();
+            // Raised outside the lock; handlers may call back into settings (deadlock risk).
             NightModeChanged?.Invoke(settings);
         }
 
@@ -342,12 +409,15 @@ namespace HDRGammaController.Core
         public void SetMhc2Calibration(string monitorDevicePath, string? profileName)
         {
             if (string.IsNullOrEmpty(monitorDevicePath)) return;
-            if (!_data.MonitorProfiles.TryGetValue(monitorDevicePath, out var profile))
+            lock (_dataLock)
             {
-                profile = new MonitorProfileData();
-                _data.MonitorProfiles[monitorDevicePath] = profile;
+                if (!_data.MonitorProfiles.TryGetValue(monitorDevicePath, out var profile))
+                {
+                    profile = new MonitorProfileData();
+                    _data.MonitorProfiles[monitorDevicePath] = profile;
+                }
+                profile.Mhc2ProfileName = profileName;
             }
-            profile.Mhc2ProfileName = profileName;
             Save();
         }
 
@@ -358,14 +428,17 @@ namespace HDRGammaController.Core
         public void SetCalibrationPrefs(string monitorDevicePath, string? ccssPath, string displayType, bool whitePointOnly)
         {
             if (string.IsNullOrEmpty(monitorDevicePath)) return;
-            if (!_data.MonitorProfiles.TryGetValue(monitorDevicePath, out var profile))
+            lock (_dataLock)
             {
-                profile = new MonitorProfileData();
-                _data.MonitorProfiles[monitorDevicePath] = profile;
+                if (!_data.MonitorProfiles.TryGetValue(monitorDevicePath, out var profile))
+                {
+                    profile = new MonitorProfileData();
+                    _data.MonitorProfiles[monitorDevicePath] = profile;
+                }
+                profile.MeterCorrectionPath = ccssPath;
+                profile.CalibDisplayType = displayType;
+                profile.CalibWhitePointOnly = whitePointOnly;
             }
-            profile.MeterCorrectionPath = ccssPath;
-            profile.CalibDisplayType = displayType;
-            profile.CalibWhitePointOnly = whitePointOnly;
             Save();
         }
 
@@ -373,11 +446,24 @@ namespace HDRGammaController.Core
         public bool HasMhc2Calibration(string monitorDevicePath)
             => !string.IsNullOrEmpty(GetMonitorProfile(monitorDevicePath)?.Mhc2ProfileName);
 
-        public List<AppExclusionRule> ExcludedApps => _data.ExcludedApps;
+        /// <summary>A snapshot copy of the excluded-apps list. Mutating it does not change settings.</summary>
+        public List<AppExclusionRule> ExcludedApps
+        {
+            get
+            {
+                lock (_dataLock)
+                {
+                    return _data.ExcludedApps.ToList();
+                }
+            }
+        }
 
         public void SetExcludedApps(List<AppExclusionRule> apps)
         {
-            _data.ExcludedApps = apps ?? new List<AppExclusionRule>();
+            lock (_dataLock)
+            {
+                _data.ExcludedApps = apps ?? new List<AppExclusionRule>();
+            }
             Save();
         }
 

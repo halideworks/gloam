@@ -584,6 +584,14 @@ namespace HDRGammaController
 
         private async void BeginMeasurement_Click(object sender, RoutedEventArgs e)
         {
+            if (_colorimeterService is null || _calibrationTarget is null)
+            {
+                Log.Error("CalibrationWindow: measurement requested without a colorimeter or calibration target");
+                ConfirmDialog.Info(this, "Calibration unavailable",
+                    "The calibration setup is incomplete. Go back and select a meter and target before measuring.");
+                return;
+            }
+
             // If THIS app already installed a calibration profile on the target monitor, Windows
             // is applying it at the compositor and we'd be measuring the display THROUGH our own
             // correction — a useless reading. DISABLE it (disassociate only) so we characterize
@@ -1607,4 +1615,3 @@ namespace HDRGammaController
 
     #endregion
 }
-

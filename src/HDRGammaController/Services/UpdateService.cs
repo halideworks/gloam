@@ -180,7 +180,7 @@ namespace HDRGammaController.Services
             // suppresses update notifications until the next real build).
             try
             {
-                string location = assembly.Location;
+                string? location = Environment.ProcessPath;
                 if (!string.IsNullOrEmpty(location))
                 {
                     return System.IO.File.GetLastWriteTimeUtc(location);

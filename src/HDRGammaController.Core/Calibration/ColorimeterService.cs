@@ -46,6 +46,10 @@ namespace HDRGammaController.Core.Calibration
         // Log file for debugging spotread communication
         private static readonly string LogFilePath = Path.Combine(AppPaths.DataDir, "colorimeter.log");
 
+        // Serialize appends: spotread emits on stdout/stderr, and the persistent session plus
+        // any transient one-shot measurement can both be logging concurrently.
+        private static readonly object _logLock = new();
+
         private static void Log(string message)
         {
             try
@@ -55,7 +59,12 @@ namespace HDRGammaController.Core.Calibration
                     Directory.CreateDirectory(logDir);
 
                 string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
-                File.AppendAllText(LogFilePath, $"[{timestamp}] {message}{Environment.NewLine}");
+                // AppendAllText itself isn't atomic across concurrent callers; a short lock keeps
+                // lines intact and ordered (the file is append-only and tiny).
+                lock (_logLock)
+                {
+                    File.AppendAllText(LogFilePath, $"[{timestamp}] {message}{Environment.NewLine}");
+                }
             }
             catch
             {
@@ -634,6 +643,17 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         private static string GetUsbDriverInstallerPath()
         {
+            string? discoveredBin = ArgyllPathFinder.FindArgyllBinPath();
+            if (!string.IsNullOrEmpty(discoveredBin))
+            {
+                string? root = Directory.GetParent(discoveredBin)?.FullName;
+                if (root != null)
+                {
+                    string discovered = Path.Combine(root, "usb", "ArgyllCMS_install_USB.exe");
+                    if (File.Exists(discovered)) return discovered;
+                }
+            }
+
             // Check our downloaded ArgyllCMS first
             string localArgyllDir = Path.Combine(AppPaths.DataDir, "Argyll");
 

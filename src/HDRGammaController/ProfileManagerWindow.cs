@@ -92,7 +92,7 @@ namespace HDRGammaController
             var buttons = new Grid();
             buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             for (int i = 0; i < 4; i++) buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            var activate = _activateButton = Make("Activate", (_, _) => Activate(), accent: true);
+            var activate = _activateButton = Make("Activate", (_, _) => ActivateSelectedProfile(), accent: true);
             var deactivate = Make("Deactivate", (_, _) => Deactivate());
             var delete = Make("Delete…", (_, _) => Delete());
             var close = Make("Close", (_, _) => Close());
@@ -181,7 +181,7 @@ namespace HDRGammaController
                 : _baseStatus;
         }
 
-        private void Activate()
+        private void ActivateSelectedProfile()
         {
             if (_list.SelectedItems.Count != 1 || Selected is not { } row) return;
             string? previous = ActiveProfileName;

@@ -2,8 +2,6 @@ using Microsoft.Win32;
 using System;
 using HDRGammaController.Core;
 using System.Diagnostics;
-using System.IO;
-using System.Reflection;
 
 namespace HDRGammaController.Services
 {
@@ -93,17 +91,11 @@ namespace HDRGammaController.Services
 
         private static string GetExePath()
         {
-            // Get the path to the current executable
-            string exePath = Environment.ProcessPath ?? Assembly.GetExecutingAssembly().Location;
-
-            // Handle single-file apps (which extract to temp) - use the original path
-            if (exePath.Contains("\\Temp\\") || exePath.EndsWith(".dll"))
-            {
-                // Fallback to the entry assembly location
-                exePath = Process.GetCurrentProcess().MainModule?.FileName ?? exePath;
-            }
-
-            return exePath;
+            // Environment.ProcessPath points at the original host executable for both
+            // framework-dependent and self-contained single-file publishes.
+            return Environment.ProcessPath
+                ?? Process.GetCurrentProcess().MainModule?.FileName
+                ?? throw new InvalidOperationException("Could not determine the application executable path.");
         }
     }
 }

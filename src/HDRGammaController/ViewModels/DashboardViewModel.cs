@@ -35,7 +35,12 @@ namespace HDRGammaController.ViewModels
         private readonly Action<MonitorInfo, GammaMode, CalibrationSettings?, int?> _applyCallback;
         private readonly Action<double> _blendChangedHandler;
         private readonly AppExclusionItem _appExclusionItem;
-        private readonly NightModeSettings _editingNightMode;
+        private NightModeSettings _editingNightMode;
+
+        // True while we're persisting _editingNightMode ourselves, so a Refresh triggered by
+        // our own SetNightMode (via the BlendChanged round-trip) doesn't clobber the in-flight
+        // edit with a freshly-read snapshot.
+        private bool _savingNightMode;
 
         // Throttle refresh to avoid excessive UI updates
         private DateTime _lastRefreshTime = DateTime.MinValue;
@@ -138,8 +143,17 @@ namespace HDRGammaController.ViewModels
 
         public void SaveEditedNightMode()
         {
-            // Note: this triggers Refresh via the NightModeService blend event if active
-            SettingsManager.SetNightMode(_editingNightMode);
+            // Guard: a Refresh triggered by the BlendChanged round-trip from our own save
+            // must not overwrite _editingNightMode mid-persist with a re-read snapshot.
+            _savingNightMode = true;
+            try
+            {
+                SettingsManager.SetNightMode(_editingNightMode);
+            }
+            finally
+            {
+                _savingNightMode = false;
+            }
         }
 
         public List<MonitorInfo> GetMonitorSnapshot()
@@ -197,6 +211,17 @@ namespace HDRGammaController.ViewModels
 
         public void Refresh()
         {
+            // If night mode changed from elsewhere (tray hotkey toggle, another window, the
+            // night-mode timer's blend tick), re-read the authoritative snapshot so the
+            // schedule editor doesn't show stale values that Save would then clobber. Skip
+            // when WE are the source of the change (SaveEditedNightMode round-trip).
+            if (!_savingNightMode)
+            {
+                var latest = SettingsManager.NightMode;
+                if (!NightModeSettingsEqual(_editingNightMode, latest))
+                    _editingNightMode = latest;
+            }
+
             var monitors = _monitorManager.EnumerateMonitors();
             _cachedMonitors = monitors; // Cache for preview operations
 
@@ -304,6 +329,29 @@ namespace HDRGammaController.ViewModels
 
         private void SaveExcludedApps()
             => SettingsManager.SetExcludedApps(_appExclusionItem.ExcludedApps.ToList());
+
+        /// <summary>
+        /// Field-wise comparison of two night-mode snapshots. Used by Refresh to decide
+        /// whether to replace the in-editor snapshot: we only swap it in when the saved
+        /// state actually differs, so we never yank a value the user is mid-edit on for a
+        /// transient field (e.g. live kelvin blend) while still catching real external edits.
+        /// </summary>
+        private static bool NightModeSettingsEqual(NightModeSettings a, NightModeSettings b)
+        {
+            if (ReferenceEquals(a, b)) return true;
+            return a.Enabled == b.Enabled
+                && a.UseAutoSchedule == b.UseAutoSchedule
+                && a.Latitude == b.Latitude
+                && a.Longitude == b.Longitude
+                && a.StartTime == b.StartTime
+                && a.EndTime == b.EndTime
+                && a.TemperatureKelvin == b.TemperatureKelvin
+                && a.Algorithm == b.Algorithm
+                && a.UseUltraWarmMode == b.UseUltraWarmMode
+                && a.FadeMinutes == b.FadeMinutes;
+            // Schedule list intentionally excluded: the editor mutates it in place and
+            // comparing list contents would force a swap on every programmatic refresh.
+        }
 
         public void Dispose()
         {

@@ -195,6 +195,16 @@ namespace HDRGammaController.Core
                 return localAppData;
             }
 
+            // Self-contained Full package: a fixed, versioned path under the application
+            // directory. Do not scan the current directory or PATH for an arbitrary exe.
+            string bundled = Path.Combine(AppContext.BaseDirectory, "argyll_cache",
+                ArgyllDownloader.ArgyllVersion, "bin", "dispwin.exe");
+            if (File.Exists(bundled))
+            {
+                Log.Info($"DispwinRunner: Found bundled dispwin: {bundled}");
+                return bundled;
+            }
+
             // 2. Search common Program Files locations (admin-protected)
             var trustedPaths = new[]
             {
