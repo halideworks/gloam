@@ -21,6 +21,12 @@ namespace HDRGammaController.Core
         // references handed out by LutGenerator's cache; they are never mutated.
         private readonly ConcurrentDictionary<string, (double[] R, double[] G, double[] B)> _lastApplied = new();
 
+        // Maps each applied display's GDI device name (the _lastApplied key) to its
+        // CalibrationStateManager.BypassKey, which is what the calibration bypass registry is
+        // keyed on. Lets the ramp guard answer "is this display mid-calibration?" — it only has
+        // the device name, but IsDeviceInBypass wants the bypass key (device path, else name).
+        private readonly ConcurrentDictionary<string, string> _deviceNameToPath = new();
+
         // dispwin numbers displays by its own (GDI) enumeration, which is not
         // guaranteed to match DXGI adapter/output order — and the old OutputId+1
         // heuristic breaks outright on multi-adapter systems. We parse the display
@@ -38,6 +44,7 @@ namespace HDRGammaController.Core
         public void InvalidateAppliedState()
         {
             _lastApplied.Clear();
+            _deviceNameToPath.Clear();
             _unverifiableDisplays.Clear();
             lock (_displayIndexLock) { _displayIndexMap = null; }
         }
@@ -69,15 +76,42 @@ namespace HDRGammaController.Core
                 string device = kvp.Key;
                 if (_unverifiableDisplays.ContainsKey(device)) continue;
 
+                // Mid-calibration guard: a calibration has bypassed this display's corrections
+                // (and the closed loop may be loading candidate ramps on it). Re-asserting the
+                // saved ramp here would clobber an in-flight measurement, so leave it alone.
+                if (_deviceNameToPath.TryGetValue(device, out var devicePath) &&
+                    CalibrationStateManager.IsDeviceInBypass(devicePath))
+                {
+                    continue;
+                }
+
+                var snapshot = kvp.Value;
                 try
                 {
-                    if (RampMatchesApplied(device, kvp.Value)) continue;
+                    if (RampMatchesApplied(device, snapshot)) continue;
 
                     Log.Info($"DispwinRunner: Ramp on {device} was overwritten externally; restoring");
-                    if (!NativeGammaRamp.TryApply(device, kvp.Value.R, kvp.Value.G, kvp.Value.B)) continue;
+                    if (!NativeGammaRamp.TryApply(device, snapshot.R, snapshot.G, snapshot.B)) continue;
                     restored++;
 
-                    if (!RampMatchesApplied(device, kvp.Value))
+                    // TOCTOU guard: the coalescer can swap a newer LUT into _lastApplied (and onto
+                    // the hardware) between our read of the snapshot and this write, which would
+                    // make us clobber the new ramp with the old one. If the live value no longer
+                    // matches our snapshot, the newer apply wins — re-assert it so the screen ends
+                    // the tick on the current value rather than self-healing (flickering) next tick.
+                    if (_lastApplied.TryGetValue(device, out var current) &&
+                        (!LutsEqual(current.R, snapshot.R) ||
+                         !LutsEqual(current.G, snapshot.G) ||
+                         !LutsEqual(current.B, snapshot.B)))
+                    {
+                        if (!CalibrationStateManager.IsDeviceInBypass(devicePath))
+                        {
+                            NativeGammaRamp.TryApply(device, current.R, current.G, current.B);
+                        }
+                        continue;
+                    }
+
+                    if (!RampMatchesApplied(device, snapshot))
                     {
                         _unverifiableDisplays[device] = true;
                         Log.Error($"DispwinRunner: {device} readback never matches the written ramp; ramp guard disabled for this display");
@@ -335,7 +369,7 @@ namespace HDRGammaController.Core
         /// <param name="whiteLevel">SDR white level in nits.</param>
         /// <param name="calibration">User calibration settings (brightness, temperature, etc.).</param>
         /// <param name="calibrationProfile">Optional display calibration profile for color-accurate correction.</param>
-        public void ApplyGamma(MonitorInfo monitor, GammaMode mode, double whiteLevel, CalibrationSettings calibration, DisplayCalibrationProfile? calibrationProfile)
+        public void ApplyGamma(MonitorInfo monitor, GammaMode mode, double whiteLevel, CalibrationSettings calibration, DisplayCalibrationProfile? calibrationProfile, bool skipIfBypassed = false)
         {
             bool hasProfile = calibrationProfile != null;
             Log.Info($"DispwinRunner.ApplyGamma: monitor={monitor.DeviceName}, mode={mode}, whiteLevel={whiteLevel}, hasCalibration={calibration.HasAdjustments}, hasProfile={hasProfile}");
@@ -376,13 +410,25 @@ namespace HDRGammaController.Core
                 return;
             }
 
+            // Live/background applies (slider, night mode, app exclusion, resume re-apply) must
+            // not stomp a monitor a calibration has put into bypass for measurement. The live
+            // path passes skipIfBypassed: true; re-checking here - immediately before the
+            // hardware write - closes the window between the caller's earlier check and this
+            // syscall. Calibration's own writes (ApplyCorrectionLut) and the on-exit restore
+            // (RestorePreviousState calls this with the default false) are never skipped.
+            if (skipIfBypassed && CalibrationStateManager.IsDeviceInBypass(monitor))
+            {
+                Log.Info($"DispwinRunner.ApplyGamma: skipping apply for {monitor.DeviceName} (calibration bypass active)");
+                return;
+            }
+
             // Fast path: set the hardware ramp directly via SetDeviceGammaRamp — the
             // same API dispwin ends up calling, minus the ~100-500ms process spawn and
             // the temp-file round trip. Argyll is then only needed for calibration.
             if (NativeGammaRamp.TryApply(monitor.DeviceName, lutR, lutG, lutB))
             {
                 Log.Info($"DispwinRunner.ApplyGamma: Applied via native gamma ramp for {applyKey}");
-                _lastApplied[applyKey] = (lutR, lutG, lutB);
+                RecordApplied(monitor, lutR, lutG, lutB);
                 return;
             }
 
@@ -415,12 +461,13 @@ namespace HDRGammaController.Core
                 Log.Info($"DispwinRunner.ApplyGamma: Running dispwin with args: {args}");
                 if (RunDispwin(args))
                 {
-                    _lastApplied[applyKey] = (lutR, lutG, lutB);
+                    RecordApplied(monitor, lutR, lutG, lutB);
                 }
                 else
                 {
                     // Unknown ramp state — make sure the next apply isn't skipped.
                     _lastApplied.TryRemove(applyKey, out _);
+                    _deviceNameToPath.TryRemove(applyKey, out _);
                 }
             }
             catch (Exception ex)
@@ -466,16 +513,33 @@ namespace HDRGammaController.Core
         {
             bool ok = NativeGammaRamp.TryApply(monitor.DeviceName, lutR, lutG, lutB);
             if (ok)
-                _lastApplied[monitor.DeviceName] = (lutR, lutG, lutB);
+            {
+                RecordApplied(monitor, lutR, lutG, lutB);
+            }
             else
+            {
                 _lastApplied.TryRemove(monitor.DeviceName, out _);
+                _deviceNameToPath.TryRemove(monitor.DeviceName, out _);
+            }
             return ok;
+        }
+
+        // Records a successful apply: the LUT for the dedupe/ramp-guard cache, and the
+        // device-name -> device-path mapping the ramp guard needs to skip bypassed displays.
+        private void RecordApplied(MonitorInfo monitor, double[] lutR, double[] lutG, double[] lutB)
+        {
+            _lastApplied[monitor.DeviceName] = (lutR, lutG, lutB);
+            // Store the SAME key the bypass registry is keyed on (CalibrationStateManager.BypassKey:
+            // device path, else GDI device name) so the ramp guard's IsDeviceInBypass lookup agrees
+            // with EnterBypassMode's registration even when MonitorDevicePath is empty.
+            _deviceNameToPath[monitor.DeviceName] = CalibrationStateManager.BypassKey(monitor);
         }
 
         public void ClearGamma(MonitorInfo monitor)
         {
              // The ramp is reset (or in an unknown state on failure) either way.
              _lastApplied.TryRemove(monitor.DeviceName, out _);
+             _deviceNameToPath.TryRemove(monitor.DeviceName, out _);
 
              if (NativeGammaRamp.TryClear(monitor.DeviceName))
              {

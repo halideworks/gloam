@@ -106,7 +106,7 @@ namespace HDRGammaController.ViewModels
             _bypassPollTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
             _bypassPollTimer.Tick += (_, _) =>
             {
-                bool any = _cachedMonitors?.Any(m => CalibrationStateManager.IsDeviceInBypass(m.MonitorDevicePath)) ?? false;
+                bool any = _cachedMonitors?.Any(m => CalibrationStateManager.IsDeviceInBypass(m)) ?? false;
                 if (any != _lastBypassState)
                 {
                     _lastBypassState = any;
@@ -262,7 +262,7 @@ namespace HDRGammaController.ViewModels
                     CurrentTemperatureText = tempText,
                     // Mid-calibration the corrections are bypassed and the panel runs
                     // native; the card fades the (inactive) settings and shows a badge.
-                    IsCalibrating = CalibrationStateManager.IsDeviceInBypass(m.MonitorDevicePath)
+                    IsCalibrating = CalibrationStateManager.IsDeviceInBypass(m)
                 });
             }
 

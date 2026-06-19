@@ -50,12 +50,35 @@ namespace HDRGammaController.Core.Calibration
         private static readonly object ActiveBypassLock = new();
         private static readonly HashSet<string> ActiveBypassPaths = new(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>
+        /// The single key under which a monitor's bypass state is registered and looked up.
+        /// Registration (EnterBypassMode) and every lookup (IsDeviceInBypass, the ramp guard,
+        /// the apply-path guards) MUST derive the key from this one helper, or a monitor whose
+        /// MonitorDevicePath is empty would register under one key and be looked up under
+        /// another, silently no-opping the bypass guard. Prefer the non-empty device path, fall
+        /// back to the non-empty GDI device name, then a fixed sentinel.
+        /// </summary>
+        public static string BypassKey(MonitorInfo monitor)
+        {
+            if (monitor == null) return "unknown";
+            if (!string.IsNullOrEmpty(monitor.MonitorDevicePath)) return monitor.MonitorDevicePath;
+            if (!string.IsNullOrEmpty(monitor.DeviceName)) return monitor.DeviceName;
+            return "unknown";
+        }
+
         /// <summary>Whether a calibration currently has this display's corrections bypassed.</summary>
         public static bool IsDeviceInBypass(string? devicePath)
         {
             if (string.IsNullOrEmpty(devicePath)) return false;
             lock (ActiveBypassLock) return ActiveBypassPaths.Contains(devicePath);
         }
+
+        /// <summary>
+        /// Bypass-state lookup keyed off a <see cref="MonitorInfo"/>. Derives the registry key
+        /// via <see cref="BypassKey"/> internally so callers cannot accidentally probe the wrong
+        /// field (device path vs. device name) and miss a registration.
+        /// </summary>
+        public static bool IsDeviceInBypass(MonitorInfo monitor) => IsDeviceInBypass(BypassKey(monitor));
 
         private void UnregisterActiveBypass()
         {
@@ -76,8 +99,10 @@ namespace HDRGammaController.Core.Calibration
         {
             if (monitor == null) throw new ArgumentNullException(nameof(monitor));
 
-            // Save current state
-            var devicePath = monitor.MonitorDevicePath ?? monitor.DeviceName ?? "unknown";
+            // Save current state. Register under the shared BypassKey so the apply-path and
+            // ramp-guard lookups (which derive the same key) always find this registration —
+            // even when MonitorDevicePath is empty and we fall back to the GDI device name.
+            var devicePath = BypassKey(monitor);
             _savedStates[devicePath] = new SavedMonitorState
             {
                 MonitorDevicePath = devicePath,
@@ -92,6 +117,13 @@ namespace HDRGammaController.Core.Calibration
             _nightModePauseEndTime = DateTime.Now.AddHours(2);
             _nightModeService.PauseUntil(_nightModePauseEndTime.Value);
 
+            // Register the bypass BEFORE clearing the ramp: a live/background apply whose
+            // hardware write races this method must see the bypass and skip, rather than
+            // writing a correction on top of the identity ramp we are about to set for
+            // measurement. (Registering after the clear left a window where a racing apply
+            // could land between the clear and the registration.)
+            lock (ActiveBypassLock) ActiveBypassPaths.Add(devicePath);
+
             // Clear all gamma corrections - set to identity/passthrough
             try
             {
@@ -100,12 +132,13 @@ namespace HDRGammaController.Core.Calibration
             }
             catch (Exception ex)
             {
+                // Roll back the registration so a failed entry does not leave a stale bypass.
+                lock (ActiveBypassLock) ActiveBypassPaths.Remove(devicePath);
                 Log.Info($"CalibrationStateManager: Failed to clear gamma: {ex.Message}");
                 throw;
             }
 
             _wasBypassActive = true;
-            lock (ActiveBypassLock) ActiveBypassPaths.Add(devicePath);
         }
 
         /// <summary>
@@ -205,7 +238,7 @@ namespace HDRGammaController.Core.Calibration
         {
             if (!_wasBypassActive) return;
 
-            var devicePath = monitor.MonitorDevicePath ?? monitor.DeviceName ?? "unknown";
+            var devicePath = BypassKey(monitor);
             if (!_savedStates.TryGetValue(devicePath, out var state))
             {
                 Log.Info($"CalibrationStateManager: No saved state for {devicePath}");

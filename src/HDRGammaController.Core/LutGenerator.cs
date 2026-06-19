@@ -339,6 +339,17 @@ namespace HDRGammaController.Core
             {
                 // SDR Mode: Compute compensation curves
                 // For each input signal level, find what signal to send to get the target output
+
+                // The tone curves were FIT against black-subtracted normalized luminance
+                // (ExtractToneCurve uses (Y - blackLuminance)/(whiteLuminance - blackLuminance)),
+                // so the InverseLookup domain must be normalized the same way. Here the target
+                // (adjR/G/B) is a fraction of absolute white (0 = zero light, 1 = white), so map
+                // it into the black-subtracted fit domain via the black fraction of white.
+                double sdrBlackFrac = characterization.PeakLuminance > 0
+                    ? Math.Clamp(characterization.BlackLevel / characterization.PeakLuminance, 0, 1)
+                    : 0.0;
+                double sdrNormRange = Math.Max(1.0 - sdrBlackFrac, 1e-6);
+
                 for (int i = 0; i < 1024; i++)
                 {
                     double input = i / 1023.0;
@@ -352,10 +363,13 @@ namespace HDRGammaController.Core
                         targetLinear, targetLinear, targetLinear, calibration);
 
                     // What signal must we send to the display to get this output?
-                    // Use the INVERSE of the measured response
-                    lutR[i] = measuredR.InverseLookup(Math.Clamp(adjR, 0, 1));
-                    lutG[i] = measuredG.InverseLookup(Math.Clamp(adjG, 0, 1));
-                    lutB[i] = measuredB.InverseLookup(Math.Clamp(adjB, 0, 1));
+                    // Use the INVERSE of the measured response, in the black-subtracted fit domain.
+                    double fitR = Math.Clamp((adjR - sdrBlackFrac) / sdrNormRange, 0, 1);
+                    double fitG = Math.Clamp((adjG - sdrBlackFrac) / sdrNormRange, 0, 1);
+                    double fitB = Math.Clamp((adjB - sdrBlackFrac) / sdrNormRange, 0, 1);
+                    lutR[i] = measuredR.InverseLookup(fitR);
+                    lutG[i] = measuredG.InverseLookup(fitG);
+                    lutB[i] = measuredB.InverseLookup(fitB);
                     lutGrey[i] = (lutR[i] + lutG[i] + lutB[i]) / 3.0;
                 }
                 return (lutR, lutG, lutB, lutGrey);
@@ -403,10 +417,16 @@ namespace HDRGammaController.Core
                 }
 
                 // 4. Compensate for display's actual response
-                // Convert target linear to the signal level that produces it on THIS display
-                double targetNormR = Math.Clamp(outputR / sdrWhiteLevel, 0, 1);
-                double targetNormG = Math.Clamp(outputG / sdrWhiteLevel, 0, 1);
-                double targetNormB = Math.Clamp(outputB / sdrWhiteLevel, 0, 1);
+                // Convert target linear to the signal level that produces it on THIS display.
+                // The tone curves were FIT against black-subtracted normalized luminance
+                // (ExtractToneCurve uses (Y - blackLuminance)/(whiteLuminance - blackLuminance)),
+                // so the InverseLookup domain must be normalized the same way - otherwise the
+                // lookup disagrees with the fit (error largest in shadows). Match the fit:
+                // (output - blackLevel)/(sdrWhiteLevel - blackLevel), clamped.
+                double normRange = Math.Max(sdrWhiteLevel - blackLevel, 1e-6);
+                double targetNormR = Math.Clamp((outputR - blackLevel) / normRange, 0, 1);
+                double targetNormG = Math.Clamp((outputG - blackLevel) / normRange, 0, 1);
+                double targetNormB = Math.Clamp((outputB - blackLevel) / normRange, 0, 1);
 
                 double compensatedR = measuredR.InverseLookup(targetNormR) * sdrWhiteLevel;
                 double compensatedG = measuredG.InverseLookup(targetNormG) * sdrWhiteLevel;

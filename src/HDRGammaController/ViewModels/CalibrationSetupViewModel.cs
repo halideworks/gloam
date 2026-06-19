@@ -485,9 +485,12 @@ namespace HDRGammaController.ViewModels
         /// Whether the display can reasonably reach the target, using the SAME drive-value
         /// metric as the apply-time gamut guard (so setup and apply agree). We build the
         /// display's RGB→XYZ from its EDID primaries, derive the correction matrix toward the
-        /// target, and ask how hard it drives the channels for the target's primaries/white.
+        /// target, and ask how hard it drives the channels for the target's PRIMARIES.
         /// A small overshoot (e.g. a 98%-P3 panel reaching for P3's green corner) is fine; only
-        /// a genuinely wider gamut (Rec.2020 on a P3 panel) blows past the limit.
+        /// a genuinely wider gamut (Rec.2020 on a P3 panel) blows past the limit. White (1,1,1)
+        /// is excluded: the matrix is ABSOLUTE, so a panel white that differs from the target
+        /// white drives white above 1.0 — a luminance shift the installer's UniformScale
+        /// absorbs, NOT unreachable gamut, so it must not grey out an otherwise in-gamut target.
         /// </summary>
         private static bool TargetFitsGamut(CalibrationTarget t, EdidColorInfo g)
         {
@@ -501,8 +504,9 @@ namespace HDRGammaController.ViewModels
                 var matrix = ColorMath.MultiplyMatrices(ColorMath.Invert3x3(displayRgbToXyz), t.RgbToXyzMatrix);
 
                 double max = 0;
-                (double, double, double)[] contents = { (1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 1) };
-                foreach (var (a, b, c) in contents)
+                // Primaries only — mirrors CalibrationProfileInstaller.MaxPrimaryDrive.
+                (double, double, double)[] primaries = { (1, 0, 0), (0, 1, 0), (0, 0, 1) };
+                foreach (var (a, b, c) in primaries)
                     for (int r = 0; r < 3; r++)
                         max = Math.Max(max, matrix[r, 0] * a + matrix[r, 1] * b + matrix[r, 2] * c);
                 // Matches the installer's gamut guard threshold so setup and apply never disagree.
