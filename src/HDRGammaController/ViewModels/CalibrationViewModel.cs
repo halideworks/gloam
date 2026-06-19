@@ -174,7 +174,7 @@ namespace HDRGammaController.ViewModels
         private bool _isCompletionVisible;
         public bool IsCompletionVisible { get => _isCompletionVisible; set => SetProperty(ref _isCompletionVisible, value); }
 
-        private string _completionIcon = "✓";
+        private string _completionIcon = "OK";
         public string CompletionIcon { get => _completionIcon; set => SetProperty(ref _completionIcon, value); }
 
         private Brush _completionIconBrush = SuccessBrush;

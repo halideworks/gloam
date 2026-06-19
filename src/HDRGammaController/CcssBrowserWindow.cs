@@ -31,6 +31,8 @@ namespace HDRGammaController
             Title = "Find Meter Correction - DisplayCAL Community Database";
             Width = 760;
             Height = 520;
+            MinWidth = 760;
+            MinHeight = 520;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             Background = new SolidColorBrush(Color.FromRgb(0x1e, 0x1e, 0x1e));
             Foreground = new SolidColorBrush(Color.FromRgb(0xe0, 0xe0, 0xe0));

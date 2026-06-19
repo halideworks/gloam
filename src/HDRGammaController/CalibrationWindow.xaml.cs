@@ -1417,7 +1417,7 @@ namespace HDRGammaController
 
             if (success)
             {
-                Vm.CompletionIcon = "✓";
+                Vm.CompletionIcon = "OK";
                 Vm.CompletionIconBrush = FindResource("SuccessBrush") as SolidColorBrush ?? CalibrationViewModel.SuccessBrush;
                 Vm.CompletionTitle = "Calibration Complete";
                 Vm.IsViewReportVisible = true;
@@ -1432,7 +1432,7 @@ namespace HDRGammaController
             }
             else
             {
-                Vm.CompletionIcon = "✕";
+                Vm.CompletionIcon = "FAILED";
                 Vm.CompletionIconBrush = FindResource("ErrorBrush") as SolidColorBrush ?? CalibrationViewModel.ErrorBrush;
                 Vm.CompletionTitle = "Calibration Failed";
                 Vm.IsViewReportVisible = false;

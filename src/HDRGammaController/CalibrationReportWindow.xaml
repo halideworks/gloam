@@ -586,76 +586,70 @@
             </StackPanel>
         </ScrollViewer>
 
-        <!-- Footer with Actions -->
+        <!-- Footer with Actions. The Detailed verification checkbox is pinned left in its
+             own flexible "*" column and the action buttons are right-aligned in an "Auto"
+             column, with the gap between them absorbing the slack. Previously every control
+             sat in its own Auto column with no flexible column, so at MinWidth the row had
+             nowhere to give and the leftmost button was pushed off the left edge and clipped. -->
         <Border Grid.Row="2" Background="#1a1a1a" BorderBrush="#FFFFFF" BorderThickness="0,3,0,0" Padding="20,16">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
-                <Button Grid.Column="1"
-                        x:Name="ExportReportButton"
-                        Content="Export Report"
-                        ToolTip="Print or save as PDF via Microsoft Print to PDF"
-                        Style="{StaticResource SecondaryButton}"
-                        Margin="0,0,10,0"
-                        Click="ExportReportButton_Click"/>
-
-                <Button Grid.Column="2"
-                        x:Name="ExportButton"
-                        Content="Export LUT"
-                        Style="{StaticResource SecondaryButton}"
-                        Margin="0,0,10,0"
-                        Click="ExportButton_Click"/>
-
-                <Button Grid.Column="3"
-                        x:Name="ApplyButton"
-                        Content="{Binding ApplyButtonContent}"
-                        IsEnabled="{Binding IsApplyEnabled}"
-                        Style="{StaticResource ActionButton}"
-                        Margin="0,0,10,0"
-                        Click="ApplyButton_Click"/>
-
-                <CheckBox Grid.Column="4"
+                <CheckBox Grid.Column="0"
                           x:Name="DetailedVerifyCheck"
                           Content="Detailed verification"
                           IsChecked="{Binding IsDetailedVerifyChecked}"
                           IsEnabled="{Binding IsVerifyEnabled}"
                           ToolTip="Extends the verify sweep to a 21-step grayscale, R/G/B saturation ramps and the ColorChecker memory colors (39 patches), adding a ΔE distribution, per-patch chart, worst/best patch lists and a category breakdown to the report. Takes several times longer than the standard verify."
                           Foreground="#e0e0e0"
-                          VerticalAlignment="Center"
-                          Margin="0,0,10,0"/>
+                          VerticalAlignment="Center" HorizontalAlignment="Left"
+                          Margin="0,0,16,0"/>
 
-                <Button Grid.Column="5"
-                        x:Name="VerifyButton"
-                        Content="{Binding VerifyButtonContent}"
-                        IsEnabled="{Binding IsVerifyEnabled}"
-                        ToolTip="Re-measure a quick patch sweep through the applied profile to refresh the 'after' numbers. Place the probe on the display first."
-                        Style="{StaticResource SecondaryButton}"
-                        Margin="0,0,10,0"
-                        Click="VerifyButton_Click"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button x:Name="ExportReportButton"
+                            Content="Export Report"
+                            ToolTip="Print or save as PDF via Microsoft Print to PDF"
+                            Style="{StaticResource SecondaryButton}"
+                            Margin="0,0,10,0"
+                            Click="ExportReportButton_Click"/>
 
-                <Button Grid.Column="6"
-                        x:Name="WhiteToolsButton"
-                        Content="White Tools"
-                        IsEnabled="{Binding IsWhiteToolsEnabled}"
-                        ToolTip="Re-anchor white with a quick measurement (drift fix), or trim the target white by eye against a reference display."
-                        Style="{StaticResource SecondaryButton}"
-                        Margin="0,0,10,0"
-                        Click="WhiteToolsButton_Click"/>
+                    <Button x:Name="ExportButton"
+                            Content="Export LUT"
+                            Style="{StaticResource SecondaryButton}"
+                            Margin="0,0,10,0"
+                            Click="ExportButton_Click"/>
 
-                <Button Grid.Column="7"
-                        Content="Close"
-                        IsEnabled="{Binding IsCloseEnabled}"
-                        Style="{StaticResource SecondaryButton}"
-                        Click="CloseButton_Click"/>
+                    <Button x:Name="ApplyButton"
+                            Content="{Binding ApplyButtonContent}"
+                            IsEnabled="{Binding IsApplyEnabled}"
+                            Style="{StaticResource ActionButton}"
+                            Margin="0,0,10,0"
+                            Click="ApplyButton_Click"/>
+
+                    <Button x:Name="VerifyButton"
+                            Content="{Binding VerifyButtonContent}"
+                            IsEnabled="{Binding IsVerifyEnabled}"
+                            ToolTip="Re-measure a quick patch sweep through the applied profile to refresh the 'after' numbers. Place the probe on the display first."
+                            Style="{StaticResource SecondaryButton}"
+                            Margin="0,0,10,0"
+                            Click="VerifyButton_Click"/>
+
+                    <Button x:Name="WhiteToolsButton"
+                            Content="White Tools"
+                            IsEnabled="{Binding IsWhiteToolsEnabled}"
+                            ToolTip="Re-anchor white with a quick measurement (drift fix), or trim the target white by eye against a reference display."
+                            Style="{StaticResource SecondaryButton}"
+                            Margin="0,0,10,0"
+                            Click="WhiteToolsButton_Click"/>
+
+                    <Button Content="Close"
+                            IsEnabled="{Binding IsCloseEnabled}"
+                            Style="{StaticResource SecondaryButton}"
+                            Click="CloseButton_Click"/>
+                </StackPanel>
             </Grid>
         </Border>
     </Grid>

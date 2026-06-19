@@ -27,6 +27,8 @@ namespace HDRGammaController
             Title = "Past Calibration Reports";
             Width = 780;
             Height = 460;
+            MinWidth = 780;
+            MinHeight = 460;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             Background = new SolidColorBrush(Color.FromRgb(0x1e, 0x1e, 0x1e));
             Foreground = new SolidColorBrush(Color.FromRgb(0xe0, 0xe0, 0xe0));

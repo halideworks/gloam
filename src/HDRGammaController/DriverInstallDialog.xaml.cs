@@ -84,13 +84,13 @@ namespace HDRGammaController
 
             if (success)
             {
-                ResultIcon.Text = "✓";
+                ResultIcon.Text = "OK";
                 ResultIcon.Foreground = (Brush)FindResource("SuccessBrush");
                 RetryButton.Visibility = Visibility.Visible;
             }
             else
             {
-                ResultIcon.Text = "✗";
+                ResultIcon.Text = "FAILED";
                 ResultIcon.Foreground = (Brush)FindResource("ErrorBrush");
                 RetryButton.Visibility = Visibility.Collapsed;
             }

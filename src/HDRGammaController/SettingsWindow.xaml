@@ -398,31 +398,45 @@
                     </StackPanel>
                 </ScrollViewer>
 
-                <!-- Footer Buttons -->
-                <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
-                    <CheckBox Content="Live Preview"
-                              Foreground="{DynamicResource ThemeText}" VerticalAlignment="Center" Margin="0,0,16,0"
+                <!-- Footer. The Live Preview checkbox is pinned left in its own column and
+                     the action buttons are right-aligned, with a flexible gap between them.
+                     Previously this was a single right-aligned StackPanel, so when the Apply
+                     button appeared (Live Preview off) the row overflowed to the left and
+                     clipped the checkbox label - leaving an unlabelled, truncated control. -->
+                <Grid Grid.Row="2" Margin="0,16,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <CheckBox Grid.Column="0" Content="Live Preview"
+                              Foreground="{DynamicResource ThemeText}"
+                              VerticalAlignment="Center" HorizontalAlignment="Left"
+                              Margin="0,0,16,0"
                               IsChecked="{Binding IsLivePreview}"/>
-                    <Button Content="Apply" Command="{Binding ApplyCommand}" Margin="0,0,8,0">
-                        <Button.Style>
-                            <Style TargetType="Button" BasedOn="{StaticResource ModernButton}">
-                                <Setter Property="Visibility" Value="Collapsed"/>
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsLivePreview}" Value="False">
-                                        <Setter Property="Visibility" Value="Visible"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </Button.Style>
-                    </Button>
-                    <Button Content="Compare (Hold)" Style="{StaticResource SecondaryButton}"
-                            PreviewMouseDown="Compare_MouseDown" PreviewMouseUp="Compare_MouseUp"
-                            Margin="0,0,8,0"/>
-                    <Button Content="Reset All" Style="{StaticResource SecondaryButton}"
-                            Command="{Binding ResetAllCommand}" Margin="0,0,8,0"/>
-                    <Button Content="Save &amp; Close" Style="{StaticResource ModernButton}"
-                            Command="{Binding SaveAndCloseCommand}"/>
-                </StackPanel>
+
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="Apply" Command="{Binding ApplyCommand}" Margin="0,0,8,0">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource ModernButton}">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsLivePreview}" Value="False">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                        <Button Content="Compare (Hold)" Style="{StaticResource SecondaryButton}"
+                                PreviewMouseDown="Compare_MouseDown" PreviewMouseUp="Compare_MouseUp"
+                                Margin="0,0,8,0"/>
+                        <Button Content="Reset All" Style="{StaticResource SecondaryButton}"
+                                Command="{Binding ResetAllCommand}" Margin="0,0,8,0"/>
+                        <Button Content="Save &amp; Close" Style="{StaticResource ModernButton}"
+                                Command="{Binding SaveAndCloseCommand}"/>
+                    </StackPanel>
+                </Grid>
             </Grid>
         </Grid>
     </Border>

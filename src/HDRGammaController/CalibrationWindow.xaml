@@ -407,7 +407,7 @@
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
-                            <TextBlock Text="ℹ" FontSize="18" Foreground="{StaticResource AccentBrush}"
+                            <TextBlock Text="!" FontSize="18" FontWeight="Bold" Foreground="{StaticResource AccentBrush}"
                                        VerticalAlignment="Top" Margin="0,0,10,0"/>
                             <StackPanel Grid.Column="1">
                                 <TextBlock TextWrapping="Wrap" Foreground="White">
@@ -654,7 +654,8 @@
             <!-- Completion Overlay -->
             <Grid Background="#CC1A1A1A" Visibility="{Binding IsCompletionVisible, Converter={StaticResource BoolToVis}}">
                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="500">
-                    <TextBlock Text="{Binding CompletionIcon}" FontSize="64"
+                    <TextBlock Text="{Binding CompletionIcon}" FontSize="40" FontWeight="Bold"
+                               FontFamily="{DynamicResource DisplayFont}"
                                Foreground="{Binding CompletionIconBrush}" HorizontalAlignment="Center" Margin="0,0,0,16"/>
                     <TextBlock Text="{Binding CompletionTitle}"
                                FontSize="24" FontWeight="SemiBold" HorizontalAlignment="Center"/>

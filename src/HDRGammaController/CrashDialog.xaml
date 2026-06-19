@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:HDRGammaController.ViewModels"
-        Title="Gloam — Error"
+        Title="Gloam - Error"
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent"

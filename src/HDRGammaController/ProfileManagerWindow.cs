@@ -40,6 +40,8 @@ namespace HDRGammaController
             Title = $"Calibration Profiles - {monitor.FriendlyName}";
             Width = 720;
             Height = 460;
+            MinWidth = 720;
+            MinHeight = 460;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             Background = new SolidColorBrush(Color.FromRgb(0x1e, 0x1e, 0x1e));
             Foreground = new SolidColorBrush(Color.FromRgb(0xe0, 0xe0, 0xe0));

@@ -94,7 +94,8 @@
 
                 <!-- Result view -->
                 <StackPanel x:Name="ResultPanel" Visibility="Collapsed" VerticalAlignment="Center" HorizontalAlignment="Center">
-                    <TextBlock x:Name="ResultIcon" Text="✓" FontSize="48" HorizontalAlignment="Center"
+                    <TextBlock x:Name="ResultIcon" Text="OK" FontSize="32" FontWeight="Bold"
+                               FontFamily="{DynamicResource DisplayFont}" HorizontalAlignment="Center"
                                Foreground="{StaticResource SuccessBrush}" Margin="0,0,0,12"/>
                     <TextBlock x:Name="ResultText" Text="Driver installation complete!" FontWeight="Bold" FontSize="16"
                                HorizontalAlignment="Center" TextAlignment="Center"/>
