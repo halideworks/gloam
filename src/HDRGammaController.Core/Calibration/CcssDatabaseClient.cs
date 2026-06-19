@@ -27,7 +27,7 @@ namespace HDRGammaController.Core.Calibration
         {
             var client = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
             // The server rejects generic/bot user agents with 403.
-            client.DefaultRequestHeaders.UserAgent.ParseAdd("HDRGammaController/1.0");
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("Gloam/1.0");
             return client;
         }
 
@@ -105,8 +105,11 @@ namespace HDRGammaController.Core.Calibration
 
                 string cgats = Get("cgats");
                 if (string.IsNullOrWhiteSpace(cgats)) continue;
-                // Sanity: a correction file is CGATS text with a data block.
-                if (!cgats.Contains("BEGIN_DATA", StringComparison.Ordinal)) continue;
+                // Structural validation: a correction file is CGATS text (CCMX/CCSS) with
+                // balanced data blocks. The old check (a bare "BEGIN_DATA" substring) let
+                // truncated or hostile bodies through to spotread's parser; this validates
+                // the full skeleton the same way Save() will before writing to disk.
+                if (!CgatsValidator.Validate(cgats, type).IsValid) continue;
 
                 yield return new Entry(
                     Type: Get("type") is { Length: > 0 } tt ? tt : type,
@@ -123,8 +126,18 @@ namespace HDRGammaController.Core.Calibration
         /// Writes the entry's correction content into <paramref name="folder"/> with a
         /// descriptive, sanitized filename. Returns the saved path.
         /// </summary>
+        /// <exception cref="InvalidDataException">The entry's CGATS body fails structural
+        /// validation and is therefore not written to disk.</exception>
         public static string Save(Entry entry, string folder)
         {
+            // Validate before touching disk: this content came from a third-party,
+            // community-contributed database and is handed verbatim to spotread. A malformed
+            // body is never useful and shouldn't be persisted as a "correction".
+            var validation = CgatsValidator.Validate(entry.Cgats, entry.Type);
+            if (!validation.IsValid)
+                throw new InvalidDataException(
+                    $"Correction file for '{entry.Display}' failed validation and was not saved: {validation.Error}");
+
             Directory.CreateDirectory(folder);
             string name = $"{entry.Display} - {entry.Reference}".Trim(' ', '-');
             if (string.IsNullOrWhiteSpace(name)) name = "correction";

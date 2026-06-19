@@ -4,10 +4,12 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Input;
 using System.Windows.Media;
 using HDRGammaController.Core;
 using HDRGammaController.Core.Calibration;
 using HDRGammaController.Services;
+using HDRGammaController.ViewModels;
 using Microsoft.Win32;
 
 namespace HDRGammaController
@@ -17,6 +19,9 @@ namespace HDRGammaController
     /// </summary>
     public partial class CalibrationReportWindow : Window
     {
+        /// <summary>All display state the XAML binds to.</summary>
+        public CalibrationReportViewModel Vm { get; } = new CalibrationReportViewModel();
+
         private readonly CalibrationProfile? _profile;
         private readonly CalibrationMetrics? _metrics;
         private readonly DisplayCharacterization? _characterization;
@@ -24,6 +29,26 @@ namespace HDRGammaController
         private readonly IReadOnlyList<MeasurementResult>? _measurements;
         private IReadOnlyList<MeasurementResult>? _verifyMeasurements;
         private System.Threading.CancellationTokenSource? _verifyCts;
+
+        /// <summary>
+        /// True while a verify sweep is measuring through the colorimeter. The tray uses
+        /// this to refuse a second calibration flow (only one probe exists).
+        /// </summary>
+        internal bool IsVerifyRunning => _verifyCts is { IsCancellationRequested: false };
+
+        // Detailed-verification per-patch results (name, category, dE) in measurement order.
+        // Set by a detailed sweep, or rebuilt from the persisted summary for historical
+        // reports; everything the Detailed Verification section shows derives from this.
+        private IReadOnlyList<PatchDeltaE>? _detailedPatchResults;
+
+        // Historical open (from the report browser): no metrics or measurements, just the
+        // profile JSON loaded from disk. The accuracy table comes from ReportSummary and
+        // the live tools stay disabled.
+        private readonly bool _isHistorical;
+
+        // Where this report's snapshot was written, so the post-verification re-save
+        // updates the same file instead of creating a sibling.
+        private string? _reportSavePath;
 
         // White tools state: re-anchoring replaces the characterization's white (drift fix);
         // the visual trim shifts the TARGET white (metameric fix). Both rebuild the profile.
@@ -65,11 +90,11 @@ namespace HDRGammaController
         /// </summary>
         public void SetBeforeAfter(double beforeDeltaE, double afterDeltaE, int refinementRounds)
         {
-            BeforeAfterNoteText.Text =
+            Vm.BeforeAfterNoteText =
                 $"Grey-ramp refinement during calibration: grey-axis tracking {beforeDeltaE:F2} → {afterDeltaE:F2} " +
                 $"ΔE after {refinementRounds} pass(es). This 1D check excludes the white-point and gamut " +
                 "correction - use Verify above for the full after numbers.";
-            BeforeAfterNoteText.Visibility = Visibility.Visible;
+            Vm.IsBeforeAfterNoteVisible = true;
         }
 
         /// <summary>
@@ -87,7 +112,7 @@ namespace HDRGammaController
             IReadOnlyList<MeasurementResult>? measurements = null)
         {
             InitializeComponent();
-            WindowTheme.UseDarkTitleBar(this);
+            DataContext = Vm;
 
             _profile = profile;
             _metrics = metrics;
@@ -95,10 +120,17 @@ namespace HDRGammaController
             _activeCharacterization = characterization;
             _correctionLut = correctionLut;
             _measurements = measurements;
+            _isHistorical = metrics == null && measurements == null;
 
             PopulateReport();
 
-            // Charts need real canvas sizes, which exist only after layout.
+            // Fresh calibration: snapshot the displayed numbers so the report can be
+            // re-opened later from the report browser. Never allowed to break the report.
+            if (_metrics != null)
+                PersistReportSummary(after: null);
+
+            // Charts need real canvas sizes, which exist only after layout. RenderCharts()
+            // redraws the detailed charts too when detailed results exist.
             Loaded += (_, _) => RenderCharts();
             SizeChanged += (_, _) => RenderCharts();
 
@@ -129,8 +161,8 @@ namespace HDRGammaController
             if (_profile == null) return;
 
             // Header info
-            MonitorNameText.Text = _profile.MonitorName;
-            CalibrationDateText.Text = $"Calibrated: {_profile.LastCalibratedAt?.ToLocalTime():g}";
+            Vm.MonitorNameText = _profile.MonitorName;
+            Vm.CalibrationDateText = $"Calibrated: {_profile.LastCalibratedAt?.ToLocalTime():g}";
 
             // Grade display
             var grade = _profile.QualityGrade ?? _metrics?.GetGrade() ?? CalibrationGrade.C;
@@ -139,25 +171,25 @@ namespace HDRGammaController
             // Summary metrics
             if (_metrics != null)
             {
-                AvgDeltaEText.Text = $"{_metrics.AverageDeltaE:F2}";
-                MaxDeltaEText.Text = $"{_metrics.MaxDeltaE:F2}";
-                GrayscaleDeltaEText.Text = $"{_metrics.AverageGrayscaleDeltaE:F2}";
-                PrimaryDeltaEText.Text = $"{_metrics.AveragePrimaryDeltaE:F2}";
+                Vm.AvgDeltaEText = $"{_metrics.AverageDeltaE:F2}";
+                Vm.MaxDeltaEText = $"{_metrics.MaxDeltaE:F2}";
+                Vm.GrayscaleDeltaEText = $"{_metrics.AverageGrayscaleDeltaE:F2}";
+                Vm.PrimaryDeltaEText = $"{_metrics.AveragePrimaryDeltaE:F2}";
 
                 // Color code the values
-                SetDeltaEColor(AvgDeltaEText, _metrics.AverageDeltaE);
-                SetDeltaEColor(MaxDeltaEText, _metrics.MaxDeltaE);
-                SetDeltaEColor(GrayscaleDeltaEText, _metrics.AverageGrayscaleDeltaE);
-                SetDeltaEColor(PrimaryDeltaEText, _metrics.AveragePrimaryDeltaE);
+                Vm.AvgDeltaEBrush = CalibrationReportViewModel.DeltaEBrush(_metrics.AverageDeltaE);
+                Vm.MaxDeltaEBrush = CalibrationReportViewModel.DeltaEBrush(_metrics.MaxDeltaE);
+                Vm.GrayscaleDeltaEBrush = CalibrationReportViewModel.DeltaEBrush(_metrics.AverageGrayscaleDeltaE);
+                Vm.PrimaryDeltaEBrush = CalibrationReportViewModel.DeltaEBrush(_metrics.AveragePrimaryDeltaE);
             }
             else if (_profile.PostCalibrationDeltaE.HasValue)
             {
-                AvgDeltaEText.Text = $"{_profile.PostCalibrationDeltaE:F2}";
-                SetDeltaEColor(AvgDeltaEText, _profile.PostCalibrationDeltaE.Value);
+                Vm.AvgDeltaEText = $"{_profile.PostCalibrationDeltaE:F2}";
+                Vm.AvgDeltaEBrush = CalibrationReportViewModel.DeltaEBrush(_profile.PostCalibrationDeltaE.Value);
             }
 
             // Summary text
-            SummaryText.Text = GetSummaryText(grade);
+            Vm.SummaryText = GetSummaryText(grade);
 
             // Display characteristics
             PopulateDisplayCharacteristics();
@@ -166,19 +198,152 @@ namespace HDRGammaController
             PopulatePrimariesComparison();
 
             // Calibration details
-            PatchCountText.Text = _profile.PatchCount.ToString();
-            // TotalTime would be set from CalibrationResult when saving the profile
-            MeasurementTimeText.Text = "--";
-            ColorimeterText.Text = _profile.ColorimeterModel ?? "Unknown";
-            LutSizeText.Text = $"{_profile.LutSize}x{_profile.LutSize}x{_profile.LutSize}";
-            TargetText.Text = _profile.Target.Name;
-            ProfilePathText.Text = _profile.GetFilePath();
+            Vm.PatchCountText = _profile.PatchCount.ToString();
+            Vm.MeasurementTimeText = _profile.MeasurementTime is { } measurementTime
+                ? FormatTimeSpan(measurementTime)
+                : "--";
+            Vm.ColorimeterText = _profile.ColorimeterModel ?? "Unknown";
+            Vm.LutSizeText = $"{_profile.LutSize}x{_profile.LutSize}x{_profile.LutSize}";
+            Vm.TargetText = _profile.Target.Name;
+            Vm.ProfilePathText = _profile.GetFilePath();
 
             // Recommendations
             PopulateRecommendations(grade);
 
             // Status
             UpdateStatus();
+
+            // Historical open: restore the displayed numbers from the saved summary and
+            // shut off everything that needs the live calibration session.
+            if (_isHistorical)
+                ApplyHistoricalPresentation();
+        }
+
+        /// <summary>
+        /// Presentation for a report re-opened from the saved-reports browser: the accuracy
+        /// table and summary come from the persisted ReportSummary, the charts (which need
+        /// the raw measurements) give way to a note, and Apply/Verify/White tools stay
+        /// disabled because they all require the live apply context and a connected probe.
+        /// </summary>
+        private void ApplyHistoricalPresentation()
+        {
+            if (_profile?.ReportSummary is { } s)
+            {
+                static (string Text, Brush Brush) Fmt(double? v) => v is { } d
+                    ? ($"{d:F2}", CalibrationReportViewModel.DeltaEBrush(d))
+                    : ("-", CalibrationReportViewModel.DefaultValueBrush);
+
+                (Vm.AvgDeltaEText, Vm.AvgDeltaEBrush) = Fmt(s.AvgDeltaE);
+                (Vm.MaxDeltaEText, Vm.MaxDeltaEBrush) = Fmt(s.MaxDeltaE);
+                (Vm.GrayscaleDeltaEText, Vm.GrayscaleDeltaEBrush) = Fmt(s.GrayscaleDeltaE);
+                (Vm.PrimaryDeltaEText, Vm.PrimaryDeltaEBrush) = Fmt(s.PrimaryDeltaE);
+                (Vm.AfterAvgText, Vm.AfterAvgBrush) = Fmt(s.AfterAvgDeltaE);
+                (Vm.AfterMaxText, Vm.AfterMaxBrush) = Fmt(s.AfterMaxDeltaE);
+                (Vm.AfterGrayscaleText, Vm.AfterGrayscaleBrush) = Fmt(s.AfterGrayscaleDeltaE);
+                (Vm.AfterPrimaryText, Vm.AfterPrimaryBrush) = Fmt(s.AfterPrimaryDeltaE);
+
+                if (!string.IsNullOrEmpty(s.GradeScopeLabel))
+                    Vm.GradeScopeText = s.GradeScopeLabel;
+                if (!string.IsNullOrEmpty(s.SummaryText))
+                    Vm.SummaryText = s.SummaryText;
+
+                // Detailed verification survives into history: the persisted per-patch list
+                // is enough to rebuild the histogram, per-patch chart, worst-10 and the
+                // category breakdown (unlike the tone/gamut charts, which need raw XYZ).
+                if (s.DetailedPatches is { Count: > 0 } detailed)
+                {
+                    _detailedPatchResults = detailed.Select(d => new PatchDeltaE(
+                        d.Name,
+                        Enum.TryParse<PatchCategory>(d.Category, out var cat) ? cat : PatchCategory.General,
+                        d.DeltaE)).ToList();
+                    PresentDetailedResults();
+                }
+            }
+
+            Vm.AreChartsVisible = false;
+            Vm.IsChartsNoteVisible = true;
+
+            Vm.IsApplyEnabled = false;
+            Vm.IsVerifyEnabled = false;
+            Vm.IsWhiteToolsEnabled = false;
+
+            // These actions all need the live calibration session (apply context, connected
+            // probe, freshly-built LUT). None of that survives into a saved report, so hide
+            // them outright rather than leaving dead disabled buttons. Export Report and Close
+            // still work (rebuilt from the persisted summary).
+            ApplyButton.Visibility = Visibility.Collapsed;
+            VerifyButton.Visibility = Visibility.Collapsed;
+            WhiteToolsButton.Visibility = Visibility.Collapsed;
+            DetailedVerifyCheck.Visibility = Visibility.Collapsed;
+            ExportButton.Visibility = Visibility.Collapsed; // Export LUT: no LUT is persisted
+
+            Vm.StatusText = "Saved report. Use Export Report to print or save a PDF.";
+            Vm.StatusBrush = CalibrationReportViewModel.DimBrush;
+        }
+
+        /// <summary>
+        /// Writes the profile (with the displayed accuracy summary baked in) to the saved
+        /// reports folder so it can be browsed later. Called once when a fresh report opens
+        /// and again after a successful verification sweep (same file). A persistence
+        /// failure must never break the report, so everything is swallowed into the log.
+        /// </summary>
+        private void PersistReportSummary(CalibrationMetrics? after)
+        {
+            if (_profile == null) return;
+            try
+            {
+                // Detailed sweep results (when one ran): per-patch list capped at the
+                // detailed set size, plus the derived histogram and category breakdown so
+                // the saved JSON is self-describing.
+                var detailed = _detailedPatchResults;
+                CategoryBreakdown? breakdown = detailed != null
+                    ? VerificationAnalysis.ComputeCategoryBreakdown(detailed)
+                    : null;
+
+                _profile.ReportSummary = new CalibrationReportSummary
+                {
+                    AvgDeltaE = _metrics?.AverageDeltaE,
+                    MaxDeltaE = _metrics?.MaxDeltaE,
+                    GrayscaleDeltaE = _metrics?.AverageGrayscaleDeltaE,
+                    PrimaryDeltaE = _metrics?.AveragePrimaryDeltaE,
+                    AfterAvgDeltaE = after?.AverageDeltaE,
+                    AfterMaxDeltaE = after?.MaxDeltaE,
+                    AfterGrayscaleDeltaE = after?.AverageGrayscaleDeltaE,
+                    AfterPrimaryDeltaE = after?.AveragePrimaryDeltaE,
+                    GradeScopeLabel = Vm.GradeScopeText,
+                    SummaryText = Vm.SummaryText,
+                    DetailedPatches = detailed?
+                        .Take(VerificationPatchSets.DetailedPatchCount)
+                        .Select(p => new VerifiedPatchResult
+                        {
+                            Name = p.Name,
+                            Category = p.Category.ToString(),
+                            DeltaE = Math.Round(p.DeltaE, 3),
+                        })
+                        .ToList(),
+                    DetailedHistogram = detailed != null
+                        ? VerificationAnalysis.HistogramCounts(detailed.Select(p => p.DeltaE))
+                        : null,
+                    DetailedGrayscaleDeltaE = breakdown?.GrayscaleDeltaE,
+                    DetailedPrimariesDeltaE = breakdown?.PrimariesDeltaE,
+                    DetailedSaturationDeltaE = breakdown?.SaturationDeltaE,
+                    DetailedMemoryColorsDeltaE = breakdown?.MemoryColorsDeltaE,
+                };
+
+                if (_reportSavePath == null)
+                {
+                    string safeName = string.Join("_", _profile.MonitorName.Split(Path.GetInvalidFileNameChars()));
+                    _reportSavePath = Path.Combine(
+                        CalibrationProfile.GetReportsDirectory(),
+                        $"{safeName}_{DateTime.Now:yyyyMMdd_HHmmss}.json");
+                }
+                _profile.SaveToFile(_reportSavePath);
+                Log.Info($"CalibrationReportWindow: report snapshot saved to {_reportSavePath}");
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"CalibrationReportWindow: report snapshot save failed (report unaffected): {ex.Message}");
+            }
         }
 
         private void SetGradeDisplay(CalibrationGrade grade)
@@ -199,36 +364,25 @@ namespace HDRGammaController
                 _ => "?"
             };
 
-            GradeText.Text = gradeText;
+            Vm.GradeText = gradeText;
 
             // Set color based on grade
-            Color gradeColor = grade switch
+            var (gradeBrush, gradeBackground) = grade switch
             {
-                CalibrationGrade.APLus or CalibrationGrade.A or CalibrationGrade.AMinus => Color.FromRgb(0x22, 0xc5, 0x5e), // Green
-                CalibrationGrade.BPlus or CalibrationGrade.B or CalibrationGrade.BMinus => Color.FromRgb(0x3b, 0x82, 0xf6), // Blue
-                CalibrationGrade.CPlus or CalibrationGrade.C or CalibrationGrade.CMinus => Color.FromRgb(0xf9, 0x73, 0x16), // Orange
-                CalibrationGrade.D => Color.FromRgb(0xf5, 0x9e, 0x0b), // Amber
-                _ => Color.FromRgb(0xef, 0x44, 0x44) // Red
+                CalibrationGrade.APLus or CalibrationGrade.A or CalibrationGrade.AMinus =>
+                    (CalibrationReportViewModel.GreenBrush, CalibrationReportViewModel.GreenBackgroundBrush),
+                CalibrationGrade.BPlus or CalibrationGrade.B or CalibrationGrade.BMinus =>
+                    (CalibrationReportViewModel.BlueBrush, CalibrationReportViewModel.BlueBackgroundBrush),
+                CalibrationGrade.CPlus or CalibrationGrade.C or CalibrationGrade.CMinus =>
+                    (CalibrationReportViewModel.OrangeBrush, CalibrationReportViewModel.OrangeBackgroundBrush),
+                CalibrationGrade.D =>
+                    (CalibrationReportViewModel.AmberBrush, CalibrationReportViewModel.AmberBackgroundBrush),
+                _ =>
+                    (CalibrationReportViewModel.RedBrush, CalibrationReportViewModel.RedBackgroundBrush)
             };
 
-            GradeText.Foreground = new SolidColorBrush(gradeColor);
-
-            Color bgColor = Color.FromArgb(0x40, gradeColor.R, gradeColor.G, gradeColor.B);
-            GradeBorder.Background = new SolidColorBrush(bgColor);
-        }
-
-        private void SetDeltaEColor(System.Windows.Controls.TextBlock textBlock, double deltaE)
-        {
-            Color color = deltaE switch
-            {
-                < 1.0 => Color.FromRgb(0x22, 0xc5, 0x5e),  // Green - excellent
-                < 2.0 => Color.FromRgb(0x22, 0xd3, 0xee),  // Cyan - good
-                < 3.0 => Color.FromRgb(0xf9, 0x73, 0x16),  // Orange - acceptable
-                < 5.0 => Color.FromRgb(0xf5, 0x9e, 0x0b),  // Amber - marginal
-                _ => Color.FromRgb(0xef, 0x44, 0x44)       // Red - poor
-            };
-
-            textBlock.Foreground = new SolidColorBrush(color);
+            Vm.GradeBrush = gradeBrush;
+            Vm.GradeBackground = gradeBackground;
         }
 
         private string GetSummaryText(CalibrationGrade grade)
@@ -259,32 +413,43 @@ namespace HDRGammaController
         {
             if (_characterization != null)
             {
-                PeakLuminanceText.Text = $"{_characterization.PeakLuminance:F1} cd/m\u00B2";
-                BlackLevelText.Text = $"{_characterization.BlackLevel:F4} cd/m\u00B2";
-                ContrastRatioText.Text = _characterization.ContrastRatio > 100000
+                Vm.PeakLuminanceText = $"{_characterization.PeakLuminance:F1} cd/m\u00B2";
+                Vm.BlackLevelText = $"{_characterization.BlackLevel:F4} cd/m\u00B2";
+                Vm.ContrastRatioText = _characterization.ContrastRatio > 100000
                     ? "Infinite"
                     : $"{_characterization.ContrastRatio:F0}:1";
-                MeasuredGammaText.Text = $"{_characterization.MeasuredGamma:F2}";
+                Vm.MeasuredGammaText = $"{_characterization.MeasuredGamma:F2}";
 
                 double cct = ColorMath.ChromaticityToCct(_characterization.WhitePoint);
                 double duv = ColorMath.CalculateDuv(_characterization.WhitePoint);
-                WhitePointCctText.Text = $"{cct:F0} K";
-                WhitePointDuvText.Text = $"{duv:F4}";
+                Vm.WhitePointCctText = $"{cct:F0} K";
+                Vm.WhitePointDuvText = $"{duv:F4}";
             }
             else if (_profile?.MeasuredCharacteristics != null)
             {
                 var mc = _profile.MeasuredCharacteristics;
-                PeakLuminanceText.Text = $"{mc.PeakLuminance:F1} cd/m\u00B2";
-                BlackLevelText.Text = $"{mc.BlackLevel:F4} cd/m\u00B2";
-                ContrastRatioText.Text = mc.ContrastRatio > 100000
+                Vm.PeakLuminanceText = $"{mc.PeakLuminance:F1} cd/m\u00B2";
+                Vm.BlackLevelText = $"{mc.BlackLevel:F4} cd/m\u00B2";
+                Vm.ContrastRatioText = mc.ContrastRatio > 100000
                     ? "Infinite"
                     : $"{mc.ContrastRatio:F0}:1";
-                MeasuredGammaText.Text = $"{mc.MeasuredGamma:F2}";
-                WhitePointCctText.Text = $"{mc.MeasuredCct:F0} K";
-                WhitePointDuvText.Text = $"{mc.MeasuredDuv:F4}";
+                Vm.MeasuredGammaText = $"{mc.MeasuredGamma:F2}";
+                Vm.WhitePointCctText = $"{mc.MeasuredCct:F0} K";
+                Vm.WhitePointDuvText = $"{mc.MeasuredDuv:F4}";
             }
 
-            SrgbCoverageText.Text = "--"; // Would need gamut volume calculation
+            // sRGB coverage from the measured primaries (CIE xy): area of the measured
+            // gamut triangle intersected with the sRGB triangle, over the sRGB area.
+            // Works for live reports (characterization) and historical ones (the
+            // measured characteristics round-trip through the report JSON).
+            (Chromaticity R, Chromaticity G, Chromaticity B)? primaries = _characterization != null
+                ? (_characterization.RedPrimary, _characterization.GreenPrimary, _characterization.BluePrimary)
+                : _profile?.MeasuredCharacteristics is { } chars
+                    ? (chars.MeasuredRed, chars.MeasuredGreen, chars.MeasuredBlue)
+                    : null;
+            Vm.SrgbCoverageText = primaries is { } p
+                ? $"{ColorMath.GamutCoverage(p.R, p.G, p.B) * 100:F1}%"
+                : "--";
         }
 
         private void PopulatePrimariesComparison()
@@ -293,36 +458,36 @@ namespace HDRGammaController
             if (target == null) return;
 
             // Target primaries
-            RedTargetText.Text = FormatChromaticity(target.RedPrimary);
-            GreenTargetText.Text = FormatChromaticity(target.GreenPrimary);
-            BlueTargetText.Text = FormatChromaticity(target.BluePrimary);
-            WhiteTargetText.Text = FormatChromaticity(target.WhitePoint);
+            Vm.RedTargetText = FormatChromaticity(target.RedPrimary);
+            Vm.GreenTargetText = FormatChromaticity(target.GreenPrimary);
+            Vm.BlueTargetText = FormatChromaticity(target.BluePrimary);
+            Vm.WhiteTargetText = FormatChromaticity(target.WhitePoint);
 
             // Measured primaries
             if (_characterization != null)
             {
-                RedMeasuredText.Text = FormatChromaticity(_characterization.RedPrimary);
-                GreenMeasuredText.Text = FormatChromaticity(_characterization.GreenPrimary);
-                BlueMeasuredText.Text = FormatChromaticity(_characterization.BluePrimary);
-                WhiteMeasuredText.Text = FormatChromaticity(_characterization.WhitePoint);
+                Vm.RedMeasuredText = FormatChromaticity(_characterization.RedPrimary);
+                Vm.GreenMeasuredText = FormatChromaticity(_characterization.GreenPrimary);
+                Vm.BlueMeasuredText = FormatChromaticity(_characterization.BluePrimary);
+                Vm.WhiteMeasuredText = FormatChromaticity(_characterization.WhitePoint);
 
-                RedErrorText.Text = FormatError(_characterization.RedPrimary, target.RedPrimary);
-                GreenErrorText.Text = FormatError(_characterization.GreenPrimary, target.GreenPrimary);
-                BlueErrorText.Text = FormatError(_characterization.BluePrimary, target.BluePrimary);
-                WhiteErrorText.Text = FormatError(_characterization.WhitePoint, target.WhitePoint);
+                Vm.RedErrorText = FormatError(_characterization.RedPrimary, target.RedPrimary);
+                Vm.GreenErrorText = FormatError(_characterization.GreenPrimary, target.GreenPrimary);
+                Vm.BlueErrorText = FormatError(_characterization.BluePrimary, target.BluePrimary);
+                Vm.WhiteErrorText = FormatError(_characterization.WhitePoint, target.WhitePoint);
             }
             else if (_profile?.MeasuredCharacteristics != null)
             {
                 var mc = _profile.MeasuredCharacteristics;
-                RedMeasuredText.Text = FormatChromaticity(mc.MeasuredRed);
-                GreenMeasuredText.Text = FormatChromaticity(mc.MeasuredGreen);
-                BlueMeasuredText.Text = FormatChromaticity(mc.MeasuredBlue);
-                WhiteMeasuredText.Text = FormatChromaticity(mc.MeasuredWhite);
+                Vm.RedMeasuredText = FormatChromaticity(mc.MeasuredRed);
+                Vm.GreenMeasuredText = FormatChromaticity(mc.MeasuredGreen);
+                Vm.BlueMeasuredText = FormatChromaticity(mc.MeasuredBlue);
+                Vm.WhiteMeasuredText = FormatChromaticity(mc.MeasuredWhite);
 
-                RedErrorText.Text = FormatError(mc.MeasuredRed, target.RedPrimary);
-                GreenErrorText.Text = FormatError(mc.MeasuredGreen, target.GreenPrimary);
-                BlueErrorText.Text = FormatError(mc.MeasuredBlue, target.BluePrimary);
-                WhiteErrorText.Text = FormatError(mc.MeasuredWhite, target.WhitePoint);
+                Vm.RedErrorText = FormatError(mc.MeasuredRed, target.RedPrimary);
+                Vm.GreenErrorText = FormatError(mc.MeasuredGreen, target.GreenPrimary);
+                Vm.BlueErrorText = FormatError(mc.MeasuredBlue, target.BluePrimary);
+                Vm.WhiteErrorText = FormatError(mc.MeasuredWhite, target.WhitePoint);
             }
         }
 
@@ -428,22 +593,24 @@ namespace HDRGammaController
                 }
             }
 
-            RecommendationsList.ItemsSource = recommendations;
+            Vm.Recommendations.Clear();
+            foreach (var recommendation in recommendations)
+                Vm.Recommendations.Add(recommendation);
         }
 
         private void UpdateStatus()
         {
             if (_profile?.IsActive == true)
             {
-                StatusText.Text = "Profile is active and applied.";
-                StatusText.Foreground = new SolidColorBrush(Color.FromRgb(0x22, 0xc5, 0x5e));
-                ApplyButton.Content = "Re-apply Profile";
+                Vm.StatusText = "Profile is active and applied.";
+                Vm.StatusBrush = CalibrationReportViewModel.GreenBrush;
+                Vm.ApplyButtonContent = "Re-apply Profile";
             }
             else
             {
-                StatusText.Text = "Profile is not currently active.";
-                StatusText.Foreground = new SolidColorBrush(Color.FromRgb(0xa0, 0xa0, 0xa0));
-                ApplyButton.Content = "Apply Profile";
+                Vm.StatusText = "Profile is not currently active.";
+                Vm.StatusBrush = CalibrationReportViewModel.DimBrush;
+                Vm.ApplyButtonContent = "Apply Profile";
             }
         }
 
@@ -458,8 +625,7 @@ namespace HDRGammaController
         {
             if (_correctionLut == null && _profile?.CorrectionLut == null)
             {
-                MessageBox.Show("No LUT data available to export.", "Export Error",
-                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                ConfirmDialog.Info(this, "Export Error", "No LUT data available to export.");
                 return;
             }
 
@@ -478,23 +644,143 @@ namespace HDRGammaController
                     var lut = _correctionLut ?? _profile?.CorrectionLut;
                     lut?.SaveAsCube(dialog.FileName, $"{_profile?.MonitorName} Calibration LUT");
 
-                    MessageBox.Show($"LUT exported successfully to:\n{dialog.FileName}",
-                        "Export Complete", MessageBoxButton.OK, MessageBoxImage.Information);
+                    ConfirmDialog.Info(this, "Export Complete",
+                        $"LUT exported successfully to:\n{dialog.FileName}");
                 }
                 catch (Exception ex)
                 {
-                    MessageBox.Show($"Failed to export LUT: {ex.Message}",
-                        "Export Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                    ConfirmDialog.Info(this, "Export Error", $"Failed to export LUT: {ex.Message}");
                 }
             }
         }
 
-        private static readonly Color CR = Color.FromRgb(0xff, 0x5a, 0x5a);
-        private static readonly Color CG = Color.FromRgb(0x55, 0xdd, 0x77);
-        private static readonly Color CB = Color.FromRgb(0x5a, 0x9c, 0xff);
-        private static readonly Color CGrey = Color.FromRgb(0x99, 0x99, 0x99);
+        /// <summary>
+        /// Prints the report (users pick "Microsoft Print to PDF" to save a PDF) as a
+        /// dedicated LIGHT, printer-friendly layout built by <see cref="ReportPrintBuilder"/>
+        /// from the same view-model strings the window displays - NOT a screenshot of the
+        /// dark UI. The charts (live reports only) are re-rendered offscreen with the light
+        /// chart palette at print size and embedded as figures; FlowDocument's paginator
+        /// handles the page breaks.
+        /// </summary>
+        private void ExportReportButton_Click(object sender, RoutedEventArgs e)
+        {
+            var dialog = new System.Windows.Controls.PrintDialog();
+            if (dialog.ShowDialog() != true) return;
 
+            try
+            {
+                // Chart figures exist only in the live report; historical reports never
+                // render the charts (no raw measurements), so the section becomes a note.
+                // The on-screen canvases are NOT captured: the figures are drawn fresh into
+                // offscreen canvases with the light palette so they sit on white paper.
+                List<ReportPrintBuilder.ChartFigure>? charts = null;
+                if (!_isHistorical && ToneCanvas.Children.Count > 0)
+                {
+                    var tone = ReportPrintBuilder.CreatePrintCanvas();
+                    var gamma = ReportPrintBuilder.CreatePrintCanvas();
+                    var balance = ReportPrintBuilder.CreatePrintCanvas();
+                    var gamut = ReportPrintBuilder.CreatePrintCanvas();
+                    RenderCharts(tone, gamma, balance, gamut, CalibrationCharts.ChartPalette.Light);
+
+                    var figures = new List<ReportPrintBuilder.ChartFigure>();
+                    void Capture(string title, System.Windows.Controls.Canvas canvas)
+                    {
+                        if (canvas.Children.Count > 0)
+                            figures.Add(new ReportPrintBuilder.ChartFigure(
+                                title, ReportPrintBuilder.RenderPrintCanvas(canvas)));
+                    }
+                    Capture("Tone Response", tone);
+                    Capture("Gamma", gamma);
+                    Capture("RGB Balance", balance);
+                    Capture("Gamut", gamut);
+                    if (figures.Count > 0) charts = figures;
+                }
+
+                // Detailed verification prints whenever its data exists - including for
+                // historical reports, where the per-patch list persists in the summary and
+                // the charts are simply re-rendered from it (light palette, print size).
+                ReportPrintBuilder.DetailedPrintSection? detailedSection = null;
+                if (_detailedPatchResults is { Count: > 0 } detailedResults)
+                {
+                    var histogram = ReportPrintBuilder.CreatePrintCanvas();
+                    var perPatch = ReportPrintBuilder.CreatePrintCanvas();
+                    RenderDetailedCharts(histogram, perPatch, CalibrationCharts.ChartPalette.Light);
+
+                    var detailedFigures = new List<ReportPrintBuilder.ChartFigure>
+                    {
+                        new("Delta E Distribution", ReportPrintBuilder.RenderPrintCanvas(histogram)),
+                        new("Per-patch Delta E", ReportPrintBuilder.RenderPrintCanvas(perPatch)),
+                    };
+                    detailedSection = new ReportPrintBuilder.DetailedPrintSection(
+                        detailedFigures,
+                        VerificationAnalysis.WorstPatches(detailedResults),
+                        VerificationAnalysis.BestPatches(detailedResults),
+                        BuildCategoryBreakdownText(detailedResults));
+                }
+
+                var document = ReportPrintBuilder.Build(Vm, _isHistorical, charts, detailedSection);
+
+                const double margin = 48;
+                document.PageWidth = dialog.PrintableAreaWidth;
+                document.PageHeight = dialog.PrintableAreaHeight;
+                document.PagePadding = new Thickness(margin);
+                // Single column: without this, FlowDocument breaks a wide page into
+                // newspaper columns.
+                document.ColumnWidth = Math.Max(dialog.PrintableAreaWidth - margin * 2, 1);
+
+                // The job name doubles as Microsoft Print to PDF's suggested filename,
+                // so make it descriptive and strip filename-hostile characters.
+                string jobName = $"Calibration Report - {_profile?.MonitorName ?? "Display"} - " +
+                                 $"{(_profile?.LastCalibratedAt?.ToLocalTime() ?? DateTime.Now):yyyy-MM-dd}";
+                foreach (char c in Path.GetInvalidFileNameChars())
+                    jobName = jobName.Replace(c, '_');
+
+                dialog.PrintDocument(
+                    ((System.Windows.Documents.IDocumentPaginatorSource)document).DocumentPaginator,
+                    jobName);
+                Vm.StatusText = "Report sent to the printer.";
+            }
+            catch (Exception ex)
+            {
+                // PTS (the FlowDocument pagination engine) surfaces native failures as
+                // non-CLS exceptions, which the CLR delivers wrapped. Unwrap and log the
+                // FULL exception so the next failure pinpoints the faulting element.
+                if (ex is System.Runtime.CompilerServices.RuntimeWrappedException rwe)
+                {
+                    Log.Error("CalibrationReportWindow: print failed with RuntimeWrappedException. " +
+                              $"Wrapped: {rwe.WrappedException?.ToString() ?? "<null>"}\nOuter: {ex}");
+                }
+                else
+                {
+                    Log.Error($"CalibrationReportWindow: print failed: {ex}");
+                }
+                ConfirmDialog.Info(this, "Export Report", $"Could not print the report:\n\n{ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Draws the on-screen charts with the dark report theme: the four main charts plus,
+        /// when detailed results exist, the two detailed charts - so every layout change
+        /// (Loaded, SizeChanged) and every verify completion regenerates all of them together.
+        /// </summary>
         private void RenderCharts()
+        {
+            RenderCharts(ToneCanvas, GammaCanvas, BalanceCanvas, GamutCanvas,
+                CalibrationCharts.ChartPalette.Dark);
+            RenderDetailedCharts();
+        }
+
+        /// <summary>
+        /// Draws all four report charts into the given canvases with the given palette.
+        /// The window calls this with its own canvases and the dark palette; the print
+        /// export calls it again with fresh offscreen canvases and the light palette.
+        /// </summary>
+        private void RenderCharts(
+            System.Windows.Controls.Canvas toneCanvas,
+            System.Windows.Controls.Canvas gammaCanvas,
+            System.Windows.Controls.Canvas balanceCanvas,
+            System.Windows.Controls.Canvas gamutCanvas,
+            CalibrationCharts.ChartPalette palette)
         {
             if (_characterization == null) return;
             var target = _profile?.Target;
@@ -549,15 +835,15 @@ namespace HDRGammaController
                 corrRangeY = Math.Max(corrected.Max(m => m.Xyz.Y) - corrMinY, 1e-6);
             }
             double CorrNormY(MeasurementResult m) => Math.Clamp((m.Xyz.Y - corrMinY) / corrRangeY, 0, 1);
-            var corrColor = Color.FromRgb(0x22, 0xc5, 0x5e);
+            var corrColor = palette.Green;
 
             var toneSeries = new List<CalibrationCharts.Series>
             {
-                new(targetLabel, CGrey, tRef, Dashed: true),
-                new("Panel (fit)", Color.FromRgb(0x22, 0xd3, 0xee), tFit),
+                new(targetLabel, palette.Neutral, tRef, Dashed: true),
+                new("Panel (fit)", palette.Cyan, tFit),
             };
             if (grays is { Count: > 1 })
-                toneSeries.Add(new CalibrationCharts.Series("Measured", Color.FromRgb(0xf9, 0x73, 0x16),
+                toneSeries.Add(new CalibrationCharts.Series("Measured", palette.Orange,
                     grays.Select(m => (m.Patch.DisplayRgb.R, NormY(m))).ToList(), Scatter: true));
             if (corrected is { Count: > 1 })
             {
@@ -565,7 +851,8 @@ namespace HDRGammaController
                 toneSeries.Add(new CalibrationCharts.Series("Corrected", corrColor, pts));
                 toneSeries.Add(new CalibrationCharts.Series("", corrColor, pts, Scatter: true));
             }
-            CalibrationCharts.DrawLineChart(ToneCanvas, toneSeries, 0, 1, 0, 1, "Input signal", "Output");
+            CalibrationCharts.DrawLineChart(toneCanvas, toneSeries, 0, 1, 0, 1,
+                "Input signal", "Output (relative)", palette: palette);
 
             // 2. Gamma tracking (fit line + per-point measured gamma) vs the TARGET's
             // effective gamma curve - a flat "2.2" reference is wrong for sRGB-curve targets
@@ -585,8 +872,8 @@ namespace HDRGammaController
             }
             var gammaSeries = new List<CalibrationCharts.Series>
             {
-                new("Target (effective)", CGrey, gammaRef, Dashed: true),
-                new("Fit", Color.FromRgb(0x22, 0xd3, 0xee), gammaMeas),
+                new("Target (effective)", palette.Neutral, gammaRef, Dashed: true),
+                new("Fit", palette.Cyan, gammaMeas),
             };
             var gammaScatter = new List<(double, double)>();
             if (grays is { Count: > 1 })
@@ -595,7 +882,7 @@ namespace HDRGammaController
                     .Where(m => m.Patch.DisplayRgb.R is >= 0.05 and <= 0.95 && NormY(m) > 0)
                     .Select(m => (m.Patch.DisplayRgb.R, Math.Log(NormY(m)) / Math.Log(m.Patch.DisplayRgb.R)))
                     .ToList();
-                gammaSeries.Add(new CalibrationCharts.Series("Measured", Color.FromRgb(0xf9, 0x73, 0x16),
+                gammaSeries.Add(new CalibrationCharts.Series("Measured", palette.Orange,
                     gammaScatter, Scatter: true));
             }
             if (corrected is { Count: > 1 })
@@ -618,7 +905,8 @@ namespace HDRGammaController
             }
             gMin = Math.Floor(Math.Clamp(gMin - 0.1, 0.8, 2.0) * 10) / 10;
             gMax = Math.Ceiling(Math.Clamp(gMax + 0.1, 2.4, 3.2) * 10) / 10;
-            CalibrationCharts.DrawLineChart(GammaCanvas, gammaSeries, 0, 1, gMin, gMax, "Input signal", "Gamma");
+            CalibrationCharts.DrawLineChart(gammaCanvas, gammaSeries, 0, 1, gMin, gMax,
+                "Input signal", "Gamma", palette: palette);
 
             // 3. Grayscale RGB balance from the MEASURED XYZ of each gray step: each channel's
             // linear contribution relative to neutral (1.0 = no cast). The old version plotted
@@ -626,7 +914,7 @@ namespace HDRGammaController
             // exactly and only the last-drawn series was visible.
             var balanceSeries = new List<CalibrationCharts.Series>
             {
-                new("Neutral", CGrey, new List<(double, double)> { (0, 1), (1, 1) }, Dashed: true),
+                new("Neutral", palette.Neutral, new List<(double, double)> { (0, 1), (1, 1) }, Dashed: true),
             };
             if (grays is { Count: > 1 } && _characterization.RgbToXyzMatrix != null)
             {
@@ -650,27 +938,112 @@ namespace HDRGammaController
                     double v = m.Patch.DisplayRgb.R;
                     balR.Add((v, r / avg)); balG.Add((v, g / avg)); balB.Add((v, b / avg));
                 }
-                balanceSeries.Add(new CalibrationCharts.Series("R", CR, balR));
-                balanceSeries.Add(new CalibrationCharts.Series("", CR, balR, Scatter: true));
-                balanceSeries.Add(new CalibrationCharts.Series("G", CG, balG));
-                balanceSeries.Add(new CalibrationCharts.Series("", CG, balG, Scatter: true));
-                balanceSeries.Add(new CalibrationCharts.Series("B", CB, balB));
-                balanceSeries.Add(new CalibrationCharts.Series("", CB, balB, Scatter: true));
+                balanceSeries.Add(new CalibrationCharts.Series("R", palette.BalanceRed, balR));
+                balanceSeries.Add(new CalibrationCharts.Series("", palette.BalanceRed, balR, Scatter: true));
+                balanceSeries.Add(new CalibrationCharts.Series("G", palette.BalanceGreen, balG));
+                balanceSeries.Add(new CalibrationCharts.Series("", palette.BalanceGreen, balG, Scatter: true));
+                balanceSeries.Add(new CalibrationCharts.Series("B", palette.BalanceBlue, balB));
+                balanceSeries.Add(new CalibrationCharts.Series("", palette.BalanceBlue, balB, Scatter: true));
             }
-            CalibrationCharts.DrawLineChart(BalanceCanvas, balanceSeries,
-                0, 1, 0.85, 1.15, "Input signal", "Balance");
+            CalibrationCharts.DrawLineChart(balanceCanvas, balanceSeries,
+                0, 1, 0.85, 1.15, "Input signal", "Gain vs neutral", palette: palette);
 
             // 4. Gamut + white point on CIE xy.
             if (target != null)
             {
-                CalibrationCharts.DrawGamutDiagram(GamutCanvas,
+                CalibrationCharts.DrawGamutDiagram(gamutCanvas,
                     (target.RedPrimary.X, target.RedPrimary.Y), (target.GreenPrimary.X, target.GreenPrimary.Y),
                     (target.BluePrimary.X, target.BluePrimary.Y), (target.WhitePoint.X, target.WhitePoint.Y),
                     (_characterization.RedPrimary.X, _characterization.RedPrimary.Y),
                     (_characterization.GreenPrimary.X, _characterization.GreenPrimary.Y),
                     (_characterization.BluePrimary.X, _characterization.BluePrimary.Y),
-                    (_characterization.WhitePoint.X, _characterization.WhitePoint.Y));
+                    (_characterization.WhitePoint.X, _characterization.WhitePoint.Y),
+                    palette);
             }
+        }
+
+        /// <summary>
+        /// Fills the Detailed Verification section from <see cref="_detailedPatchResults"/>:
+        /// worst-10 and best-10 lists, category breakdown text, section visibility and both
+        /// charts. Works identically for a fresh detailed sweep and a historical restore.
+        /// </summary>
+        private void PresentDetailedResults()
+        {
+            if (_detailedPatchResults is not { Count: > 0 } results) return;
+
+            static void Fill(
+                System.Collections.ObjectModel.ObservableCollection<CalibrationReportViewModel.PatchListItem> list,
+                IEnumerable<PatchDeltaE> ranked)
+            {
+                list.Clear();
+                int rank = 1;
+                foreach (var p in ranked)
+                {
+                    list.Add(new CalibrationReportViewModel.PatchListItem(
+                        $"{rank++}.", p.Name, $"{p.DeltaE:F2}",
+                        CalibrationReportViewModel.DeltaEBrush(p.DeltaE)));
+                }
+            }
+            Fill(Vm.WorstPatches, VerificationAnalysis.WorstPatches(results));
+            Fill(Vm.BestPatches, VerificationAnalysis.BestPatches(results));
+
+            Vm.CategoryBreakdownText = BuildCategoryBreakdownText(results);
+            Vm.HasDetailedResults = true;
+
+            // The card just became visible (BoolToVis), so its canvases have not been laid
+            // out yet - drawing now would see ActualWidth 0 and render blank. Defer the draw
+            // until after the pending layout pass; later layout changes re-render through
+            // the shared RenderCharts path.
+            Dispatcher.BeginInvoke(
+                System.Windows.Threading.DispatcherPriority.Loaded,
+                new Action(RenderDetailedCharts));
+        }
+
+        /// <summary>
+        /// Category breakdown line plus, for HDR sweeps, the honesty caveat: saturation and
+        /// memory color patches measure the Windows SDR-to-HDR pipeline and the panel's HDR
+        /// color handling, which the (typically white-point-only) correction does not remap.
+        /// Without the note those two averages read as calibration failure on wide-gamut HDR
+        /// panels. The target carries everything needed (PQ <=> HDR sweep, WhitePointOnly),
+        /// so live and restored reports annotate identically.
+        /// </summary>
+        private string BuildCategoryBreakdownText(IReadOnlyList<PatchDeltaE> results)
+        {
+            string text = VerificationAnalysis.ComputeCategoryBreakdown(results).ToDisplayText();
+            var target = _applyContext?.Target ?? _profile?.Target;
+            if (target != null &&
+                VerificationAnalysis.CategoryCaveat(target.IsHdr, target.WhitePointOnly) is { } caveat)
+            {
+                text += "\n" + caveat;
+            }
+            return text;
+        }
+
+        /// <summary>Draws the on-screen detailed charts with the dark report theme.</summary>
+        private void RenderDetailedCharts()
+            => RenderDetailedCharts(HistogramCanvas, PerPatchCanvas, CalibrationCharts.ChartPalette.Dark);
+
+        /// <summary>
+        /// Draws the ΔE histogram and per-patch strip chart into the given canvases with the
+        /// given palette - same parameterization as the four main charts, so the print export
+        /// re-renders them offscreen with the light palette.
+        /// </summary>
+        private void RenderDetailedCharts(
+            System.Windows.Controls.Canvas histogramCanvas,
+            System.Windows.Controls.Canvas perPatchCanvas,
+            CalibrationCharts.ChartPalette palette)
+        {
+            if (_detailedPatchResults is not { Count: > 0 } results) return;
+
+            CalibrationCharts.DrawDeltaEHistogram(
+                histogramCanvas,
+                VerificationAnalysis.HistogramCounts(results.Select(p => p.DeltaE)),
+                VerificationAnalysis.HistogramBucketLabels,
+                palette);
+            CalibrationCharts.DrawPerPatchDeltaE(
+                perPatchCanvas,
+                results.Select(p => (p.Name, p.DeltaE)).ToList(),
+                palette);
         }
 
         private string? _installedProfileName;
@@ -688,18 +1061,18 @@ namespace HDRGammaController
                 {
                     CalibrationProfileInstaller.Disable(ctx.Monitor, profileName);
                     _profileEnabled = false;
-                    ApplyButton.Content = "Enable Profile";
-                    StatusText.Text = "Profile disabled - showing the uncorrected panel for comparison.";
+                    Vm.ApplyButtonContent = "Enable Profile";
+                    Vm.StatusText = "Profile disabled - showing the uncorrected panel for comparison.";
                 }
                 else if (CalibrationProfileInstaller.Reenable(ctx.Monitor, profileName, ctx.HdrMode))
                 {
                     _profileEnabled = true;
-                    ApplyButton.Content = "Disable Profile";
-                    StatusText.Text = "Profile re-enabled.";
+                    Vm.ApplyButtonContent = "Disable Profile";
+                    Vm.StatusText = "Profile re-enabled.";
                 }
                 else
                 {
-                    StatusText.Text = "Could not re-enable the profile - close and re-run the calibration.";
+                    Vm.StatusText = "Could not re-enable the profile - close and re-run the calibration.";
                 }
                 return;
             }
@@ -721,16 +1094,16 @@ namespace HDRGammaController
         {
             if (_applyContext == null || _activeCharacterization == null)
             {
-                MessageBox.Show("This calibration can't be applied (missing display characterization).",
-                    "Apply Profile", MessageBoxButton.OK, MessageBoxImage.Warning);
+                ConfirmDialog.Info(this, "Apply Profile",
+                    "This calibration can't be applied (missing display characterization).");
                 return;
             }
 
             var ctx = _applyContext;
-            ApplyButton.IsEnabled = false;
+            Vm.IsApplyEnabled = false;
             try
             {
-                StatusText.Text = "Applying profile…";
+                Vm.StatusText = "Applying profile…";
                 var result = CalibrationProfileInstaller.Install(
                     ctx.Monitor, _activeCharacterization, EffectiveTarget(ctx),
                     ctx.LutR, ctx.LutG, ctx.LutB, ctx.WhiteLevel,
@@ -741,29 +1114,29 @@ namespace HDRGammaController
                     _profileApplied = true;
                     _installedProfileName = result.ProfileName;
                     _profileEnabled = true;
-                    ApplyButton.Content = "Disable Profile";
+                    Vm.ApplyButtonContent = "Disable Profile";
                     ctx.OnInstalled?.Invoke(result.ProfileName);
 
                     if (runVerify && ctx.Colorimeter != null)
                     {
-                        StatusText.Text = "Profile applied - verifying through the correction…";
+                        Vm.StatusText = "Profile applied - verifying through the correction…";
                         await RunVerificationAsync();
                     }
                     else
                     {
-                        StatusText.Text = "Profile applied.";
+                        Vm.StatusText = "Profile applied.";
                     }
                 }
                 else
                 {
-                    StatusText.Text = "Apply failed.";
-                    MessageBox.Show($"Could not apply the calibration:\n\n{result.Error}",
-                        "Apply Failed", MessageBoxButton.OK, MessageBoxImage.Error);
+                    Vm.StatusText = "Apply failed.";
+                    ConfirmDialog.Info(this, "Apply Failed",
+                        $"Could not apply the calibration:\n\n{result.Error}");
                 }
             }
             finally
             {
-                ApplyButton.IsEnabled = true;
+                Vm.IsApplyEnabled = true;
             }
         }
 
@@ -771,8 +1144,8 @@ namespace HDRGammaController
         {
             if (_applyContext == null || _activeCharacterization == null)
             {
-                MessageBox.Show("White tools need the live calibration context (open this report right after a calibration).",
-                    "White Tools", MessageBoxButton.OK, MessageBoxImage.Information);
+                ConfirmDialog.Info(this, "White Tools",
+                    "White tools need the live calibration context (open this report right after a calibration).");
                 return;
             }
 
@@ -827,15 +1200,15 @@ namespace HDRGammaController
         private async Task ValidateHdrRendererAsync()
         {
             if (_applyContext is not { Colorimeter: { } colorimeter } ctx) return;
-            if (MessageBox.Show(
+            if (!ConfirmDialog.Confirm(this, "Validate HDR Renderer",
                     "Place the probe on the display, then press Yes.\n\n" +
                     "Three short measurements: SDR white, the FP16 renderer at the same level, " +
                     "and the FP16 renderer at double that level (briefly bright).",
-                    "Validate HDR Renderer", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+                    confirmLabel: "Yes", cancelLabel: "Cancel"))
                 return;
 
-            ApplyButton.IsEnabled = false;
-            VerifyButton.IsEnabled = false;
+            Vm.IsApplyEnabled = false;
+            Vm.IsVerifyEnabled = false;
             PatchDisplayWindow? surround = null;
             HdrPatchRenderer? renderer = null;
             bool bypassed = false;
@@ -899,14 +1272,13 @@ namespace HDRGammaController
                         ? "The HDR-range patch path is trustworthy on this system. HDR-range calibration can be built on it."
                         : "Do NOT trust HDR-range measurements on this system yet - send the log for diagnosis.");
                 Log.Info($"HDR renderer validation:\n{report}");
-                MessageBox.Show(report, "HDR Renderer Validation",
-                    MessageBoxButton.OK, passPipeline && passRange ? MessageBoxImage.Information : MessageBoxImage.Warning);
+                ConfirmDialog.Info(this, "HDR Renderer Validation", report);
             }
             catch (Exception ex)
             {
                 Log.Info($"HDR renderer validation failed: {ex}");
-                MessageBox.Show($"HDR renderer validation failed:\n\n{ex.Message}",
-                    "HDR Renderer Validation", MessageBoxButton.OK, MessageBoxImage.Error);
+                ConfirmDialog.Info(this, "HDR Renderer Validation",
+                    $"HDR renderer validation failed:\n\n{ex.Message}");
             }
             finally
             {
@@ -914,8 +1286,8 @@ namespace HDRGammaController
                 renderer?.Dispose();
                 surround?.Close();
                 if (bypassed) { try { ctx.StateManager!.RestorePreviousState(); } catch { } }
-                ApplyButton.IsEnabled = true;
-                VerifyButton.IsEnabled = true;
+                Vm.IsApplyEnabled = true;
+                Vm.IsVerifyEnabled = true;
             }
         }
 
@@ -962,8 +1334,10 @@ namespace HDRGammaController
                         Nits = nits,
                         Category = PatchCategory.General,
                     };
-                    VerifyButton.Content = $"PQ tracking {i + 1}/{rungs.Count}…";
-                    patchWindow.SetProgress(i + 1, rungs.Count, p.Name);
+                    Vm.VerifyButtonContent = $"PQ tracking {i + 1}/{rungs.Count}…";
+                    patchWindow.SetProgress(i + 1, rungs.Count, p.Name,
+                        i + 1 < rungs.Count ? $"PQ {rungs[i + 1]:F0} nits" : null,
+                        phase: "HDR PQ tracking");
                     wire.PresentNits(nits, nits, nits);
                     await Task.Delay(i == 0 ? 1200 : 600, token);
                     var m = await colorimeter.MeasureAsync(p, ctx.HdrMode, token);
@@ -1018,12 +1392,13 @@ namespace HDRGammaController
         {
             if (_applyContext is not { Colorimeter: { } colorimeter } ctx || _activeCharacterization is not { } ch)
                 return;
-            if (MessageBox.Show("Place the probe on the display, then press Yes to re-measure white.",
-                    "Re-anchor White", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+            if (!ConfirmDialog.Confirm(this, "Re-anchor White",
+                    "Place the probe on the display, then press Yes to re-measure white.",
+                    confirmLabel: "Yes", cancelLabel: "Cancel"))
                 return;
 
-            ApplyButton.IsEnabled = false;
-            VerifyButton.IsEnabled = false;
+            Vm.IsApplyEnabled = false;
+            Vm.IsVerifyEnabled = false;
             PatchDisplayWindow? patchWindow = null;
             bool bypassed = false;
             try
@@ -1081,8 +1456,7 @@ namespace HDRGammaController
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"White re-anchor failed:\n\n{ex.Message}", "Re-anchor White",
-                    MessageBoxButton.OK, MessageBoxImage.Error);
+                ConfirmDialog.Info(this, "Re-anchor White", $"White re-anchor failed:\n\n{ex.Message}");
                 return;
             }
             finally
@@ -1090,8 +1464,8 @@ namespace HDRGammaController
                 try { await colorimeter.EndMeasurementSessionAsync(); } catch { }
                 patchWindow?.Close();
                 if (bypassed) { try { ctx.StateManager!.RestorePreviousState(); } catch { } }
-                ApplyButton.IsEnabled = true;
-                VerifyButton.IsEnabled = true;
+                Vm.IsApplyEnabled = true;
+                Vm.IsVerifyEnabled = true;
             }
 
             await ApplyAndVerifyAsync();
@@ -1122,7 +1496,7 @@ namespace HDRGammaController
             if (accepted == true && editor.Result is { } trim && (trim.Dx != 0 || trim.Dy != 0))
             {
                 _trimmedTargetWhite = new Chromaticity(baseWhite.X + trim.Dx, baseWhite.Y + trim.Dy);
-                StatusText.Text = $"White trim baked in (dx {trim.Dx:+0.0000;-0.0000}, dy {trim.Dy:+0.0000;-0.0000}).";
+                Vm.StatusText = $"White trim baked in (dx {trim.Dx:+0.0000;-0.0000}, dy {trim.Dy:+0.0000;-0.0000}).";
                 await ApplyAndVerifyAsync(runVerify: false);
             }
             else
@@ -1170,6 +1544,18 @@ namespace HDRGammaController
             Close();
         }
 
+        private void Header_MouseDown(object sender, MouseButtonEventArgs e)
+        {
+            if (e.ChangedButton == MouseButton.Left) DragMove();
+        }
+
+        // MouseDown (not Up) + Handled so clicking the glyph never reaches the header's DragMove.
+        private void CloseGlyph_Click(object sender, MouseButtonEventArgs e)
+        {
+            e.Handled = true;
+            Close();
+        }
+
         /// <summary>
         /// Re-measures a quick patch sweep THROUGH whatever Windows is currently applying
         /// (normally the just-installed profile) and fills in the "after" row of the accuracy
@@ -1179,10 +1565,9 @@ namespace HDRGammaController
         {
             if (_applyContext?.Colorimeter is not { } colorimeter || _applyContext is not { } ctx)
             {
-                MessageBox.Show(
+                ConfirmDialog.Info(this, "Verify Calibration",
                     "Verification isn't available for this report (no colorimeter context). " +
-                    "Run it from the report that opens right after a calibration.",
-                    "Verify Calibration", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    "Run it from the report that opens right after a calibration.");
                 return;
             }
 
@@ -1192,12 +1577,16 @@ namespace HDRGammaController
                 : "The profile hasn't been applied from this window yet, so Verify will measure " +
                   "whatever is currently active on the display.\n\n" +
                   "Place the probe on the display, then press Yes to start.";
-            if (MessageBox.Show(prompt, "Verify Calibration", MessageBoxButton.YesNo,
-                    MessageBoxImage.Question) != MessageBoxResult.Yes)
+            if (!ConfirmDialog.Confirm(this, "Verify Calibration", prompt,
+                    confirmLabel: "Yes", cancelLabel: "Cancel"))
                 return;
 
             await RunVerificationAsync();
         }
+
+        /// <summary>Strip label for a sweep patch: its name, or an RGB-derived description.</summary>
+        private static string PatchLabel(ColorPatch patch) =>
+            string.IsNullOrEmpty(patch.Name) ? CalibrationWindow.GetPatchDescription(patch) : patch.Name;
 
         /// <summary>
         /// The verify sweep itself (no prompts): measures the verification patches through
@@ -1209,9 +1598,9 @@ namespace HDRGammaController
             if (_applyContext?.Colorimeter is not { } colorimeter || _applyContext is not { } ctx)
                 return;
 
-            VerifyButton.IsEnabled = false;
-            ApplyButton.IsEnabled = false;
-            CloseButton.IsEnabled = false;
+            Vm.IsVerifyEnabled = false;
+            Vm.IsApplyEnabled = false;
+            Vm.IsCloseEnabled = false;
             PatchDisplayWindow? patchWindow = null;
             using var verifyCts = new System.Threading.CancellationTokenSource();
             _verifyCts = verifyCts;
@@ -1240,16 +1629,31 @@ namespace HDRGammaController
             {
                 patchWindow = new PatchDisplayWindow(ctx.Monitor, ctx.PatchSize, ctx.PatchOffsetX, ctx.PatchOffsetY);
                 patchWindow.AbortRequested += () => verifyCts.Cancel(); // Escape aborts the sweep
+                // On-strip Cancel goes through the same CTS as Escape, so cleanup (session
+                // end, window close, bypass restore) is identical: this method's finally.
+                patchWindow.EnableSweepControls(() =>
+                {
+                    if (_verifyCts is { IsCancellationRequested: false } cts)
+                        cts.Cancel();
+                });
                 patchWindow.Show();
 
-                var patches = CalibrationVerifier.BuildVerificationPatches();
+                // Detailed mode swaps in the extended patch set (fine grayscale, saturation
+                // ramps, memory colors); everything downstream - progress, settle delays,
+                // metrics, the PQ ladder - is shared with the standard sweep.
+                bool detailedSweep = Vm.IsDetailedVerifyChecked;
+                var patches = detailedSweep
+                    ? VerificationPatchSets.Detailed(ctx.Target, ctx.HdrMode)
+                    : CalibrationVerifier.BuildVerificationPatches();
                 var results = new List<MeasurementResult>();
                 await colorimeter.BeginMeasurementSessionAsync(hdrMode: ctx.HdrMode, verifyCts.Token);
                 for (int i = 0; i < patches.Count; i++)
                 {
                     var p = patches[i];
-                    VerifyButton.Content = $"Verifying {i + 1}/{patches.Count}…";
-                    patchWindow.SetProgress(i + 1, patches.Count, p.Name);
+                    var next = i + 1 < patches.Count ? patches[i + 1] : null;
+                    Vm.VerifyButtonContent = $"Verifying {i + 1}/{patches.Count}…";
+                    patchWindow.SetProgress(i + 1, patches.Count, PatchLabel(p),
+                        next == null ? null : PatchLabel(next));
                     patchWindow.SetColor(p.DisplayRgb.R, p.DisplayRgb.G, p.DisplayRgb.B);
                     await Task.Delay(i == 0 ? 1200 : 500, verifyCts.Token); // settle (longer for the first patch)
                     results.Add(await colorimeter.MeasureAsync(p, ctx.HdrMode, verifyCts.Token));
@@ -1269,37 +1673,53 @@ namespace HDRGammaController
                     : null;
 
                 var after = CalibrationVerifier.ComputeMetrics(results, ctx.Target);
-                AfterAvgText.Text = $"{after.AverageDeltaE:F2}";
-                AfterMaxText.Text = $"{after.MaxDeltaE:F2}";
-                AfterGrayscaleText.Text = $"{after.AverageGrayscaleDeltaE:F2}";
-                AfterPrimaryText.Text = $"{after.AveragePrimaryDeltaE:F2}";
-                SetDeltaEColor(AfterAvgText, after.AverageDeltaE);
-                SetDeltaEColor(AfterMaxText, after.MaxDeltaE);
-                SetDeltaEColor(AfterGrayscaleText, after.AverageGrayscaleDeltaE);
-                SetDeltaEColor(AfterPrimaryText, after.AveragePrimaryDeltaE);
+                Vm.AfterAvgText = $"{after.AverageDeltaE:F2}";
+                Vm.AfterMaxText = $"{after.MaxDeltaE:F2}";
+                Vm.AfterGrayscaleText = $"{after.AverageGrayscaleDeltaE:F2}";
+                Vm.AfterPrimaryText = $"{after.AveragePrimaryDeltaE:F2}";
+                Vm.AfterAvgBrush = CalibrationReportViewModel.DeltaEBrush(after.AverageDeltaE);
+                Vm.AfterMaxBrush = CalibrationReportViewModel.DeltaEBrush(after.MaxDeltaE);
+                Vm.AfterGrayscaleBrush = CalibrationReportViewModel.DeltaEBrush(after.AverageGrayscaleDeltaE);
+                Vm.AfterPrimaryBrush = CalibrationReportViewModel.DeltaEBrush(after.AveragePrimaryDeltaE);
 
                 // The grade AND its summary sentence now reflect what the user actually
                 // sees: the corrected display, not the uncorrected panel.
                 var afterGrade = after.GetGrade();
                 SetGradeDisplay(afterGrade);
-                GradeScopeText.Text = "after correction";
-                SummaryText.Text = GetSummaryText(afterGrade);
-                PerceptualNotePanel.Visibility = Visibility.Visible;
+                Vm.GradeScopeText = "after correction";
+                Vm.SummaryText = GetSummaryText(afterGrade);
+                Vm.IsPerceptualNoteVisible = true;
 
                 // Diagnostics line: tone/color decomposition answers "is the residual real?",
                 // and ΔE ITP is the HDR-native metric for cross-tool comparison.
-                VerifyDetailText.Text =
+                Vm.VerifyDetailText =
                     $"Grayscale residual split: tone {after.AverageGrayscaleToneDeltaE:F2} / color {after.AverageGrayscaleColorDeltaE:F2} ΔE2000 " +
                     $"(tone near black is mostly instrument noise; color is a visible cast). " +
                     $"ΔE ITP avg {after.AverageItpDeltaE:F1}, max {after.MaxItpDeltaE:F1} (BT.2124; ~3x ΔE2000 scale, 1 unit ≈ 1 JND).";
                 if (pqSummary != null)
-                    VerifyDetailText.Text += "\n" + pqSummary;
-                VerifyDetailText.Visibility = Visibility.Visible;
+                    Vm.VerifyDetailText += "\n" + pqSummary;
+                Vm.IsVerifyDetailVisible = true;
+
+                // Detailed sweep: hand the per-patch results to the Detailed Verification
+                // section. A standard re-verify retires earlier detailed results instead of
+                // showing them next to "after" numbers they no longer describe.
+                if (detailedSweep)
+                {
+                    _detailedPatchResults = after.PatchResults.ToList();
+                    PresentDetailedResults();
+                }
+                else if (_detailedPatchResults != null)
+                {
+                    _detailedPatchResults = null;
+                    Vm.HasDetailedResults = false;
+                    Vm.WorstPatches.Clear();
+                    Vm.BestPatches.Clear();
+                }
 
                 // Refresh recommendations with verify-aware guidance.
                 PopulateRecommendations(afterGrade, after);
-                StatusText.Text = $"Verified through the applied profile: average ΔE {after.AverageDeltaE:F2} " +
-                                  $"({results.Count(r => r.IsValid)} of {patches.Count} patches).";
+                Vm.StatusText = $"Verified through the applied profile: average ΔE {after.AverageDeltaE:F2} " +
+                                $"({results.Count(r => r.IsValid)} of {patches.Count} patches).";
 
                 // Overlay the corrected response on the charts: the native curves alone read
                 // as alarming even when the corrected result is good.
@@ -1308,15 +1728,22 @@ namespace HDRGammaController
                 CalibrationSounds.PlayCompletion();
                 Log.Info($"CalibrationReportWindow: Verify pass avg dE {after.AverageDeltaE:F2}, " +
                          $"max {after.MaxDeltaE:F2}, gray {after.AverageGrayscaleDeltaE:F2}, primary {after.AveragePrimaryDeltaE:F2}.");
+
+                // Re-save the report snapshot so the "after" column (and the verified
+                // grade the disc now shows) survive into the saved-reports browser.
+                if (_metrics != null && _profile != null)
+                {
+                    _profile.QualityGrade = afterGrade;
+                    PersistReportSummary(after);
+                }
             }
             catch (OperationCanceledException)
             {
-                StatusText.Text = "Verification cancelled. Use Re-verify to run it again.";
+                Vm.StatusText = "Verification cancelled. Use Re-verify to run it again.";
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Verification failed:\n\n{ex.Message}",
-                    "Verify Calibration", MessageBoxButton.OK, MessageBoxImage.Error);
+                ConfirmDialog.Info(this, "Verify Calibration", $"Verification failed:\n\n{ex.Message}");
             }
             finally
             {
@@ -1328,10 +1755,10 @@ namespace HDRGammaController
                     try { ctx.StateManager!.RestorePreviousState(); }
                     catch (Exception ex) { Log.Info($"CalibrationReportWindow: verify bypass restore failed: {ex.Message}"); }
                 }
-                VerifyButton.Content = "Re-verify";
-                VerifyButton.IsEnabled = true;
-                ApplyButton.IsEnabled = true;
-                CloseButton.IsEnabled = true;
+                Vm.VerifyButtonContent = "Re-verify";
+                Vm.IsVerifyEnabled = true;
+                Vm.IsApplyEnabled = true;
+                Vm.IsCloseEnabled = true;
             }
         }
     }

@@ -292,7 +292,7 @@ namespace HDRGammaController.Core.Calibration
         {
             using var writer = new StreamWriter(path, false, Encoding.ASCII);
 
-            writer.WriteLine($"# Created by HDR Gamma Controller");
+            writer.WriteLine($"# Created by Gloam");
             writer.WriteLine($"# {DateTime.UtcNow:O}");
             writer.WriteLine();
 

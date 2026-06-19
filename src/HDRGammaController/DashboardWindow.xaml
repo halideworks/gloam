@@ -3,357 +3,360 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:HDRGammaController"
         xmlns:vm="clr-namespace:HDRGammaController.ViewModels"
-        Title="HDR Gamma Controller - Dashboard" 
-        Height="Auto" Width="1000"
+        Title="Gloam - Dashboard"
+        Height="Auto" Width="1040"
         SizeToContent="Height"
-        MaxHeight="900" 
-        MinWidth="800" MinHeight="600"
+        MaxHeight="900"
+        MinWidth="820" MinHeight="600"
         WindowStartupLocation="CenterScreen"
-        Background="#1E1E1E"
-        Foreground="White"
+        Background="Transparent"
+        Foreground="{DynamicResource ThemeText}"
         WindowStyle="None"
         AllowsTransparency="True"
         ResizeMode="CanResizeWithGrip">
 
+    <!--
+        Brutalist dashboard. Component styles + theme tokens are shared:
+        tokens/fonts in App.xaml, control styles in Themes/Brutalist.xaml (merged below).
+        Light/dark is app-wide via App.BrutalistTheme; the title-bar toggle flips it.
+        View model and bindings are unchanged.
+    -->
     <Window.Resources>
-        <!-- Reusing styles from SettingsWindow for consistency -->
-        <SolidColorBrush x:Key="AccentBrush" Color="#0078D4"/>
-        <SolidColorBrush x:Key="CardBackground" Color="#2D2D2D"/>
-        <SolidColorBrush x:Key="CardBorder" Color="#3F3F3F"/>
-        <SolidColorBrush x:Key="TextDim" Color="#888888"/>
-        
-        <Style x:Key="MonitorCard" TargetType="Border">
-            <Setter Property="Background" Value="{StaticResource CardBackground}"/>
-            <Setter Property="BorderBrush" Value="{StaticResource CardBorder}"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="CornerRadius" Value="8"/>
-            <Setter Property="Padding" Value="12"/>
-            <Setter Property="Margin" Value="0,0,12,12"/>
-            <Setter Property="Width" Value="320"/>
-            <Setter Property="Height" Value="240"/>
-        </Style>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="pack://application:,,,/Gloam;component/Themes/Brutalist.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
 
-        <Style TargetType="Button">
-            <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}" CornerRadius="4" Padding="12,6">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
+            <BooleanToVisibilityConverter x:Key="BoolToVis"/>
 
-        <!-- Toggle Style (Copied for consistency) -->
-        <Style x:Key="ModernToggle" TargetType="CheckBox">
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="Margin" Value="0,4"/>
-            <Setter Property="VerticalContentAlignment" Value="Center"/>
-        </Style>
-        
-        <!-- Input Style -->
-        <Style TargetType="TextBox">
-             <Setter Property="Background" Value="#3D3D3D"/>
-             <Setter Property="Foreground" Value="White"/>
-             <Setter Property="BorderBrush" Value="{StaticResource CardBorder}"/>
-             <Setter Property="BorderThickness" Value="1"/>
-             <Setter Property="Padding" Value="8,6"/>
-             <Setter Property="CaretBrush" Value="White"/>
-        </Style>
-        
-        <Style TargetType="ComboBox">
-             <Setter Property="Background" Value="#3D3D3D"/>
-             <Setter Property="Foreground" Value="White"/>
-             <Setter Property="BorderBrush" Value="{StaticResource CardBorder}"/>
-             <Setter Property="BorderThickness" Value="1"/>
-             <Setter Property="Padding" Value="6"/>
-             <Setter Property="Margin" Value="0,0,8,0"/>
-             <Setter Property="ItemContainerStyle">
-                 <Setter.Value>
-                     <Style TargetType="ComboBoxItem">
-                         <Setter Property="Background" Value="#3D3D3D"/>
-                         <Setter Property="Foreground" Value="White"/>
-                         <Setter Property="BorderThickness" Value="0"/>
-                         <Setter Property="Template">
-                             <Setter.Value>
-                                 <ControlTemplate TargetType="ComboBoxItem">
-                                     <Border Name="Border" Padding="4" Background="{TemplateBinding Background}">
-                                         <ContentPresenter />
-                                     </Border>
-                                     <ControlTemplate.Triggers>
-                                         <Trigger Property="IsMouseOver" Value="True">
-                                             <Setter TargetName="Border" Property="Background" Value="#555"/>
-                                         </Trigger>
-                                         <Trigger Property="IsSelected" Value="True">
-                                              <Setter TargetName="Border" Property="Background" Value="{StaticResource AccentBrush}"/>
-                                         </Trigger>
-                                     </ControlTemplate.Triggers>
-                                 </ControlTemplate>
-                             </Setter.Value>
-                         </Setter>
-                     </Style>
-                 </Setter.Value>
-             </Setter>
-        </Style>
-
-        <!-- ScrollBar Styling -->
-        <Style x:Key="ScrollBarThumb" TargetType="{x:Type Thumb}">
-            <Setter Property="OverridesDefaultStyle" Value="true"/>
-            <Setter Property="IsTabStop" Value="false"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="{x:Type Thumb}">
-                        <Border x:Name="rectangle"
-                                Background="#555555"
-                                CornerRadius="4"
-                                BorderThickness="0" />
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="true">
-                                <Setter TargetName="rectangle" Property="Background" Value="#888888"/>
-                            </Trigger>
-                            <Trigger Property="IsDragging" Value="true">
-                                <Setter TargetName="rectangle" Property="Background" Value="#AAAAAA"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <Style TargetType="{x:Type ScrollBar}">
-            <Setter Property="Stylus.IsPressAndHoldEnabled" Value="false"/>
-            <Setter Property="Stylus.IsFlicksEnabled" Value="false"/>
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Width" Value="10"/>
-            <Setter Property="MinWidth" Value="10"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="{x:Type ScrollBar}">
-                        <Grid x:Name="Bg" Background="Transparent" SnapsToDevicePixels="true">
-                            <Track x:Name="PART_Track" IsDirectionReversed="true">
-                                <Track.Thumb>
-                                    <Thumb Style="{StaticResource ScrollBarThumb}"/>
-                                </Track.Thumb>
-                            </Track>
-                        </Grid>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <!-- DATA TEMPLATES -->
-        
-        <!-- Monitor Template -->
-        <DataTemplate DataType="{x:Type vm:DashboardItem}">
-            <Border Style="{StaticResource MonitorCard}">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-                    
-                    <!-- Header -->
-                    <Grid Grid.Row="0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Text="{Binding FriendlyName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
-                        <Border Grid.Column="1" Background="{Binding BadgeColor}" CornerRadius="4" Padding="6,2">
-                            <TextBlock Text="{Binding BadgeText}" FontSize="10" FontWeight="Bold"/>
-                        </Border>
-                    </Grid>
-                    
-                    <!-- Stats -->
-                    <StackPanel Grid.Row="1" Margin="0,12,0,0">
-                        <TextBlock Text="Gamma Mode:" Foreground="{StaticResource TextDim}" FontSize="11"/>
-                        <TextBlock Text="{Binding CurrentGamma}" Margin="0,0,0,8"/>
-                        
-                        <TextBlock Text="Brightness:" Foreground="{StaticResource TextDim}" FontSize="11"/>
-                        <ProgressBar Value="{Binding CurrentBrightness}" Height="4" Margin="0,2,0,4" Background="#444" Foreground="{StaticResource AccentBrush}"/>
-                        <TextBlock Text="{Binding CurrentBrightness, StringFormat={}{0}%}" FontSize="12" Margin="0,0,0,8"/>
-
-                        <TextBlock Text="Color Temp:" Foreground="{StaticResource TextDim}" FontSize="11"/>
-                        <TextBlock Text="{Binding CurrentTemperatureText}" FontSize="12"/>
-                    </StackPanel>
-                    
-                    <!-- Actions -->
-                    <Button Grid.Row="2" Content="Configure Settings" Click="Configure_Click" Tag="{Binding}"/>
-                </Grid>
-            </Border>
-        </DataTemplate>
-
-        <!-- App Exclusion Template -->
-        <DataTemplate DataType="{x:Type vm:AppExclusionItem}">
-            <Border Style="{StaticResource MonitorCard}">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                    </Grid.RowDefinitions>
-                    
-                    <TextBlock Text="Night Mode App Auto-Disable" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                    
-                    <Grid Grid.Row="1">
+            <!-- Monitor Template -->
+            <DataTemplate DataType="{x:Type vm:DashboardItem}">
+                <Border Style="{StaticResource MonitorCard}">
+                    <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
-                        <TextBlock Text="Disable Night Mode for:" Foreground="{StaticResource TextDim}" FontSize="12" Margin="0,0,0,8"/>
-
-                        <!-- Add New (ComboBox) -->
-                        <Grid Grid.Row="1" Margin="0,0,0,12">
+                        <!-- Header -->
+                        <Grid Grid.Row="0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            
-                            <ComboBox x:Name="AppSelector" IsEditable="True" ItemsSource="{Binding RunningApps}" Text="Select running app..." 
-                                      Foreground="White" AllowDrop="False" BorderBrush="{StaticResource CardBorder}">
-                                <ComboBox.Resources>
-                                    <Style TargetType="TextBox">
-                                        <Setter Property="Background" Value="#3D3D3D"/>
-                                        <Setter Property="Foreground" Value="White"/>
-                                        <Setter Property="CaretBrush" Value="White"/>
-                                        <Setter Property="BorderThickness" Value="0"/>
-                                    </Style>
-                                </ComboBox.Resources>
-                            </ComboBox>
-                                      
-                            <Button Grid.Column="1" Content="Add" Click="AddExcludedApp_Click" CommandParameter="{Binding ElementName=AppSelector}"/>
+                            <TextBlock Text="{Binding FriendlyName}" FontFamily="{StaticResource DisplayFont}"
+                                       FontWeight="Bold" FontSize="15" VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis" Foreground="{DynamicResource ThemeText}"/>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                <!-- Calibrating: amber outline -->
+                                <Border BorderBrush="{DynamicResource ThemeAmber}" BorderThickness="2" Padding="6,2" Margin="0,0,6,0"
+                                        Visibility="{Binding IsCalibrating, Converter={StaticResource BoolToVis}}"
+                                        ToolTip="A calibration is measuring this display; its gamma, brightness and temperature settings are bypassed until it finishes">
+                                    <TextBlock Text="CALIBRATING" FontFamily="{StaticResource DisplayFont}"
+                                               FontSize="9" FontWeight="Bold" Foreground="{DynamicResource ThemeAmber}"/>
+                                </Border>
+                                <!-- HDR = filled accent, SDR = outline.
+                                     Defaults live in the Style (not local attributes), else the
+                                     local value would beat the DataTrigger and the fill never applies. -->
+                                <Border Padding="7,2" BorderThickness="2">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Background" Value="Transparent"/>
+                                            <Setter Property="BorderBrush" Value="{DynamicResource ThemeBorder}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding BadgeText}" Value="HDR">
+                                                    <Setter Property="Background" Value="{DynamicResource ThemeAccent}"/>
+                                                    <Setter Property="BorderBrush" Value="{DynamicResource ThemeAccent}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <TextBlock Text="{Binding BadgeText}" FontFamily="{StaticResource DisplayFont}"
+                                               FontSize="10" FontWeight="Bold">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="{DynamicResource ThemeText}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding BadgeText}" Value="HDR">
+                                                        <Setter Property="Foreground" Value="{DynamicResource ThemeOnAccent}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </Border>
+                            </StackPanel>
                         </Grid>
 
-                        <!-- List -->
-                        <ListBox Grid.Row="2" ItemsSource="{Binding ExcludedApps}" Background="#333" BorderThickness="0" 
-                                 ScrollViewer.VerticalScrollBarVisibility="Auto">
-                            <ListBox.ItemTemplate>
-                                <DataTemplate>
-                                    <Grid Margin="0,4" Background="Transparent">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Text="{Binding AppName}" VerticalAlignment="Center" Margin="8,0" FontSize="12" Foreground="White" FontWeight="Medium"/>
-                                        
-                                        <!-- Full/Global Checkbox -->
-                                        <CheckBox Grid.Column="1" Content="Block All Screens" IsChecked="{Binding FullDisable}" 
-                                                  VerticalAlignment="Center" Margin="0,0,12,0" Foreground="#AAA" FontSize="11"
-                                                  Click="ExcludedAppMode_Click"/>
+                        <!-- Stats (faded while a calibration has this monitor's settings bypassed) -->
+                        <StackPanel Grid.Row="1" Margin="0,16,0,0">
+                            <StackPanel.Style>
+                                <Style TargetType="StackPanel">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsCalibrating}" Value="True">
+                                            <Setter Property="Opacity" Value="0.35"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </StackPanel.Style>
+                            <TextBlock Text="GAMMA MODE" Style="{StaticResource FieldLabel}"/>
+                            <TextBlock Text="{Binding CurrentGamma}" Style="{StaticResource MonoValue}" Margin="0,1,0,10"/>
 
-                                        <Button Grid.Column="2" Content="✕" Width="24" Height="24" 
-                                                Padding="0" Background="#333" Foreground="#FFF" BorderThickness="0"
-                                                Cursor="Hand" Click="RemoveExcludedApp_Click" Tag="{Binding AppName}">
-                                                 <Button.Resources>
-                                                     <Style TargetType="Border">
-                                                         <Setter Property="CornerRadius" Value="12"/>
-                                                     </Style>
-                                                 </Button.Resources>
-                                        </Button>
-                                    </Grid>
-                                </DataTemplate>
-                            </ListBox.ItemTemplate>
-                        </ListBox>
+                            <TextBlock Text="BRIGHTNESS" Style="{StaticResource FieldLabel}"/>
+                            <ProgressBar Value="{Binding CurrentBrightness}" Height="6" Margin="0,3,0,3"/>
+                            <TextBlock Text="{Binding CurrentBrightness, StringFormat={}{0}%}" Style="{StaticResource MonoValue}" Margin="0,0,0,10"/>
+
+                            <TextBlock Text="COLOR TEMP" Style="{StaticResource FieldLabel}"/>
+                            <TextBlock Text="{Binding CurrentTemperatureText}" Style="{StaticResource MonoValue}" Margin="0,1,0,0"/>
+                        </StackPanel>
+
+                        <!-- Actions -->
+                        <Button Grid.Row="2" Content="CONFIGURE SETTINGS"
+                                Command="{Binding DataContext.ConfigureMonitorCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                CommandParameter="{Binding}">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource BrutBtnPrimary}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsCalibrating}" Value="True">
+                                            <Setter Property="IsEnabled" Value="False"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
                     </Grid>
-                </Grid>
-            </Border>
-        </DataTemplate>
+                </Border>
+            </DataTemplate>
+
+            <!-- App Exclusion Template -->
+            <DataTemplate DataType="{x:Type vm:AppExclusionItem}">
+                <Border Style="{StaticResource MonitorCard}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Text="NIGHT MODE AUTO-DISABLE" FontFamily="{StaticResource DisplayFont}"
+                                   FontSize="14" FontWeight="Bold" Margin="0,0,0,10" Foreground="{DynamicResource ThemeText}"/>
+
+                        <Grid Grid.Row="1">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Text="DISABLE NIGHT MODE FOR:" Style="{StaticResource FieldLabel}" Margin="0,0,0,8"/>
+
+                            <!-- Add New (ComboBox) -->
+                            <Grid Grid.Row="1" Margin="0,0,0,12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <ComboBox IsEditable="True" ItemsSource="{Binding RunningApps}"
+                                          Text="{Binding NewAppText, UpdateSourceTrigger=PropertyChanged}"
+                                          Foreground="{DynamicResource ThemeText}" AllowDrop="False">
+                                    <ComboBox.Resources>
+                                        <Style TargetType="TextBox">
+                                            <Setter Property="Background" Value="{DynamicResource ThemeSurface}"/>
+                                            <Setter Property="Foreground" Value="{DynamicResource ThemeText}"/>
+                                            <Setter Property="CaretBrush" Value="{DynamicResource ThemeText}"/>
+                                            <Setter Property="BorderThickness" Value="0"/>
+                                        </Style>
+                                    </ComboBox.Resources>
+                                </ComboBox>
+
+                                <Button Grid.Column="1" Content="ADD" Padding="14,6"
+                                        Command="{Binding DataContext.AddExcludedAppCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                        CommandParameter="{Binding}"/>
+                            </Grid>
+
+                            <!-- List -->
+                            <ListBox Grid.Row="2" ItemsSource="{Binding ExcludedApps}" Background="Transparent" BorderThickness="0"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto">
+                                <ListBox.ItemContainerStyle>
+                                    <Style TargetType="ListBoxItem">
+                                        <Setter Property="Background" Value="Transparent"/>
+                                        <Setter Property="Padding" Value="0"/>
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="ListBoxItem">
+                                                    <Border Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
+                                                        <ContentPresenter/>
+                                                    </Border>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </ListBox.ItemContainerStyle>
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="0,3" Height="28" Background="Transparent">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="{Binding AppName}" VerticalAlignment="Center" Margin="0,0,8,0"
+                                                       FontFamily="{StaticResource MonoFont}" FontSize="12"
+                                                       Foreground="{DynamicResource ThemeText}"/>
+
+                                            <CheckBox Grid.Column="1" Content="ALL SCREENS" IsChecked="{Binding FullDisable}"
+                                                      VerticalAlignment="Center" Margin="0,0,12,0"
+                                                      Foreground="{DynamicResource ThemeTextDim}" FontSize="10"
+                                                      FontFamily="{StaticResource DisplayFont}" FontWeight="Bold"
+                                                      Command="{Binding DataContext.SaveExcludedAppsCommand, RelativeSource={RelativeSource AncestorType=Window}}"/>
+
+                                            <Button Grid.Column="2" Content="&#x2715;" Width="24" Height="24" Padding="0"
+                                                    Style="{StaticResource BrutIconButton}" FontSize="13" VerticalAlignment="Center"
+                                                    Command="{Binding DataContext.RemoveExcludedAppCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}"/>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </Grid>
+                    </Grid>
+                </Border>
+            </DataTemplate>
+        </ResourceDictionary>
     </Window.Resources>
 
-    <Border Background="#1E1E1E" BorderBrush="#3F3F3F" BorderThickness="1" CornerRadius="8">
+    <!-- Outer window frame: black in both themes (visible on light, seamless on dark) -->
+    <Border Background="{DynamicResource ThemeBg}" BorderBrush="{DynamicResource ThemeWindowFrame}" BorderThickness="2">
         <Grid>
             <Grid.RowDefinitions>
-                <RowDefinition Height="40"/>
+                <RowDefinition Height="48"/>
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
             <!-- Custom Title Bar -->
-            <Border Grid.Row="0" Background="#252525" CornerRadius="8,8,0,0" MouseLeftButtonDown="TitleBar_MouseDown">
+            <Border Grid.Row="0" Background="{DynamicResource ThemeSurface}"
+                    BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="0,0,0,3"
+                    MouseLeftButtonDown="TitleBar_MouseDown">
                 <Grid Margin="16,0">
-                    <TextBlock Text="Monitor Dashboard" VerticalAlignment="Center" FontWeight="Medium"/>
-                    <Button Content="✕" HorizontalAlignment="Right" VerticalAlignment="Center"
-                            Background="Transparent" Foreground="#888" BorderThickness="0"
-                            Click="Close_Click"/>
+                    <!-- Brand -->
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <local:BrandMark Width="20" Height="20" Margin="0,0,10,0" VerticalAlignment="Center" GapBrush="{DynamicResource ThemeSurface}"/>
+                        <TextBlock Text="GLOAM" FontFamily="{StaticResource DisplayFont}" FontWeight="ExtraBold"
+                                   FontSize="16" Foreground="{DynamicResource ThemeText}" VerticalAlignment="Center"/>
+                        <Border Width="1" Height="16" Background="{DynamicResource ThemeTextDim}" Opacity="0.5" Margin="12,0"/>
+                        <TextBlock Text="DASHBOARD" FontFamily="{StaticResource DisplayFont}" FontWeight="Bold"
+                                   FontSize="12" Foreground="{DynamicResource ThemeTextDim}" VerticalAlignment="Center"/>
+                    </StackPanel>
+
+                    <!-- Window controls -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                        <Button x:Name="ThemeToggleButton" Content="&#x25D0;" Width="32" Height="32"
+                                Style="{StaticResource BrutIconButton}" FontSize="16"
+                                ToolTip="Toggle light / dark" Click="ThemeToggle_Click"/>
+                        <Button Content="&#x2715;" Width="32" Height="32"
+                                Style="{StaticResource BrutIconButton}" FontSize="14"
+                                Click="Close_Click"/>
+                    </StackPanel>
                 </Grid>
             </Border>
 
             <!-- Content -->
-            <Grid Grid.Row="1" Margin="20">
+            <Grid Grid.Row="1" Margin="24">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
-                
-                <Grid Grid.Row="0" Margin="0,0,0,16">
+
+                <Grid Grid.Row="0" Margin="0,0,0,20">
                     <Grid.ColumnDefinitions>
-                         <ColumnDefinition Width="Auto"/>
                          <ColumnDefinition Width="*"/>
                          <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Text="Active Monitors" FontSize="18" FontWeight="SemiBold"/>
-                        <Button Content="Refresh" Margin="16,0,0,0" Click="Refresh_Click" Padding="8,4" Background="#444"/>
+
+                    <!-- Heading with kicker -->
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="01 / DISPLAYS" Style="{StaticResource Kicker}" Margin="0,0,0,4"/>
+                        <TextBlock Text="ACTIVE MONITORS" FontFamily="{StaticResource DisplayFont}"
+                                   FontWeight="ExtraBold" FontSize="28" Foreground="{DynamicResource ThemeText}"/>
                     </StackPanel>
-                    
-                    <ToggleButton x:Name="NightModeToggle" Grid.Column="2" Content="Night Mode" 
-                                  Width="320" Height="36" Padding="20,0" HorizontalAlignment="Right"
-                                  IsChecked="{Binding IsNightModeEnabled, Mode=OneWay}"
-                                  Click="NightModeToggle_Click" MouseRightButtonUp="NightModeToggle_RightClick">
-                         <ToggleButton.Style>
-                             <Style TargetType="ToggleButton">
-                                 <Setter Property="Template">
-                                     <Setter.Value>
-                                         <ControlTemplate TargetType="ToggleButton">
-                                             <Border x:Name="border" Background="#444" CornerRadius="4">
-                                                 <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                             </Border>
-                                             <ControlTemplate.Triggers>
-                                                 <Trigger Property="IsChecked" Value="True">
-                                                     <Setter TargetName="border" Property="Background" Value="{StaticResource AccentBrush}"/>
-                                                     <Setter Property="Foreground" Value="White"/>
-                                                 </Trigger>
-                                             </ControlTemplate.Triggers>
-                                         </ControlTemplate>
-                                     </Setter.Value>
-                                 </Setter>
-                                 <Setter Property="Foreground" Value="White"/>
-                             </Style>
-                         </ToggleButton.Style>
-                         <ToggleButton.ContextMenu>
-                             <ContextMenu>
-                                 <MenuItem Header="Pause for 1 Hour" Click="Pause1h_Click"/>
-                                 <MenuItem Header="Pause for 4 Hours" Click="Pause4h_Click"/>
-                                 <MenuItem Header="Pause Until Morning" Click="PauseUntilMorning_Click"/>
-                             </ContextMenu>
-                         </ToggleButton.ContextMenu>
-                    </ToggleButton>
+
+                    <!-- Controls -->
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Content="REFRESH" Command="{Binding RefreshCommand}" Margin="0,0,10,0"/>
+
+                        <ToggleButton x:Name="NightModeToggle" Content="NIGHT MODE"
+                                      Height="38" Padding="18,0" VerticalAlignment="Center"
+                                      IsChecked="{Binding IsNightModeEnabled}"
+                                      MouseRightButtonUp="NightModeToggle_RightClick">
+                             <ToggleButton.Style>
+                                 <Style TargetType="ToggleButton">
+                                     <Setter Property="Foreground" Value="{DynamicResource ThemeText}"/>
+                                     <Setter Property="FontFamily" Value="{DynamicResource DisplayFont}"/>
+                                     <Setter Property="FontWeight" Value="Bold"/>
+                                     <Setter Property="FontSize" Value="12"/>
+                                     <Setter Property="Cursor" Value="Hand"/>
+                                     <Setter Property="Template">
+                                         <Setter.Value>
+                                             <ControlTemplate TargetType="ToggleButton">
+                                                 <Border x:Name="border" Background="Transparent"
+                                                         BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="2"
+                                                         Padding="{TemplateBinding Padding}">
+                                                     <ContentPresenter x:Name="cp" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                                       TextElement.Foreground="{DynamicResource ThemeText}"/>
+                                                 </Border>
+                                                 <ControlTemplate.Triggers>
+                                                     <Trigger Property="IsChecked" Value="True">
+                                                         <Setter TargetName="border" Property="Background" Value="{DynamicResource ThemeAccent}"/>
+                                                         <Setter TargetName="border" Property="BorderBrush" Value="{DynamicResource ThemeAccent}"/>
+                                                         <Setter TargetName="cp" Property="TextElement.Foreground" Value="{DynamicResource ThemeOnAccent}"/>
+                                                     </Trigger>
+                                                     <Trigger Property="IsMouseOver" Value="True">
+                                                         <Setter TargetName="border" Property="BorderBrush" Value="{DynamicResource ThemeAccent}"/>
+                                                     </Trigger>
+                                                 </ControlTemplate.Triggers>
+                                             </ControlTemplate>
+                                         </Setter.Value>
+                                     </Setter>
+                                 </Style>
+                             </ToggleButton.Style>
+                             <ToggleButton.ContextMenu>
+                                 <ContextMenu>
+                                     <MenuItem Header="Pause for 1 Hour" Command="{Binding Pause1hCommand}"/>
+                                     <MenuItem Header="Pause for 4 Hours" Command="{Binding Pause4hCommand}"/>
+                                     <MenuItem Header="Pause Until Morning" Command="{Binding PauseUntilMorningCommand}"/>
+                                 </ContextMenu>
+                             </ToggleButton.ContextMenu>
+                        </ToggleButton>
+                    </StackPanel>
                 </Grid>
 
                 <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
                     <StackPanel>
-                        <ItemsControl x:Name="MonitorList">
+                        <ItemsControl ItemsSource="{Binding Items}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
                                     <WrapPanel />
                                 </ItemsPanelTemplate>
                             </ItemsControl.ItemsPanel>
-                            <!-- ItemTemplate is handled by DataTemplates in Resources -->
                         </ItemsControl>
 
                         <!-- Night Mode Schedule -->
-                        <Expander Header="Night Mode Schedule &amp; Settings" Foreground="White" Margin="0,24,0,0" IsExpanded="True">
-                            <StackPanel Margin="12">
-                                <TextBlock Text="Configure automatic night mode schedule." Foreground="#888" Margin="0,0,0,12"/>
-                                <local:NightModeScheduleControl x:Name="ScheduleEditor"/>
-                            </StackPanel>
+                        <Expander Margin="0,24,0,0" IsExpanded="True" Foreground="{DynamicResource ThemeText}">
+                            <Expander.Header>
+                                <TextBlock Text="NIGHT MODE SCHEDULE &amp; SETTINGS"
+                                           FontFamily="{StaticResource DisplayFont}" FontWeight="Bold" FontSize="14"
+                                           Foreground="{DynamicResource ThemeText}"/>
+                            </Expander.Header>
+                            <Border BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="2" Margin="0,10,0,0" Padding="16">
+                                <StackPanel>
+                                    <TextBlock Text="Configure the automatic night mode schedule."
+                                               Foreground="{DynamicResource ThemeTextDim}" FontFamily="{StaticResource BodyFont}"
+                                               Margin="0,0,0,12"/>
+                                    <local:NightModeScheduleControl x:Name="ScheduleEditor"/>
+                                </StackPanel>
+                            </Border>
                         </Expander>
                     </StackPanel>
                 </ScrollViewer>

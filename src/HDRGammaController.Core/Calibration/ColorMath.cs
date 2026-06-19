@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace HDRGammaController.Core.Calibration
 {
@@ -597,6 +598,133 @@ namespace HDRGammaController.Core.Calibration
                 }
             }
             return result;
+        }
+
+        #endregion
+
+        #region Gamut Coverage
+
+        /// <summary>sRGB / Rec.709 red primary in CIE xy.</summary>
+        public static readonly Chromaticity SrgbRedPrimary = new(0.64, 0.33);
+
+        /// <summary>sRGB / Rec.709 green primary in CIE xy.</summary>
+        public static readonly Chromaticity SrgbGreenPrimary = new(0.30, 0.60);
+
+        /// <summary>sRGB / Rec.709 blue primary in CIE xy.</summary>
+        public static readonly Chromaticity SrgbBluePrimary = new(0.15, 0.06);
+
+        /// <summary>
+        /// Fraction of the sRGB gamut triangle (CIE xy) covered by the gamut triangle of the
+        /// given measured primaries: area(measured ∩ sRGB) / area(sRGB). Returns 0..1+ scale
+        /// values in [0, 1] (full coverage = 1.0).
+        /// </summary>
+        public static double GamutCoverage(Chromaticity red, Chromaticity green, Chromaticity blue)
+            => GamutCoverage(red, green, blue, SrgbRedPrimary, SrgbGreenPrimary, SrgbBluePrimary);
+
+        /// <summary>
+        /// Fraction of the reference gamut triangle (CIE xy) covered by the measured gamut
+        /// triangle: area(measured ∩ reference) / area(reference). The intersection is
+        /// computed by Sutherland-Hodgman clipping of the measured triangle against the
+        /// reference triangle. Vertex winding order does not matter. Returns 0 for a
+        /// degenerate (zero-area) reference or measured triangle.
+        /// </summary>
+        public static double GamutCoverage(
+            Chromaticity red, Chromaticity green, Chromaticity blue,
+            Chromaticity refRed, Chromaticity refGreen, Chromaticity refBlue)
+        {
+            var subject = NormalizeWinding(new List<(double X, double Y)>
+            {
+                (red.X, red.Y), (green.X, green.Y), (blue.X, blue.Y)
+            });
+            var clip = NormalizeWinding(new List<(double X, double Y)>
+            {
+                (refRed.X, refRed.Y), (refGreen.X, refGreen.Y), (refBlue.X, refBlue.Y)
+            });
+
+            double refArea = Math.Abs(SignedArea(clip));
+            if (refArea < 1e-12 || Math.Abs(SignedArea(subject)) < 1e-12)
+                return 0;
+
+            var intersection = ClipPolygon(subject, clip);
+            if (intersection.Count < 3)
+                return 0;
+
+            return Math.Clamp(Math.Abs(SignedArea(intersection)) / refArea, 0.0, 1.0);
+        }
+
+        /// <summary>Shoelace signed area (positive for counter-clockwise winding).</summary>
+        private static double SignedArea(IReadOnlyList<(double X, double Y)> polygon)
+        {
+            double area = 0;
+            for (int i = 0; i < polygon.Count; i++)
+            {
+                var a = polygon[i];
+                var b = polygon[(i + 1) % polygon.Count];
+                area += a.X * b.Y - b.X * a.Y;
+            }
+            return area / 2;
+        }
+
+        /// <summary>Returns the polygon in counter-clockwise winding.</summary>
+        private static List<(double X, double Y)> NormalizeWinding(List<(double X, double Y)> polygon)
+        {
+            if (SignedArea(polygon) < 0)
+                polygon.Reverse();
+            return polygon;
+        }
+
+        /// <summary>
+        /// Sutherland-Hodgman: clips the subject polygon against each edge of the convex
+        /// clip polygon. Both polygons must wind counter-clockwise.
+        /// </summary>
+        private static List<(double X, double Y)> ClipPolygon(
+            List<(double X, double Y)> subject, List<(double X, double Y)> clip)
+        {
+            var output = subject;
+            for (int i = 0; i < clip.Count && output.Count > 0; i++)
+            {
+                var edgeA = clip[i];
+                var edgeB = clip[(i + 1) % clip.Count];
+
+                // Inside = on or left of the directed edge (CCW polygon interior).
+                bool Inside((double X, double Y) p) =>
+                    (edgeB.X - edgeA.X) * (p.Y - edgeA.Y) - (edgeB.Y - edgeA.Y) * (p.X - edgeA.X) >= 0;
+
+                // Intersection of segment p→q with the (infinite) edge line.
+                (double X, double Y) Intersect((double X, double Y) p, (double X, double Y) q)
+                {
+                    double a1 = edgeB.Y - edgeA.Y, b1 = edgeA.X - edgeB.X;
+                    double c1 = a1 * edgeA.X + b1 * edgeA.Y;
+                    double a2 = q.Y - p.Y, b2 = p.X - q.X;
+                    double c2 = a2 * p.X + b2 * p.Y;
+                    double det = a1 * b2 - a2 * b1;
+                    if (Math.Abs(det) < 1e-15)
+                        return p; // parallel: degenerate, keep an endpoint
+                    return ((b2 * c1 - b1 * c2) / det, (a1 * c2 - a2 * c1) / det);
+                }
+
+                var input = output;
+                output = new List<(double X, double Y)>(input.Count + 2);
+                for (int j = 0; j < input.Count; j++)
+                {
+                    var current = input[j];
+                    var previous = input[(j + input.Count - 1) % input.Count];
+                    bool currentInside = Inside(current);
+                    bool previousInside = Inside(previous);
+
+                    if (currentInside)
+                    {
+                        if (!previousInside)
+                            output.Add(Intersect(previous, current));
+                        output.Add(current);
+                    }
+                    else if (previousInside)
+                    {
+                        output.Add(Intersect(previous, current));
+                    }
+                }
+            }
+            return output;
         }
 
         #endregion

@@ -2,11 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Windows.Input;
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using HDRGammaController.Core;
 
 namespace HDRGammaController.ViewModels
 {
-    public class MonitorViewModel
+    public class MonitorViewModel : ObservableObject
     {
         private readonly MonitorInfo _model;
         public MonitorInfo Model => _model;
@@ -38,6 +40,10 @@ namespace HDRGammaController.ViewModels
         
         public ObservableCollection<ActionViewModel> SubItems { get; } = new ObservableCollection<ActionViewModel>();
 
+        private ActionViewModel? _gamma22Item;
+        private ActionViewModel? _gamma24Item;
+        private ActionViewModel? _defaultItem;
+
         public MonitorViewModel(MonitorInfo model, ProfileManager profileManager, DispwinRunner dispwinRunner, int index, SettingsManager? settingsManager = null)
         {
             _model = model;
@@ -49,34 +55,51 @@ namespace HDRGammaController.ViewModels
             RebuildSubItems();
         }
         
+        private string GammaLabel(GammaMode mode, string name)
+            => (_model.CurrentGamma == mode ? "✓ " : "   ") + name;
+
         private void RebuildSubItems()
         {
             SubItems.Clear();
-            
+
             if (_model.IsHdrActive)
             {
-                // HDR is active - show gamma options with checkmarks
-                string g22Label = (_model.CurrentGamma == GammaMode.Gamma22 ? "✓ " : "   ") + "Gamma 2.2";
-                string g24Label = (_model.CurrentGamma == GammaMode.Gamma24 ? "✓ " : "   ") + "Gamma 2.4";
-                string defLabel = (_model.CurrentGamma == GammaMode.WindowsDefault ? "✓ " : "   ") + "Windows Default";
-                
-                SubItems.Add(new ActionViewModel(g22Label, new RelayCommand(_ => ApplyGamma(GammaMode.Gamma22))));
-                SubItems.Add(new ActionViewModel(g24Label, new RelayCommand(_ => ApplyGamma(GammaMode.Gamma24))));
-                SubItems.Add(new ActionViewModel(defLabel, new RelayCommand(_ => ApplyGamma(GammaMode.WindowsDefault))));
-                
+                // HDR is active - show gamma options with checkmarks. These stay open
+                // on click so modes can be A/B compared without reopening the menu.
+                _gamma22Item = new ActionViewModel(GammaLabel(GammaMode.Gamma22, "Gamma 2.2"), new RelayCommand(() => ApplyGamma(GammaMode.Gamma22)), staysOpenOnClick: true);
+                _gamma24Item = new ActionViewModel(GammaLabel(GammaMode.Gamma24, "Gamma 2.4"), new RelayCommand(() => ApplyGamma(GammaMode.Gamma24)), staysOpenOnClick: true);
+                _defaultItem = new ActionViewModel(GammaLabel(GammaMode.WindowsDefault, "Windows Default"), new RelayCommand(() => ApplyGamma(GammaMode.WindowsDefault)), staysOpenOnClick: true);
+
+                SubItems.Add(_gamma22Item);
+                SubItems.Add(_gamma24Item);
+                SubItems.Add(_defaultItem);
+
                 // Add settings option
                 SubItems.Add(new ActionViewModel("───────────", null));
-                SubItems.Add(new ActionViewModel("Settings...", new RelayCommand(_ => OpenSettings())));
+                SubItems.Add(new ActionViewModel("Settings...", new RelayCommand(OpenSettings)));
             }
             else
             {
                 // HDR not active - show SDR info and settings
+                _gamma22Item = _gamma24Item = _defaultItem = null;
                 SubItems.Add(new ActionViewModel("(SDR Display)", null));
-                 
+
                 // Add settings option
                 SubItems.Add(new ActionViewModel("───────────", null));
-                SubItems.Add(new ActionViewModel("Settings...", new RelayCommand(_ => OpenSettings())));
+                SubItems.Add(new ActionViewModel("Settings...", new RelayCommand(OpenSettings)));
             }
+        }
+
+        /// <summary>
+        /// Update the checkmark labels in place. Clearing SubItems would tear the
+        /// items out of the still-open menu (gamma items keep it open on click).
+        /// </summary>
+        private void UpdateCheckmarks()
+        {
+            if (_gamma22Item == null || _gamma24Item == null || _defaultItem == null) return;
+            _gamma22Item.Header = GammaLabel(GammaMode.Gamma22, "Gamma 2.2");
+            _gamma24Item.Header = GammaLabel(GammaMode.Gamma24, "Gamma 2.4");
+            _defaultItem.Header = GammaLabel(GammaMode.WindowsDefault, "Windows Default");
         }
         
         private void OpenSettings()
@@ -105,15 +128,15 @@ namespace HDRGammaController.ViewModels
              {
                 // Delegate to parent to ensure Night Mode is respected
                 OnApplyWithCalibration?.Invoke(_model, mode, null, null);
-                
-                // Rebuild sub-items to update checkmarks
-                RebuildSubItems();
+
+                // Update checkmarks in place; the menu is still open
+                UpdateCheckmarks();
              }
              catch (Exception ex)
              {
                  System.Windows.MessageBox.Show(
                      $"Failed to apply gamma:\n\n{ex.Message}",
-                     "HDR Gamma Controller - Error",
+                     "Gloam - Error",
                      System.Windows.MessageBoxButton.OK,
                      System.Windows.MessageBoxImage.Error);
              }

@@ -62,16 +62,21 @@ namespace HDRGammaController.Services
         public static void ExcludeFromPeek(Window window)
         {
             if (window == null) return;
-            void Apply2(IntPtr hwnd)
-            {
-                if (hwnd == IntPtr.Zero) return;
-                int on = 1;
-                DwmSetWindowAttribute(hwnd, DwmwaExcludedFromPeek, ref on, sizeof(int));
-                DwmSetWindowAttribute(hwnd, DwmwaDisallowPeek, ref on, sizeof(int));
-            }
             var h = new WindowInteropHelper(window).Handle;
-            if (h != IntPtr.Zero) Apply2(h);
-            else window.SourceInitialized += (_, _) => Apply2(new WindowInteropHelper(window).Handle);
+            if (h != IntPtr.Zero) ExcludeFromPeek(h);
+            else window.SourceInitialized += (_, _) => ExcludeFromPeek(new WindowInteropHelper(window).Handle);
+        }
+
+        /// <summary>
+        /// Raw-HWND variant for native (non-WPF) windows such as the FP16 HDR patch
+        /// renderer's swapchain window. The handle must already exist.
+        /// </summary>
+        public static void ExcludeFromPeek(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero) return;
+            int on = 1;
+            DwmSetWindowAttribute(hwnd, DwmwaExcludedFromPeek, ref on, sizeof(int));
+            DwmSetWindowAttribute(hwnd, DwmwaDisallowPeek, ref on, sizeof(int));
         }
     }
 }

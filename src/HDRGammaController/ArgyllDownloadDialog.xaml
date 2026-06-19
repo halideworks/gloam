@@ -1,63 +1,45 @@
 <Window x:Class="HDRGammaController.ArgyllDownloadDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:HDRGammaController"
         Title="ArgyllCMS Download"
         Height="280" Width="450"
         WindowStartupLocation="CenterOwner"
-        Background="#1E1E1E"
-        Foreground="White"
+        Background="Transparent"
+        Foreground="{DynamicResource ThemeText}"
+        FontFamily="{DynamicResource BodyFont}"
         WindowStyle="None"
         AllowsTransparency="True"
         ResizeMode="NoResize"
         ShowInTaskbar="False">
 
     <Window.Resources>
-        <SolidColorBrush x:Key="AccentBrush" Color="#0078D4"/>
-        <SolidColorBrush x:Key="CardBackground" Color="#2D2D2D"/>
-        <SolidColorBrush x:Key="CardBorder" Color="#3F3F3F"/>
-        <SolidColorBrush x:Key="TextDim" Color="#888888"/>
-        <SolidColorBrush x:Key="SuccessBrush" Color="#22C55E"/>
-        <SolidColorBrush x:Key="ErrorBrush" Color="#EF4444"/>
-
-        <Style TargetType="Button">
-            <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="Padding" Value="16,8"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="border" Background="{TemplateBinding Background}"
-                                CornerRadius="4" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="border" Property="Opacity" Value="0.85"/>
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="border" Property="Opacity" Value="0.5"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="pack://application:,,,/Gloam;component/Themes/Brutalist.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+            <SolidColorBrush x:Key="SuccessBrush" Color="#22C55E"/>
+            <SolidColorBrush x:Key="ErrorBrush" Color="#EF4444"/>
+        </ResourceDictionary>
     </Window.Resources>
 
-    <Border Background="#1E1E1E" BorderBrush="#3F3F3F" BorderThickness="1" CornerRadius="8">
+    <Border Background="{DynamicResource ThemeBg}" BorderBrush="{DynamicResource ThemeWindowFrame}" BorderThickness="2">
         <Grid>
             <Grid.RowDefinitions>
-                <RowDefinition Height="40"/>
+                <RowDefinition Height="42"/>
                 <RowDefinition Height="*"/>
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
             <!-- Title Bar -->
-            <Border Grid.Row="0" Background="#252525" CornerRadius="8,8,0,0" MouseLeftButtonDown="TitleBar_MouseDown">
+            <Border Grid.Row="0" Background="{DynamicResource ThemeSurface}"
+                    BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="0,0,0,3"
+                    MouseLeftButtonDown="TitleBar_MouseDown">
                 <Grid Margin="16,0">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Text="Download ArgyllCMS" FontWeight="Medium" FontSize="14"/>
+                        <local:BrandMark Width="20" Height="20" Margin="0,0,10,0" VerticalAlignment="Center" GapBrush="{DynamicResource ThemeSurface}"/>
+                        <TextBlock Text="DOWNLOAD ARGYLLCMS" FontFamily="{DynamicResource DisplayFont}"
+                                   FontWeight="Bold" FontSize="13" Foreground="{DynamicResource ThemeText}"/>
                     </StackPanel>
                 </Grid>
             </Border>
@@ -67,37 +49,39 @@
                 <!-- Confirmation View -->
                 <StackPanel x:Name="ConfirmationPanel" Visibility="Visible">
                     <TextBlock x:Name="ReasonText" Text="" TextWrapping="Wrap" Margin="0,0,0,16" LineHeight="20"/>
-                    <TextBlock Text="Would you like to download ArgyllCMS automatically?" FontWeight="Medium" Margin="0,0,0,8"/>
-                    <TextBlock Foreground="{StaticResource TextDim}" FontSize="12" TextWrapping="Wrap">
+                    <TextBlock Text="Would you like to download ArgyllCMS automatically?" FontWeight="Bold" Margin="0,0,0,8"/>
+                    <TextBlock Foreground="{DynamicResource ThemeTextDim}" FontSize="12" TextWrapping="Wrap">
                         This will download approximately 15MB from argyllcms.com and install to your local AppData folder.
                     </TextBlock>
                 </StackPanel>
 
                 <!-- Progress View -->
                 <StackPanel x:Name="ProgressPanel" Visibility="Collapsed" VerticalAlignment="Center">
-                    <TextBlock x:Name="ProgressStatusText" Text="Downloading..." FontWeight="Medium" Margin="0,0,0,12"/>
+                    <TextBlock x:Name="ProgressStatusText" Text="Downloading..." FontWeight="Bold" Margin="0,0,0,12"/>
                     <Grid Margin="0,0,0,8">
-                        <Border Background="#3D3D3D" CornerRadius="3" Height="6"/>
-                        <Border x:Name="ProgressBar" Background="{StaticResource AccentBrush}"
-                                CornerRadius="3" Height="6" HorizontalAlignment="Left" Width="0"/>
+                        <Border Background="{DynamicResource ThemeTrack}" Height="6"/>
+                        <Border x:Name="ProgressBar" Background="{DynamicResource ThemeAccent}"
+                                Height="6" HorizontalAlignment="Left" Width="0"/>
                     </Grid>
-                    <TextBlock x:Name="ProgressDetailText" Text="" Foreground="{StaticResource TextDim}" FontSize="12"/>
+                    <TextBlock x:Name="ProgressDetailText" Text="" Foreground="{DynamicResource ThemeTextDim}" FontSize="12"/>
                 </StackPanel>
 
                 <!-- Result View -->
                 <StackPanel x:Name="ResultPanel" Visibility="Collapsed" VerticalAlignment="Center" HorizontalAlignment="Center">
-                    <TextBlock x:Name="ResultIcon" Text="✓" FontSize="48" HorizontalAlignment="Center"
+                    <TextBlock x:Name="ResultIcon" Text="OK" FontSize="32" FontWeight="Bold"
+                               FontFamily="{DynamicResource DisplayFont}" HorizontalAlignment="Center"
                                Foreground="{StaticResource SuccessBrush}" Margin="0,0,0,12"/>
-                    <TextBlock x:Name="ResultText" Text="Download complete!" FontWeight="Medium" FontSize="16"
+                    <TextBlock x:Name="ResultText" Text="Download complete!" FontWeight="Bold" FontSize="16"
                                HorizontalAlignment="Center"/>
-                    <TextBlock x:Name="ResultDetailText" Text="" Foreground="{StaticResource TextDim}"
+                    <TextBlock x:Name="ResultDetailText" Text="" Foreground="{DynamicResource ThemeTextDim}"
                                FontSize="12" HorizontalAlignment="Center" Margin="0,8,0,0" TextWrapping="Wrap"
                                TextAlignment="Center"/>
                 </StackPanel>
             </Grid>
 
             <!-- Footer Buttons -->
-            <Border Grid.Row="2" Background="#252525" CornerRadius="0,0,8,8" Padding="24,12">
+            <Border Grid.Row="2" Background="{DynamicResource ThemeSurface}"
+                    BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="0,3,0,0" Padding="24,12">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
@@ -107,13 +91,13 @@
 
                     <!-- Confirmation buttons -->
                     <StackPanel x:Name="ConfirmationButtons" Grid.Column="1" Orientation="Horizontal" Grid.ColumnSpan="2">
-                        <Button Content="No, Thanks" Background="#444" Click="Cancel_Click" Margin="0,0,12,0"/>
-                        <Button x:Name="YesButton" Content="Yes, Download" Click="Yes_Click"/>
+                        <Button Content="No, Thanks" Click="Cancel_Click" Margin="0,0,12,0"/>
+                        <Button x:Name="YesButton" Content="Yes, Download" Style="{StaticResource BrutBtnPrimary}" Click="Yes_Click"/>
                     </StackPanel>
 
                     <!-- Progress cancel button -->
                     <Button x:Name="CancelDownloadButton" Grid.Column="2" Content="Cancel"
-                            Background="#444" Click="CancelDownload_Click" Visibility="Collapsed"/>
+                            Click="CancelDownload_Click" Visibility="Collapsed"/>
 
                     <!-- Result close button -->
                     <Button x:Name="CloseButton" Grid.Column="2" Content="Close"

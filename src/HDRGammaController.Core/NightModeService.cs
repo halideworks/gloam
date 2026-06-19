@@ -13,38 +13,38 @@ namespace HDRGammaController.Core
         /// Whether night mode is enabled.
         /// </summary>
         public bool Enabled { get; set; } = false;
-        
+
         /// <summary>
         /// Use automatic sunrise/sunset calculation based on location.
         /// </summary>
         public bool UseAutoSchedule { get; set; } = false;
-        
+
         /// <summary>
         /// Latitude for sunrise/sunset calculation (-90 to 90).
         /// </summary>
         public double? Latitude { get; set; } = null;
-        
+
         /// <summary>
         /// Longitude for sunrise/sunset calculation (-180 to 180).
         /// </summary>
         public double? Longitude { get; set; } = null;
-        
+
         /// <summary>
         /// Start time for night mode (e.g., "21:00"). Used when UseAutoSchedule is false.
         /// </summary>
         public TimeSpan StartTime { get; set; } = new TimeSpan(21, 0, 0);
-        
+
         /// <summary>
         /// End time for night mode (e.g., "07:00"). Used when UseAutoSchedule is false.
         /// </summary>
         public TimeSpan EndTime { get; set; } = new TimeSpan(7, 0, 0);
-        
+
         /// <summary>
         /// Color temperature in Kelvin during night mode (1900-6500K, lower = warmer).
         /// Default 2700K matches warm incandescent lighting.
         /// </summary>
         public int TemperatureKelvin { get; set; } = 2700;
-        
+
         /// <summary>
         /// Algorithm to use for color temperature transformation.
         /// </summary>
@@ -55,7 +55,7 @@ namespace HDRGammaController.Core
         /// When disabled, uses physically accurate color temperatures (subtle at very warm temps).
         /// </summary>
         public bool UseUltraWarmMode { get; set; } = false;
-        
+
         /// <summary>
         /// Legacy temperature as -50 to +50 scale. Converts to Kelvin internally.
         /// </summary>
@@ -64,12 +64,12 @@ namespace HDRGammaController.Core
             get => (TemperatureKelvin - 6500) / 70.0;
             set => TemperatureKelvin = (int)(6500 + value * 70);
         }
-        
+
         /// <summary>
         /// Fade duration in minutes (0 = instant, 60 = gradual).
         /// </summary>
         public int FadeMinutes { get; set; } = 30;
-        
+
         public List<NightModeSchedulePoint> Schedule { get; set; } = new List<NightModeSchedulePoint>();
 
         public void EnsureSchedule(double? lat, double? lon)
@@ -102,7 +102,7 @@ namespace HDRGammaController.Core
             Schedule.Add(sunrisePoint);
             Schedule.Add(sunsetPoint);
         }
-        
+
         /// <summary>
         /// Gets effective start/end times, using sunrise/sunset if auto mode enabled.
         /// Falls back to the manual StartTime/EndTime if we're in polar day/night, where
@@ -124,7 +124,7 @@ namespace HDRGammaController.Core
             return (StartTime, EndTime);
         }
     }
-    
+
     /// <summary>
     /// Service that manages automatic night mode scheduling with fade transitions.
     /// </summary>
@@ -133,7 +133,15 @@ namespace HDRGammaController.Core
         private System.Timers.Timer _timer;
         private NightModeSettings _settings;
         private DateTime? _pauseUntil = null;
-        
+
+        // Guards all mutable state below (settings reference + its cloned schedule,
+        // pause window, fade bookkeeping, current kelvin, timer start/stop). The timer
+        // Elapsed handler runs on a pool thread while the UI thread mutates settings, so
+        // every read/write path takes this lock. BlendChanged is always raised OUTSIDE
+        // the lock to avoid handler reentrancy/deadlock.
+        private readonly object _stateLock = new();
+        private bool _disposed;
+
         /// <summary>
         /// Fired exactly once per effective state change (kelvin moved or settings changed).
         /// Subscribers re-apply gamma and refresh UI. Value is 1.0 while night mode is in
@@ -142,126 +150,180 @@ namespace HDRGammaController.Core
         /// </summary>
         public event Action<double>? BlendChanged;
 
-        public int CurrentNightKelvin => _currentNightKelvin;
-        public bool IsNightModeActive => _currentNightKelvin < 6450;
-        
+        public int CurrentNightKelvin
+        {
+            get { lock (_stateLock) { return _currentNightKelvin; } }
+        }
+
+        public bool IsNightModeActive
+        {
+            get { lock (_stateLock) { return _currentNightKelvin < 6450; } }
+        }
+
         private int _currentNightKelvin = 6500;
-        
+
         public NightModeService(NightModeSettings settings)
         {
-            _settings = settings;
-            
+            _settings = CloneSettings(settings);
+
             // One-shot timer, we restart it manually with dynamic intervals
-            _timer = new System.Timers.Timer(1000); 
+            _timer = new System.Timers.Timer(1000);
             _timer.AutoReset = false;
             _timer.Elapsed += OnTimerElapsed;
         }
 
         public void PauseUntil(DateTime until)
         {
-            _pauseUntil = until;
-            UpdateState(); // Immediate apply
+            double? blend;
+            lock (_stateLock)
+            {
+                _pauseUntil = until;
+                blend = UpdateStateLocked(); // Immediate apply
+            }
+            if (blend.HasValue) BlendChanged?.Invoke(blend.Value);
         }
-        
+
         public void UpdateSettings(NightModeSettings newSettings)
         {
-            // If specific settings changed (like toggle/times), force immediate re-eval
-            bool wasEnabled = _settings.Enabled;
-            _settings = newSettings;
+            // Values captured under the lock; events are raised after release.
+            double? blend = null;
+            bool forceReapply = false;
 
-            if (_settings.Enabled && !wasEnabled)
+            lock (_stateLock)
             {
-                Start();
-            }
-            else
-            {
-                // Force an update to catch new times/durations immediately
-                bool notified = UpdateState();
-                ScheduleNextTick();
+                // If specific settings changed (like toggle/times), force immediate re-eval
+                bool wasEnabled = _settings.Enabled;
 
-                // Re-apply even when the kelvin didn't move — other settings that affect
-                // the output may have changed (e.g. UseUltraWarmMode, Algorithm).
-                if (_settings.Enabled && !notified)
+                // Store a defensive deep copy so the schedule editor cannot mutate the
+                // List the timer enumerates out from under us ('Collection was modified').
+                _settings = CloneSettings(newSettings);
+
+                if (_settings.Enabled && !wasEnabled)
                 {
-                    BlendChanged?.Invoke(1.0);
+                    blend = StartLocked();
+                }
+                else
+                {
+                    // Force an update to catch new times/durations immediately
+                    blend = UpdateStateLocked();
+                    ScheduleNextTickLocked();
+
+                    // Re-apply even when the kelvin didn't move — other settings that affect
+                    // the output may have changed (e.g. UseUltraWarmMode, Algorithm).
+                    if (_settings.Enabled && !blend.HasValue)
+                    {
+                        forceReapply = true;
+                    }
                 }
             }
+
+            if (blend.HasValue) BlendChanged?.Invoke(blend.Value);
+            else if (forceReapply) BlendChanged?.Invoke(1.0);
         }
-        
+
         public void Start()
         {
-            if (!_settings.Enabled) return;
-            UpdateState();
-            ScheduleNextTick();
+            double? blend;
+            lock (_stateLock)
+            {
+                blend = StartLocked();
+            }
+            if (blend.HasValue) BlendChanged?.Invoke(blend.Value);
         }
-        
+
+        /// <summary>Caller must hold <see cref="_stateLock"/>. Returns the blend value to fire, or null.</summary>
+        private double? StartLocked()
+        {
+            if (!_settings.Enabled) return null;
+            double? blend = UpdateStateLocked();
+            ScheduleNextTickLocked();
+            return blend;
+        }
+
         public void Stop()
         {
-            _timer.Stop();
+            lock (_stateLock)
+            {
+                _timer.Stop();
+            }
         }
 
         private void OnTimerElapsed(object? sender, ElapsedEventArgs e)
         {
-            UpdateState();
-            ScheduleNextTick();
+            double? blend;
+            lock (_stateLock)
+            {
+                if (_disposed) return;
+                blend = UpdateStateLocked();
+                ScheduleNextTickLocked();
+            }
+            if (blend.HasValue) BlendChanged?.Invoke(blend.Value);
         }
 
-        // Tick fast only while a fade is actually interpolating; when idle, sleep until
-        // the next schedule trigger (capped at 60s so system clock changes can't strand
-        // us). The old constant 4s tick was ~21,600 wakeups/day of pure idle work.
-        private const double FadeTickMs = 4000;
+        // Tick adaptively while a fade is interpolating and sleep while idle. The cadence
+        // targets at most 1 K per update, so short and long transitions are both smooth.
+        private const double MinFadeTickMs = 1000.0 / 60.0;
+        private const double MaxFadeTickMs = 500;
         private const double IdleTickMs = 60000;
         private bool _inFadeWindow;
+        private double _fadeTickMs = MaxFadeTickMs;
         private double _msToNextTrigger = double.MaxValue;
 
-        private void ScheduleNextTick()
+        /// <summary>Caller must hold <see cref="_stateLock"/>.</summary>
+        private void ScheduleNextTickLocked()
         {
+            if (_disposed) return;
             if (!_settings.Enabled) return;
 
             _timer.Interval = _inFadeWindow
-                ? FadeTickMs
-                : Math.Clamp(_msToNextTrigger, FadeTickMs, IdleTickMs);
+                ? _fadeTickMs
+                : Math.Clamp(_msToNextTrigger, MaxFadeTickMs, IdleTickMs);
             _timer.Start();
         }
-        
-        /// <returns>True if BlendChanged was fired.</returns>
-        private bool UpdateState()
+
+        /// <summary>
+        /// Caller must hold <see cref="_stateLock"/>.
+        /// </summary>
+        /// <returns>The blend value to fire via BlendChanged after releasing the lock, or null if no change.</returns>
+        private double? UpdateStateLocked()
         {
             if (!_settings.Enabled)
             {
-                return ForceDayMode();
+                return ForceDayModeLocked();
             }
 
             if (_pauseUntil.HasValue)
             {
                 if (DateTime.Now < _pauseUntil.Value)
                 {
-                    return ForceDayMode();
+                    return ForceDayModeLocked();
                 }
                 _pauseUntil = null; // Expired
             }
 
             _settings.EnsureSchedule(_settings.Latitude, _settings.Longitude);
 
-            int targetKelvin = CalculateCurrentKelvin();
+            int targetKelvin = CalculateCurrentKelvinLocked();
 
-            // Only update if changed significantly
-            if (Math.Abs(targetKelvin - _currentNightKelvin) > 5)
+            // Kelvin is integral, so equality is the only useful dedupe here. A larger
+            // threshold turns a gradual fade into periodic visible steps.
+            if (targetKelvin != _currentNightKelvin)
             {
                 _currentNightKelvin = targetKelvin;
-                BlendChanged?.Invoke(1.0);
-                return true;
+                return 1.0;
             }
-            return false;
+            return null;
         }
-        
-        private int CalculateCurrentKelvin()
+
+        /// <summary>Caller must hold <see cref="_stateLock"/>.</summary>
+        private int CalculateCurrentKelvinLocked()
         {
             var now = DateTime.Now;
             var timeOfDay = now.TimeOfDay;
 
             // Recomputed below; default to "no fade, nothing scheduled".
             _inFadeWindow = false;
+            _fadeTickMs = MaxFadeTickMs;
             _msToNextTrigger = double.MaxValue;
 
             // 1. Resolve all points to absolute TimeSpans for today
@@ -275,7 +337,7 @@ namespace HDRGammaController.Core
                 resolvedPoints.Add((p.GetTimeOfDay(_settings.Latitude, _settings.Longitude), p));
             }
             resolvedPoints.Sort((a, b) => a.Time.CompareTo(b.Time));
-            
+
             // 2. Find the last point that occurred (Time <= Now)
             int currentIndex = -1;
             for (int i = 0; i < resolvedPoints.Count; i++)
@@ -285,31 +347,31 @@ namespace HDRGammaController.Core
                     currentIndex = i;
                 }
             }
-            
+
             // 3. Identify Current Point and Previous Point
             // If current is -1, we are in the early morning before the first point of the day.
             // Our "current state" is determined by the LAST point of Yesterday.
-            
+
             (TimeSpan Time, NightModeSchedulePoint Point) currentContext;
             (TimeSpan Time, NightModeSchedulePoint Point) previousContext;
-            
+
             if (currentIndex == -1)
             {
                 // Current context is the last point of the list (acting as yesterday's end)
                 // Its trigger time was yesterday.
                 var last = resolvedPoints[resolvedPoints.Count - 1];
                 currentContext = (last.Time - TimeSpan.FromHours(24), last.Point);
-                
+
                 // Prev would be the one before that
                 var prev = resolvedPoints.Count > 1 ? resolvedPoints[resolvedPoints.Count - 2] : last;
-                if (resolvedPoints.Count > 1) 
+                if (resolvedPoints.Count > 1)
                      previousContext = (prev.Time - TimeSpan.FromHours(24), prev.Point);
                 else previousContext = (prev.Time - TimeSpan.FromHours(48), prev.Point); // Edge case 1 point
             }
             else
             {
                 currentContext = resolvedPoints[currentIndex];
-                
+
                 // Previous is index - 1. If index is 0, it's the last point of Yesterday.
                 if (currentIndex > 0)
                 {
@@ -321,7 +383,7 @@ namespace HDRGammaController.Core
                     previousContext = (last.Time - TimeSpan.FromHours(24), last.Point);
                 }
             }
-            
+
             // 4. Calculate interpolation. A point defines the transition TO its own target:
             // at currentContext.Time we start fading from the previous point's target to
             // currentContext's target over currentContext's FadeMinutes.
@@ -345,6 +407,7 @@ namespace HDRGammaController.Core
             if (timeSinceTrigger.TotalMinutes < fadeMinutes && fadeMinutes > 0)
             {
                 _inFadeWindow = true;
+                _fadeTickMs = CalculateFadeTickMilliseconds(startKelvin, endKelvin, fadeMinutes);
                 double progress = timeSinceTrigger.TotalMinutes / fadeMinutes;
                 progress = Math.Clamp(progress, 0.0, 1.0);
 
@@ -355,24 +418,78 @@ namespace HDRGammaController.Core
             return endKelvin;
         }
 
-        /// <returns>True if BlendChanged was fired.</returns>
-        private bool ForceDayMode()
+        internal static double CalculateFadeTickMilliseconds(int startKelvin, int endKelvin, double fadeMinutes)
+        {
+            int distance = Math.Abs(endKelvin - startKelvin);
+            if (distance == 0 || fadeMinutes <= 0) return MaxFadeTickMs;
+
+            double millisecondsPerKelvin = fadeMinutes * 60_000.0 / distance;
+            return Math.Clamp(millisecondsPerKelvin, MinFadeTickMs, MaxFadeTickMs);
+        }
+
+        /// <summary>
+        /// Caller must hold <see cref="_stateLock"/>.
+        /// </summary>
+        /// <returns>The blend value to fire via BlendChanged after releasing the lock, or null if no change.</returns>
+        private double? ForceDayModeLocked()
         {
             _inFadeWindow = false;
             if (_currentNightKelvin != 6500)
             {
                 _currentNightKelvin = 6500;
-                BlendChanged?.Invoke(0); // 0 = day
-                return true;
+                return 0; // 0 = day
             }
-            return false;
+            return null;
+        }
+
+        /// <summary>
+        /// Defensive deep copy of settings and its schedule so the caller (the editor) cannot
+        /// mutate the List/entries the timer enumerates after handing them to us.
+        /// </summary>
+        private static NightModeSettings CloneSettings(NightModeSettings source)
+        {
+            var clone = new NightModeSettings
+            {
+                Enabled = source.Enabled,
+                UseAutoSchedule = source.UseAutoSchedule,
+                Latitude = source.Latitude,
+                Longitude = source.Longitude,
+                StartTime = source.StartTime,
+                EndTime = source.EndTime,
+                TemperatureKelvin = source.TemperatureKelvin,
+                Algorithm = source.Algorithm,
+                UseUltraWarmMode = source.UseUltraWarmMode,
+                FadeMinutes = source.FadeMinutes,
+                Schedule = new List<NightModeSchedulePoint>()
+            };
+
+            if (source.Schedule != null)
+            {
+                foreach (var p in source.Schedule)
+                {
+                    clone.Schedule.Add(new NightModeSchedulePoint
+                    {
+                        TriggerType = p.TriggerType,
+                        Time = p.Time,
+                        OffsetMinutes = p.OffsetMinutes,
+                        TargetKelvin = p.TargetKelvin,
+                        FadeMinutes = p.FadeMinutes
+                    });
+                }
+            }
+
+            return clone;
         }
 
 
         public void Dispose()
         {
-            _timer.Stop();
-            _timer.Dispose();
+            lock (_stateLock)
+            {
+                _disposed = true;
+                _timer.Stop();
+                _timer.Dispose();
+            }
         }
     }
 }

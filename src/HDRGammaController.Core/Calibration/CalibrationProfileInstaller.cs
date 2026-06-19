@@ -88,12 +88,14 @@ namespace HDRGammaController.Core.Calibration
             // display drive value well above full-scale → clipping and a heavy cast (the magenta
             // we hit). NARROWING a slightly-wide panel to sRGB/Rec.709 is perfectly reachable
             // (drive values stay <= 1) and must NOT be blocked — that wrongly rejected a good
-            // Gamma-2.4 calibration. (The matrix is white-preserving now, so white-point
-            // correction no longer contributes any overshoot here.)
-            double maxDrive = MaxTargetDrive(matrix);
-            if (maxDrive > 1.3) // keep in sync with the setup-time EDID filter
+            // Gamma-2.4 calibration. Gauge REACH on the PRIMARIES ONLY: the matrix is ABSOLUTE,
+            // so white (1,1,1) drives above 1.0 whenever the panel white differs from the target
+            // white — that is a luminance shift UniformScale absorbs, not unreachable gamut, and
+            // must not trip this reject.
+            double maxPrimaryDrive = MaxPrimaryDrive(matrix);
+            if (maxPrimaryDrive > 1.3) // keep in sync with the setup-time EDID filter
                 return new InstallResult(false, "",
-                    $"The chosen target ('{target.Name}') needs primaries about {maxDrive:P0} of this " +
+                    $"The chosen target ('{target.Name}') needs primaries about {maxPrimaryDrive:P0} of this " +
                     "display's maximum - i.e. a wider gamut than the panel can physically produce, so the " +
                     "correction would clip and cast color.\n\nCalibrate to a target the panel can reach - " +
                     "for an SDR display that's usually \"sRGB (Gamma 2.2)\" or Rec.709. Re-run with that selected.");
@@ -101,7 +103,10 @@ namespace HDRGammaController.Core.Calibration
             // White-point handling: the matrix is ABSOLUTE (maps content white to the target
             // white), so on a panel whose white differs some channel needs >1.0 drive for
             // white. Dim ALL channels uniformly to fit — chromaticities (including the
-            // primaries) stay exact; per-channel compensation here would re-tint them.
+            // primaries) stay exact; per-channel compensation here would re-tint them. The
+            // scale uses the FULL drive (primaries AND white) so the white overshoot the guard
+            // ignored is still absorbed here.
+            double maxDrive = MaxTargetDrive(matrix);
             double uniformScale = Mhc2ProfileBuilder.UniformScale(maxDrive);
             double[,] scaledMatrix = Mhc2ProfileBuilder.ScaleMatrix(matrix, uniformScale);
 
@@ -138,7 +143,7 @@ namespace HDRGammaController.Core.Calibration
                 $"B({c.BluePrimary.X:F4},{c.BluePrimary.Y:F4}) W({c.WhitePoint.X:F4},{c.WhitePoint.Y:F4}) " +
                 $"peak {c.PeakLuminance:F1} cd/m², gamma {c.MeasuredGamma:F2}\n" +
                 $"  gamut matrix (RGB→RGB, absolute): {FormatMatrix(matrix)}\n" +
-                $"  uniform scale {uniformScale:F4} (max target drive {maxDrive:F3})\n" +
+                $"  uniform scale {uniformScale:F4} (max target drive {maxDrive:F3}, max primary drive {maxPrimaryDrive:F3})\n" +
                 $"  MHC2 tag matrix (XYZ-domain wrapped): {FormatMatrix(mhc2Matrix)}\n" +
                 $"  mode {(hdrMode ? "HDR (PQ-domain LUTs)" : "SDR")}{(target.WhitePointOnly ? ", WHITE-POINT-ONLY matrix" : "")}" +
                 (hdrMode ? $", header range {headerMinNits:F3}–{headerMaxNits:F0} nits, SDR white {monitor.SdrWhiteLevel:F0} nits" +
@@ -308,7 +313,11 @@ namespace HDRGammaController.Core.Calibration
                     $@"Software\Microsoft\Windows NT\CurrentVersion\ICM\ProfileAssociations\Display\{{4d36e96e-e325-11ce-bfc1-08002be10318}}\{suffix}");
                 if (key == null) return;
 
-                string prefix = monitor.FriendlyName.Trim() + " - ";
+                // Derive the prefix from the SAME Sanitize() form BuildProfileName writes on
+                // disk — an invalid char or a >40-char name makes the stored name diverge from
+                // the raw FriendlyName, and a prefix off the raw name would match nothing, so
+                // cleanup would silently leave a stale association behind.
+                string prefix = Sanitize(monitor.FriendlyName) + " - ";
                 var names = new List<string>();
                 foreach (var valueName in new[] { "ICMProfile", "ICMProfileAC" })
                 {
@@ -347,12 +356,7 @@ namespace HDRGammaController.Core.Calibration
             }
         }
 
-        /// <summary>
-        /// Largest display drive value the matrix demands for the target's primaries and white
-        /// (content R/G/B = (1,0,0),(0,1,0),(0,0,1),(1,1,1)). &lt;= ~1 means every target color is
-        /// reachable (including narrowing a wider panel); well above 1 means the target asks for
-        /// primaries the display can't emit → it would clip and cast.
-        /// </summary>
+        /// <summary>Compact one-line "[r0; r1; r2]" rendering of a 3x3 matrix for the log.</summary>
         private static string FormatMatrix(double[,] m) =>
             $"[{m[0, 0]:F5} {m[0, 1]:F5} {m[0, 2]:F5}; " +
             $"{m[1, 0]:F5} {m[1, 1]:F5} {m[1, 2]:F5}; " +
@@ -363,6 +367,23 @@ namespace HDRGammaController.Core.Calibration
             double max = 0;
             (double, double, double)[] contents = { (1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 1) };
             foreach (var (a, b, c) in contents)
+                for (int r = 0; r < 3; r++)
+                    max = Math.Max(max, m[r, 0] * a + m[r, 1] * b + m[r, 2] * c);
+            return max;
+        }
+
+        /// <summary>
+        /// Largest display drive value the matrix demands for the target's PRIMARIES ONLY
+        /// (content R/G/B = (1,0,0),(0,1,0),(0,0,1) — white (1,1,1) is excluded). This is the
+        /// gamut-REACH metric: &gt; ~1.3 means a target primary asks for more than the panel can
+        /// emit (genuinely wider gamut → clip and cast). White overshoot is deliberately left
+        /// out here because it is a luminance shift UniformScale absorbs, not unreachable gamut.
+        /// </summary>
+        private static double MaxPrimaryDrive(double[,] m)
+        {
+            double max = 0;
+            (double, double, double)[] primaries = { (1, 0, 0), (0, 1, 0), (0, 0, 1) };
+            foreach (var (a, b, c) in primaries)
                 for (int r = 0; r < 3; r++)
                     max = Math.Max(max, m[r, 0] * a + m[r, 1] * b + m[r, 2] * c);
             return max;
@@ -390,10 +411,8 @@ namespace HDRGammaController.Core.Calibration
                 yield return dir.FullName;
 
             // ResourceExtractor's fallback when the app dir is read-only (unelevated under
-            // Program Files): %LocalAppData%\HDRGammaController.
-            yield return Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "HDRGammaController");
+            // Program Files): %LocalAppData%\Gloam.
+            yield return AppPaths.DataDir;
         }
 
         /// <summary>

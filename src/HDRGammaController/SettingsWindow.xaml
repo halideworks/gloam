@@ -3,673 +3,441 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:HDRGammaController"
         xmlns:behaviors="clr-namespace:HDRGammaController.Behaviors"
-        Title="HDR Gamma Controller - Settings"
-        Width="520" Height="750"
+        Title="Gloam - Settings"
+        Width="540" Height="760"
         MinWidth="500" MinHeight="600"
         WindowStartupLocation="CenterScreen"
-        Background="#1E1E1E"
-        Foreground="White"
+        Background="Transparent"
+        Foreground="{DynamicResource ThemeText}"
         WindowStyle="None"
         AllowsTransparency="True"
         ResizeMode="CanResizeWithGrip">
-    
+
     <Window.Resources>
-        <!-- Accent Colors -->
-        <SolidColorBrush x:Key="AccentBrush" Color="#0078D4"/>
-        <SolidColorBrush x:Key="AccentHoverBrush" Color="#1E90FF"/>
-        <SolidColorBrush x:Key="CardBackground" Color="#2D2D2D"/>
-        <SolidColorBrush x:Key="CardBorder" Color="#3F3F3F"/>
-        <SolidColorBrush x:Key="TextDim" Color="#888888"/>
-        <SolidColorBrush x:Key="InputBackground" Color="#3D3D3D"/>
-        <SolidColorBrush x:Key="DropdownBackground" Color="#2D2D2D"/>
-        
-        <!-- Dark ComboBox Toggle Button Template -->
-        <ControlTemplate x:Key="ComboBoxToggleButton" TargetType="ToggleButton">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition/>
-                    <ColumnDefinition Width="20"/>
-                </Grid.ColumnDefinitions>
-                <Border x:Name="Border" Grid.ColumnSpan="2" 
-                        Background="{StaticResource InputBackground}" 
-                        BorderBrush="{StaticResource CardBorder}" 
-                        BorderThickness="1" CornerRadius="4"/>
-                <Path x:Name="Arrow" Grid.Column="1" 
-                      Data="M 0 0 L 4 4 L 8 0 Z" 
-                      Fill="White" 
-                      HorizontalAlignment="Center" 
-                      VerticalAlignment="Center"/>
-            </Grid>
-        </ControlTemplate>
-        
-        <!-- Dark ComboBox Template -->
-        <Style TargetType="ComboBox">
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="Background" Value="{StaticResource InputBackground}"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="ComboBox">
-                        <Grid>
-                            <ToggleButton x:Name="ToggleButton" 
-                                          Template="{StaticResource ComboBoxToggleButton}" 
-                                          Focusable="False" 
-                                          ClickMode="Press"
-                                          IsChecked="{Binding Path=IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"/>
-                            <ContentPresenter x:Name="ContentSite" 
-                                              IsHitTestVisible="False" 
-                                              Content="{TemplateBinding SelectionBoxItem}" 
-                                              ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}" 
-                                              Margin="10,6,24,6" 
-                                              VerticalAlignment="Center" 
-                                              HorizontalAlignment="Left"/>
-                            <Popup x:Name="Popup" 
-                                   Placement="Bottom" 
-                                   IsOpen="{TemplateBinding IsDropDownOpen}" 
-                                   AllowsTransparency="True" 
-                                   Focusable="False" 
-                                   PopupAnimation="Slide">
-                                <Grid x:Name="DropDown" 
-                                      SnapsToDevicePixels="True" 
-                                      MinWidth="{TemplateBinding ActualWidth}" 
-                                      MaxHeight="{TemplateBinding MaxDropDownHeight}">
-                                    <Border x:Name="DropDownBorder" 
-                                            Background="{StaticResource DropdownBackground}" 
-                                            BorderBrush="{StaticResource CardBorder}" 
-                                            BorderThickness="1" CornerRadius="4"/>
-                                    <ScrollViewer Margin="4" SnapsToDevicePixels="True">
-                                        <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained"/>
-                                    </ScrollViewer>
-                                </Grid>
-                            </Popup>
-                        </Grid>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-        
-        <!-- Dark ComboBoxItem Style -->
-        <Style TargetType="ComboBoxItem">
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Padding" Value="10,8"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="ComboBoxItem">
-                        <Border x:Name="Border" 
-                                Background="{TemplateBinding Background}" 
-                                Padding="{TemplateBinding Padding}" 
-                                CornerRadius="4">
-                            <ContentPresenter/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsHighlighted" Value="True">
-                                <Setter TargetName="Border" Property="Background" Value="{StaticResource AccentBrush}"/>
-                            </Trigger>
-                            <Trigger Property="IsSelected" Value="True">
-                                <Setter TargetName="Border" Property="Background" Value="{StaticResource AccentBrush}"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-        
-        <!-- Dark TextBox Style -->
-        <Style TargetType="TextBox">
-            <Setter Property="Background" Value="{StaticResource InputBackground}"/>
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="BorderBrush" Value="{StaticResource CardBorder}"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="CaretBrush" Value="White"/>
-            <Setter Property="Padding" Value="8,6"/>
-        </Style>
-        
-        <!-- Styled Slider with optional center tick -->
-        <Style x:Key="ModernSlider" TargetType="Slider">
-            <Setter Property="Height" Value="24"/>
-            <Setter Property="Margin" Value="0,4"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Slider">
-                        <Grid>
-                            <!-- Track background -->
-                            <Border Height="4" VerticalAlignment="Center" Background="#3D3D3D" CornerRadius="2"/>
-                            <!-- Center tick mark (only visible for centered sliders) -->
-                            <Rectangle x:Name="CenterTick" Width="2" Height="12" Fill="#555"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"
-                                       Visibility="Collapsed"/>
-                            <!-- Track with selection -->
-                            <Track x:Name="PART_Track">
-                                <Track.Thumb>
-                                    <Thumb>
-                                        <Thumb.Style>
-                                            <Style TargetType="Thumb">
-                                                <Setter Property="Width" Value="16"/>
-                                                <Setter Property="Height" Value="16"/>
-                                                <Setter Property="Template">
-                                                    <Setter.Value>
-                                                        <ControlTemplate TargetType="Thumb">
-                                                            <Ellipse Fill="{StaticResource AccentBrush}"
-                                                                     Effect="{x:Null}">
-                                                                <Ellipse.Style>
-                                                                    <Style TargetType="Ellipse">
-                                                                        <Style.Triggers>
-                                                                            <Trigger Property="IsMouseOver" Value="True">
-                                                                                <Setter Property="Fill" Value="{StaticResource AccentHoverBrush}"/>
-                                                                            </Trigger>
-                                                                        </Style.Triggers>
-                                                                    </Style>
-                                                                </Ellipse.Style>
-                                                            </Ellipse>
-                                                        </ControlTemplate>
-                                                    </Setter.Value>
-                                                </Setter>
-                                            </Style>
-                                        </Thumb.Style>
-                                    </Thumb>
-                                </Track.Thumb>
-                            </Track>
-                        </Grid>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="pack://application:,,,/Gloam;component/Themes/Brutalist.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
 
-        <!-- Slider with center detent indicator -->
-        <Style x:Key="CenteredSlider" TargetType="Slider">
-            <Setter Property="Height" Value="24"/>
-            <Setter Property="Margin" Value="0,4"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Slider">
-                        <Grid>
-                            <!-- Track background -->
-                            <Border Height="4" VerticalAlignment="Center" Background="#3D3D3D" CornerRadius="2"/>
-                            <!-- Center tick mark -->
-                            <Rectangle Width="2" Height="10" Fill="#666"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"
-                                       ToolTip="Default: 0"/>
-                            <!-- Track with selection -->
-                            <Track x:Name="PART_Track">
-                                <Track.Thumb>
-                                    <Thumb>
-                                        <Thumb.Style>
-                                            <Style TargetType="Thumb">
-                                                <Setter Property="Width" Value="16"/>
-                                                <Setter Property="Height" Value="16"/>
-                                                <Setter Property="Template">
-                                                    <Setter.Value>
-                                                        <ControlTemplate TargetType="Thumb">
-                                                            <Ellipse Fill="{StaticResource AccentBrush}">
-                                                                <Ellipse.Style>
-                                                                    <Style TargetType="Ellipse">
-                                                                        <Style.Triggers>
-                                                                            <Trigger Property="IsMouseOver" Value="True">
-                                                                                <Setter Property="Fill" Value="{StaticResource AccentHoverBrush}"/>
-                                                                            </Trigger>
-                                                                        </Style.Triggers>
-                                                                    </Style>
-                                                                </Ellipse.Style>
-                                                            </Ellipse>
-                                                        </ControlTemplate>
-                                                    </Setter.Value>
-                                                </Setter>
-                                            </Style>
-                                        </Thumb.Style>
-                                    </Thumb>
-                                </Track.Thumb>
-                            </Track>
-                        </Grid>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
+            <!-- Brutalist slider: square track, square accent thumb, optional center tick -->
+            <Style x:Key="ModernSlider" TargetType="Slider">
+                <Setter Property="Height" Value="24"/>
+                <Setter Property="Margin" Value="0,4"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Slider">
+                            <Grid>
+                                <Border Height="4" VerticalAlignment="Center" Background="{DynamicResource ThemeTrack}"/>
+                                <Track x:Name="PART_Track">
+                                    <Track.Thumb>
+                                        <Thumb>
+                                            <Thumb.Template>
+                                                <ControlTemplate TargetType="Thumb">
+                                                    <Rectangle Width="14" Height="14" Fill="{DynamicResource ThemeAccent}"/>
+                                                </ControlTemplate>
+                                            </Thumb.Template>
+                                        </Thumb>
+                                    </Track.Thumb>
+                                </Track>
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
 
-        <!-- RGB Slider with center at 1.0 -->
-        <Style x:Key="RgbSlider" TargetType="Slider">
-            <Setter Property="Height" Value="24"/>
-            <Setter Property="Margin" Value="0,4"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Slider">
-                        <Grid>
-                            <Border Height="4" VerticalAlignment="Center" Background="#3D3D3D" CornerRadius="2"/>
-                            <!-- Center tick at 1.0 (50% of 0.5-1.5 range) -->
-                            <Rectangle Width="2" Height="10" Fill="#666"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"
-                                       ToolTip="Default: 1.0"/>
-                            <Track x:Name="PART_Track">
-                                <Track.Thumb>
-                                    <Thumb>
-                                        <Thumb.Style>
-                                            <Style TargetType="Thumb">
-                                                <Setter Property="Width" Value="16"/>
-                                                <Setter Property="Height" Value="16"/>
-                                                <Setter Property="Template">
-                                                    <Setter.Value>
-                                                        <ControlTemplate TargetType="Thumb">
-                                                            <Ellipse Fill="{StaticResource AccentBrush}">
-                                                                <Ellipse.Style>
-                                                                    <Style TargetType="Ellipse">
-                                                                        <Style.Triggers>
-                                                                            <Trigger Property="IsMouseOver" Value="True">
-                                                                                <Setter Property="Fill" Value="{StaticResource AccentHoverBrush}"/>
-                                                                            </Trigger>
-                                                                        </Style.Triggers>
-                                                                    </Style>
-                                                                </Ellipse.Style>
-                                                            </Ellipse>
-                                                        </ControlTemplate>
-                                                    </Setter.Value>
-                                                </Setter>
-                                            </Style>
-                                        </Thumb.Style>
-                                    </Thumb>
-                                </Track.Thumb>
-                            </Track>
-                        </Grid>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
+            <Style x:Key="CenteredSlider" TargetType="Slider">
+                <Setter Property="Height" Value="24"/>
+                <Setter Property="Margin" Value="0,4"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Slider">
+                            <Grid>
+                                <Border Height="4" VerticalAlignment="Center" Background="{DynamicResource ThemeTrack}"/>
+                                <Rectangle Width="2" Height="12" Fill="{DynamicResource ThemeTextDim}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center" ToolTip="Default: 0"/>
+                                <Track x:Name="PART_Track">
+                                    <Track.Thumb>
+                                        <Thumb>
+                                            <Thumb.Template>
+                                                <ControlTemplate TargetType="Thumb">
+                                                    <Rectangle Width="14" Height="14" Fill="{DynamicResource ThemeAccent}"/>
+                                                </ControlTemplate>
+                                            </Thumb.Template>
+                                        </Thumb>
+                                    </Track.Thumb>
+                                </Track>
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
 
-        <!-- Value Display (must be before EditableValue which inherits from it) -->
-        <Style x:Key="ValueDisplay" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="14"/>
-            <Setter Property="FontWeight" Value="Medium"/>
-            <Setter Property="HorizontalAlignment" Value="Right"/>
-        </Style>
+            <Style x:Key="RgbSlider" TargetType="Slider">
+                <Setter Property="Height" Value="24"/>
+                <Setter Property="Margin" Value="0,4"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Slider">
+                            <Grid>
+                                <Border Height="4" VerticalAlignment="Center" Background="{DynamicResource ThemeTrack}"/>
+                                <Rectangle Width="2" Height="12" Fill="{DynamicResource ThemeTextDim}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center" ToolTip="Default: 1.0"/>
+                                <Track x:Name="PART_Track">
+                                    <Track.Thumb>
+                                        <Thumb>
+                                            <Thumb.Template>
+                                                <ControlTemplate TargetType="Thumb">
+                                                    <Rectangle Width="14" Height="14" Fill="{DynamicResource ThemeAccent}"/>
+                                                </ControlTemplate>
+                                            </Thumb.Template>
+                                        </Thumb>
+                                    </Track.Thumb>
+                                </Track>
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
 
-        <!-- Clickable Value Display -->
-        <Style x:Key="EditableValue" TargetType="TextBlock" BasedOn="{StaticResource ValueDisplay}">
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="ToolTip" Value="Click to enter value"/>
-            <Setter Property="VerticalAlignment" Value="Center"/>
-            <Setter Property="Margin" Value="8,0,0,0"/>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
-                    <Setter Property="TextDecorations" Value="Underline"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
+            <!-- Mono value readout -->
+            <Style x:Key="ValueDisplay" TargetType="TextBlock">
+                <Setter Property="FontFamily" Value="{DynamicResource MonoFont}"/>
+                <Setter Property="FontSize" Value="13"/>
+                <Setter Property="Foreground" Value="{DynamicResource ThemeText}"/>
+                <Setter Property="HorizontalAlignment" Value="Right"/>
+            </Style>
 
-        <!-- Section Card Style -->
-        <Style x:Key="SectionCard" TargetType="Border">
-            <Setter Property="Background" Value="{StaticResource CardBackground}"/>
-            <Setter Property="BorderBrush" Value="{StaticResource CardBorder}"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="CornerRadius" Value="8"/>
-            <Setter Property="Padding" Value="16"/>
-            <Setter Property="Margin" Value="0,0,0,12"/>
-        </Style>
+            <Style x:Key="EditableValue" TargetType="TextBlock" BasedOn="{StaticResource ValueDisplay}">
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="ToolTip" Value="Click to enter value"/>
+                <Setter Property="VerticalAlignment" Value="Center"/>
+                <Setter Property="Margin" Value="8,0,0,0"/>
+                <Style.Triggers>
+                    <Trigger Property="IsMouseOver" Value="True">
+                        <Setter Property="Foreground" Value="{DynamicResource ThemeAccent}"/>
+                        <Setter Property="TextDecorations" Value="Underline"/>
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
 
-        <!-- Section Header -->
-        <Style x:Key="SectionHeader" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="14"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Margin" Value="0,0,0,12"/>
-        </Style>
+            <!-- Section card: hard square border -->
+            <Style x:Key="SectionCard" TargetType="Border">
+                <Setter Property="Background" Value="{DynamicResource ThemeSurface}"/>
+                <Setter Property="BorderBrush" Value="{DynamicResource ThemeBorder}"/>
+                <Setter Property="BorderThickness" Value="2"/>
+                <Setter Property="Padding" Value="16"/>
+                <Setter Property="Margin" Value="0,0,0,12"/>
+            </Style>
 
-        <!-- Label Style -->
-        <Style x:Key="FieldLabel" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="{StaticResource TextDim}"/>
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Margin" Value="0,8,0,4"/>
-        </Style>
-        
-        <!-- Button Style -->
-        <Style x:Key="ModernButton" TargetType="Button">
-            <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Padding" Value="16,8"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="Bd" Background="{TemplateBinding Background}"
-                                CornerRadius="4"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="{StaticResource AccentHoverBrush}"/>
-                            </Trigger>
-                            <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="#005A9E"/>
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter Property="Opacity" Value="0.5"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
+            <Style x:Key="SectionHeader" TargetType="TextBlock">
+                <Setter Property="FontFamily" Value="{DynamicResource DisplayFont}"/>
+                <Setter Property="FontWeight" Value="Bold"/>
+                <Setter Property="FontSize" Value="14"/>
+                <Setter Property="Foreground" Value="{DynamicResource ThemeText}"/>
+                <Setter Property="Margin" Value="0,0,0,12"/>
+            </Style>
 
-        <!-- Secondary Button -->
-        <Style x:Key="SecondaryButton" TargetType="Button">
-            <Setter Property="Background" Value="#444"/>
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Padding" Value="16,8"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="Bd" Background="{TemplateBinding Background}"
-                                CornerRadius="4"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="#555"/>
-                            </Trigger>
-                            <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="#333"/>
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter Property="Opacity" Value="0.5"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-        
-        <!-- Toggle Style -->
-        <Style x:Key="ModernToggle" TargetType="CheckBox">
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="Margin" Value="0,4"/>
-        </Style>
+            <Style x:Key="FieldLabel" TargetType="TextBlock">
+                <Setter Property="FontFamily" Value="{DynamicResource DisplayFont}"/>
+                <Setter Property="FontWeight" Value="Bold"/>
+                <Setter Property="Foreground" Value="{DynamicResource ThemeTextDim}"/>
+                <Setter Property="FontSize" Value="11"/>
+                <Setter Property="Margin" Value="0,8,0,4"/>
+            </Style>
+
+            <!-- Buttons reuse the shared brutalist templates -->
+            <Style x:Key="ModernButton" TargetType="Button" BasedOn="{StaticResource BrutBtnPrimary}"/>
+            <Style x:Key="SecondaryButton" TargetType="Button" BasedOn="{StaticResource BrutBtnSecondary}"/>
+
+            <Style x:Key="ModernToggle" TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
+                <Setter Property="Margin" Value="0,4"/>
+            </Style>
+        </ResourceDictionary>
     </Window.Resources>
 
-    <Border Background="#1E1E1E" BorderBrush="#3F3F3F" BorderThickness="1" CornerRadius="8">
+    <!-- Outer frame: black in both themes (visible on light, seamless on dark) -->
+    <Border Background="{DynamicResource ThemeBg}" BorderBrush="{DynamicResource ThemeWindowFrame}" BorderThickness="2">
         <Grid>
             <Grid.RowDefinitions>
-                <RowDefinition Height="40"/>
+                <RowDefinition Height="44"/>
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
-            
+
             <!-- Custom Title Bar -->
-            <Border Grid.Row="0" Background="#252525" CornerRadius="8,8,0,0" MouseLeftButtonDown="TitleBar_MouseDown">
+            <Border Grid.Row="0" Background="{DynamicResource ThemeSurface}"
+                    BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="0,0,0,3"
+                    MouseLeftButtonDown="TitleBar_MouseDown">
                 <Grid Margin="16,0">
-                    <TextBlock Text="Settings" VerticalAlignment="Center" FontWeight="Medium"/>
-                    <Button HorizontalAlignment="Right" VerticalAlignment="Center" Click="Close_Click"
-                            ToolTip="Close">
-                        <Button.Style>
-                            <Style TargetType="Button">
-                                <Setter Property="Background" Value="Transparent"/>
-                                <Setter Property="Foreground" Value="#888"/>
-                                <Setter Property="BorderThickness" Value="0"/>
-                                <Setter Property="Padding" Value="10,6"/>
-                                <Setter Property="Cursor" Value="Hand"/>
-                                <Setter Property="Template">
-                                    <Setter.Value>
-                                        <ControlTemplate TargetType="Button">
-                                            <Border x:Name="Bd" Background="{TemplateBinding Background}"
-                                                    CornerRadius="4" Padding="{TemplateBinding Padding}">
-                                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                            </Border>
-                                            <ControlTemplate.Triggers>
-                                                <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter TargetName="Bd" Property="Background" Value="#E81123"/>
-                                                    <Setter Property="Foreground" Value="White"/>
-                                                </Trigger>
-                                                <Trigger Property="IsPressed" Value="True">
-                                                    <Setter TargetName="Bd" Property="Background" Value="#C42B1C"/>
-                                                    <Setter Property="Foreground" Value="White"/>
-                                                </Trigger>
-                                            </ControlTemplate.Triggers>
-                                        </ControlTemplate>
-                                    </Setter.Value>
-                                </Setter>
-                            </Style>
-                        </Button.Style>
-                        <Path Data="M0,0 L8,8 M8,0 L0,8" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                              StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
-                    </Button>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <local:BrandMark Width="20" Height="20" Margin="0,0,10,0" VerticalAlignment="Center" GapBrush="{DynamicResource ThemeSurface}"/>
+                        <TextBlock Text="GLOAM" FontFamily="{DynamicResource DisplayFont}" FontWeight="ExtraBold"
+                                   FontSize="14" Foreground="{DynamicResource ThemeText}" VerticalAlignment="Center"/>
+                        <Border Width="1" Height="14" Background="{DynamicResource ThemeTextDim}" Opacity="0.5" Margin="10,0"/>
+                        <TextBlock Text="SETTINGS" FontFamily="{DynamicResource DisplayFont}" FontWeight="Bold"
+                                   FontSize="11" Foreground="{DynamicResource ThemeTextDim}" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <Button Content="&#x2715;" HorizontalAlignment="Right" VerticalAlignment="Center"
+                            Width="30" Height="30" FontSize="13"
+                            Style="{StaticResource BrutIconButton}" Click="Close_Click" ToolTip="Close"/>
                 </Grid>
             </Border>
-            
+
             <!-- Main Content -->
-            <Grid Grid.Row="1" Margin="20,12,20,20">
+            <Grid Grid.Row="1" Margin="20,14,20,20">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
-                
+
                 <!-- Monitor Selector Header -->
                 <StackPanel Grid.Row="0" Margin="0,0,0,16">
-                    <TextBlock Text="Monitor" Style="{StaticResource FieldLabel}" Margin="0,0,0,4"/>
-                    <ComboBox x:Name="MonitorSelector" SelectionChanged="MonitorSelector_Changed"/>
+                    <TextBlock Text="MONITOR" Style="{StaticResource FieldLabel}" Margin="0,0,0,4"/>
+                    <ComboBox ItemsSource="{Binding Monitors}" DisplayMemberPath="Label"
+                              SelectedItem="{Binding SelectedMonitor}"/>
                 </StackPanel>
-                
+
                 <!-- Scrollable Content -->
                 <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Hidden" Padding="0,0,4,0">
                     <StackPanel>
-                        
+
                         <!-- Gamma Section -->
                         <Border Style="{StaticResource SectionCard}">
                             <StackPanel>
-                                <TextBlock Text="Gamma" Style="{StaticResource SectionHeader}"/>
-                                <ComboBox x:Name="GammaModeCombo" SelectionChanged="GammaModeCombo_Changed">
-                                    <ComboBoxItem Content="Gamma 2.2" IsSelected="True"/>
+                                <TextBlock Text="GAMMA" Style="{StaticResource SectionHeader}"/>
+                                <ComboBox SelectedIndex="{Binding GammaModeIndex}">
+                                    <ComboBoxItem Content="Gamma 2.2"/>
                                     <ComboBoxItem Content="Gamma 2.4"/>
                                     <ComboBoxItem Content="Windows Default"/>
                                 </ComboBox>
                             </StackPanel>
                         </Border>
-                        
+
                         <!-- Brightness/Dimming Section -->
                         <Border Style="{StaticResource SectionCard}">
                             <StackPanel>
                                 <Grid>
-                                    <TextBlock Text="Brightness" Style="{StaticResource SectionHeader}"/>
-                                    <TextBlock x:Name="BrightnessValue" Text="100%" Style="{StaticResource ValueDisplay}"/>
+                                    <TextBlock Text="BRIGHTNESS" Style="{StaticResource SectionHeader}"/>
+                                    <TextBlock Text="{Binding Value, ElementName=BrightnessSlider, StringFormat={}{0:F0}%}" Style="{StaticResource ValueDisplay}"/>
                                 </Grid>
                                 <Slider x:Name="BrightnessSlider" IsSnapToTickEnabled="True" TickFrequency="1" Style="{StaticResource ModernSlider}"
-                                        Minimum="10" Maximum="100" Value="100" 
-                                        ValueChanged="BrightnessSlider_ValueChanged"/>
-                                <CheckBox x:Name="EnhanceShadowsCheck" Content="Enhance shadow detail (Recommended)" 
+                                        Minimum="10" Maximum="100"
+                                        Value="{Binding Brightness}"/>
+                                <CheckBox Content="Enhance shadow detail (Recommended)"
                                           ToolTip="When dimming, slightly lifts shadows to prevent them from becoming invisible (black crush)."
                                           Style="{StaticResource ModernToggle}" Margin="0,8,0,0"
-                                          IsChecked="True" Checked="EnhanceShadows_Changed" Unchecked="EnhanceShadows_Changed"/>
-                                
+                                          IsChecked="{Binding EnhanceShadows}"/>
+
                                 <!-- Quick Presets -->
                                 <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-                                    <Button Content="100%" Style="{StaticResource ModernButton}" 
-                                            Click="Brightness100_Click" Margin="0,0,8,0"/>
-                                    <Button Content="75%" Style="{StaticResource ModernButton}" 
-                                            Click="Brightness75_Click" Margin="0,0,8,0"/>
-                                    <Button Content="50%" Style="{StaticResource ModernButton}" 
-                                            Click="Brightness50_Click"/>
+                                    <Button Content="100%" Style="{StaticResource ModernButton}"
+                                            Command="{Binding SetBrightnessCommand}" CommandParameter="100" Margin="0,0,8,0"/>
+                                    <Button Content="75%" Style="{StaticResource ModernButton}"
+                                            Command="{Binding SetBrightnessCommand}" CommandParameter="75" Margin="0,0,8,0"/>
+                                    <Button Content="50%" Style="{StaticResource ModernButton}"
+                                            Command="{Binding SetBrightnessCommand}" CommandParameter="50"/>
                                 </StackPanel>
                             </StackPanel>
                         </Border>
-                        
+
                         <!-- Temperature/Tint Section -->
                         <Border Style="{StaticResource SectionCard}">
                             <StackPanel>
-                                <TextBlock Text="Color Temperature" Style="{StaticResource SectionHeader}"/>
-                                
-                                <TextBlock Text="Temperature" Style="{StaticResource FieldLabel}"/>
+                                <TextBlock Text="COLOR TEMPERATURE" Style="{StaticResource SectionHeader}"/>
+
+                                <TextBlock Text="TEMPERATURE" Style="{StaticResource FieldLabel}"/>
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <Slider x:Name="TemperatureSlider" IsSnapToTickEnabled="True" TickFrequency="1" Grid.Column="0" Style="{StaticResource CenteredSlider}"
-                                            Minimum="-50" Maximum="50" Value="0"
+                                            Minimum="-50" Maximum="50"
+                                            Value="{Binding Temperature}"
                                             behaviors:SliderDetent.IsEnabled="True"
                                             behaviors:SliderDetent.DetentValue="0"
-                                            behaviors:SliderDetent.SnapThreshold="2"
-                                            ValueChanged="TemperatureSlider_ValueChanged"/>
-                                    <TextBlock x:Name="TemperatureValue" Grid.Column="1" Text="0"
+                                            behaviors:SliderDetent.SnapThreshold="2"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding Value, ElementName=TemperatureSlider, StringFormat={}{0:F0}}"
                                                Style="{StaticResource EditableValue}" Width="40"
                                                behaviors:ClickToEdit.TargetSlider="{Binding ElementName=TemperatureSlider}"/>
                                 </Grid>
                                 <Grid>
-                                    <TextBlock Text="Warm" Foreground="{StaticResource TextDim}" FontSize="10"/>
-                                    <TextBlock Text="Cool" Foreground="{StaticResource TextDim}" FontSize="10" 
+                                    <TextBlock Text="Warm" Foreground="{DynamicResource ThemeTextDim}" FontSize="10"/>
+                                    <TextBlock Text="Cool" Foreground="{DynamicResource ThemeTextDim}" FontSize="10"
                                                HorizontalAlignment="Right"/>
                                 </Grid>
-                                
+
                                 <!-- Tint Section -->
-                                <TextBlock Text="Tint" Style="{StaticResource FieldLabel}"/>
+                                <TextBlock Text="TINT" Style="{StaticResource FieldLabel}"/>
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <Slider x:Name="TintSlider" IsSnapToTickEnabled="True" TickFrequency="1" Grid.Column="0" Style="{StaticResource CenteredSlider}"
-                                            Minimum="-50" Maximum="50" Value="0"
+                                            Minimum="-50" Maximum="50"
+                                            Value="{Binding Tint}"
                                             behaviors:SliderDetent.IsEnabled="True"
                                             behaviors:SliderDetent.DetentValue="0"
-                                            behaviors:SliderDetent.SnapThreshold="2"
-                                            ValueChanged="TintSlider_ValueChanged"/>
-                                    <TextBlock x:Name="TintValue" Grid.Column="1" Text="0"
+                                            behaviors:SliderDetent.SnapThreshold="2"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding Value, ElementName=TintSlider, StringFormat={}{0:F0}}"
                                                Style="{StaticResource EditableValue}" Width="40"
                                                behaviors:ClickToEdit.TargetSlider="{Binding ElementName=TintSlider}"/>
                                 </Grid>
                                 <Grid>
-                                    <TextBlock Text="Green" Foreground="{StaticResource TextDim}" FontSize="10"/>
-                                    <TextBlock Text="Magenta" Foreground="{StaticResource TextDim}" FontSize="10" 
+                                    <TextBlock Text="Green" Foreground="{DynamicResource ThemeTextDim}" FontSize="10"/>
+                                    <TextBlock Text="Magenta" Foreground="{DynamicResource ThemeTextDim}" FontSize="10"
                                                HorizontalAlignment="Right"/>
                                 </Grid>
                             </StackPanel>
                         </Border>
-                        
+
                         <!-- Night Mode Section -->
                         <Border Style="{StaticResource SectionCard}">
                             <StackPanel>
-                                <TextBlock Text="Night Mode" Style="{StaticResource SectionHeader}"/>
-                                
+                                <TextBlock Text="NIGHT MODE" Style="{StaticResource SectionHeader}"/>
+
                                 <!-- Global Settings Moved to Dashboard -->
-                                <TextBlock Text="Global Night Mode settings are now managed in the Dashboard." 
-                                           Foreground="{StaticResource TextDim}" FontSize="12" Margin="0,0,0,16" TextWrapping="Wrap"/>
-                                
+                                <TextBlock Text="Global Night Mode settings are now managed in the Dashboard."
+                                           Foreground="{DynamicResource ThemeTextDim}" FontSize="12" Margin="0,0,0,16" TextWrapping="Wrap"/>
+
                                 <!-- Per Monitor Settings -->
-                                <Separator Margin="0,16,0,16" Background="#3F3F3F"/>
-                                <TextBlock Text="Per-Monitor Override" Style="{StaticResource SectionHeader}" FontSize="12" Margin="0,0,0,8" Foreground="{StaticResource TextDim}"/>
-                                <TextBlock Text="Fine-tune this monitor's temperature relative to the global setting." 
-                                           Foreground="{StaticResource TextDim}" FontSize="11" Margin="0,-4,0,12" TextWrapping="Wrap"/>
-                                
-                                <TextBlock Text="Temperature Offset" Style="{StaticResource FieldLabel}"/>
+                                <Separator Margin="0,16,0,16" Background="{DynamicResource ThemeBorder}"/>
+                                <TextBlock Text="PER-MONITOR OVERRIDE" Style="{StaticResource SectionHeader}" FontSize="11" Margin="0,0,0,8" Foreground="{DynamicResource ThemeTextDim}"/>
+                                <TextBlock Text="Fine-tune this monitor's temperature relative to the global setting."
+                                           Foreground="{DynamicResource ThemeTextDim}" FontSize="11" Margin="0,-4,0,12" TextWrapping="Wrap"/>
+
+                                <TextBlock Text="TEMPERATURE OFFSET" Style="{StaticResource FieldLabel}"/>
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <Slider x:Name="TempOffsetSlider" IsSnapToTickEnabled="True" TickFrequency="1" Grid.Column="0" Style="{StaticResource CenteredSlider}"
-                                            Minimum="-20" Maximum="20" Value="0"
+                                            Minimum="-20" Maximum="20"
+                                            Value="{Binding TemperatureOffset}"
                                             behaviors:SliderDetent.IsEnabled="True"
                                             behaviors:SliderDetent.DetentValue="0"
-                                            behaviors:SliderDetent.SnapThreshold="1"
-                                            ValueChanged="TempOffsetSlider_ValueChanged"/>
-                                    <TextBlock x:Name="TempOffsetValue" Grid.Column="1" Text="0"
+                                            behaviors:SliderDetent.SnapThreshold="1"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding Value, ElementName=TempOffsetSlider, StringFormat={}{0:F0}}"
                                                Style="{StaticResource EditableValue}" Width="40"
                                                behaviors:ClickToEdit.TargetSlider="{Binding ElementName=TempOffsetSlider}"/>
                                 </Grid>
                                 <Grid>
-                                    <TextBlock Text="Warmer" Foreground="{StaticResource TextDim}" FontSize="10"/>
-                                    <TextBlock Text="Cooler" Foreground="{StaticResource TextDim}" FontSize="10" 
+                                    <TextBlock Text="Warmer" Foreground="{DynamicResource ThemeTextDim}" FontSize="10"/>
+                                    <TextBlock Text="Cooler" Foreground="{DynamicResource ThemeTextDim}" FontSize="10"
                                                HorizontalAlignment="Right"/>
                                 </Grid>
                             </StackPanel>
                         </Border>
 
-                        <!-- App Auto-Disable Moved to Dashboard -->
-                        
                         <!-- RGB Fine Tuning Section -->
                         <Border Style="{StaticResource SectionCard}">
-                            <Expander Header="RGB Fine Tuning" Foreground="White" IsExpanded="False">
+                            <Expander Header="RGB FINE TUNING" Foreground="{DynamicResource ThemeText}" FontFamily="{DynamicResource DisplayFont}" FontWeight="Bold" IsExpanded="False">
                                 <StackPanel Margin="0,12,0,0">
                                     <!-- Red -->
-                                    <TextBlock Text="Red Gain" Style="{StaticResource FieldLabel}"/>
+                                    <TextBlock Text="RED GAIN" Style="{StaticResource FieldLabel}"/>
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
                                         <Slider x:Name="RedGainSlider" Grid.Column="0" Style="{StaticResource RgbSlider}"
-                                                Minimum="0.5" Maximum="1.5" Value="1.0" TickFrequency="0.01"
+                                                Minimum="0.5" Maximum="1.5" TickFrequency="0.01"
+                                                Value="{Binding RedGain}"
                                                 behaviors:SliderDetent.IsEnabled="True"
                                                 behaviors:SliderDetent.DetentValue="1.0"
-                                                behaviors:SliderDetent.SnapThreshold="0.03"
-                                                ValueChanged="RgbSlider_ValueChanged"/>
-                                        <TextBlock x:Name="RedGainValue" Grid.Column="1" Text="1.00"
+                                                behaviors:SliderDetent.SnapThreshold="0.03"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Value, ElementName=RedGainSlider, StringFormat={}{0:F2}}"
                                                    Style="{StaticResource EditableValue}" Width="40"
                                                    behaviors:ClickToEdit.TargetSlider="{Binding ElementName=RedGainSlider}"/>
                                     </Grid>
 
                                     <!-- Green -->
-                                    <TextBlock Text="Green Gain" Style="{StaticResource FieldLabel}"/>
+                                    <TextBlock Text="GREEN GAIN" Style="{StaticResource FieldLabel}"/>
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
                                         <Slider x:Name="GreenGainSlider" Grid.Column="0" Style="{StaticResource RgbSlider}"
-                                                Minimum="0.5" Maximum="1.5" Value="1.0" TickFrequency="0.01"
+                                                Minimum="0.5" Maximum="1.5" TickFrequency="0.01"
+                                                Value="{Binding GreenGain}"
                                                 behaviors:SliderDetent.IsEnabled="True"
                                                 behaviors:SliderDetent.DetentValue="1.0"
-                                                behaviors:SliderDetent.SnapThreshold="0.03"
-                                                ValueChanged="RgbSlider_ValueChanged"/>
-                                        <TextBlock x:Name="GreenGainValue" Grid.Column="1" Text="1.00"
+                                                behaviors:SliderDetent.SnapThreshold="0.03"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Value, ElementName=GreenGainSlider, StringFormat={}{0:F2}}"
                                                    Style="{StaticResource EditableValue}" Width="40"
                                                    behaviors:ClickToEdit.TargetSlider="{Binding ElementName=GreenGainSlider}"/>
                                     </Grid>
 
                                     <!-- Blue -->
-                                    <TextBlock Text="Blue Gain" Style="{StaticResource FieldLabel}"/>
+                                    <TextBlock Text="BLUE GAIN" Style="{StaticResource FieldLabel}"/>
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
                                         <Slider x:Name="BlueGainSlider" Grid.Column="0" Style="{StaticResource RgbSlider}"
-                                                Minimum="0.5" Maximum="1.5" Value="1.0" TickFrequency="0.01"
+                                                Minimum="0.5" Maximum="1.5" TickFrequency="0.01"
+                                                Value="{Binding BlueGain}"
                                                 behaviors:SliderDetent.IsEnabled="True"
                                                 behaviors:SliderDetent.DetentValue="1.0"
-                                                behaviors:SliderDetent.SnapThreshold="0.03"
-                                                ValueChanged="RgbSlider_ValueChanged"/>
-                                        <TextBlock x:Name="BlueGainValue" Grid.Column="1" Text="1.00"
+                                                behaviors:SliderDetent.SnapThreshold="0.03"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Value, ElementName=BlueGainSlider, StringFormat={}{0:F2}}"
                                                    Style="{StaticResource EditableValue}" Width="40"
                                                    behaviors:ClickToEdit.TargetSlider="{Binding ElementName=BlueGainSlider}"/>
                                     </Grid>
-                                    
-                                    <Button Content="Reset RGB" Style="{StaticResource ModernButton}" 
-                                            Click="ResetRgb_Click" Margin="0,12,0,0" HorizontalAlignment="Left"/>
+
+                                    <Button Content="RESET RGB" Style="{StaticResource ModernButton}"
+                                            Command="{Binding ResetRgbCommand}" Margin="0,12,0,0" HorizontalAlignment="Left"/>
                                 </StackPanel>
                             </Expander>
                         </Border>
-                        
+
                     </StackPanel>
                 </ScrollViewer>
-                
-                <!-- Footer Buttons -->
-                <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
-                    <CheckBox x:Name="LivePreviewToggle" Content="Live Preview" 
-                              Foreground="White" VerticalAlignment="Center" Margin="0,0,16,0"
-                              IsChecked="True" Checked="LivePreviewToggle_Changed" Unchecked="LivePreviewToggle_Changed"/>
-                    <Button x:Name="ApplyButton" Content="Apply" Style="{StaticResource ModernButton}" 
-                            Click="Apply_Click" Margin="0,0,8,0" Visibility="Collapsed"/>
-                    <Button x:Name="CompareButton" Content="Compare (Hold)" Style="{StaticResource SecondaryButton}" 
-                            PreviewMouseDown="Compare_MouseDown" PreviewMouseUp="Compare_MouseUp"
-                            Margin="0,0,8,0"/>
-                    <Button Content="Reset All" Style="{StaticResource SecondaryButton}" 
-                            Click="ResetAll_Click" Margin="0,0,8,0"/>
-                    <Button Content="Save &amp; Close" Style="{StaticResource ModernButton}" 
-                            Click="SaveAndClose_Click"/>
-                </StackPanel>
+
+                <!-- Footer. The Live Preview checkbox is pinned left in its own column and
+                     the action buttons are right-aligned, with a flexible gap between them.
+                     Previously this was a single right-aligned StackPanel, so when the Apply
+                     button appeared (Live Preview off) the row overflowed to the left and
+                     clipped the checkbox label - leaving an unlabelled, truncated control. -->
+                <Grid Grid.Row="2" Margin="0,16,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <CheckBox Grid.Column="0" Content="Live Preview"
+                              Foreground="{DynamicResource ThemeText}"
+                              VerticalAlignment="Center" HorizontalAlignment="Left"
+                              Margin="0,0,16,0"
+                              IsChecked="{Binding IsLivePreview}"/>
+
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="Apply" Command="{Binding ApplyCommand}" Margin="0,0,8,0">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource ModernButton}">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsLivePreview}" Value="False">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                        <Button Content="Compare (Hold)" Style="{StaticResource SecondaryButton}"
+                                PreviewMouseDown="Compare_MouseDown" PreviewMouseUp="Compare_MouseUp"
+                                Margin="0,0,8,0"/>
+                        <Button Content="Reset All" Style="{StaticResource SecondaryButton}"
+                                Command="{Binding ResetAllCommand}" Margin="0,0,8,0"/>
+                        <Button Content="Save &amp; Close" Style="{StaticResource ModernButton}"
+                                Command="{Binding SaveAndCloseCommand}"/>
+                    </StackPanel>
+                </Grid>
             </Grid>
         </Grid>
     </Border>
 </Window>
-
-

@@ -26,6 +26,7 @@ build_log.txt
 .claude/
 .vscode/
 .idea/
+*.bak
 
 # Stray artifact: a `2>nul` redirect run in bash on Windows creates a literal
 # file called "nul" because bash doesn't honor Windows reserved device names.
@@ -36,9 +37,15 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
+# Local marketing assets (before/after demo LUTs, scratch renders) - not shipped
+marketing-assets/
+
 # Packaging Artifacts
 argyll_cache/
 argyll_cache.zip
+argyll_cache_*/
+argyll_cache_*.zip
 HDRGammaController_*.zip
+Gloam_*.zip
 *.csv
 *.cal

@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.IO.Compression;
 using System.Net.Http;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -11,10 +12,8 @@ namespace HDRGammaController.Core.Calibration
     /// Utility class for downloading and managing ArgyllCMS binaries.
     /// Provides shared download functionality for both dispwin (gamma) and spotread (calibration).
     ///
-    /// Integrity: we rely on HTTPS cert validation of argyllcms.com as the trust boundary —
-    /// a pinned SHA256 was considered and rejected because the maintenance burden of keeping
-    /// a hash current through upstream rebuilds would outweigh the marginal security it adds
-    /// on top of TLS for a long-deployed app without a release cadence guarantee.
+    /// Integrity: the versioned archive is fetched over HTTPS and must match the pinned
+    /// SHA-256 before any executable is extracted or installed.
     /// </summary>
     public static class ArgyllDownloader
     {
@@ -34,17 +33,21 @@ namespace HDRGammaController.Core.Calibration
         /// <summary>Current ArgyllCMS version being downloaded (directory-name form).</summary>
         public const string ArgyllVersion = "Argyll_V" + ArgyllVersionNumber;
 
+        public const string ArgyllArchiveSha256 = "C80F78BA30E715079A00A14C2E7C9F533C58E6C8FDBC27F2D32B3D7813F9D132";
+
         /// <summary>
         /// Minimum required version string (used for version comparison).
         /// </summary>
         public const string MinimumVersion = "3.0.0";
 
+        private const long MaxDownloadBytes = 128L * 1024 * 1024;
+        private const long MaxExtractedBytes = 512L * 1024 * 1024;
+        private const int MaxArchiveEntries = 10_000;
+
         /// <summary>
         /// Gets the local directory where ArgyllCMS is installed.
         /// </summary>
-        public static string LocalArgyllDir => Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "HDRGammaController", "Argyll");
+        public static string LocalArgyllDir => Path.Combine(AppPaths.DataDir, "Argyll");
 
         /// <summary>
         /// Gets the bin directory path.
@@ -108,8 +111,39 @@ namespace HDRGammaController.Core.Calibration
             if (installed == null || installed == "unknown")
                 return true;
 
-            // Compare versions (simple string comparison works for "V3.x.y" format)
-            return string.Compare(ArgyllVersion, installed, StringComparison.OrdinalIgnoreCase) > 0;
+            // Numeric comparison, not lexicographic. A bare string.Compare would sort "3.10.0"
+            // BELOW "3.5.0" (because '1' < '5'), suppressing a real future update.
+            return IsNewerVersion(ArgyllVersion, installed);
+        }
+
+        /// <summary>
+        /// True if <paramref name="candidate"/> is a newer version than
+        /// <paramref name="installed"/>. Both may carry a leading "Argyll_V" prefix and/or
+        /// trailing qualifiers; only the leading numeric components are compared.
+        /// </summary>
+        private static bool IsNewerVersion(string candidate, string installed)
+        {
+            if (Version.TryParse(StripVersionPrefix(candidate), out var c) &&
+                Version.TryParse(StripVersionPrefix(installed), out var i))
+            {
+                return c > i;
+            }
+            // Fall back to lexicographic only when either side isn't a clean X.Y[.Z] — which
+            // shouldn't happen for our own version constants, but keeps a one-off build from
+            // blocking updates forever.
+            return string.Compare(candidate, installed, StringComparison.OrdinalIgnoreCase) > 0;
+        }
+
+        /// <summary>Strips a leading "Argyll_V"/"V" prefix and any whitespace, leaving the numeric core.</summary>
+        private static string StripVersionPrefix(string s)
+        {
+            string t = s.Trim();
+            const string prefix = "Argyll_V";
+            if (t.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                t = t.Substring(prefix.Length);
+            else if (t.Length > 0 && (t[0] == 'V' || t[0] == 'v'))
+                t = t.Substring(1);
+            return t.Trim();
         }
 
         /// <summary>
@@ -123,6 +157,8 @@ namespace HDRGammaController.Core.Calibration
             IProgress<int>? progress = null)
         {
             string? tempDir = null;
+            string? stagingDir = null;
+            string? backupDir = null;
             try
             {
                 ReportProgress("Starting download...", 0);
@@ -149,6 +185,8 @@ namespace HDRGammaController.Core.Calibration
                     response.EnsureSuccessStatusCode();
 
                     var totalBytes = response.Content.Headers.ContentLength ?? -1;
+                    if (totalBytes > MaxDownloadBytes)
+                        throw new InvalidDataException($"ArgyllCMS download is unexpectedly large ({totalBytes} bytes).");
                     var downloadedBytes = 0L;
 
                     using var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -161,6 +199,8 @@ namespace HDRGammaController.Core.Calibration
                     {
                         await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken);
                         downloadedBytes += bytesRead;
+                        if (downloadedBytes > MaxDownloadBytes)
+                            throw new InvalidDataException("ArgyllCMS download exceeded the size limit.");
 
                         if (totalBytes > 0)
                         {
@@ -175,16 +215,24 @@ namespace HDRGammaController.Core.Calibration
                 ReportProgress("Download complete", 75);
                 progress?.Report(75);
 
+                await using (var archiveStream = File.OpenRead(zipPath))
+                {
+                    byte[] digest = await SHA256.HashDataAsync(archiveStream, cancellationToken);
+                    string actualHash = Convert.ToHexString(digest);
+                    if (!actualHash.Equals(ArgyllArchiveSha256, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidDataException(
+                            $"ArgyllCMS archive integrity check failed (SHA-256 {actualHash}).");
+                }
+
                 // Extract
                 ReportProgress("Extracting files...", 80);
                 progress?.Report(80);
 
-                // Remove old installation if present
-                if (Directory.Exists(LocalArgyllDir))
-                {
-                    Directory.Delete(LocalArgyllDir, recursive: true);
-                }
-                Directory.CreateDirectory(LocalArgyllDir);
+                // Extract and validate beside the live install. The old working copy is
+                // retained until the replacement is complete, so cancellation/corruption
+                // cannot leave calibration without its tools.
+                stagingDir = LocalArgyllDir + $".staging-{Guid.NewGuid():N}";
+                Directory.CreateDirectory(stagingDir);
 
                 // The ZIP contains Argyll_V3.3.0/bin/dispwin.exe etc.
                 // We strip the version prefix and extract to LocalArgyllDir
@@ -192,6 +240,10 @@ namespace HDRGammaController.Core.Calibration
                 {
                     int totalEntries = archive.Entries.Count;
                     int extracted = 0;
+                    long extractedBytes = 0;
+
+                    if (totalEntries > MaxArchiveEntries)
+                        throw new InvalidDataException("ArgyllCMS archive contains too many entries.");
 
                     foreach (var entry in archive.Entries)
                     {
@@ -208,8 +260,8 @@ namespace HDRGammaController.Core.Calibration
 
                         // SECURITY: Zip-slip guard. Entry names like "..\..\evil.exe" or
                         // absolute paths must not escape the install directory.
-                        string destPath = Path.GetFullPath(Path.Combine(LocalArgyllDir, entryPath));
-                        string rootPrefix = Path.GetFullPath(LocalArgyllDir) + Path.DirectorySeparatorChar;
+                        string destPath = Path.GetFullPath(Path.Combine(stagingDir, entryPath));
+                        string rootPrefix = Path.GetFullPath(stagingDir) + Path.DirectorySeparatorChar;
                         if (!destPath.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
                         {
                             throw new InvalidDataException(
@@ -223,6 +275,12 @@ namespace HDRGammaController.Core.Calibration
                         }
                         else
                         {
+                            if (entry.Length < 0 || entry.Length > MaxExtractedBytes)
+                                throw new InvalidDataException($"Archive entry '{entry.FullName}' is unexpectedly large.");
+                            extractedBytes = checked(extractedBytes + entry.Length);
+                            if (extractedBytes > MaxExtractedBytes)
+                                throw new InvalidDataException("ArgyllCMS archive exceeds the extracted-size limit.");
+
                             // File
                             Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
                             entry.ExtractToFile(destPath, overwrite: true);
@@ -236,7 +294,33 @@ namespace HDRGammaController.Core.Calibration
                 }
 
                 // Write version marker
-                File.WriteAllText(Path.Combine(LocalArgyllDir, "version.txt"), ArgyllVersion);
+                File.WriteAllText(Path.Combine(stagingDir, "version.txt"), ArgyllVersion);
+
+                if (!File.Exists(Path.Combine(stagingDir, "bin", "spotread.exe")) ||
+                    !File.Exists(Path.Combine(stagingDir, "bin", "dispwin.exe")))
+                    throw new InvalidDataException("ArgyllCMS archive is missing required executables.");
+
+                backupDir = LocalArgyllDir + $".backup-{Guid.NewGuid():N}";
+                if (Directory.Exists(LocalArgyllDir))
+                    Directory.Move(LocalArgyllDir, backupDir);
+                try
+                {
+                    Directory.Move(stagingDir, LocalArgyllDir);
+                    stagingDir = null;
+                }
+                catch
+                {
+                    if (Directory.Exists(backupDir) && !Directory.Exists(LocalArgyllDir))
+                        Directory.Move(backupDir, LocalArgyllDir);
+                    throw;
+                }
+
+                if (Directory.Exists(backupDir))
+                {
+                    try { Directory.Delete(backupDir, recursive: true); }
+                    catch (Exception ex) { Log.Info($"ArgyllDownloader: old-version cleanup failed: {ex.Message}"); }
+                }
+                backupDir = null;
 
                 ReportProgress("Installation complete!", 100);
                 progress?.Report(100);
@@ -259,6 +343,11 @@ namespace HDRGammaController.Core.Calibration
                 if (tempDir != null && Directory.Exists(tempDir))
                 {
                     try { Directory.Delete(tempDir, true); }
+                    catch { /* Ignore cleanup errors */ }
+                }
+                if (stagingDir != null && Directory.Exists(stagingDir))
+                {
+                    try { Directory.Delete(stagingDir, true); }
                     catch { /* Ignore cleanup errors */ }
                 }
             }

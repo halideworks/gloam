@@ -35,6 +35,9 @@ namespace HDRGammaController
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             Background = new SolidColorBrush(Color.FromRgb(0xBC, 0xBC, 0xBC)); // ~50% gray field
             WindowStyle = WindowStyle.SingleBorderWindow;
+            // The gray field is the measurement surface here (visually, against a reference
+            // display); keep it opaque if a taskbar hover triggers Aero Peek mid-comparison.
+            Services.WindowTheme.ExcludeFromPeek(this);
 
             _readout = new TextBlock
             {
@@ -70,10 +73,10 @@ namespace HDRGammaController
 
             var done = new Button
             {
-                Content = "Done — keep this white",
+                Content = "Done - keep this white",
                 Padding = new Thickness(16, 7, 16, 7),
                 Margin = new Thickness(4, 0, 4, 0),
-                Background = new SolidColorBrush(Color.FromRgb(0x08, 0x91, 0xb2)),
+                Background = new SolidColorBrush(Color.FromRgb(0xFF, 0x3C, 0x2F)),
                 Foreground = Brushes.White,
                 BorderThickness = new Thickness(0),
             };

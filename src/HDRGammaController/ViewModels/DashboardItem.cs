@@ -12,5 +12,11 @@ namespace HDRGammaController.ViewModels
         public GammaMode CurrentGamma { get; set; }
         public double CurrentBrightness { get; set; }
         public string CurrentTemperatureText { get; set; } = "";
+
+        /// <summary>
+        /// A calibration is measuring this display with corrections bypassed; the card
+        /// fades its (inactive) settings and shows a badge.
+        /// </summary>
+        public bool IsCalibrating { get; set; }
     }
 }

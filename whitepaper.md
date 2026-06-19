@@ -1,4 +1,6 @@
-# HDR Gamma Controller: A Technical Whitepaper
+# Gloam: A Technical Whitepaper
+
+*Formerly HDR Gamma Controller.*
 
 > *The machine promises fidelity but delivers translation—and every translation is a betrayal.*
 
@@ -8,7 +10,7 @@
 
 Windows 11's HDR implementation employs piecewise sRGB as the transfer function for standard dynamic range content displayed within an HDR composition space—a technical decision that, while nominally compliant with the sRGB specification, introduces a fundamental perceptual mismatch with the overwhelming majority of content mastered on gamma 2.2 displays, manifesting as elevated shadow regions, reduced contrast, and the characteristic "washed out" appearance that has plagued HDR adoption on the Windows platform since its inception.
 
-This whitepaper documents the mathematical foundations, engineering decisions, and calibration philosophy underlying the HDR Gamma Controller, a tool that corrects this mismatch through the application of per-channel 1D Look-Up Tables within the Windows Advanced Color pipeline; it examines the relevant transfer functions, derives the correction algorithm from first principles, and explores the additional calibration adjustments—color temperature, tint, brightness—that enable fine-grained control over the visual output, with particular attention to why specific mathematical choices were made, grounded always in the physics of light perception and the engineering constraints of the Windows HDR compositor.
+This whitepaper documents the mathematical foundations, engineering decisions, and calibration philosophy underlying Gloam, a tool that corrects this mismatch through the application of per-channel 1D Look-Up Tables within the Windows Advanced Color pipeline; it examines the relevant transfer functions, derives the correction algorithm from first principles, and explores the additional calibration adjustments—color temperature, tint, brightness—that enable fine-grained control over the visual output, with particular attention to why specific mathematical choices were made, grounded always in the physics of light perception and the engineering constraints of the Windows HDR compositor.
 
 ---
 
@@ -272,7 +274,7 @@ This produces a LUT that is smooth and monotonic across the full range, preserve
 
 ## 6. Calibration Adjustments
 
-Beyond the core gamma correction, the HDR Gamma Controller provides calibration adjustments—color temperature, tint, brightness—for fine-tuning the display to the user's environment and preferences, adjustments that operate throughout on a philosophy of perceptual accuracy over mathematical simplicity.
+Beyond the core gamma correction, Gloam provides calibration adjustments—color temperature, tint, brightness—for fine-tuning the display to the user's environment and preferences, adjustments that operate throughout on a philosophy of perceptual accuracy over mathematical simplicity.
 
 ### 6.1 Operating in Linear Light Space
 
@@ -377,7 +379,7 @@ This order ensures that creative adjustments (temperature, tint) operate on the 
 
 A persistent challenge in Windows color management is the conflict between hardware gamma tables (VCGT) and the system's native Night Light feature. When an external tool writes a correction to the VCGT, it often overrides or gets overridden by Windows Night Light, leading to a flickering battle for control or the complete disablement of the warming effect just when it is needed.
 
-The HDR Gamma Controller solves this by **integrating Night Shift directly into the correction pipeline**. Rather than relying on Windows to apply a toggleable overlay, the application calculates the sun's position based on the user's geolocation, determines the appropriate color temperature shift, and *bakes it mathematically into the gamma LUTs* before they are ever sent to the display.
+Gloam solves this by **integrating Night Shift directly into the correction pipeline**. Rather than relying on Windows to apply a toggleable overlay, the application calculates the sun's position based on the user's geolocation, determines the appropriate color temperature shift, and *bakes it mathematically into the gamma LUTs* before they are ever sent to the display.
 
 This approach offers two profound advantages: first, it eliminates the resource contention for the VCGT, ensuring that the gamma correction and the night mode warming coexist in perfect harmony; second, it applies the warming effect in high-precision floating-point space *before* quantization, resulting in a smoother, band-free transition that maintains the integrity of the shadow details even as the screen warms to a deep amber.
 
@@ -414,7 +416,7 @@ The primary path calls the Win32 `SetDeviceGammaRamp` API directly: the 1024-poi
 - **Universal**: Works across most GPU vendors and driver versions.
 - **Precise**: Bypasses the Windows compositor's color management quirks by speaking directly to the hardware driver.
 
-While VCGT loading is sometimes criticized for its volatility—it can be reset by system events or fullscreen exclusive games—the HDR Gamma Controller counters this with a **ramp guard**: every 10 seconds it reads each display's hardware ramp back via `GetDeviceGammaRamp` (an essentially free call), compares it against the ramp it last applied, and silently restores the correction if anything overwrote it. Displays whose drivers transform ramps on write (so a readback can never match) are detected and excluded after one restore attempt, preventing a restore-flash loop. Combined with re-application on display-configuration changes and resume-from-sleep, the correction is self-healing without user intervention.
+While VCGT loading is sometimes criticized for its volatility—it can be reset by system events or fullscreen exclusive games—Gloam counters this with a **ramp guard**: every 10 seconds it reads each display's hardware ramp back via `GetDeviceGammaRamp` (an essentially free call), compares it against the ramp it last applied, and silently restores the correction if anything overwrote it. Displays whose drivers transform ramps on write (so a readback can never match) are detected and excluded after one restore attempt, preventing a restore-flash loop. Combined with re-application on display-configuration changes and resume-from-sleep, the correction is self-healing without user intervention.
 
 #### Apply Hygiene: Why Re-Apply Discipline Matters
 

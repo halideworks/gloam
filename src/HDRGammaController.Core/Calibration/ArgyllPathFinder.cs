@@ -71,9 +71,7 @@ namespace HDRGammaController.Core.Calibration
         private static IEnumerable<string> GetStandardSearchPaths()
         {
             // User's local app data (auto-downloaded location)
-            yield return Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "HDRGammaController", "Argyll", "bin");
+            yield return Path.Combine(AppPaths.DataDir, "Argyll", "bin");
 
             // Standard ArgyllCMS installations
             yield return @"C:\Program Files\ArgyllCMS\bin";
@@ -247,9 +245,7 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         private static IEnumerable<string> SearchLocalAppDataVersioned()
         {
-            string localArgyllDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "HDRGammaController", "Argyll");
+            string localArgyllDir = Path.Combine(AppPaths.DataDir, "Argyll");
 
             if (!Directory.Exists(localArgyllDir))
                 yield break;

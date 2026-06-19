@@ -1,4 +1,6 @@
-# HDR Gamma Controller
+# Gloam
+
+*Formerly HDR Gamma Controller (win11hdr-gamma-adjuster).*
 
 A Windows System Tray application to manage HDR Gamma settings on a per-monitor basis. This tool addresses the "washed out" or incorrect dark levels often experienced when using Windows HDR on OLED and Mini-LED displays.
 
@@ -22,7 +24,7 @@ A Windows System Tray application to manage HDR Gamma settings on a per-monitor 
   - Meter spectral corrections (.ccss/.ccmx) with an in-app browser for the DisplayCAL community corrections database - essential for accurate readings on QD-OLED and wide-gamut panels
   - Per-monitor memory of display type, correction file, and calibration scope
   - Your gamma preference and night mode compose on top of the installed calibration
-- **Update Checker**: Automatically notifies you when a new version or auto-build is available.
+- **Automatic Updates**: New versions download in the background and install on the next restart (one unobtrusive prompt, no manual re-download). Powered by Velopack; the per-user install needs no administrator rights.
 - **System Tray Integration**: Unobtrusive background operation with dark/light mode support
 - **Start with Windows**: Toggle auto-start from the tray menu
 - **Auto-Download ArgyllCMS**: Downloads ArgyllCMS automatically when calibration features need it
@@ -30,58 +32,51 @@ A Windows System Tray application to manage HDR Gamma settings on a per-monitor 
 ## Requirements
 
 1. **Windows 10/11** with HDR-capable display(s)
-2. **.NET 8.0 Runtime** (for the Lite build) or no dependencies (for the self-contained Full build)
+2. **No .NET runtime install required** - the app is self-contained (the installer and the portable zip both bundle it)
 3. **ArgyllCMS** — *optional*. Core gamma correction works without it (the app sets the hardware gamma ramp natively). ArgyllCMS is only needed for colorimeter calibration (`spotread`) and as an automatic fallback if a driver ever rejects the native ramp call:
    - The app will **automatically download** ArgyllCMS when a feature needs it
    - Or if you have **DisplayCAL** installed, the app detects its bundled Argyll binaries
 
 ## Installation
 
-### Option 1: Pre-built Releases (Recommended)
+### Option 1: Installer (Recommended)
 
-**Download the latest release from the Releases page.**
+**Download `Gloam-<version>-Setup.exe` from the [Releases page](https://github.com/halideworks/gloam/releases) and run it.**
 
-There are two versions available:
+- **Self-contained**: no .NET Runtime required, and ArgyllCMS (`dispwin.exe`) is bundled so calibration works offline.
+- **Per-user install**: installs into `%LocalAppData%\GloamApp` with no administrator prompt. Your settings, logs, and calibration reports live separately under `%LocalAppData%\Gloam` and survive an uninstall.
+- **Automatic updates**: future versions download in the background and install on restart; you never download an installer again.
 
-1.  **Full Version (`HDRGammaController_Full.zip`)**:
-    *   **Recommended for most users.**
-    *   **Self-Contained**: Does *not* require .NET Runtime to be installed.
-    *   **Bundled Dependencies**: Includes ArgyllCMS (`dispwin.exe`) so it works immediately offline.
-    *   **Size**: ~160 MB.
+After installing, right-click the tray icon and enable "Start with Windows" if you want it to launch at login.
 
-2.  **Lite Version (`HDRGammaController_Lite.zip`)**:
-    *   **Requires**: [.NET 8.0 Desktop Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/8.0).
-    *   **ArgyllCMS**: Not needed for gamma correction; downloaded automatically if you use colorimeter calibration.
-    *   **Size**: ~200 KB.
+### Option 2: Portable (no install, no auto-update)
 
-**Instructions:**
-1.  Extract the ZIP file to your preferred location (e.g., `C:\Program Files\HDRGammaController`).
-2.  Run `HDRGammaController.exe`.
-3.  Right-click the tray icon and enable "Start with Windows" for auto-start.
+Prefer not to install? Download `Gloam-<version>-Portable.zip` from the Releases page, extract it anywhere, and run `Gloam.exe`. The portable build is also self-contained, but it does **not** auto-update - to upgrade, replace it with a newer zip.
 
-### Option 2: Build from Source
+### Option 3: Build from Source
 
-You can build the project manually or use the included packaging script.
-
-#### Using Packaging Script (Recommended)
-This script will generate both Lite and Full packages in the root directory.
+Use the included packaging script to produce the installer and portable zip locally:
 
 ```powershell
-.\package.ps1
+# Produces Gloam-<version>-Setup.exe and the portable zip in .\Releases
+.\package.ps1 -Version 1.0.0
 ```
 
-#### Manual Build
+The script publishes a self-contained build, bundles ArgyllCMS, and packages it with Velopack (installing the `vpk` tool if needed).
+
+#### Manual Build (run from source)
 ```powershell
 # Clone the repository
-git clone https://github.com/davidtorcivia/win11hdr-gamma-adjuster.git
-cd win11hdr-gamma-adjuster
+git clone https://github.com/halideworks/gloam.git
+cd gloam
 
-# Build minimal (requires .NET 8 runtime)
-dotnet publish src/HDRGammaController -c Release --self-contained false -o publish-minimal
+# Run directly (auto-update is disabled unless launched from a Velopack install)
+dotnet run --project src/HDRGammaController
 
-# OR build self-contained (no dependencies)
-dotnet publish src/HDRGammaController -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish
+# Or publish a self-contained build to a folder
+dotnet publish src/HDRGammaController -c Release -r win-x64 --self-contained true -o publish
 ```
+> Note: do not pass `-p:PublishSingleFile=true` - Velopack packages a normal multi-file publish directory.
 
 ## Usage
 
@@ -96,7 +91,7 @@ dotnet publish src/HDRGammaController -c Release -r win-x64 --self-contained tru
    - **Night Mode**: Enable "Sunrise/Sunset" for automatic adjustment based on your location (Latitude/Longitude).
    - **Calibration**: Adjust Brightness, Temperature, Tint, and RGB Gains/Offsets for fine-tuning your display's white point and color balance.
 
-   **Note**: All settings are saved automatically to `%LOCALAPPDATA%\HDRGammaController\settings.json`. Diagnostic logs are written to `%LOCALAPPDATA%\HDRGammaController\app.log` — include this file when reporting issues.
+   **Note**: All settings are saved automatically to `%LOCALAPPDATA%\Gloam\settings.json`. Diagnostic logs are written to `%LOCALAPPDATA%\Gloam\app.log` - include this file when reporting issues.
 
 Your selections are automatically saved and restored on next launch.
 

@@ -25,13 +25,22 @@ namespace HDRGammaController
         private static readonly Brush Surround = new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A));
         private static readonly Brush OverlayBg = new SolidColorBrush(Color.FromArgb(0xCC, 0x1A, 0x1A, 0x1A));
         private static readonly Brush BarBg = new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33));
-        private static readonly Brush Accent = new SolidColorBrush(Color.FromRgb(0x08, 0x91, 0xb2));
+        private static readonly Brush Accent = new SolidColorBrush(Color.FromRgb(0xFF, 0x3C, 0x2F));
         private static readonly Brush TextDim = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88));
+        private static readonly Brush ButtonBg = new SolidColorBrush(Color.FromRgb(0x44, 0x44, 0x44));
+        private static readonly Brush ButtonHoverBg = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55));
 
         private readonly Border _patch;
         private readonly ProgressBar _progress;
         private readonly TextBlock _patchInfo;
         private readonly TextBlock _phase;
+        private readonly TextBlock _percent;
+        private readonly TextBlock _currentPatch;
+        private readonly TextBlock _nextPatch;
+        private readonly Grid _currentNextRow;
+        private readonly StackPanel _controlsRow;
+        private readonly Button _muteButton;
+        private Action? _cancelRequested;
 
         /// <summary>Raised when the user presses Escape on the patch window (abort the sweep).</summary>
         public event Action? AbortRequested;
@@ -102,6 +111,9 @@ namespace HDRGammaController
             Topmost = true;
             Background = Surround;
             Focusable = true;
+            // Hovering a taskbar icon mid-sweep triggers Aero Peek; without this the patch
+            // fades to glass and the probe reads the desktop instead of the patch.
+            Services.WindowTheme.ExcludeFromPeek(this);
 
             PreviewKeyDown += (_, e) =>
             {
@@ -178,14 +190,69 @@ namespace HDRGammaController
                 HorizontalAlignment = HorizontalAlignment.Center,
                 Text = "Verifying calibration",
             };
+            _percent = new TextBlock { Foreground = TextDim, FontSize = 13, HorizontalAlignment = HorizontalAlignment.Right };
 
             var infoRow = new Grid();
+            infoRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            infoRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            infoRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            Grid.SetColumn(_phase, 1);
+            Grid.SetColumn(_percent, 2);
             infoRow.Children.Add(_patchInfo);
             infoRow.Children.Add(_phase);
+            infoRow.Children.Add(_percent);
+
+            // Current/Next patch row, mirroring the calibration measurement strip. Shown
+            // only for sweeps that report a next patch (the verify and PQ-tracking loops).
+            _currentPatch = new TextBlock { Foreground = Brushes.White, FontSize = 12 };
+            _nextPatch = new TextBlock { Foreground = Brushes.White, FontSize = 12 };
+            _currentNextRow = new Grid { Margin = new Thickness(0, 4, 0, 0), Visibility = Visibility.Collapsed };
+            _currentNextRow.ColumnDefinitions.Add(new ColumnDefinition());
+            _currentNextRow.ColumnDefinitions.Add(new ColumnDefinition());
+            var currentStack = new StackPanel { Orientation = Orientation.Horizontal };
+            currentStack.Children.Add(new TextBlock { Text = "Current: ", Foreground = TextDim, FontSize = 12 });
+            currentStack.Children.Add(_currentPatch);
+            var nextStack = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+            nextStack.Children.Add(new TextBlock { Text = "Next: ", Foreground = TextDim, FontSize = 12 });
+            nextStack.Children.Add(_nextPatch);
+            Grid.SetColumn(nextStack, 1);
+            _currentNextRow.Children.Add(currentStack);
+            _currentNextRow.Children.Add(nextStack);
+
+            // Cancel + mute, the same in-run controls the calibration screen offers. Hidden
+            // until a sweep opts in via EnableSweepControls.
+            var cancelButton = MakeSubtleButton("Cancel");
+            cancelButton.Margin = new Thickness(0, 0, 8, 0);
+            cancelButton.Click += (_, _) =>
+            {
+                if (_cancelRequested == null) return;
+                if (ConfirmDialog.Confirm(this, "Cancel Verification",
+                        "Cancel verification? Progress from this sweep will be lost.",
+                        confirmLabel: "Yes", cancelLabel: "No"))
+                    _cancelRequested?.Invoke();
+            };
+            _muteButton = MakeSubtleButton("Sound: On");
+            _muteButton.ToolTip = "Mute or unmute capture and completion sounds";
+            _muteButton.Click += (_, _) =>
+            {
+                CalibrationSounds.Muted = !CalibrationSounds.Muted;
+                UpdateMuteLabel();
+            };
+            _controlsRow = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 12, 0, 0),
+                Visibility = Visibility.Collapsed,
+            };
+            _controlsRow.Children.Add(cancelButton);
+            _controlsRow.Children.Add(_muteButton);
 
             var overlayContent = new StackPanel { MaxWidth = 600 };
             overlayContent.Children.Add(_progress);
             overlayContent.Children.Add(infoRow);
+            overlayContent.Children.Add(_currentNextRow);
+            overlayContent.Children.Add(_controlsRow);
 
             var overlay = new Border
             {
@@ -199,6 +266,20 @@ namespace HDRGammaController
             root.Children.Add(_patch);
             root.Children.Add(overlay);
             Content = root;
+        }
+
+        /// <summary>
+        /// A stray Win+D / taskbar-preview click can minimize the patch window mid-sweep,
+        /// leaving the probe staring at the desktop. Snap straight back to Normal.
+        /// </summary>
+        protected override void OnStateChanged(EventArgs e)
+        {
+            base.OnStateChanged(e);
+            if (WindowState == WindowState.Minimized)
+            {
+                Core.Log.Info("PatchDisplayWindow: minimized during a sweep; restoring to keep the patch on screen.");
+                WindowState = WindowState.Normal;
+            }
         }
 
         /// <summary>
@@ -225,9 +306,75 @@ namespace HDRGammaController
 
         public void SetProgress(int current, int total, string patchName)
         {
-            _progress.Value = total > 0 ? current * 100.0 / total : 0;
-            _patchInfo.Text = $"Patch {current} of {total}";
+            SetProgressBar(current, total);
             _phase.Text = $"Verifying - {patchName}";
+            _currentNextRow.Visibility = Visibility.Collapsed;
+        }
+
+        /// <summary>
+        /// Sweep-style progress with the calibration screen's Current/Next patch row.
+        /// Pass null for <paramref name="nextPatchName"/> on the last patch.
+        /// </summary>
+        public void SetProgress(int current, int total, string patchName, string? nextPatchName,
+            string phase = "Verifying calibration")
+        {
+            SetProgressBar(current, total);
+            _phase.Text = phase;
+            _currentPatch.Text = patchName;
+            _nextPatch.Text = nextPatchName ?? "(last patch)";
+            _currentNextRow.Visibility = Visibility.Visible;
+        }
+
+        private void SetProgressBar(int current, int total)
+        {
+            double pct = total > 0 ? current * 100.0 / total : 0;
+            _progress.Value = pct;
+            _percent.Text = $"{pct:F0}%";
+            _patchInfo.Text = $"Patch {current} of {total}";
+        }
+
+        /// <summary>
+        /// Shows the in-run Cancel and mute buttons on the bottom strip. The cancel
+        /// callback is invoked only after the user confirms ("Cancel verification?"),
+        /// and must trigger the same cancellation path as Escape (the sweep's CTS).
+        /// </summary>
+        public void EnableSweepControls(Action cancelRequested)
+        {
+            _cancelRequested = cancelRequested;
+            _controlsRow.Visibility = Visibility.Visible;
+            UpdateMuteLabel();
+        }
+
+        private void UpdateMuteLabel() =>
+            _muteButton.Content = CalibrationSounds.Muted ? "Sound: Muted" : "Sound: On";
+
+        /// <summary>Code-built twin of CalibrationWindow.xaml's SubtleButton style.</summary>
+        private static Button MakeSubtleButton(string label)
+        {
+            var border = new System.Windows.FrameworkElementFactory(typeof(Border), "border");
+            border.SetValue(Border.CornerRadiusProperty, new CornerRadius(4));
+            border.SetValue(Border.BackgroundProperty, ButtonBg);
+            border.SetValue(Border.PaddingProperty, new Thickness(12, 6, 12, 6));
+            var presenter = new System.Windows.FrameworkElementFactory(typeof(ContentPresenter));
+            presenter.SetValue(HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            presenter.SetValue(VerticalAlignmentProperty, VerticalAlignment.Center);
+            border.AppendChild(presenter);
+
+            var template = new ControlTemplate(typeof(Button)) { VisualTree = border };
+            var hover = new System.Windows.Trigger { Property = IsMouseOverProperty, Value = true };
+            hover.Setters.Add(new Setter(Border.BackgroundProperty, ButtonHoverBg, "border"));
+            template.Triggers.Add(hover);
+
+            return new Button
+            {
+                Content = label,
+                Template = template,
+                Foreground = Brushes.White,
+                Cursor = System.Windows.Input.Cursors.Hand,
+                // Keep keyboard focus on the window so Escape/Enter still land there and
+                // Space can't accidentally re-click a focused button mid-sweep.
+                Focusable = false,
+            };
         }
     }
 }

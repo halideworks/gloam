@@ -7,14 +7,17 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using HDRGammaController.Core;
 using HDRGammaController.Core.Calibration;
 using HDRGammaController.Services;
 using HDRGammaController.Interop;
+using Velopack;
 
 namespace HDRGammaController.ViewModels
 {
-    public class TrayViewModel : IDisposable
+    public class TrayViewModel : ObservableObject, IDisposable
     {
         public event Action<string, string>? NotificationRequested;
 
@@ -26,13 +29,17 @@ namespace HDRGammaController.ViewModels
         private readonly NightModeService _nightModeService;
         private readonly GammaApplyService _applyService;
         private readonly UpdateService _updateService;
+        private readonly IToastService? _toastService;
 
         private readonly Dictionary<int, Action<MonitorInfo>> _hotkeyActions = new Dictionary<int, Action<MonitorInfo>>();
         private int _panicId = -1;
         private int _nightModeToggleId = -1;
 
         private readonly AppDetectionService _appDetectionService;
+        // Guarded by _activeMonitorsLock: RefreshMonitors (UI thread) mutates this while
+        // OnForegroundAppChanged can enumerate it from the foreground-app hook thread.
         private List<MonitorInfo> _activeMonitors = new List<MonitorInfo>();
+        private readonly object _activeMonitorsLock = new();
 
         private Dictionary<string, MonitorInfo> _savedConfigs = new Dictionary<string, MonitorInfo>();
 
@@ -44,25 +51,36 @@ namespace HDRGammaController.ViewModels
         public ICommand DashboardCommand { get; }
         public ICommand CalibrateCommand { get; }
 
-        public TrayViewModel(HotkeyManager? hotkeyManager = null)
+        public TrayViewModel(
+            MonitorManager monitorManager,
+            SettingsManager settingsManager,
+            NightModeService nightModeService,
+            ProfileManager profileManager,
+            DispwinRunner dispwinRunner,
+            GammaApplyService applyService,
+            AppDetectionService appDetectionService,
+            UpdateService updateService,
+            IToastService? toastService = null,
+            HotkeyManager? hotkeyManager = null)
         {
-            // Construct everything before starting any service: NightModeService and
+            // Dependencies are constructed by the DI container (App.ConfigureServices)
+            // and must all be assigned before starting any service: NightModeService and
             // AppDetectionService both fire their events synchronously from Start(),
-            // and those handlers reach the apply service.
-            _monitorManager = new MonitorManager();
-            _settingsManager = new SettingsManager();
-            _nightModeService = new NightModeService(_settingsManager.NightMode);
-
-            // Assumes template is in the same directory (needs to be sourced by user)
-            string profileTemplatePath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "srgb_to_gamma2p2_100_mhc2.icm");
-            _profileManager = new ProfileManager(profileTemplatePath);
-            _dispwinRunner = new DispwinRunner(); // Auto-detects
+            // and those handlers reach the apply service. The wiring/start order in
+            // this constructor body is load-bearing; do not reorder it.
+            _monitorManager = monitorManager;
+            _settingsManager = settingsManager;
+            _nightModeService = nightModeService;
+            _profileManager = profileManager;
+            _dispwinRunner = dispwinRunner;
             _hotkeyManager = hotkeyManager;
-
-            _applyService = new GammaApplyService(_dispwinRunner, _settingsManager, _nightModeService);
+            _applyService = applyService;
+            _appDetectionService = appDetectionService;
+            _updateService = updateService;
+            _toastService = toastService;
 
             _dispwinRunner.DispwinUnavailable += () =>
-                Application.Current.Dispatcher.Invoke(() =>
+                OnUiThread(() =>
                     NotificationRequested?.Invoke("ArgyllCMS Not Found",
                         "Native gamma apply failed and dispwin.exe is unavailable.\n" +
                         "Open Calibrate Display to download ArgyllCMS."));
@@ -71,18 +89,17 @@ namespace HDRGammaController.ViewModels
             {
                 // The hardware apply is thread-agnostic, but ApplyAll reads TrayItems,
                 // which belongs to the UI thread.
-                Application.Current.Dispatcher.Invoke(() => ApplyAll());
+                OnUiThread(() => ApplyAll());
             };
             _settingsManager.NightModeChanged += (newSettings) => _nightModeService.UpdateSettings(newSettings);
 
-            _appDetectionService = new AppDetectionService();
             _appDetectionService.ForegroundAppChanged += OnForegroundAppChanged;
 
-            ExitCommand = new RelayCommand(_ => Application.Current.Shutdown());
-            RefreshCommand = new RelayCommand(_ => RefreshMonitors());
-            StartupCommand = new RelayCommand(_ => ToggleStartup());
-            DashboardCommand = new RelayCommand(_ => OpenDashboard());
-            CalibrateCommand = new RelayCommand(_ => OpenCalibration());
+            ExitCommand = new RelayCommand(() => Application.Current.Shutdown());
+            RefreshCommand = new RelayCommand(RefreshMonitors);
+            StartupCommand = new RelayCommand(ToggleStartup);
+            DashboardCommand = new RelayCommand(OpenDashboard);
+            CalibrateCommand = new RelayCommand(OpenCalibration);
 
             RefreshMonitors();
 
@@ -98,25 +115,94 @@ namespace HDRGammaController.ViewModels
                 _hotkeyManager.HotkeyPressed += OnHotkeyPressed;
             }
 
-            _updateService = new UpdateService();
             CheckForUpdates();
         }
         
+        // The downloaded-and-ready update awaiting apply. Null until one is detected and
+        // fully downloaded. Applied either immediately (user clicks the toast) or, failing
+        // that, on the next normal exit (see Dispose).
+        private UpdateInfo? _pendingUpdate;
+        private bool _updateApplied;
+
         private async void CheckForUpdates()
         {
             // async void: any escaped exception would crash the process via the dispatcher.
             try
             {
+                // Dev (F5) and the portable zip have no Velopack install to update.
+                if (!_updateService.IsInstalled) return;
+
                 var info = await _updateService.CheckForUpdatesAsync();
-                if (info.IsUpdateAvailable)
+                if (info == null) return; // up to date
+
+                // Download silently in the background - no prompt, no manual download step.
+                if (!await _updateService.DownloadUpdatesAsync(info)) return;
+
+                _pendingUpdate = info;
+                string version = UpdateService.VersionLabel(info);
+                Log.Info($"TrayViewModel: update {version} downloaded and ready to apply.");
+
+                // One low-friction toast. Clicking restarts into the new version now; if it
+                // is ignored, the update is applied on the next normal exit anyway (Dispose).
+                if (_toastService != null)
                 {
-                     NotificationRequested?.Invoke("Update Available",
-                         $"A new version ({info.Version}) is available.\nClick here to download.");
+                    _toastService.Show("Update ready",
+                        $"Gloam {version} will install when you restart.",
+                        ToastKind.Success, "Restart now", ApplyPendingUpdate);
+                }
+                else
+                {
+                    NotificationRequested?.Invoke("Update ready",
+                        $"Gloam {version} will install the next time you restart the app.");
                 }
             }
             catch (Exception ex)
             {
                 Log.Error($"TrayViewModel.CheckForUpdates: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Applies the downloaded update and restarts into it immediately. Wired to the
+        /// update toast's "Restart now" action. Velopack terminates the process from here.
+        /// </summary>
+        public void ApplyPendingUpdate()
+        {
+            var info = _pendingUpdate;
+            if (info == null) return;
+            try
+            {
+                _updateApplied = true; // suppress the apply-on-exit path in Dispose
+                _updateService.ApplyUpdatesAndRestart(info);
+            }
+            catch (Exception ex)
+            {
+                _updateApplied = false;
+                Log.Error($"TrayViewModel.ApplyPendingUpdate: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Marshals an action onto the UI thread, but no-ops if the dispatcher is gone or
+        /// shutting down. The night-mode timer and the foreground-window hook fire on
+        /// background threads; a Dispatcher.Invoke after Application.Shutdown throws there,
+        /// where nothing catches it, and an unhandled exception on a non-UI thread tears down
+        /// the whole process. This guard turns that race into a harmless skip.
+        /// </summary>
+        private static void OnUiThread(Action action)
+        {
+            var dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher == null || dispatcher.HasShutdownStarted || dispatcher.HasShutdownFinished)
+                return;
+            try
+            {
+                dispatcher.Invoke(action);
+            }
+            catch (Exception ex)
+            {
+                // Most likely the dispatcher began shutting down between the check and the
+                // Invoke. Log and move on rather than letting it escape the timer/hook thread.
+                Log.Error($"TrayViewModel.OnUiThread: {ex.Message}");
             }
         }
         
@@ -153,9 +239,14 @@ namespace HDRGammaController.ViewModels
             
             if (id == _nightModeToggleId)
             {
-                // Toggle night mode on/off
-                _applyService.NightModeManuallyDisabled = !_applyService.NightModeManuallyDisabled;
+                // Toggle night mode on/off. Not persisted across restarts (avoids a stuck-off
+                // footgun where night mode silently never returns); the toast makes the current
+                // state visible on every press.
+                bool nowDisabled = (_applyService.NightModeManuallyDisabled = !_applyService.NightModeManuallyDisabled);
                 ApplyAll(); // Re-apply all calibrations with night mode toggled
+                _toastService?.Show("Gloam",
+                    nowDisabled ? "Night warmth disabled - day mode" : "Night warmth enabled",
+                    nowDisabled ? ToastKind.Info : ToastKind.Success);
                 return;
             }
 
@@ -166,23 +257,63 @@ namespace HDRGammaController.ViewModels
                 {
                      action(monitor);
                 }
+                else
+                {
+                    // #18: previously this dropped the apply silently. Tell the user why
+                    // nothing changed instead.
+                    _toastService?.Show("Gloam", "No monitor under cursor", ToastKind.Warning);
+                }
             }
         }
         
         private MonitorInfo? GetFocusedMonitor()
         {
-            IntPtr hwnd = User32.GetForegroundWindow();
-            if (hwnd == IntPtr.Zero) return null;
-            
-            IntPtr hMonitor = User32.MonitorFromWindow(hwnd, User32.MONITOR_DEFAULTTONEAREST);
-            
-            foreach(var item in TrayItems)
+            // A global hotkey should act on the monitor the user is pointing at: the
+            // mouse cursor. The focused window's monitor is only the fallback - using
+            // it first meant the hotkey always hit wherever the active window lived
+            // (usually the primary), regardless of where the user actually was.
+            IntPtr hMonitor = IntPtr.Zero;
+            if (User32.GetCursorPos(out var cursor))
+            {
+                hMonitor = User32.MonitorFromPoint(cursor, User32.MONITOR_DEFAULTTONEAREST);
+            }
+            if (hMonitor == IntPtr.Zero)
+            {
+                IntPtr hwnd = User32.GetForegroundWindow();
+                if (hwnd == IntPtr.Zero) return null;
+                hMonitor = User32.MonitorFromWindow(hwnd, User32.MONITOR_DEFAULTTONEAREST);
+            }
+
+            // First try handle identity (cheap), but HMONITOR values captured at DXGI
+            // enumeration go stale after display-configuration changes while the
+            // window's handle is current - so fall back to matching the monitor's
+            // desktop bounds, which are stable across re-enumeration.
+            foreach (var item in TrayItems)
             {
                 if (item is MonitorViewModel vm && vm.Model.HMonitor == hMonitor)
                 {
                     return vm.Model;
                 }
             }
+
+            if (User32.TryGetMonitorBounds(hMonitor, out var rect))
+            {
+                foreach (var item in TrayItems)
+                {
+                    if (item is MonitorViewModel vm)
+                    {
+                        var b = vm.Model.MonitorBounds;
+                        if (b.Left == rect.Left && b.Top == rect.Top &&
+                            b.Right == rect.Right && b.Bottom == rect.Bottom)
+                        {
+                            Log.Info($"TrayViewModel: focused monitor matched by bounds (stale HMONITOR) for {vm.Model.FriendlyName}");
+                            return vm.Model;
+                        }
+                    }
+                }
+            }
+
+            Log.Info($"TrayViewModel: no focused monitor match for HMONITOR {hMonitor} among {TrayItems.OfType<MonitorViewModel>().Count()} monitors");
             return null;
         }
 
@@ -219,11 +350,20 @@ namespace HDRGammaController.ViewModels
 
         private void OnForegroundAppChanged(string appName, Dxgi.RECT? appBounds)
         {
-            try 
+            try
             {
+                // Snapshot the monitor list under the lock: RefreshMonitors (UI thread) can be
+                // rebuilding _activeMonitors while this handler runs on the foreground-app hook
+                // thread, and a concurrent List mutation throws / yields torn reads.
+                List<MonitorInfo> activeMonitors;
+                lock (_activeMonitorsLock)
+                {
+                    activeMonitors = _activeMonitors;
+                }
+
                 // Check if app is in exclusion list
                 var rule = _settingsManager.ExcludedApps.FirstOrDefault(r => r.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase));
-                
+
                 var newBlocked = new HashSet<IntPtr>();
 
                 if (rule != null)
@@ -231,13 +371,13 @@ namespace HDRGammaController.ViewModels
                     if (rule.FullDisable)
                     {
                         // Block ALL active monitors
-                        foreach(var m in _activeMonitors) newBlocked.Add(m.HMonitor);
+                        foreach(var m in activeMonitors) newBlocked.Add(m.HMonitor);
                     }
                     else if (appBounds.HasValue)
                     {
                         // Smart Mode: Block intersecting
                         var r1 = appBounds.Value;
-                        foreach (var monitor in _activeMonitors)
+                        foreach (var monitor in activeMonitors)
                         {
                             var r2 = monitor.MonitorBounds;
                             bool intersects = r1.Left < r2.Right && r2.Left < r1.Right &&
@@ -247,7 +387,7 @@ namespace HDRGammaController.ViewModels
                     }
                     else
                     {
-                        // Excluded but no bounds? Maybe block primary or all? 
+                        // Excluded but no bounds? Maybe block primary or all?
                         // Let's safe fallback to all if we can't detect bounds (e.g. minimized but active?)
                         // Or maybe just Ignore.
                         // For now, if no bounds, we assume it's not effectively on screen or we can't decide.
@@ -258,7 +398,7 @@ namespace HDRGammaController.ViewModels
                 if (_applyService.UpdateBlockedMonitors(newBlocked))
                 {
                     Log.Info($"TrayViewModel: Block state changed. App={appName}, Blocked Count={newBlocked.Count}");
-                    Application.Current.Dispatcher.Invoke(() => ApplyAll());
+                    OnUiThread(() => ApplyAll());
                 }
             }
             catch (Exception ex)
@@ -284,13 +424,23 @@ namespace HDRGammaController.ViewModels
         private void PanicAll()
         {
             _applyService.ClearAll(TrayItems.OfType<MonitorViewModel>().Select(vm => vm.Model));
-            MessageBox.Show("Panic Mode Activated: All gamma tables cleared.", "HDR Gamma Controller", MessageBoxButton.OK, MessageBoxImage.Information);
+            // #22: replaced a parentless MessageBox.Show (called from the hotkey hook thread,
+            // which could appear behind other windows / on the wrong monitor) with a themed,
+            // non-modal toast. It confirms the recovery without stealing focus.
+            _toastService?.Show("Gloam", "Gamma cleared - safe mode", ToastKind.Warning);
         }
+
+        private ActionViewModel? _startupItem;
+
+        private static string StartupLabel()
+            => StartupManager.IsStartupEnabled ? "✓ Start with Windows" : "Start with Windows";
 
         private void ToggleStartup()
         {
             StartupManager.IsStartupEnabled = !StartupManager.IsStartupEnabled;
-            RefreshMonitors(); // Refresh to update the checkmark
+            // Update the checkmark in place; rebuilding the menu would tear the
+            // items out from under the still-open tray menu.
+            if (_startupItem != null) _startupItem.Header = StartupLabel();
         }
         
         private void OnMonitorProfileChanged(MonitorInfo monitor, GammaMode mode)
@@ -310,7 +460,25 @@ namespace HDRGammaController.ViewModels
 
         private void OpenCalibration()
         {
-            var setupWindow = new CalibrationSetupWindow(_activeMonitors, _settingsManager);
+            // Only one probe exists: if a calibration flow is already open (setup wizard,
+            // live calibration, or a report window mid-verify), bring it to the front
+            // instead of starting a second flow for another monitor.
+            foreach (Window window in Application.Current.Windows)
+            {
+                bool inUse = window is CalibrationSetupWindow or CalibrationWindow
+                    || (window is CalibrationReportWindow report && report.IsVerifyRunning);
+                if (!inUse) continue;
+
+                Log.Info($"TrayViewModel: calibration already in progress ({window.GetType().Name}); focusing the existing window instead of opening a new flow.");
+                if (window.WindowState == WindowState.Minimized)
+                    window.WindowState = WindowState.Normal;
+                window.Activate();
+                return;
+            }
+
+            List<MonitorInfo> activeMonitors;
+            lock (_activeMonitorsLock) { activeMonitors = _activeMonitors; }
+            var setupWindow = new CalibrationSetupWindow(activeMonitors, _settingsManager);
             var dialogResult = setupWindow.ShowDialog();
 
             if (dialogResult == true &&
@@ -346,6 +514,11 @@ namespace HDRGammaController.ViewModels
                     }
                 };
 
+                // Back: reopen the setup dialog after this window finishes closing
+                // (BeginInvoke so the modal setup doesn't block the close).
+                calibrationWindow.BackRequested += (s, e) =>
+                    Application.Current.Dispatcher.BeginInvoke(new Action(OpenCalibration));
+
                 // When the calibration window closes, re-assert the correct live gamma through
                 // the apply path. This composes any freshly-installed MHC2 calibration with the
                 // user's gamma mode + night mode, and overwrites any leftover closed-loop
@@ -362,6 +535,13 @@ namespace HDRGammaController.ViewModels
 
         public void Dispose()
         {
+            // If an update was downloaded but the user never clicked "Restart now", apply it
+            // on the way out so the next launch is on the new version.
+            if (_pendingUpdate != null && !_updateApplied)
+            {
+                _updateService.ApplyUpdatesOnExit(_pendingUpdate);
+            }
+
             // Stops the night-mode and ramp-guard timers and unhooks the
             // foreground-window event hook.
             _applyService.Dispose();
@@ -373,8 +553,15 @@ namespace HDRGammaController.ViewModels
         {
             Log.Info("TrayViewModel: Refreshing monitors...");
             TrayItems.Clear();
-            _activeMonitors = _monitorManager.EnumerateMonitors();
-            var monitors = _activeMonitors;
+            var enumerated = _monitorManager.EnumerateMonitors();
+            // Publish the new list atomically: OnForegroundAppChanged may snapshot it from the
+            // foreground-app hook thread at any moment. A new list reference is published in
+            // one write, so readers never see a half-built list.
+            lock (_activeMonitorsLock)
+            {
+                _activeMonitors = enumerated;
+            }
+            var monitors = enumerated;
             Log.Info($"TrayViewModel: Enumerated {monitors.Count} monitors.");
             
             if (monitors.Count == 0)
@@ -420,9 +607,9 @@ namespace HDRGammaController.ViewModels
             }
             
             // Startup toggle with checkmark
-            string startupLabel = StartupManager.IsStartupEnabled ? "✓ Start with Windows" : "Start with Windows";
-            TrayItems.Add(new ActionViewModel(startupLabel, StartupCommand));
-            TrayItems.Add(new ActionViewModel("Refresh", RefreshCommand));
+            _startupItem = new ActionViewModel(StartupLabel(), StartupCommand, staysOpenOnClick: true);
+            TrayItems.Add(_startupItem);
+            TrayItems.Add(new ActionViewModel("Refresh", RefreshCommand, staysOpenOnClick: true));
             TrayItems.Add(new ActionViewModel("Exit", ExitCommand));
         }
     }

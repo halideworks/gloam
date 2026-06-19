@@ -269,6 +269,33 @@ namespace HDRGammaController.Core.Calibration
                 // Complete
                 _elapsedTimer.Stop();
 
+                // Atomically decide success vs. cancellation. Cancel() flips the state to
+                // Cancelled (and trips the token) under _stateLock from another thread, so the
+                // cancellation check and the success transition MUST happen under the same lock -
+                // otherwise a Cancel() landing between the check and the transition would be
+                // overwritten and a cancelled run reported as Success (installing a bad profile).
+                // Any non-cancelled state here completes: that is Running normally, but a Pause()
+                // can land during the EndMeasurementSessionAsync await above, leaving _state ==
+                // Paused - that must still complete (the measurements are done), or the orchestrator
+                // is left stuck Paused with IsRunning == true and wedges the next run. The
+                // StateChanged event is raised after releasing the lock to match SetState and avoid
+                // handler-reentrancy deadlocks.
+                CalibrationState? completedFrom = null;
+                lock (_stateLock)
+                {
+                    if (_cancellationTokenSource!.IsCancellationRequested || _state == CalibrationState.Cancelled)
+                    {
+                        // Ensure state reflects the cancellation (Cancel() may have already done so).
+                        _state = CalibrationState.Cancelled;
+                    }
+                    else
+                    {
+                        // Capture the real prior state (Running or Paused) for the event.
+                        completedFrom = _state;
+                        _state = CalibrationState.Completed;
+                    }
+                }
+
                 if (_state == CalibrationState.Cancelled)
                 {
                     return new CalibrationResult
@@ -281,7 +308,10 @@ namespace HDRGammaController.Core.Calibration
                     };
                 }
 
-                SetState(CalibrationState.Completed);
+                if (completedFrom.HasValue)
+                {
+                    StateChanged?.Invoke(this, new CalibrationStateEventArgs(completedFrom.Value, CalibrationState.Completed));
+                }
 
                 string msg = $"Calibration completed successfully. {_measurements.Count} patches measured in {FormatTime(_elapsedTimer.Elapsed)}.";
                 if (closedLoop.HasValue)
@@ -414,6 +444,16 @@ namespace HDRGammaController.Core.Calibration
                 RaiseProgressChanged();
 
                 var measurement = await MeasurePatchWithRetryAsync(patch, cancellationToken);
+
+                // If the user paused while this patch was in flight, the reading is suspect
+                // (the probe or panel may have been disturbed mid-pause) - and recording it
+                // also played the capture sound during the pause/resume countdown. Discard
+                // it, wait out the pause (top of loop), and re-measure the same patch.
+                if (_isPaused)
+                {
+                    _currentPatchIndex--;
+                    continue;
+                }
 
                 // Store measurement
                 _measurements!.Add(measurement);

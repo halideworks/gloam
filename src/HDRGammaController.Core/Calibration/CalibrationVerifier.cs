@@ -86,6 +86,8 @@ namespace HDRGammaController.Core.Calibration
 
                 double deltaE = measuredLab.DeltaE2000(targetLab);
                 deltaEs.Add(deltaE);
+                metrics.PatchResults.Add(new PatchDeltaE(
+                    measurement.Patch.Name, measurement.Patch.Category, deltaE));
 
                 if (measurement.Patch.Category == PatchCategory.Grayscale)
                 {

@@ -1,62 +1,20 @@
 <UserControl x:Class="HDRGammaController.NightModeScheduleControl"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
-             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
-             mc:Ignorable="d" 
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             mc:Ignorable="d"
              d:DesignHeight="400" d:DesignWidth="480">
     <UserControl.Resources>
-        <!-- Re-use styles from SettingsWindow if possible, or define local ones -->
-        <SolidColorBrush x:Key="AccentBrush" Color="#0078D4"/>
-        <SolidColorBrush x:Key="CardBorder" Color="#3F3F3F"/>
-        <SolidColorBrush x:Key="TextDim" Color="#888888"/>
-        
-        <Style TargetType="Button" x:Key="SmallBtn">
-            <Setter Property="Background" Value="#444"/>
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Padding" Value="8,4"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="pack://application:,,,/Gloam;component/Themes/Brutalist.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
 
-        <!-- Delete button with hover effect -->
-        <Style TargetType="Button" x:Key="DeleteBtn">
-            <Setter Property="Background" Value="#333"/>
-            <Setter Property="Foreground" Value="#FF5555"/>
-            <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Padding" Value="8,2"/>
-            <Setter Property="FontSize" Value="11"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="border" Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="#C42B1C"/>
-                                <Setter Property="Foreground" Value="White"/>
-                            </Trigger>
-                            <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="#A02515"/>
-                                <Setter Property="Foreground" Value="White"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
+            <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+        </ResourceDictionary>
     </UserControl.Resources>
-    
+
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/> <!-- Title/Summary -->
@@ -71,40 +29,46 @@
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
-            <TextBlock Grid.Column="0" Background="Transparent" Foreground="#AAA" FontSize="11" TextWrapping="Wrap" VerticalAlignment="Center">
+            <TextBlock Grid.Column="0" Background="Transparent" Foreground="{DynamicResource ThemeTextDim}"
+                       FontFamily="{DynamicResource BodyFont}" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center">
                 Drag points to adjust. Double-click to add.
             </TextBlock>
             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                 <Button x:Name="DetectBtn" Content="Auto-Detect Location" Click="Detect_Click" 
-                         FontSize="11" FontWeight="SemiBold" Padding="8,4" Margin="0,0,8,0"
-                         Style="{StaticResource SmallBtn}" Background="#0064B0"/>
-                 
+                 <Button x:Name="DetectBtn" Content="AUTO-DETECT LOCATION" Click="Detect_Click"
+                         FontSize="11" Padding="12,6" Margin="0,0,10,0"/>
+
                  <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                     <TextBlock Text="Lat:" Foreground="#666" FontSize="11" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                     <TextBox x:Name="LatBox" Width="50" Background="#333" Foreground="#DDD" BorderThickness="0" Padding="4,2" FontSize="11" LostFocus="Location_LostFocus"/>
-                     <TextBlock Text="Lon:" Foreground="#666" FontSize="11" VerticalAlignment="Center" Margin="8,0,4,0"/>
-                     <TextBox x:Name="LonBox" Width="50" Background="#333" Foreground="#DDD" BorderThickness="0" Padding="4,2" FontSize="11" LostFocus="Location_LostFocus"/>
+                     <TextBlock Text="LAT" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                     <TextBox Text="{Binding LatitudeText, UpdateSourceTrigger=PropertyChanged}" Width="56"
+                              Padding="5,3" FontSize="11" LostFocus="Location_LostFocus"/>
+                     <TextBlock Text="LON" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" Margin="10,0,4,0"/>
+                     <TextBox Text="{Binding LongitudeText, UpdateSourceTrigger=PropertyChanged}" Width="56"
+                              Padding="5,3" FontSize="11" LostFocus="Location_LostFocus"/>
                  </StackPanel>
             </StackPanel>
         </Grid>
 
         <!-- Graph Container -->
-        <Border Grid.Row="1" Background="#222" BorderBrush="#444" BorderThickness="1" CornerRadius="4" Margin="0,0,0,8">
+        <Border Grid.Row="1" Background="{DynamicResource ThemeBg}" BorderBrush="{DynamicResource ThemeBorder}"
+                BorderThickness="2" Margin="0,0,0,8">
             <Grid>
                  <Canvas x:Name="GridCanvas" IsHitTestVisible="False"/>
-                 <Canvas x:Name="CurveCanvas" ClipToBounds="True" Background="Transparent" 
+                 <Canvas x:Name="CurveCanvas" ClipToBounds="True" Background="Transparent"
                         MouseLeftButtonDown="GraphCanvas_MouseDown"
                         MouseMove="GraphCanvas_MouseMove"
                         MouseLeftButtonUp="GraphCanvas_MouseUp"
                         SizeChanged="GraphCanvas_SizeChanged"/>
-                        
+
                  <!-- Drag Readout Popup (In-Canvas Overlay) -->
-                 <Border x:Name="DragOverlay" HorizontalAlignment="Left" VerticalAlignment="Top" 
-                         Background="#202020" BorderBrush="White" BorderThickness="1" CornerRadius="4" 
-                         Padding="8" IsHitTestVisible="False" Visibility="Collapsed">
+                 <Border x:Name="DragOverlay" HorizontalAlignment="Left" VerticalAlignment="Top"
+                         Background="{DynamicResource ThemeSurface}" BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="2"
+                         Padding="8" IsHitTestVisible="False"
+                         Visibility="{Binding IsDragOverlayVisible, Converter={StaticResource BoolToVis}}">
                      <StackPanel>
-                         <TextBlock x:Name="OverlayTime" Text="22:00" Foreground="White" FontWeight="Bold"/>
-                         <TextBlock x:Name="OverlayTemp" Text="3500K" Foreground="#FFB400"/>
+                         <TextBlock Text="{Binding OverlayTimeText}" Foreground="{DynamicResource ThemeText}"
+                                    FontFamily="{DynamicResource MonoFont}" FontWeight="Bold"/>
+                         <TextBlock Text="{Binding OverlayTempText}" Foreground="{DynamicResource ThemeAccent}"
+                                    FontFamily="{DynamicResource MonoFont}"/>
                      </StackPanel>
                  </Border>
             </Grid>
@@ -117,37 +81,41 @@
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
             <StackPanel Grid.Column="0" Orientation="Horizontal">
-                <Button Content="+ Add Point" Click="AddPoint_Click" Style="{StaticResource SmallBtn}" Margin="0,0,8,0"/>
-                <Button Content="Reset Default" Click="Reset_Click" Style="{StaticResource SmallBtn}"/>
+                <Button Content="ADD POINT" Click="AddPoint_Click" Padding="12,6" Margin="0,0,8,0"/>
+                <Button Content="RESET DEFAULT" Click="Reset_Click" Padding="12,6"/>
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                <CheckBox x:Name="UltraWarmCheck" Checked="UltraWarm_Changed" Unchecked="UltraWarm_Changed"
-                          VerticalAlignment="Center" Margin="0,0,6,0"/>
-                <TextBlock Foreground="#CCC" FontSize="11" VerticalAlignment="Center">
-                    <Run Text="Ultra Warm" FontWeight="SemiBold"/>
-                    <Run Text=" - Enhanced warmth below 2800K" Foreground="#888"/>
+                <CheckBox IsChecked="{Binding UseUltraWarmMode}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <TextBlock Foreground="{DynamicResource ThemeText}" FontFamily="{DynamicResource BodyFont}"
+                           FontSize="12" VerticalAlignment="Center">
+                    <Run Text="Ultra Warm" FontWeight="Bold"/>
+                    <Run Text=" - Enhanced warmth below 2800K" Foreground="{DynamicResource ThemeTextDim}"/>
                 </TextBlock>
             </StackPanel>
         </Grid>
 
         <!-- List -->
-        <!-- Use standard ScrollViewer in parent, allow Grid to auto-size -->
-        <DataGrid x:Name="PointsGrid" Grid.Row="3" Background="#252525" BorderThickness="0" 
+        <DataGrid ItemsSource="{Binding Points}" SelectedItem="{Binding SelectedPoint}"
+                  Grid.Row="3" Background="{DynamicResource ThemeBg}" BorderThickness="0"
                   AutoGenerateColumns="False" CanUserAddRows="False" HeadersVisibility="Column"
-                  GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="#444"
-                  RowBackground="Transparent" Foreground="White"
+                  GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="{DynamicResource ThemeTrack}"
+                  RowBackground="Transparent" Foreground="{DynamicResource ThemeText}"
+                  FontFamily="{DynamicResource BodyFont}"
                   VerticalScrollBarVisibility="Disabled">
             <DataGrid.Resources>
-                <!-- Resources omitted for brevity, keeping existing styles -->
                 <Style TargetType="DataGridColumnHeader">
-                    <Setter Property="Background" Value="#333"/>
-                    <Setter Property="Foreground" Value="#BBB"/>
-                    <Setter Property="Padding" Value="6"/>
-                    <Setter Property="BorderThickness" Value="0,0,1,1"/>
-                    <Setter Property="BorderBrush" Value="#444"/>
+                    <Setter Property="Background" Value="{DynamicResource ThemeSurface}"/>
+                    <Setter Property="Foreground" Value="{DynamicResource ThemeTextDim}"/>
+                    <Setter Property="FontFamily" Value="{DynamicResource DisplayFont}"/>
+                    <Setter Property="FontWeight" Value="Bold"/>
+                    <Setter Property="FontSize" Value="11"/>
+                    <Setter Property="Padding" Value="8,6"/>
+                    <Setter Property="BorderThickness" Value="0,0,2,2"/>
+                    <Setter Property="BorderBrush" Value="{DynamicResource ThemeBorder}"/>
                 </Style>
                 <Style TargetType="DataGridCell">
-                    <Setter Property="Padding" Value="4"/>
+                    <Setter Property="Padding" Value="6,4"/>
+                    <Setter Property="Foreground" Value="{DynamicResource ThemeText}"/>
                     <Setter Property="Template">
                         <Setter.Value>
                             <ControlTemplate TargetType="DataGridCell">
@@ -159,34 +127,33 @@
                     </Setter>
                     <Style.Triggers>
                         <Trigger Property="IsSelected" Value="True">
-                             <!-- Use a subtler selection color or keep existing -->
-                            <Setter Property="Background" Value="#0078D4"/>
-                            <Setter Property="Foreground" Value="White"/>
+                            <Setter Property="Background" Value="{DynamicResource ThemeAccent}"/>
+                            <Setter Property="Foreground" Value="{DynamicResource ThemeOnAccent}"/>
                         </Trigger>
                     </Style.Triggers>
                 </Style>
             </DataGrid.Resources>
-            
+
             <DataGrid.Columns>
                 <!-- Trigger Type -->
-                <DataGridTemplateColumn Header="Type" Width="80">
+                <DataGridTemplateColumn Header="TYPE" Width="80">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>
-                            <TextBlock Text="{Binding TriggerType}" Foreground="#DDD"/>
+                            <TextBlock Text="{Binding TriggerType}" Foreground="{DynamicResource ThemeText}"/>
                         </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                     <DataGridTemplateColumn.CellEditingTemplate>
                         <DataTemplate>
-                            <ComboBox SelectedItem="{Binding TriggerType}" ItemsSource="{Binding RelativeSource={RelativeSource AncestorType=UserControl}, Path=TriggerTypes}"/>
+                            <ComboBox SelectedItem="{Binding TriggerType}" ItemsSource="{Binding RelativeSource={RelativeSource AncestorType=UserControl}, Path=Vm.TriggerTypes}"/>
                         </DataTemplate>
                     </DataGridTemplateColumn.CellEditingTemplate>
                 </DataGridTemplateColumn>
 
                 <!-- Time / Offset -->
-                <DataGridTemplateColumn Header="Time/Offset" Width="90">
+                <DataGridTemplateColumn Header="TIME/OFFSET" Width="100">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>
-                            <TextBlock Text="{Binding DisplayTime}" Foreground="#DDD"/>
+                            <TextBlock Text="{Binding DisplayTime}" FontFamily="{DynamicResource MonoFont}" Foreground="{DynamicResource ThemeText}"/>
                         </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                     <DataGridTemplateColumn.CellEditingTemplate>
@@ -195,12 +162,12 @@
                         </DataTemplate>
                     </DataGridTemplateColumn.CellEditingTemplate>
                 </DataGridTemplateColumn>
-                
+
                 <!-- Temp -->
-                <DataGridTemplateColumn Header="Temp (K)" Width="70">
+                <DataGridTemplateColumn Header="TEMP (K)" Width="74">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>
-                            <TextBlock Text="{Binding TargetKelvin}" FontWeight="Bold"/>
+                            <TextBlock Text="{Binding TargetKelvin}" FontFamily="{DynamicResource MonoFont}" FontWeight="Bold" Foreground="{DynamicResource ThemeText}"/>
                         </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                     <DataGridTemplateColumn.CellEditingTemplate>
@@ -211,10 +178,10 @@
                 </DataGridTemplateColumn>
 
                 <!-- Fade -->
-                <DataGridTemplateColumn Header="Fade (m)" Width="60">
+                <DataGridTemplateColumn Header="FADE (M)" Width="64">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>
-                            <TextBlock Text="{Binding FadeMinutes}"/>
+                            <TextBlock Text="{Binding FadeMinutes}" FontFamily="{DynamicResource MonoFont}" Foreground="{DynamicResource ThemeText}"/>
                         </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                     <DataGridTemplateColumn.CellEditingTemplate>
@@ -223,14 +190,13 @@
                         </DataTemplate>
                     </DataGridTemplateColumn.CellEditingTemplate>
                 </DataGridTemplateColumn>
-                
+
                 <!-- Delete -->
-                <DataGridTemplateColumn Width="*"> <!-- Expand to fill -->
+                <DataGridTemplateColumn Width="*">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>
-                            <Button Content="Delete" Click="DeleteRow_Click"
-                                    Style="{StaticResource DeleteBtn}"
-                                    HorizontalAlignment="Center"/>
+                            <Button Content="DELETE" Click="DeleteRow_Click" Padding="10,4"
+                                    FontSize="10" HorizontalAlignment="Center"/>
                         </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                 </DataGridTemplateColumn>

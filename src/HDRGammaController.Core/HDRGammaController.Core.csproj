@@ -11,4 +11,8 @@
     <ProjectReference Include="..\HDRGammaController.Interop\HDRGammaController.Interop.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="HDRGammaController.Tests" />
+  </ItemGroup>
+
 </Project>

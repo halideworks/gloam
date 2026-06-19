@@ -21,12 +21,30 @@ namespace HDRGammaController.Core
     public static class LutGenerator
     {
         // Cache for computed LUTs to avoid redundant computation.
-        // Key: (GammaMode, WhiteLevel rounded to nearest 10, CalibrationHash, IsHdr)
+        // Key: (GammaMode, exact WhiteLevel, full calibration, IsHdr)
         //
         // CONTRACT: Cached arrays are READ-ONLY. Callers must not mutate them — the cache
         // hands out shared references directly to avoid 32 KB of per-call allocation at
         // slider-drag frequencies. Any write to a returned array corrupts future lookups.
-        private static readonly ConcurrentDictionary<(GammaMode, int, int, bool), (double[] R, double[] G, double[] B, double[] Grey)> _lutCache = new();
+        private static readonly ConcurrentDictionary<(GammaMode, double, CalibrationCacheKey, bool), (double[] R, double[] G, double[] B, double[] Grey)> _lutCache = new();
+
+        // A hash code alone is not identity: collisions returned a wrong cached LUT. Keep
+        // every input in the dictionary key so equality is checked field-by-field. The cache
+        // is bounded, so exact values are preferable to order-dependent approximate hits.
+        private readonly record struct CalibrationCacheKey(
+            double Brightness, double Temperature, double TemperatureOffset, double Tint,
+            double RedGain, double GreenGain, double BlueGain,
+            double RedOffset, double GreenOffset, double BlueOffset,
+            NightModeAlgorithm Algorithm, bool LinearBrightness, bool UltraWarm,
+            Guid? ProfileId, Lut3D? MeasuredLut)
+        {
+            public static CalibrationCacheKey From(CalibrationSettings value) => new(
+                value.Brightness, value.Temperature, value.TemperatureOffset, value.Tint,
+                value.RedGain, value.GreenGain, value.BlueGain,
+                value.RedOffset, value.GreenOffset, value.BlueOffset,
+                value.Algorithm, value.UseLinearBrightness, value.UseUltraWarmMode,
+                value.CalibrationProfileId, value.MeasuredCorrectionLut);
+        }
 
         // Cache ceiling. When we cross it we clear the entire cache at once rather than try to
         // approximate LRU from ConcurrentDictionary.Keys (which has no defined order, so the
@@ -65,10 +83,12 @@ namespace HDRGammaController.Core
             CalibrationSettings calibration,
             bool isHdr = true)
         {
-            // Create cache key (round white level to reduce cache fragmentation)
-            int whiteLevelKey = (int)Math.Round(sdrWhiteLevel / 10.0) * 10;
-            int calibrationHash = calibration.GetHashCode();
-            var cacheKey = (gammaMode, whiteLevelKey, calibrationHash, isHdr);
+            // Display white is part of the actual transfer function. Coarse bucketing made
+            // two monitors order-dependent: whichever generated a LUT first supplied its
+            // curve to the other.
+            double whiteLevelKey = sdrWhiteLevel;
+            var calibrationKey = CalibrationCacheKey.From(calibration);
+            var cacheKey = (gammaMode, whiteLevelKey, calibrationKey, isHdr);
 
             if (_lutCache.TryGetValue(cacheKey, out var cachedLut))
             {
@@ -117,20 +137,33 @@ namespace HDRGammaController.Core
 
             if (!isHdr)
             {
-                // SDR Generation logic: Gamma 2.2 Decode -> Calibrate -> Gamma 2.2 Encode
-                // This ensures linear operations (like tint/temp) are perceptually uniform
+                // SDR generation: decode the incoming signal using the TARGET gamma, do
+                // calibration in linear light, then re-encode for the display's assumed
+                // native ~2.2 response. Windows SDR content is mastered on a ~2.2 display,
+                // so the display decodes as gamma 2.2 regardless of what the user selects
+                // here — the gammaMode therefore controls the DECODE of the (re-)mapped
+                // signal, not the display. Gamma22/WindowsDefault net to a passthrough
+                // (decode 2.2 / encode 1/2.2); Gamma24 now correctly darkens shadows.
+                //
+                // This mirrors the SDR branch of GenerateCalibratedLut. Previously this path
+                // hardcoded 2.2 for both, silently making Gamma 2.4 selection a no-op on SDR.
+                double targetGamma = gammaMode switch
+                {
+                    GammaMode.Gamma24 => 2.4,
+                    _ => 2.2 // Gamma22 and WindowsDefault
+                };
+
                 for (int i = 0; i < 1024; i++)
                 {
                     double input = i / 1023.0;
-                    
-                    // 1. Decode generic Gamma 2.2 (Standard Windows SDR)
-                    // We assume the signal is sRGB/Gamma 2.2
-                    double linear = Math.Pow(input, 2.2);
-                    
-                    // 2. Apply Calibration
+
+                    // 1. Decode the signal with the target gamma into linear light.
+                    double linear = Math.Pow(input, targetGamma);
+
+                    // 2. Apply calibration (temp/tint/dimming/gains) in linear space.
                     var (r, g, b) = ColorAdjustments.ApplyCalibration(linear, linear, linear, calibration);
-                    
-                    // 3. Encode back to Gamma 2.2
+
+                    // 3. Re-encode for the display's native ~2.2 response.
                     lutR[i] = Math.Pow(r, 1.0 / 2.2);
                     lutG[i] = Math.Pow(g, 1.0 / 2.2);
                     lutB[i] = Math.Pow(b, 1.0 / 2.2);
@@ -306,6 +339,17 @@ namespace HDRGammaController.Core
             {
                 // SDR Mode: Compute compensation curves
                 // For each input signal level, find what signal to send to get the target output
+
+                // The tone curves were FIT against black-subtracted normalized luminance
+                // (ExtractToneCurve uses (Y - blackLuminance)/(whiteLuminance - blackLuminance)),
+                // so the InverseLookup domain must be normalized the same way. Here the target
+                // (adjR/G/B) is a fraction of absolute white (0 = zero light, 1 = white), so map
+                // it into the black-subtracted fit domain via the black fraction of white.
+                double sdrBlackFrac = characterization.PeakLuminance > 0
+                    ? Math.Clamp(characterization.BlackLevel / characterization.PeakLuminance, 0, 1)
+                    : 0.0;
+                double sdrNormRange = Math.Max(1.0 - sdrBlackFrac, 1e-6);
+
                 for (int i = 0; i < 1024; i++)
                 {
                     double input = i / 1023.0;
@@ -319,10 +363,13 @@ namespace HDRGammaController.Core
                         targetLinear, targetLinear, targetLinear, calibration);
 
                     // What signal must we send to the display to get this output?
-                    // Use the INVERSE of the measured response
-                    lutR[i] = measuredR.InverseLookup(Math.Clamp(adjR, 0, 1));
-                    lutG[i] = measuredG.InverseLookup(Math.Clamp(adjG, 0, 1));
-                    lutB[i] = measuredB.InverseLookup(Math.Clamp(adjB, 0, 1));
+                    // Use the INVERSE of the measured response, in the black-subtracted fit domain.
+                    double fitR = Math.Clamp((adjR - sdrBlackFrac) / sdrNormRange, 0, 1);
+                    double fitG = Math.Clamp((adjG - sdrBlackFrac) / sdrNormRange, 0, 1);
+                    double fitB = Math.Clamp((adjB - sdrBlackFrac) / sdrNormRange, 0, 1);
+                    lutR[i] = measuredR.InverseLookup(fitR);
+                    lutG[i] = measuredG.InverseLookup(fitG);
+                    lutB[i] = measuredB.InverseLookup(fitB);
                     lutGrey[i] = (lutR[i] + lutG[i] + lutB[i]) / 3.0;
                 }
                 return (lutR, lutG, lutB, lutGrey);
@@ -370,10 +417,16 @@ namespace HDRGammaController.Core
                 }
 
                 // 4. Compensate for display's actual response
-                // Convert target linear to the signal level that produces it on THIS display
-                double targetNormR = Math.Clamp(outputR / sdrWhiteLevel, 0, 1);
-                double targetNormG = Math.Clamp(outputG / sdrWhiteLevel, 0, 1);
-                double targetNormB = Math.Clamp(outputB / sdrWhiteLevel, 0, 1);
+                // Convert target linear to the signal level that produces it on THIS display.
+                // The tone curves were FIT against black-subtracted normalized luminance
+                // (ExtractToneCurve uses (Y - blackLuminance)/(whiteLuminance - blackLuminance)),
+                // so the InverseLookup domain must be normalized the same way - otherwise the
+                // lookup disagrees with the fit (error largest in shadows). Match the fit:
+                // (output - blackLevel)/(sdrWhiteLevel - blackLevel), clamped.
+                double normRange = Math.Max(sdrWhiteLevel - blackLevel, 1e-6);
+                double targetNormR = Math.Clamp((outputR - blackLevel) / normRange, 0, 1);
+                double targetNormG = Math.Clamp((outputG - blackLevel) / normRange, 0, 1);
+                double targetNormB = Math.Clamp((outputB - blackLevel) / normRange, 0, 1);
 
                 double compensatedR = measuredR.InverseLookup(targetNormR) * sdrWhiteLevel;
                 double compensatedG = measuredG.InverseLookup(targetNormG) * sdrWhiteLevel;

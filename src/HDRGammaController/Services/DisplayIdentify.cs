@@ -44,12 +44,14 @@ namespace HDRGammaController.Services
                 Height = h,
             };
 
+            var display = Application.Current?.Resources["DisplayFont"] as FontFamily;
+
             var card = new Border
             {
-                Background = new SolidColorBrush(Color.FromArgb(0xE6, 0x09, 0x14, 0x18)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(0x22, 0xd3, 0xee)),
-                BorderThickness = new Thickness(3),
-                CornerRadius = new CornerRadius(16),
+                Background = new SolidColorBrush(Color.FromArgb(0xF0, 0x00, 0x00, 0x00)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(0xFF, 0x3C, 0x2F)),
+                BorderThickness = new Thickness(4),
+                CornerRadius = new CornerRadius(0),
                 Padding = new Thickness(48, 36, 48, 36),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
@@ -58,15 +60,18 @@ namespace HDRGammaController.Services
             stack.Children.Add(new TextBlock
             {
                 Text = index.ToString(),
+                FontFamily = display,
                 FontSize = 180,
-                FontWeight = FontWeights.Bold,
-                Foreground = new SolidColorBrush(Color.FromRgb(0x22, 0xd3, 0xee)),
+                FontWeight = FontWeights.ExtraBold,
+                Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x3C, 0x2F)),
                 HorizontalAlignment = HorizontalAlignment.Center,
             });
             stack.Children.Add(new TextBlock
             {
                 Text = string.IsNullOrWhiteSpace(monitor.FriendlyName) ? "Display" : monitor.FriendlyName,
+                FontFamily = display,
                 FontSize = 26,
+                FontWeight = FontWeights.Bold,
                 Foreground = Brushes.White,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 Margin = new Thickness(0, 4, 0, 0),

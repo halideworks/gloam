@@ -4,22 +4,29 @@
              ShutdownMode="OnExplicitShutdown"
              DispatcherUnhandledException="App_DispatcherUnhandledException">
     <Application.Resources>
-        <!-- Light Theme Colors -->
-        <SolidColorBrush x:Key="LightMenuBackground" Color="#F0F0F0"/>
-        <SolidColorBrush x:Key="LightMenuForeground" Color="#1A1A1A"/>
-        <SolidColorBrush x:Key="LightMenuBorder" Color="#CCCCCC"/>
-        <SolidColorBrush x:Key="LightMenuHighlight" Color="#E0E0E0"/>
-        
-        <!-- Dark Theme Colors -->
-        <SolidColorBrush x:Key="DarkMenuBackground" Color="#2D2D2D"/>
-        <SolidColorBrush x:Key="DarkMenuForeground" Color="#FFFFFF"/>
-        <SolidColorBrush x:Key="DarkMenuBorder" Color="#3F3F3F"/>
-        <SolidColorBrush x:Key="DarkMenuHighlight" Color="#3E3E3E"/>
-        
-        <!-- Dynamic brushes that will be set at runtime -->
-        <SolidColorBrush x:Key="MenuBackground" Color="#2D2D2D"/>
-        <SolidColorBrush x:Key="MenuForeground" Color="#FFFFFF"/>
-        <SolidColorBrush x:Key="MenuBorder" Color="#3F3F3F"/>
-        <SolidColorBrush x:Key="MenuHighlight" Color="#3E3E3E"/>
+        <ResourceDictionary>
+            <!-- Brutalist design tokens + bundled fonts (shared, app-wide). -->
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="pack://application:,,,/Gloam;component/Themes/Tokens.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+
+            <!-- Light Theme Colors (tray menu) -->
+            <SolidColorBrush x:Key="LightMenuBackground" Color="#F0F0F0"/>
+            <SolidColorBrush x:Key="LightMenuForeground" Color="#1A1A1A"/>
+            <SolidColorBrush x:Key="LightMenuBorder" Color="#CCCCCC"/>
+            <SolidColorBrush x:Key="LightMenuHighlight" Color="#E0E0E0"/>
+
+            <!-- Dark Theme Colors (tray menu) -->
+            <SolidColorBrush x:Key="DarkMenuBackground" Color="#2D2D2D"/>
+            <SolidColorBrush x:Key="DarkMenuForeground" Color="#FFFFFF"/>
+            <SolidColorBrush x:Key="DarkMenuBorder" Color="#3F3F3F"/>
+            <SolidColorBrush x:Key="DarkMenuHighlight" Color="#3E3E3E"/>
+
+            <!-- Dynamic brushes that will be set at runtime -->
+            <SolidColorBrush x:Key="MenuBackground" Color="#2D2D2D"/>
+            <SolidColorBrush x:Key="MenuForeground" Color="#FFFFFF"/>
+            <SolidColorBrush x:Key="MenuBorder" Color="#3F3F3F"/>
+            <SolidColorBrush x:Key="MenuHighlight" Color="#3E3E3E"/>
+        </ResourceDictionary>
     </Application.Resources>
 </Application>

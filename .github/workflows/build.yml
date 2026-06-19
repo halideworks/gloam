@@ -1,8 +1,10 @@
 name: Build and Release
 
+# Releases are cut by pushing a semver tag (e.g. v1.2.0): CI publishes a signed Velopack
+# release to GitHub Releases, and installed apps auto-update from it. Pull requests build
+# and pack (unsigned, no upload) to validate the pipeline.
 on:
   push:
-    branches: [ "main" ]
     tags:
       - 'v*'
   pull_request:
@@ -10,11 +12,28 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: write   # publish GitHub Releases
+  id-token: write   # OIDC token for azure/login (no client secret stored)
+
+# --- Required repository configuration (Settings -> Secrets and variables -> Actions) ---
+# Variables (not secrets - OIDC means no signing secret to store):
+#   AZURE_CLIENT_ID        Entra app (federated credential) client id
+#   AZURE_TENANT_ID        Entra tenant id
+#   AZURE_SUBSCRIPTION_ID  subscription holding the Trusted Signing account
+#   AZURE_SIGN_ENDPOINT    e.g. https://eastus.codesigning.azure.net
+#   AZURE_SIGN_ACCOUNT     Trusted Signing account name
+#   AZURE_SIGN_PROFILE     certificate profile name
+# The Entra app needs the "Trusted Signing Certificate Profile Signer" role on the account,
+# and a federated credential scoped to: repo:${{ github.repository }}:ref:refs/tags/v*
 
 jobs:
   build:
     runs-on: windows-latest
+    # Tag builds run in the 'release' GitHub Environment so the OIDC token subject is
+    # exactly repo:halideworks/gloam:environment:release - the Azure federated credential
+    # matches the subject exactly and cannot wildcard a tag ref like refs/tags/v*. Non-tag
+    # runs (PR/dispatch) resolve to an empty name, i.e. no environment.
+    environment: ${{ startsWith(github.ref, 'refs/tags/v') && 'release' || '' }}
 
     steps:
       - name: Checkout
@@ -25,41 +44,96 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
-      - name: Build Packages
-        shell: powershell
-        run: .\package.ps1
+      - name: Derive version
+        id: ver
+        shell: pwsh
+        run: |
+          $ref = "${{ github.ref }}"
+          if ($ref -like 'refs/tags/v*') {
+            $v = "${{ github.ref_name }}" -replace '^v',''
+          } else {
+            # Non-release build (PR / manual): synthetic but valid semver.
+            $v = "0.0.${{ github.run_number }}"
+          }
+          Write-Host "version=$v"
+          "version=$v" >> $env:GITHUB_OUTPUT
 
-      - name: Upload Lite Package
-        uses: actions/upload-artifact@v4
-        with:
-          name: HDRGammaController_Lite
-          path: HDRGammaController_Lite.zip
+      - name: Publish + bundle assets
+        shell: pwsh
+        run: ./package.ps1 -Version ${{ steps.ver.outputs.version }} -PublishOnly
 
-      - name: Upload Full Package
-        uses: actions/upload-artifact@v4
-        with:
-          name: HDRGammaController_Full
-          path: HDRGammaController_Full.zip
+      - name: Install Velopack CLI
+        run: dotnet tool install -g vpk
 
-      - name: Create Tagged Release
+      # --- Release-only steps (tags) ---
+
+      - name: Azure login (OIDC)
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v1
+        uses: azure/login@v2
         with:
-          files: |
-            HDRGammaController_Lite.zip
-            HDRGammaController_Full.zip
-          draft: false
-          prerelease: false
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Update Latest Auto-Build
-        if: github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v1
+      - name: Write Azure signing metadata
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          @{
+            Endpoint               = "${{ vars.AZURE_SIGN_ENDPOINT }}"
+            CodeSigningAccountName = "${{ vars.AZURE_SIGN_ACCOUNT }}"
+            CertificateProfileName = "${{ vars.AZURE_SIGN_PROFILE }}"
+          } | ConvertTo-Json | Set-Content azure-sign.json
+
+      - name: Download previous release (enables deltas)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: vpk download github --repoUrl https://github.com/${{ github.repository }} --token ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true   # first release has nothing to download
+
+      # packId is "GloamApp" (not "Gloam") so Velopack's install root (%LocalAppData%\GloamApp,
+      # which uninstall deletes wholesale) stays off the app's data dir (%LocalAppData%\Gloam).
+      # User-facing name is the packTitle. Keep this id identical to package.ps1.
+      - name: Pack (signed)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: >
+          vpk pack
+          --packId GloamApp
+          --packVersion ${{ steps.ver.outputs.version }}
+          --packDir publish
+          --mainExe Gloam.exe
+          --packTitle Gloam
+          --packAuthors "David Torcivia"
+          --icon src/HDRGammaController/app.ico
+          --azureTrustedSignFile azure-sign.json
+
+      - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: >
+          vpk upload github
+          --repoUrl https://github.com/${{ github.repository }}
+          --token ${{ secrets.GITHUB_TOKEN }}
+          --publish
+          --releaseName "Gloam ${{ steps.ver.outputs.version }}"
+          --tag ${{ github.ref_name }}
+          --merge
+
+      # --- Validation-only pack for PRs / manual runs (unsigned, not uploaded) ---
+
+      - name: Pack (validation, unsigned)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: >
+          vpk pack
+          --packId GloamApp
+          --packVersion ${{ steps.ver.outputs.version }}
+          --packDir publish
+          --mainExe Gloam.exe
+          --packTitle Gloam
+          --packAuthors "David Torcivia"
+          --icon src/HDRGammaController/app.ico
+
+      - name: Upload build artifacts
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          tag_name: latest
-          name: Latest Auto-Build
-          files: |
-            HDRGammaController_Lite.zip
-            HDRGammaController_Full.zip
-          draft: false
-          prerelease: true
+          name: Gloam_Velopack
+          path: Releases/*

@@ -131,7 +131,16 @@ namespace HDRGammaController.Core.Calibration
             // Essential on narrow-primary panels (QD-OLED) where the generic corrections
             // misplace the white point by several ΔE.
             if (!string.IsNullOrEmpty(correctionFilePath) && File.Exists(correctionFilePath))
+            {
+                // Defense-in-depth: never pass a malformed correction file to spotread — it
+                // could come from a hand-edited path or a stale/older DB entry. CcssDatabaseClient
+                // validates on save, but a file that landed here any other way is still checked.
+                if (!CgatsValidator.IsValidFile(correctionFilePath))
+                    throw new InvalidOperationException(
+                        $"The meter correction file is not a valid CGATS correction:\n{correctionFilePath}\n" +
+                        "Re-download it from the corrections database, or clear it to use the built-in display-type correction.");
                 args += $" -X \"{correctionFilePath}\"";
+            }
 
             var psi = new ProcessStartInfo(spotreadPath, args)
             {
@@ -240,20 +249,62 @@ namespace HDRGammaController.Core.Calibration
         }
 
         /// <summary>
-        /// Terminates any lingering spotread.exe processes (e.g. orphaned by a crash or by the
-        /// app being closed mid-calibration) so they release the colorimeter before we connect.
+        /// Terminates a lingering spotread.exe spawned by THIS app (e.g. orphaned by a crash
+        /// or by the app being closed mid-calibration) so it releases the colorimeter before
+        /// we connect.
+        ///
+        /// Scoped: only spotread processes whose executable resolves to our own downloaded
+        /// Argyll bin directory are touched. A system-wide <c>GetProcessesByName("spotread")</c>
+        /// would also kill another user's calibration tool or a system-installed Argyll on a
+        /// shared/multi-session machine. If we cannot resolve a process's path (access denied,
+        /// 32/64-bit cross-resolution), we err on the side of NOT killing it.
         /// </summary>
         private static void KillStraySpotread(Action<string> log)
         {
             try
             {
+                // Normalize once (lowercase, trailing separator) for prefix comparison.
+                string ourBinDir;
+                try
+                {
+                    ourBinDir = Path.GetFullPath(ArgyllDownloader.LocalArgyllBinDir)
+                        .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                        .ToLowerInvariant();
+                }
+                catch
+                {
+                    // If we can't even resolve our own bin dir, don't kill anything — we'd be
+                    // guessing. The HID sharing-violation path still surfaces a clear message.
+                    return;
+                }
+
                 foreach (var p in Process.GetProcessesByName("spotread"))
                 {
                     using (p)
                     {
+                        string? exePath;
+                        try { exePath = TryGetProcessImagePath(p); }
+                        catch { continue; } // can't resolve -> leave it alone
+
+                        if (string.IsNullOrEmpty(exePath)) continue;
+
+                        string dir;
+                        try { dir = Path.GetDirectoryName(exePath) ?? ""; }
+                        catch { continue; }
+
+                        dir = Path.GetFullPath(dir)
+                            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                            .ToLowerInvariant();
+
+                        if (!dir.Equals(ourBinDir, StringComparison.Ordinal))
+                        {
+                            // Not ours — a system/other-user spotread. Leave it alone.
+                            continue;
+                        }
+
                         try
                         {
-                            log($"Killing stray spotread (PID {p.Id}) holding the colorimeter");
+                            log($"Killing stray spotread (PID {p.Id}) from our Argyll bin dir holding the colorimeter");
                             p.Kill(entireProcessTree: true);
                             p.WaitForExit(2000);
                         }
@@ -264,6 +315,17 @@ namespace HDRGammaController.Core.Calibration
                 System.Threading.Thread.Sleep(300);
             }
             catch { /* enumeration can fail on locked-down machines; non-fatal */ }
+        }
+
+        /// <summary>
+        /// Resolves a process's main executable path. Uses the modern MainModule where
+        /// available, which can throw on cross-bitness access; callers treat that as
+        /// "unknown" and skip the process rather than kill it.
+        /// </summary>
+        private static string? TryGetProcessImagePath(Process p)
+        {
+            try { return p.MainModule?.FileName; }
+            catch { return null; }
         }
 
         private void OnLine(string? line, bool isError)

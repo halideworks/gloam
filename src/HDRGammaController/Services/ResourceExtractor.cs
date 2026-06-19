@@ -38,9 +38,7 @@ namespace HDRGammaController.Services
             var appDir = AppDomain.CurrentDomain.BaseDirectory;
             if (!IsWritable(appDir))
             {
-                appDir = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "HDRGammaController");
+                appDir = AppPaths.DataDir;
                 Directory.CreateDirectory(appDir);
                 Log.Info($"ResourceExtractor: app dir not writable; extracting to {appDir}");
             }

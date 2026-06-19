@@ -1,8 +1,10 @@
 using Xunit;
 using HDRGammaController.Core;
+using HDRGammaController.Core.Calibration;
 using System;
 using System.IO;
 using System.Text.Json;
+using System.Threading.Tasks;
 
 namespace HDRGammaController.Tests
 {
@@ -11,6 +13,29 @@ namespace HDRGammaController.Tests
     /// </summary>
     public class SettingsValidationTests
     {
+        [Fact]
+        public void MonitorProfileClone_PreservesCalibrationMetadata()
+        {
+            var source = new MonitorProfileData
+            {
+                CalibrationProfileId = "calibration-id",
+                UseCalibrationForGamma = false,
+                Mhc2ProfileName = "gloam-profile.icm",
+                MeterCorrectionPath = @"C:\corrections\panel.ccss",
+                CalibDisplayType = "Oled",
+                CalibWhitePointOnly = true
+            };
+
+            var clone = source.Clone();
+
+            Assert.Equal(source.CalibrationProfileId, clone.CalibrationProfileId);
+            Assert.Equal(source.UseCalibrationForGamma, clone.UseCalibrationForGamma);
+            Assert.Equal(source.Mhc2ProfileName, clone.Mhc2ProfileName);
+            Assert.Equal(source.MeterCorrectionPath, clone.MeterCorrectionPath);
+            Assert.Equal(source.CalibDisplayType, clone.CalibDisplayType);
+            Assert.Equal(source.CalibWhitePointOnly, clone.CalibWhitePointOnly);
+        }
+
         #region MonitorProfileData Validation
 
         [Fact]
@@ -304,6 +329,69 @@ namespace HDRGammaController.Tests
             var settings = new CalibrationSettings { RedGain = 1.05 };
 
             Assert.True(settings.HasAdjustments);
+        }
+
+        [Fact]
+        public void CalibrationSettings_Hash_IncludesMeasuredCorrectionLut()
+        {
+            // Regression: GetHashCode previously ignored MeasuredCorrectionLut, so two settings
+            // with identical scalars but a freshly-regenerated Lut3D (same profile id) collided
+            // in LutGenerator's cache and returned a stale LUT. Reference identity must
+            // contribute to the hash so a different LUT instance is never a false hit.
+            var lutA = new Lut3D(17);
+            var lutB = new Lut3D(17);
+
+            var a = new CalibrationSettings { MeasuredCorrectionLut = lutA };
+            var b = new CalibrationSettings { MeasuredCorrectionLut = lutB };
+
+            Assert.NotEqual(a.GetHashCode(), b.GetHashCode());
+
+            // And the same instance should be stable / equal-hash.
+            var c = new CalibrationSettings { MeasuredCorrectionLut = lutA };
+            Assert.Equal(a.GetHashCode(), c.GetHashCode());
+        }
+
+        #endregion
+
+        #region SettingsManager Concurrency
+
+        /// <summary>
+        /// SettingsManager is a DI singleton touched from the UI thread, the night-mode timer
+        /// thread, and background calibration paths. This is a smoke test that concurrent
+        /// Set/Get access doesn't throw (InvalidOperationException from enumerating a mutating
+        /// dictionary) or corrupt the in-memory state. It exercises the _dataLock added in C1.
+        /// </summary>
+        [Fact]
+        public async Task SettingsManager_ConcurrentAccess_DoesNotThrow()
+        {
+            var sm = new SettingsManager();
+            string device = @"\\?\DISPLAY#TEST#...";
+
+            await Task.WhenAll(
+                Task.Run(() =>
+                {
+                    for (int i = 0; i < 200; i++)
+                        sm.SetProfileForMonitor(device, (i & 1) == 0 ? GammaMode.Gamma24 : GammaMode.Gamma22);
+                }),
+                Task.Run(() =>
+                {
+                    for (int i = 0; i < 200; i++)
+                        sm.GetProfileForMonitor(device);
+                }),
+                Task.Run(() =>
+                {
+                    for (int i = 0; i < 200; i++)
+                        sm.GetMonitorProfile(device);
+                }),
+                Task.Run(() =>
+                {
+                    for (int i = 0; i < 200; i++)
+                    { var _ = sm.ExcludedApps; }
+                }));
+
+            // After the storm: the last written mode should be consistent on read.
+            sm.SetProfileForMonitor(device, GammaMode.Gamma24);
+            Assert.Equal(GammaMode.Gamma24, sm.GetProfileForMonitor(device));
         }
 
         #endregion

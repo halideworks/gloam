@@ -156,6 +156,12 @@ namespace HDRGammaController.Core.Calibration
         [JsonIgnore]
         public CalibrationReport? Report { get; set; }
 
+        /// <summary>
+        /// The accuracy numbers exactly as the report window displayed them, persisted so
+        /// a saved report can be re-opened later without the raw measurement data.
+        /// </summary>
+        public CalibrationReportSummary? ReportSummary { get; set; }
+
         #endregion
 
         #region Calibration Settings
@@ -164,6 +170,11 @@ namespace HDRGammaController.Core.Calibration
         /// Number of patches measured during calibration.
         /// </summary>
         public int PatchCount { get; set; }
+
+        /// <summary>
+        /// Total wall-clock time the calibration measurements took.
+        /// </summary>
+        public TimeSpan? MeasurementTime { get; set; }
 
         /// <summary>
         /// Colorimeter model used for measurements.
@@ -262,7 +273,9 @@ namespace HDRGammaController.Core.Calibration
                 PreCalibrationDeltaE = PreCalibrationDeltaE,
                 PostCalibrationDeltaE = PostCalibrationDeltaE,
                 QualityGrade = QualityGrade,
+                ReportSummary = ReportSummary,
                 PatchCount = PatchCount,
+                MeasurementTime = MeasurementTime,
                 ColorimeterModel = ColorimeterModel,
                 SoftwareVersion = SoftwareVersion
             };
@@ -307,7 +320,9 @@ namespace HDRGammaController.Core.Calibration
                 PreCalibrationDeltaE = data.PreCalibrationDeltaE,
                 PostCalibrationDeltaE = data.PostCalibrationDeltaE,
                 QualityGrade = data.QualityGrade,
+                ReportSummary = data.ReportSummary,
                 PatchCount = data.PatchCount,
+                MeasurementTime = data.MeasurementTime,
                 ColorimeterModel = data.ColorimeterModel,
                 SoftwareVersion = data.SoftwareVersion
             };
@@ -316,13 +331,22 @@ namespace HDRGammaController.Core.Calibration
         }
 
         /// <summary>
+        /// Gets the directory where calibration report snapshots are saved
+        /// (%LocalAppData%\Gloam\reports).
+        /// </summary>
+        public static string GetReportsDirectory()
+        {
+            string dir = Path.Combine(AppPaths.DataDir, "reports");
+            Directory.CreateDirectory(dir);
+            return dir;
+        }
+
+        /// <summary>
         /// Gets the default profile directory.
         /// </summary>
         public static string GetProfileDirectory()
         {
-            string dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "HDRGammaController", "Profiles");
+            string dir = Path.Combine(AppPaths.RoamingDataDir, "Profiles");
             Directory.CreateDirectory(dir);
             return dir;
         }
@@ -363,6 +387,49 @@ namespace HDRGammaController.Core.Calibration
     }
 
     /// <summary>
+    /// The accuracy numbers a calibration report displayed, persisted with the profile so
+    /// past reports can be browsed and re-opened. "Before" values are the native panel as
+    /// measured during calibration; the "after" values come from the verification sweep
+    /// through the applied profile (null until a verify pass has run).
+    /// </summary>
+    public class CalibrationReportSummary
+    {
+        public double? AvgDeltaE { get; set; }
+        public double? MaxDeltaE { get; set; }
+        public double? GrayscaleDeltaE { get; set; }
+        public double? PrimaryDeltaE { get; set; }
+        public double? AfterAvgDeltaE { get; set; }
+        public double? AfterMaxDeltaE { get; set; }
+        public double? AfterGrayscaleDeltaE { get; set; }
+        public double? AfterPrimaryDeltaE { get; set; }
+        public string? GradeScopeLabel { get; set; }
+        public string? SummaryText { get; set; }
+
+        // Detailed-verification results (all null unless a detailed sweep ran; nullable so
+        // report JSONs from before the feature load unchanged). The per-patch list is small
+        // (capped at VerificationPatchSets.DetailedPatchCount) and lets a re-opened report
+        // re-render the histogram, per-patch chart and worst-10 list.
+        public List<VerifiedPatchResult>? DetailedPatches { get; set; }
+        /// <summary>ΔE histogram counts in VerificationAnalysis bucket order (6 buckets).</summary>
+        public int[]? DetailedHistogram { get; set; }
+        public double? DetailedGrayscaleDeltaE { get; set; }
+        public double? DetailedPrimariesDeltaE { get; set; }
+        public double? DetailedSaturationDeltaE { get; set; }
+        public double? DetailedMemoryColorsDeltaE { get; set; }
+    }
+
+    /// <summary>
+    /// One persisted detailed-verification patch result. Category is stored as the
+    /// PatchCategory name (string, so unknown future values degrade gracefully).
+    /// </summary>
+    public class VerifiedPatchResult
+    {
+        public string Name { get; set; } = "";
+        public string? Category { get; set; }
+        public double DeltaE { get; set; }
+    }
+
+    /// <summary>
     /// Internal class for JSON serialization of CalibrationProfile.
     /// </summary>
     internal class CalibrationProfileData
@@ -385,7 +452,10 @@ namespace HDRGammaController.Core.Calibration
         public double? PreCalibrationDeltaE { get; set; }
         public double? PostCalibrationDeltaE { get; set; }
         public CalibrationGrade? QualityGrade { get; set; }
+        public CalibrationReportSummary? ReportSummary { get; set; }
         public int PatchCount { get; set; }
+        // System.Text.Json serializes TimeSpan as ISO 8601 duration text on .NET 8.
+        public TimeSpan? MeasurementTime { get; set; }
         public string? ColorimeterModel { get; set; }
         public string? SoftwareVersion { get; set; }
     }

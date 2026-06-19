@@ -186,6 +186,10 @@ namespace HDRGammaController
             if (_hwnd == IntPtr.Zero)
                 throw new InvalidOperationException($"CreateWindowEx failed ({Marshal.GetLastWin32Error()}).");
 
+            // Hovering a taskbar icon mid-measurement triggers Aero Peek, which fades every
+            // non-excluded window to glass - the probe would read black instead of the patch.
+            Services.WindowTheme.ExcludeFromPeek(_hwnd);
+
             ShowWindow(_hwnd, SW_SHOWNOACTIVATE);
             SetWindowPos(_hwnd, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
         }

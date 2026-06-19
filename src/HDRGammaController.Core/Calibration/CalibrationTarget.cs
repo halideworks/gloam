@@ -132,13 +132,17 @@ namespace HDRGammaController.Core.Calibration
 
         /// <summary>
         /// Gets the RGB to XYZ matrix for this color space.
+        /// JsonIgnore: derived from the serialized primaries, and System.Text.Json
+        /// cannot serialize double[,] (it broke report-snapshot persistence).
         /// </summary>
+        [System.Text.Json.Serialization.JsonIgnore]
         public double[,] RgbToXyzMatrix =>
             ColorMath.CalculateRgbToXyzMatrix(RedPrimary, GreenPrimary, BluePrimary, WhitePoint);
 
         /// <summary>
         /// Gets the XYZ to RGB matrix for this color space.
         /// </summary>
+        [System.Text.Json.Serialization.JsonIgnore]
         public double[,] XyzToRgbMatrix => ColorMath.Invert3x3(RgbToXyzMatrix);
 
         /// <summary>

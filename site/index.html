@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gloam - Free, open-source HDR gamma fix for Windows</title>
+  <meta name="description" content="Gloam is a free, open-source Windows app that fixes washed-out SDR-in-HDR gamma and adds a scientifically sound night mode. No colorimeter required.">
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
+</head>
+<body>
+  <script>
+    (function() {
+      const storedTheme = localStorage.getItem('theme');
+      if (storedTheme === 'dark' || (!storedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        document.body.classList.add('dark-theme');
+      }
+    })();
+  </script>
+
+  <div class="container">
+    <!-- Header -->
+    <header class="site-header">
+      <div class="wrap">
+        <a class="brand" href="index.html">
+          <span class="brand-mark" aria-hidden="true"></span>
+          Gloam
+        </a>
+        <nav class="site-nav" aria-label="Site">
+          <a href="index.html" aria-current="page">Home</a>
+          <a href="guides.html">Guides</a>
+          <a href="whitepaper.html">Whitepaper</a>
+          <a href="#download">Download</a>
+        </nav>
+        <button class="theme-toggle-btn" id="themeToggle" aria-label="Invert print colors">◐</button>
+      </div>
+    </header>
+
+    <main>
+      <!-- Band 01: Hero Section -->
+      <section class="hero">
+        <div class="hero-vertical-title">GLOAM</div>
+        <div class="hero-body">
+          <span class="kicker">SDR-in-HDR Gamma Override</span>
+          <h1>Fix the gray that Windows HDR casts over <span>everything.</span></h1>
+          <p class="hero-tagline">Gloam is a free, open-source Windows app that restores proper gamma to SDR content in HDR, with a color considered night mode.</p>
+          <p class="hero-summary">A simple small tray app, designed by a colorist, that repairs the broken Windows HDR tone curve, per monitor, while you play, watch, or work.</p>
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="#download">Download Gloam</a>
+            <a class="btn btn-secondary" href="guides.html">Read the quick-start guide</a>
+          </div>
+          <p class="hero-meta">MIT licensed. Windows 10 and 11. Works on HDR and SDR displays. Full calibration capable with most colorimeters.</p>
+        </div>
+      </section>
+
+      <!-- Band 02: The Problem -->
+      <section id="problem" aria-labelledby="problem-heading">
+        <div class="problem-layout">
+          <div class="problem-copy">
+            <span class="kicker">01 / The problem</span>
+            <h2 id="problem-heading">Windows lifts shadows and it's ugly.</h2>
+            <p>
+              When you enable HDR, Windows 11 decodes standard SDR window frames using a piecewise sRGB curve. Because almost all games, movies, and desktop assets are mastered for traditional gamma 2.2 screens, this curves mismatch dumps extra light directly into shadow regions.
+            </p>
+            <p>
+              In dark scenes, such as dark gameplay in Diablo IV, blacks turn into a flat gray haze, ruining ambient contrast in the areas where human vision is most sensitive:
+            </p>
+
+            <div class="stats">
+              <div class="stat">
+                <span class="stat-value">+58.7%</span>
+                <span class="stat-label">Extra light at 10% signal (deep shadows)</span>
+              </div>
+              <div class="stat">
+                <span class="stat-value">+52.5%</span>
+                <span class="stat-label">Extra light at 20% signal (low mid-tones)</span>
+              </div>
+              <div class="stat">
+                <span class="stat-value">+34.3%</span>
+                <span class="stat-label">Extra light at 30% signal (average shadows)</span>
+              </div>
+              <div class="stat">
+                <span class="stat-value">RUINED</span>
+                <span class="stat-label">Your perceptual visual experience.</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Slider Compare component -->
+          <div class="comparison" id="comparison" role="img" aria-label="Before and after comparison: Windows sRGB decode on the left, Gloam gamma 2.2 correction on the right.">
+            <img src="assets/d4_srgb.png" alt="Diablo IV screenshot with Windows sRGB decode: washed-out shadows" loading="lazy">
+            <div class="after" id="comparison-after">
+              <img src="assets/d4_gamma2p2.png" alt="Same Diablo IV screenshot with Gloam gamma 2.2 correction: richer shadows" loading="lazy">
+            </div>
+            <div class="comparison-handle" id="comparison-handle" aria-label="Drag to compare">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M9 18l-6-6 6-6M15 6l6 6-6 6"/></svg>
+            </div>
+            <div class="comparison-labels" aria-hidden="true">
+              <span>Windows sRGB</span>
+              <span>Gloam 2.2</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Band 03: How it works (Scrollytelling) -->
+      <section class="how-section" id="how" aria-labelledby="how-heading">
+        <div class="how-sticky-container" id="howSticky">
+          
+          <!-- Sticky Left: Vertical Pipeline Progress -->
+          <div class="pipeline-panel">
+            <div class="pipeline-vertical">
+              <div class="pipeline-line"></div>
+              <div class="pipeline-step active" data-step="1" data-title="Decode PQ" data-num="01" data-text="Read the ST.2084 PQ signal Windows sends to the display. This captures raw HDR luminance coordinates.">01</div>
+              <div class="pipeline-step" data-step="2" data-title="Undo sRGB" data-num="02" data-text="Reverse the incorrect sRGB piecewise curve Windows applied to the SDR desktop window composition space.">02</div>
+              <div class="pipeline-step" data-step="3" data-title="Apply Gamma" data-num="03" data-text="Re-decode the flat linear signal back into your targeted power curve (Gamma 2.2 or BT.1886 Gamma 2.4).">03</div>
+              <div class="pipeline-step" data-step="4" data-title="Protect Highlights" data-num="04" data-text="Blend the tone curve smoothly to passthrough above SDR white, preserving bright specular HDR highlights.">04</div>
+              <div class="pipeline-step" data-step="5" data-title="Re-encode PQ" data-num="05" data-text="Re-encode the corrected linear values back into PQ coordinates to write directly to GPU 1D Look-Up Tables.">05</div>
+            </div>
+          </div>
+
+          <!-- Sticky Right: Scrollytelling Details & SVG Graphs -->
+          <div class="how-copy">
+            <span class="kicker">02 / How it works</span>
+            <h2 id="how-heading">Pure math inside the HDR signal path.</h2>
+            
+            <div class="details-panel">
+              <div class="giant-number" id="detailNum">01</div>
+              <div class="node-title" id="detailTitle">Decode PQ</div>
+              <div class="node-explanation" id="detailText">
+                Read the ST.2084 PQ signal Windows sends to the display. This captures raw HDR luminance coordinates.
+              </div>
+            </div>
+
+            <!-- Technical SVG Diagram container -->
+            <div class="diagram-container">
+              <!-- SVG 1: Decode PQ -->
+              <svg class="pipeline-diagram active" id="diagram-1" viewBox="-35 0 535 280">
+                <rect width="100%" height="100%" fill="none"/>
+                <g stroke="var(--border)" stroke-width="1.5" opacity="0.15">
+                  <line x1="50" y1="20" x2="50" y2="230"/>
+                  <line x1="50" y1="230" x2="470" y2="230"/>
+                  <line x1="50" y1="125" x2="470" y2="125" stroke-dasharray="2,2"/>
+                  <line x1="260" y1="20" x2="260" y2="230" stroke-dasharray="2,2"/>
+                </g>
+                <path d="M 50 230 Q 270 120 450 30" fill="none" stroke="var(--accent)" stroke-width="3"/>
+                <text x="50" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">0.0 (Black)</text>
+                <text x="450" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">1.0 (White)</text>
+                <text x="40" y="30" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">10,000 Nits</text>
+                <text x="40" y="130" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">100 Nits</text>
+                <text x="40" y="230" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">0 Nits</text>
+              </svg>
+
+              <!-- SVG 2: Undo sRGB -->
+              <svg class="pipeline-diagram" id="diagram-2" viewBox="-35 0 535 280">
+                <rect width="100%" height="100%" fill="none"/>
+                <g stroke="var(--border)" stroke-width="1.5" opacity="0.15">
+                  <line x1="50" y1="20" x2="50" y2="230"/>
+                  <line x1="50" y1="230" x2="470" y2="230"/>
+                </g>
+                <!-- Linear reference -->
+                <line x1="50" y1="230" x2="450" y2="30" fill="none" stroke="var(--text)" stroke-dasharray="4,4" stroke-width="1.5" opacity="0.5"/>
+                <!-- sRGB curve showing lifted shadows near black -->
+                <path d="M 50 230 C 120 220, 200 170, 450 30" fill="none" stroke="var(--accent)" stroke-width="3"/>
+                <!-- arrows or indicator -->
+                <path d="M 120 215 L 120 195" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
+                <polygon points="120,190 117,196 123,196" fill="var(--accent)"/>
+                <rect x="127" y="189" width="126" height="14" fill="var(--bg)"/>
+                <text x="130" y="200" font-family="monospace" font-size="10" fill="var(--accent)">Shadow Lift Mismatch</text>
+                <text x="40" y="30" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">10,000 Nits</text>
+                <text x="40" y="130" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">100 Nits</text>
+                <text x="40" y="230" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">0 Nits</text>
+                <text x="50" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">0.0 (Black)</text>
+                <text x="450" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">1.0 (White)</text>
+              </svg>
+
+              <!-- SVG 3: Apply Gamma -->
+              <svg class="pipeline-diagram" id="diagram-3" viewBox="-35 0 535 280">
+                <rect width="100%" height="100%" fill="none"/>
+                <g stroke="var(--border)" stroke-width="1.5" opacity="0.15">
+                  <line x1="50" y1="20" x2="50" y2="230"/>
+                  <line x1="50" y1="230" x2="470" y2="230"/>
+                </g>
+                <!-- Gamma 2.2 curve -->
+                <path d="M 50 230 Q 300 210, 450 30" fill="none" stroke="var(--accent)" stroke-width="3"/>
+                <text x="260" y="60" font-family="monospace" font-size="11" fill="var(--accent)" text-anchor="middle" font-weight="bold">Target Power Gamma (γ = 2.2)</text>
+                <text x="40" y="30" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">10,000 Nits</text>
+                <text x="40" y="130" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">100 Nits</text>
+                <text x="40" y="230" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">0 Nits</text>
+                <text x="50" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">0.0 (Black)</text>
+                <text x="450" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">1.0 (White)</text>
+              </svg>
+
+              <!-- SVG 4: Protect Highlights -->
+              <svg class="pipeline-diagram" id="diagram-4" viewBox="-35 0 535 280">
+                <rect width="100%" height="100%" fill="none"/>
+                <g stroke="var(--border)" stroke-width="1.5" opacity="0.15">
+                  <line x1="50" y1="20" x2="50" y2="230"/>
+                  <line x1="50" y1="230" x2="470" y2="230"/>
+                  <line x1="280" y1="20" x2="280" y2="230" stroke-dasharray="2,2"/>
+                </g>
+                <!-- Highlight protect curve (bends above SDR white) -->
+                <path d="M 50 230 Q 180 200 280 120 T 450 30" fill="none" stroke="var(--accent)" stroke-width="3"/>
+                <text x="280" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">SDR White (100 Nits)</text>
+                <text x="370" y="120" font-family="monospace" font-size="10" fill="var(--accent)" text-anchor="middle">HDR Highlight Knee</text>
+                <text x="40" y="30" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">10,000 Nits</text>
+                <text x="40" y="130" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">100 Nits</text>
+                <text x="40" y="230" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">0 Nits</text>
+                <text x="50" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">0.0 (Black)</text>
+                <text x="450" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">1.0 (White)</text>
+              </svg>
+
+              <!-- SVG 5: Re-encode PQ -->
+              <svg class="pipeline-diagram" id="diagram-5" viewBox="-35 0 535 280">
+                <rect width="100%" height="100%" fill="none"/>
+                <g stroke="var(--border)" stroke-width="1.5" opacity="0.15">
+                  <line x1="50" y1="20" x2="50" y2="230"/>
+                  <line x1="50" y1="230" x2="470" y2="230"/>
+                </g>
+                <!-- Final corrected LUT curve: gamma 2.2 correction + highlight knee -->
+                <path d="M 50 230 Q 180 200 280 120 T 450 30" fill="none" stroke="var(--accent)" stroke-width="3"/>
+                <text x="170" y="58" font-family="monospace" font-size="11" fill="var(--accent)" text-anchor="middle" font-weight="bold">GPU 1D LUT Ramp Injection</text>
+                <text x="40" y="30" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">10,000 Nits</text>
+                <text x="40" y="130" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">100 Nits</text>
+                <text x="40" y="230" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="end">0 Nits</text>
+                <text x="50" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">0.0 (Black)</text>
+                <text x="450" y="250" font-family="monospace" font-size="10" fill="var(--text)" text-anchor="middle">1.0 (White)</text>
+              </svg>
+
+              <div class="diagram-caption" id="diagramCaption">Fig 1.0 - PQ input signal mapped to target display luminance (nits).</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Band 04: What it does (Features - No borders) -->
+      <section id="features" aria-labelledby="features-heading">
+        <div class="wrap" style="padding: 4rem 2rem 1rem;">
+          <span class="kicker">03 / What it does</span>
+          <h2 id="features-heading">One app. Three things Windows gets wrong.</h2>
+          <p class="section-lede">Gloam not only fixes HDR/SDR gamma, but also replaces Night Light with a color-science-aware night mode and provides a full HDR capable calibration path when you are ready to measure.</p>
+        </div>
+
+        <div class="feature-grid">
+          <article class="feature-card">
+            <h3>
+              <span class="feature-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h20M2 12c0-5.523 4.477-10 10-10s10 4.477 10 10M2 12c0 5.523 4.477 10 10 10s10-4.477 10-10"/><path d="M12 2a10 10 0 0 1 0 20 10 10 0 0 1 0-20z"/></svg>
+              </span>
+              HDR gamma fix
+            </h3>
+            <p>Per-monitor gamma 2.2, 2.4, or Windows default. Switchable per monitor with a hotkey. Self-healing ramp guard restores the correction if a game or driver resets it.</p>
+          </article>
+
+          <article class="feature-card">
+            <h3>
+              <span class="feature-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+              </span>
+              Night mode, done right
+            </h3>
+            <p>Temperature shifts are blended in linear light, where light physically mixes so night mode <i>looks better</i>. Sunset and sunrise are computed from the sun's position at your location, with programmable smooth fades and per-app exclusions.</p>
+          </article>
+
+          <article class="feature-card">
+            <h3>
+              <span class="feature-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+              </span>
+              Colorimeter calibration
+            </h3>
+            <p>Add a meter and Gloam installs a native Windows MHC2 profile, then verifies it by measuring through the applied correction. HDR verifications include a PQ tracking sweep in absolute nits.</p>
+          </article>
+
+          <article class="feature-card">
+            <h3>
+              <span class="feature-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><path d="M8 21h8M12 17v4"/></svg>
+              </span>
+              Per-monitor dashboard
+            </h3>
+            <p>Real monitor names, HDR/SDR status, smart brightness levels, temp/tint and RGB adjustment, and live gamma mode readout for every connected display. Settings persist per monitor and restore on startup.</p>
+          </article>
+
+          <article class="feature-card">
+            <h3>
+              <span class="feature-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+              </span>
+              Native apply
+            </h3>
+            <p>LUTs write directly to the GPU gamma ramp through the Windows API. No helper process. No repeated rewrites when nothing has changed.</p>
+          </article>
+
+          <article class="feature-card">
+            <h3>
+              <span class="feature-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              </span>
+              No telemetry, fully local
+            </h3>
+            <p>Your settings live in a local JSON file. The update checker is the only network call, and it only asks GitHub for the latest release tag.</p>
+          </article>
+        </div>
+      </section>
+
+      <!-- Band 05: Open Source & Community -->
+      <section class="opensource" id="opensource" aria-labelledby="opensource-heading">
+        <div class="opensource-layout">
+          <div class="opensource-copy">
+            <span class="kicker">04 / Built in the open</span>
+            <span class="license-pill"><span class="dot" aria-hidden="true"></span>MIT licensed</span>
+            <h2 id="opensource-heading">Free software, made to help.</h2>
+            <p>
+              Gloam exists because a lot of people bought beautiful HDR displays and then watched Windows wash them out. As a Windows user this bothers me but as a colorist this dismays me. The fix is straightforward enough to give away, and open enough that anyone can inspect it, improve it, or fork it.
+            </p>
+            <p>
+              The source is on GitHub. Builds are published through GitHub Releases. There is no paid tier, no subscription, no data collection, and no upsell. If you have a colorimeter, great. If you do not, the app still will make SDR content look pristine on your HDR display.
+            </p>
+            <a class="btn btn-secondary" href="https://github.com/halideworks/gloam">View source on GitHub</a>
+          </div>
+
+          <div class="opensource-details">
+            <ul class="opensource-list">
+              <li>
+                <span style="color: var(--accent); font-weight: bold; flex-shrink: 0; margin-right: 0.5rem;">→</span>
+                <span><strong>Core features need no dependencies.</strong> Gamma correction, night mode, and dashboard run on the app's native pipeline.</span>
+              </li>
+              <li>
+                <span style="color: var(--accent); font-weight: bold; flex-shrink: 0; margin-right: 0.5rem;">→</span>
+                <span><strong>ArgyllCMS is used only for measurement.</strong> It is downloaded automatically when calibration runs and invoked as a separate process. Gloam does not link against it.</span>
+              </li>
+              <li>
+                <span style="color: var(--accent); font-weight: bold; flex-shrink: 0; margin-right: 0.5rem;">→</span>
+                <span><strong>Built on community research.</strong> The gamma fix draws from Dylan Raga's original research. Calibration references MHC2 by dantmnf and the DisplayCAL corrections database.</span>
+              </li>
+              <li>
+                <span style="color: var(--accent); font-weight: bold; flex-shrink: 0; margin-right: 0.5rem;">→</span>
+                <span><strong>Full local processing.</strong> All adjustments are calculated locally on your machine with zero external cloud dependencies.</span>
+              </li>
+              <li>
+                <span style="color: var(--accent); font-weight: bold; flex-shrink: 0; margin-right: 0.5rem;">→</span>
+                <span><strong>Extensible configuration.</strong> Customize gamma targets, temperature curves, monitor brightness, tint and temp trim, and more.</span>
+              </li>
+              <li>
+                <span style="color: var(--accent); font-weight: bold; flex-shrink: 0; margin-right: 0.5rem;">→</span>
+                <span><strong>Contributions welcome.</strong> Bug reports, pull requests, documentation edits, and measured verification data all help.</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- Band 06: Unified Download Section -->
+      <section id="download" aria-labelledby="download-heading">
+        <div class="wrap" style="padding: 2.5rem 2rem 1rem;">
+          <span class="kicker">05 / Get it</span>
+          <h2 id="download-heading">Download Packages</h2>
+          <p class="section-lede">One self-contained app, two ways to get it. Run the installer (recommended) or grab the portable zip, then enable "Start with Windows" from the tray menu if you want to correct your display on every boot.</p>
+        </div>
+
+        <div class="download-panel">
+          <div class="download-option">
+            <h3>Installer</h3>
+            <p>Gloam-&lt;version&gt;-Setup.exe. The recommended way in.</p>
+            <ul>
+              <li>Self-contained: no .NET runtime to install</li>
+              <li>Bundles ArgyllCMS, so colorimeter calibration works immediately</li>
+              <li>Per-user install, no administrator prompt</li>
+              <li>Updates itself in the background: download it once</li>
+            </ul>
+          </div>
+
+          <div class="download-option">
+            <h3>Portable</h3>
+            <p>Gloam-&lt;version&gt;-Portable.zip. No install, no traces.</p>
+            <ul>
+              <li>Also self-contained: no .NET runtime to install</li>
+              <li>Extract it anywhere and run the executable</li>
+              <li>Does not auto-update: replace it with a newer zip to upgrade</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="download-action-box">
+          <a class="btn btn-primary" href="https://github.com/halideworks/gloam/releases" target="_blank">Download on GitHub</a>
+        </div>
+      </section>
+
+      <!-- Band 07: FAQ Questions -->
+      <section id="faq" aria-labelledby="faq-heading">
+        <div class="wrap faq" style="padding: 4rem 2rem 6rem;">
+          <span class="kicker">06 / Questions</span>
+          <h2 id="faq-heading" style="margin-bottom: 3rem;">Before you ask</h2>
+
+          <details style="border-bottom: var(--border-thin) solid var(--border); padding: 1rem 0;">
+            <summary style="font-weight: 700; cursor: pointer; text-transform: uppercase; list-style: none; display: flex; justify-content: space-between; align-items: center;">
+              Do I need a colorimeter?
+              <span style="font-size: 1.25rem;">+</span>
+            </summary>
+            <div class="faq-body" style="padding-top: 1rem; opacity: 0.85; max-width: 800px;">
+              <p>No. The core gamma fix is pure math and needs no hardware. Night mode, per-monitor white point trims, and the dashboard all work without a meter. A colorimeter is only required for measurement-based calibration and verification.</p>
+            </div>
+          </details>
+
+          <details style="border-bottom: var(--border-thin) solid var(--border); padding: 1rem 0;">
+            <summary style="font-weight: 700; cursor: pointer; text-transform: uppercase; list-style: none; display: flex; justify-content: space-between; align-items: center;">
+              Does it work in SDR, or only HDR?
+              <span style="font-size: 1.25rem;">+</span>
+            </summary>
+            <div class="faq-body" style="padding-top: 1rem; opacity: 0.85; max-width: 800px;">
+              <p>Both. HDR is where the gray haze is most obvious, so that is where Gloam started. The gamma fix operates inside the HDR signal path, and colorimeter corrections install as native Windows MHC2 profiles that the compositor applies in HDR and SDR. SDR displays get gamma control, night mode, and full calibration too.</p>
+            </div>
+          </details>
+
+          <details style="border-bottom: var(--border-thin) solid var(--border); padding: 1rem 0;">
+            <summary style="font-weight: 700; cursor: pointer; text-transform: uppercase; list-style: none; display: flex; justify-content: space-between; align-items: center;">
+              How is this different from Windows Night Light?
+              <span style="font-size: 1.25rem;">+</span>
+            </summary>
+            <div class="faq-body" style="padding-top: 1rem; opacity: 0.85; max-width: 800px;">
+              <p>Three differences. First, the math: Gloam blends temperature in linear light, where light physically mixes, and its accurate CIE 1931 mode keeps the white point on the Planckian locus. Night Light is a simple compositor filter that tints without discernment.</p>
+              <p>Second, composition: Night Light fights other corrections for control of the pipeline. Gloam bakes the warm shift into the same high-precision LUTs as your gamma and calibration, so nothing bands or flickers.</p>
+              <p>Third, scheduling: sunset and sunrise are computed from the sun's actual position at your location, with configurable fades and levels (set different temps at different times), per-app exclusions, and per-monitor temperature offsets.</p>
+            </div>
+          </details>
+
+          <details style="border-bottom: var(--border-thin) solid var(--border); padding: 1rem 0;">
+            <summary style="font-weight: 700; cursor: pointer; text-transform: uppercase; list-style: none; display: flex; justify-content: space-between; align-items: center;">
+              Which colorimeters work?
+              <span style="font-size: 1.25rem;">+</span>
+            </summary>
+            <div class="faq-body" style="padding-top: 1rem; opacity: 0.85; max-width: 800px;">
+              <p>Any meter supported by ArgyllCMS. The X-Rite i1 Display family and its Calibrite successors are the common path. Use a spectral correction matched to your panel; Gloam's in-app browser downloads .ccss and .ccmx files from the DisplayCAL community database. On QD-OLED and wide-gamut panels this is essential.</p>
+            </div>
+          </details>
+
+          <details style="border-bottom: var(--border-thin) solid var(--border); padding: 1rem 0;">
+            <summary style="font-weight: 700; cursor: pointer; text-transform: uppercase; list-style: none; display: flex; justify-content: space-between; align-items: center;">
+              How is this different from DisplayCAL or Calman?
+              <span style="font-size: 1.25rem;">+</span>
+            </summary>
+            <div class="faq-body" style="padding-top: 1rem; opacity: 0.85; max-width: 800px;">
+              <p>For SDR desktop calibration, DisplayCAL is mature and excellent, and Calman is a professional standard for TV and mastering workflows. If those fit your use case, use them.</p>
+              <p>Gloam's focus is the HDR-native pipeline on Windows 11. Traditional tools apply corrections through the GPU gamma ramp and ICC profiles that the Advanced Color compositor largely ignores when HDR is on. Gloam builds a properly domain-wrapped MHC2 matrix plus PQ-domain tone LUTs, installs them through the association the HDR pipeline reads, and verifies by measuring through the applied profile. It's just a better option for most users using HDR without expensive professional software (though our math is built on the same principles).</p>
+            </div>
+          </details>
+
+          <details style="border-bottom: var(--border-thin) solid var(--border); padding: 1rem 0;">
+            <summary style="font-weight: 700; cursor: pointer; text-transform: uppercase; list-style: none; display: flex; justify-content: space-between; align-items: center;">
+              Is it really free and open source?
+              <span style="font-size: 1.25rem;">+</span>
+            </summary>
+            <div class="faq-body" style="padding-top: 1rem; opacity: 0.85; max-width: 800px;">
+              <p>Yes. Gloam is MIT licensed and the source is on GitHub. ArgyllCMS, which Gloam invokes as a separate process for measurement, is AGPL v3. Gloam does not link against it.</p>
+            </div>
+          </details>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="site-footer">
+      <div class="wrap">
+        <span>Gloam. MIT licensed. Free for everyone.</span>
+        <span class="footer-links">
+          <a href="https://github.com/halideworks/gloam">GitHub</a>
+          <a href="https://github.com/halideworks/gloam/releases">Releases</a>
+          <a href="whitepaper.html">Technical whitepaper</a>
+          <a href="guides.html">Guides</a>
+        </span>
+      </div>
+    </footer>
+  </div>
+
+  <button class="back-to-top" id="backToTop">Back To Top</button>
+
+  <script>
+    // Theme toggle function
+    (function() {
+      const themeToggle = document.getElementById('themeToggle');
+      if (themeToggle) {
+        themeToggle.addEventListener('click', () => {
+          document.body.classList.toggle('dark-theme');
+          const nowDark = document.body.classList.contains('dark-theme');
+          try {
+            localStorage.setItem('theme', nowDark ? 'dark' : 'light');
+          } catch(e) {}
+        });
+      }
+    })();
+
+    // Back to top button
+    (function() {
+      const backToTop = document.getElementById('backToTop');
+      if (backToTop) {
+        window.addEventListener('scroll', () => {
+          if (window.scrollY > 400) {
+            backToTop.classList.add('visible');
+          } else {
+            backToTop.classList.remove('visible');
+          }
+        });
+        backToTop.addEventListener('click', () => {
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+      }
+    })();
+
+    // Pointer-events based comparison slider (buttery-smooth animation frame)
+    (function () {
+      const comparison = document.getElementById('comparison');
+      const after = document.getElementById('comparison-after');
+      const handle = document.getElementById('comparison-handle');
+      if (!comparison || !after || !handle) return;
+
+      let isDragging = false;
+      let targetPct = 50;
+      let currentPct = 50;
+
+      function updateSlider() {
+        currentPct += (targetPct - currentPct) * 0.25;
+        if (Math.abs(currentPct - targetPct) < 0.05) {
+          currentPct = targetPct;
+        }
+        comparison.style.setProperty('--clip-pos', currentPct + '%');
+
+        if (isDragging || Math.abs(currentPct - targetPct) > 0.01) {
+          requestAnimationFrame(updateSlider);
+        }
+      }
+
+      function setPosition(x) {
+        const rect = comparison.getBoundingClientRect();
+        let pct = ((x - rect.left) / rect.width) * 100;
+        targetPct = Math.max(0, Math.min(100, pct));
+      }
+
+      function onPointerMove(e) {
+        if (!isDragging) return;
+        setPosition(e.clientX);
+      }
+
+      function onPointerUp() {
+        isDragging = false;
+        window.removeEventListener('pointermove', onPointerMove);
+        window.removeEventListener('pointerup', onPointerUp);
+      }
+
+      function onPointerDown(e) {
+        e.preventDefault(); // Prevent text highlight selection
+        isDragging = true;
+        setPosition(e.clientX);
+        window.addEventListener('pointermove', onPointerMove);
+        window.addEventListener('pointerup', onPointerUp);
+        requestAnimationFrame(updateSlider);
+      }
+
+      handle.addEventListener('pointerdown', onPointerDown);
+      comparison.addEventListener('click', function (e) {
+        if (e.target === handle || handle.contains(e.target)) return;
+        setPosition(e.clientX);
+        requestAnimationFrame(updateSlider);
+      });
+    })();
+
+    // Scrollytelling vertical pipeline & tabs controller
+    (function () {
+      const howSection = document.getElementById('how');
+      const steps = document.querySelectorAll('.pipeline-step');
+      const detailNum = document.getElementById('detailNum');
+      const detailTitle = document.getElementById('detailTitle');
+      const detailText = document.getElementById('detailText');
+      const diagrams = document.querySelectorAll('.pipeline-diagram');
+      const caption = document.getElementById('diagramCaption');
+
+      const captions = {
+        1: "Fig 1.0 - PQ input signal mapped to target display luminance (nits).",
+        2: "Fig 2.0 - Shadow-lift deviation of sRGB (orange) vs linear reference (dashed).",
+        3: "Fig 3.0 - Target power-law gamma 2.2 curve maps linear light values.",
+        4: "Fig 4.0 - Highlight protection knee bends smoothly to fit peak HDR headroom.",
+        5: "Fig 5.0 - Corrected transfer function values injected directly to GPU 1D LUT."
+      };
+
+      let activeStep = 1;
+
+      function updateActiveStep(step) {
+        if (activeStep === step) return;
+        activeStep = step;
+
+        steps.forEach(s => {
+          if (parseInt(s.getAttribute('data-step')) === step) {
+            s.classList.add('active');
+            
+            // Update copy
+            detailNum.textContent = s.getAttribute('data-num');
+            detailTitle.textContent = s.getAttribute('data-title');
+            detailText.textContent = s.getAttribute('data-text');
+          } else {
+            s.classList.remove('active');
+          }
+        });
+
+        // Update active SVG
+        diagrams.forEach(diag => {
+          if (diag.id === `diagram-${step}`) {
+            diag.classList.add('active');
+          } else {
+            diag.classList.remove('active');
+          }
+        });
+
+        // Update caption
+        caption.textContent = captions[step];
+      }
+
+      steps.forEach(step => {
+        const stepNum = parseInt(step.getAttribute('data-step'));
+        const update = () => updateActiveStep(stepNum);
+        
+        step.addEventListener('click', update);
+        step.addEventListener('pointerdown', update);
+        step.addEventListener('mouseenter', () => {
+          if (window.innerWidth >= 900) {
+            update();
+          }
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

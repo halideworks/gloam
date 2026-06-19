@@ -20,9 +20,7 @@ namespace HDRGammaController.Core
         private const long MaxBytes = 1_000_000;
 
         /// <summary>Default log location under LocalApplicationData.</summary>
-        public static string DefaultFilePath => Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "HDRGammaController", "app.log");
+        public static string DefaultFilePath => Path.Combine(AppPaths.DataDir, "app.log");
 
         /// <summary>
         /// Enables the file sink. Safe to call once at startup; if the path is

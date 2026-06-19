@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using HDRGammaController.Core.Calibration;
 
 namespace HDRGammaController.Core
 {
@@ -42,7 +43,20 @@ namespace HDRGammaController.Core
                 {
                     try
                     {
-                        _dispwinRunner.ApplyGamma(item.Item1, item.Item2, item.Item4, item.Item3);
+                        // Coalescer-time bypass re-check (TOCTOU close): RequestApply checked bypass
+                        // on the caller thread, but the coalesced work runs later — a calibration may
+                        // have called EnterBypassMode in between. Re-evaluate immediately before the
+                        // hardware write so we never stomp the identity ramp the colorimeter is reading.
+                        if (CalibrationStateManager.IsDeviceInBypass(item.Item1))
+                        {
+                            Log.Info($"GammaApplyService: skipping coalesced apply for {item.Item1.FriendlyName} (calibration bypass active)");
+                            return;
+                        }
+
+                        // skipIfBypassed: re-check bypass inside ApplyGamma immediately before the
+                        // hardware write, closing the window between this coalesced callback and the
+                        // syscall (a calibration could call EnterBypassMode during LUT generation).
+                        _dispwinRunner.ApplyGamma(item.Item1, item.Item2, item.Item4, item.Item3, calibrationProfile: null, skipIfBypassed: true);
                     }
                     catch (Exception ex)
                     {
@@ -78,6 +92,17 @@ namespace HDRGammaController.Core
 
         public void RequestApply(MonitorInfo monitor, GammaMode mode, CalibrationSettings? manualCalibration = null, int? nightKelvinOverride = null)
         {
+            // Mid-calibration guard: a calibration has bypassed this display's corrections so
+            // the colorimeter measures the raw panel. The live apply path (slider, night mode,
+            // app exclusions, display-change / resume re-apply) must not stomp that in-flight
+            // ramp. Every live caller funnels through here, so this single skip also covers
+            // ApplyAll and the InvalidateAppliedState()+ApplyAll() resume path.
+            if (CalibrationStateManager.IsDeviceInBypass(monitor))
+            {
+                Log.Info($"GammaApplyService: skipping apply for {monitor.FriendlyName} (calibration bypass active)");
+                return;
+            }
+
             // Resolve the effective calibration synchronously on the caller's thread. This
             // keeps us reading fresh state (settings, night mode, exclusions) right at the
             // moment of the request, even if the actual apply is delayed by coalescing.

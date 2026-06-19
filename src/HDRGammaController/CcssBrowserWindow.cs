@@ -31,18 +31,28 @@ namespace HDRGammaController
             Title = "Find Meter Correction - DisplayCAL Community Database";
             Width = 760;
             Height = 520;
+            MinWidth = 760;
+            MinHeight = 520;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             Background = new SolidColorBrush(Color.FromRgb(0x1e, 0x1e, 0x1e));
             Foreground = new SolidColorBrush(Color.FromRgb(0xe0, 0xe0, 0xe0));
+            Resources.MergedDictionaries.Add(new ResourceDictionary
+            {
+                Source = new Uri("pack://application:,,,/Gloam;component/Themes/DarkControls.xaml", UriKind.Absolute),
+            });
+            // Brutalist custom chrome (header + frame) is applied at the end of the ctor.
 
             _query = new TextBox
             {
                 Text = initialQuery,
                 FontSize = 13,
-                Padding = new Thickness(6, 4, 6, 4),
-                Background = new SolidColorBrush(Color.FromRgb(0x2d, 0x2d, 0x2d)),
+                FontFamily = Application.Current?.Resources["BodyFont"] as FontFamily,
+                Padding = new Thickness(8, 6, 8, 6),
+                Background = new SolidColorBrush(Color.FromRgb(0x1a, 0x1a, 0x1a)),
                 Foreground = Brushes.White,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(0x3f, 0x3f, 0x3f)),
+                BorderBrush = Brushes.White,
+                BorderThickness = new Thickness(2),
+                CaretBrush = Brushes.White,
                 VerticalContentAlignment = VerticalAlignment.Center,
             };
             _query.KeyDown += async (_, e) => { if (e.Key == System.Windows.Input.Key.Enter) await SearchAsync(); };
@@ -60,9 +70,10 @@ namespace HDRGammaController
 
             _list = new ListView
             {
-                Background = new SolidColorBrush(Color.FromRgb(0x25, 0x25, 0x25)),
+                Background = new SolidColorBrush(Color.FromRgb(0x1a, 0x1a, 0x1a)),
                 Foreground = new SolidColorBrush(Color.FromRgb(0xe0, 0xe0, 0xe0)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(0x3f, 0x3f, 0x3f)),
+                BorderBrush = Brushes.White,
+                BorderThickness = new Thickness(2),
                 Margin = new Thickness(0, 10, 0, 10),
             };
             var grid = new GridView();
@@ -114,7 +125,7 @@ namespace HDRGammaController
             root.Children.Add(topRow);
             root.Children.Add(_list);
             root.Children.Add(bottomRow);
-            Content = root;
+            Services.BrutalistChrome.Apply(this, "Find Meter Correction", root);
 
             Loaded += async (_, _) => await SearchAsync();
         }
@@ -123,7 +134,7 @@ namespace HDRGammaController
         {
             Content = content,
             Padding = new Thickness(14, 5, 14, 5),
-            Background = new SolidColorBrush(Color.FromRgb(0x08, 0x91, 0xb2)),
+            Background = new SolidColorBrush(Color.FromRgb(0xFF, 0x3C, 0x2F)), // app accent
             Foreground = Brushes.White,
             BorderThickness = new Thickness(0),
         };

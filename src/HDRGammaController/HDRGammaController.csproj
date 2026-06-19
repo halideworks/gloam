@@ -3,23 +3,35 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
+    <!-- User-facing brand is Gloam; the project file name and RootNamespace stay
+         HDRGammaController internally. -->
+    <AssemblyName>Gloam</AssemblyName>
+    <RootNamespace>HDRGammaController</RootNamespace>
+    <Product>Gloam</Product>
+    <AssemblyTitle>Gloam</AssemblyTitle>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <RollForward>LatestMajor</RollForward>
     <ApplicationIcon>app.ico</ApplicationIcon>
     <PublishTrimmed>false</PublishTrimmed>
-    <!-- Stamped at compile time; UpdateService compares it against the GitHub
-         release published_at, since the rolling 'latest' tag has no semver. -->
-    <BuildTimestampUtc>$([System.DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"))</BuildTimestampUtc>
+    <!-- Default version for local builds; CI overrides via /p:Version=<tag>. Velopack
+         compares the installed package version (vpk pack -v) to the release feed, so
+         keep this in sync with the tag the release is cut from. -->
+    <Version>1.0.0</Version>
+    <!-- Velopack requires its hooks to run before WPF spins up, so the entry point is a
+         custom Main in Program.cs rather than the App.xaml-generated one. -->
+    <StartupObject>HDRGammaController.Program</StartupObject>
   </PropertyGroup>
 
   <ItemGroup>
-    <AssemblyMetadata Include="BuildTimestampUtc" Value="$(BuildTimestampUtc)" />
+    <Resource Include="app.ico" />
   </ItemGroup>
 
+  <!-- Bundled brand fonts (OFL). Referenced via pack URI by typographic family name;
+       all weights aggregate under "Plus Jakarta Sans" / "Space Grotesk". -->
   <ItemGroup>
-    <Resource Include="app.ico" />
+    <Resource Include="Fonts\*.ttf" />
   </ItemGroup>
 
   <!-- Embedded ICM profiles - extracted at runtime if missing or updated -->
@@ -51,7 +63,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageReference Include="Hardcodet.NotifyIcon.Wpf" Version="1.1.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
+    <PackageReference Include="Velopack" Version="1.2.0" />
   </ItemGroup>
 
 </Project>

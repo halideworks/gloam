@@ -179,10 +179,16 @@ namespace HDRGammaController.Core.Calibration
             char_.BluePrimary = blueMeasurement?.Chromaticity ?? Chromaticity.Rec709Blue;
             char_.WhitePoint = whiteMeasurement?.Chromaticity ?? Chromaticity.D65;
 
-            // Build tone response curves from grayscale measurements
-            char_.RedToneCurve = ExtractToneCurve(PatchCategory.Grayscale, m => m.Patch.DisplayRgb.R);
-            char_.GreenToneCurve = ExtractToneCurve(PatchCategory.Grayscale, m => m.Patch.DisplayRgb.G);
-            char_.BlueToneCurve = ExtractToneCurve(PatchCategory.Grayscale, m => m.Patch.DisplayRgb.B);
+            // Build the tone response curve from grayscale measurements. Tone correction is
+            // LUMINANCE-ONLY: only neutral (grayscale) patches are measured, and the curve's
+            // output is total luminance Y, so a per-channel fit would produce three byte-for-byte
+            // identical curves. We therefore fit a single shared luminance curve and reference it
+            // from all three channels. Per-channel tracking (grayscale color cast) is NOT corrected
+            // by the tone curves - only the RGB->XYZ matrix corrects white point and gamut.
+            var luminanceToneCurve = ExtractToneCurve(PatchCategory.Grayscale, m => m.Patch.DisplayRgb.R);
+            char_.RedToneCurve = luminanceToneCurve;
+            char_.GreenToneCurve = luminanceToneCurve;
+            char_.BlueToneCurve = luminanceToneCurve;
 
             // Calculate RGB to XYZ matrix from measured primaries
             char_.RgbToXyzMatrix = CalculateMeasuredMatrix(char_);
@@ -649,9 +655,13 @@ namespace HDRGammaController.Core.Calibration
                     hi = mid;
             }
 
-            // Interpolate between adjacent entries
-            if (lo == 0) return 0;
-            if (lo >= LutSize - 1) return 1;
+            // Interpolate between adjacent entries. Only short-circuit to the
+            // endpoints when the target is at/outside the curve's actual range;
+            // otherwise interpolate the first and last intervals exactly like the
+            // interior. (The old code snapped any target in the last interval
+            // [lut[LutSize-2], lut[LutSize-1]] straight to full scale.)
+            if (output <= _lookupTable[0]) return 0;
+            if (output >= _lookupTable[LutSize - 1]) return 1;
 
             double y0 = _lookupTable[lo - 1];
             double y1 = _lookupTable[lo];
@@ -787,6 +797,13 @@ namespace HDRGammaController.Core.Calibration
 
         /// <summary>ΔE ITP (BT.2124) per patch, absolute-luminance HDR metric. ~3× ΔE2000 scale.</summary>
         public List<double> ItpDeltaEs { get; } = new();
+
+        /// <summary>
+        /// Per-patch results in measurement order (name, category, ΔE2000). Populated by
+        /// <see cref="CalibrationVerifier.ComputeMetrics"/> for the detailed-verification
+        /// analysis; other metric producers may leave it empty.
+        /// </summary>
+        public List<PatchDeltaE> PatchResults { get; } = new();
 
         /// <summary>Average grayscale tone-axis (lightness) error.</summary>
         public double AverageGrayscaleToneDeltaE => GrayscaleToneDeltaEs.Count > 0 ? GrayscaleToneDeltaEs.Average() : 0;
