@@ -1,194 +1,102 @@
 using System;
-using System.Net.Http;
-using System.Net.Http.Headers;
-using System.Text.Json;
 using System.Threading.Tasks;
-using System.Reflection;
 using HDRGammaController.Core;
+using Velopack;
+using Velopack.Sources;
 
 namespace HDRGammaController.Services
 {
-    public class UpdateInfo
-    {
-        public string Version { get; set; } = "";
-        public string ReleaseUrl { get; set; } = "";
-        public string DownloadUrl { get; set; } = "";
-        public bool IsUpdateAvailable { get; set; }
-        public DateTime PublishedAt { get; set; }
-    }
-
+    /// <summary>
+    /// Wraps Velopack's <see cref="UpdateManager"/> against our GitHub Releases feed.
+    ///
+    /// Replaces the old model (poll the rolling 'latest' tag over the GitHub API, compare
+    /// a compile-time build timestamp, then open the releases page in a browser). Velopack
+    /// installs the app per-user under %LocalAppData%\GloamApp and applies updates by swapping
+    /// the current\ folder, so updates need no elevation and no manual download/extract.
+    /// (Note: the app's data dir %LocalAppData%\Gloam is intentionally distinct from the
+    /// install dir, so settings/logs/reports survive an uninstall.)
+    /// </summary>
     public class UpdateService
     {
-        // The GitHub repo is being renamed for the Gloam rebrand. Until the rename
-        // lands, the check 404s and logs - acceptable.
-        private const string RepoOwner = "davidtorcivia";
-        private const string RepoName = "gloam";
+        // Canonical repo for the Gloam rebrand. The runtime feed here and the CI
+        // 'vpk upload github' target MUST point at the same repo, or CheckForUpdatesAsync
+        // 404s. The repo must actually be named 'gloam' (GitHub web-redirects the old
+        // name, but release assets resolve under the canonical name).
+        private const string RepoUrl = "https://github.com/davidtorcivia/gloam";
 
-        // Rate limiting to prevent excessive API calls
-        private static DateTime _lastCheckTime = DateTime.MinValue;
-        private static UpdateInfo? _cachedResult = null;
-        private static readonly TimeSpan MinCheckInterval = TimeSpan.FromMinutes(15);
-        private const int MaxResponseSizeBytes = 1024 * 100; // 100KB max response
+        private readonly UpdateManager _manager;
 
-        public async Task<UpdateInfo> CheckForUpdatesAsync()
+        public UpdateService()
         {
-            // Rate limiting - return cached result if checked recently
-            if (_cachedResult != null && DateTime.UtcNow - _lastCheckTime < MinCheckInterval)
-            {
-                Log.Info($"UpdateService: Returning cached result (last check was {(DateTime.UtcNow - _lastCheckTime).TotalMinutes:F1} minutes ago)");
-                return _cachedResult;
-            }
+            // prerelease: false - only stable, tag-driven releases are offered (see build.yml).
+            _manager = new UpdateManager(new GithubSource(RepoUrl, accessToken: null, prerelease: false));
+        }
 
-            var result = new UpdateInfo();
+        /// <summary>
+        /// True only when running from a Velopack install (%LocalAppData%\GloamApp\current).
+        /// False for `dotnet run` / F5 debugging and the portable zip, where there is no
+        /// install to update - every operation below is then a safe no-op.
+        /// </summary>
+        public bool IsInstalled => _manager.IsInstalled;
 
+        /// <summary>Returns the pending update, or null if up to date / not installed / on error.</summary>
+        public async Task<UpdateInfo?> CheckForUpdatesAsync()
+        {
+            if (!_manager.IsInstalled) return null;
             try
             {
-                using var client = new HttpClient();
-                client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Gloam", "1.0"));
-                client.Timeout = TimeSpan.FromSeconds(30);
-
-                // Get the release tagged 'latest' (our Auto-Build)
-                // Note: The standard 'releases/latest' endpoint ONLY returns stable releases, not prereleases.
-                // Since our auto-build is a prerelease tagged 'latest', we should fetch by tag.
-                string url = $"https://api.github.com/repos/{RepoOwner}/{RepoName}/releases/tags/latest";
-
-                var response = await client.GetAsync(url);
-                if (!response.IsSuccessStatusCode)
-                {
-                    // Fallback to latest stable release
-                    url = $"https://api.github.com/repos/{RepoOwner}/{RepoName}/releases/latest";
-                    response = await client.GetAsync(url);
-                }
-
-                if (response.IsSuccessStatusCode)
-                {
-                    // Security: Check response size before reading
-                    if (response.Content.Headers.ContentLength > MaxResponseSizeBytes)
-                    {
-                        Log.Error($"UpdateService: Response too large ({response.Content.Headers.ContentLength} bytes), skipping");
-                        return result;
-                    }
-
-                    var json = await response.Content.ReadAsStringAsync();
-
-                    // Additional size check for cases where Content-Length is not set
-                    if (json.Length > MaxResponseSizeBytes)
-                    {
-                        Log.Error($"UpdateService: Response too large ({json.Length} chars), skipping");
-                        return result;
-                    }
-
-                    using var doc = JsonDocument.Parse(json);
-                    var root = doc.RootElement;
-
-                    // Security: Validate expected properties exist before accessing
-                    if (!root.TryGetProperty("tag_name", out var tagNameProp) || tagNameProp.ValueKind != JsonValueKind.String)
-                    {
-                        Log.Error("UpdateService: Invalid response - missing tag_name");
-                        return result;
-                    }
-
-                    string tagName = tagNameProp.GetString() ?? "";
-                    string htmlUrl = root.TryGetProperty("html_url", out var htmlUrlProp) ? htmlUrlProp.GetString() ?? "" : "";
-                    string publishedAtStr = root.TryGetProperty("published_at", out var publishedProp) ? publishedProp.GetString() ?? "" : "";
-                    // Parse as UTC: the old default parse converted to local time while the
-                    // build date was UTC, skewing the comparison by the timezone offset.
-                    DateTime publishedAt = ParseUtc(publishedAtStr);
-
-                    // GitHub freezes published_at when a release is first published.
-                    // The CI workflow reuses the rolling 'latest' release and only swaps
-                    // its assets, so published_at never moves again; the assets'
-                    // updated_at is the only timestamp that tracks new builds.
-                    DateTime releaseTimeUtc = publishedAt;
-                    if (root.TryGetProperty("assets", out var assetsProp) && assetsProp.ValueKind == JsonValueKind.Array)
-                    {
-                        foreach (var asset in assetsProp.EnumerateArray())
-                        {
-                            if (asset.TryGetProperty("updated_at", out var updatedProp) && updatedProp.ValueKind == JsonValueKind.String)
-                            {
-                                DateTime assetUpdated = ParseUtc(updatedProp.GetString() ?? "");
-                                if (assetUpdated > releaseTimeUtc) releaseTimeUtc = assetUpdated;
-                            }
-
-                            if (string.IsNullOrEmpty(result.DownloadUrl) &&
-                                asset.TryGetProperty("browser_download_url", out var dlProp) && dlProp.ValueKind == JsonValueKind.String)
-                            {
-                                result.DownloadUrl = dlProp.GetString() ?? "";
-                            }
-                        }
-                    }
-
-                    result.Version = tagName;
-                    result.ReleaseUrl = htmlUrl;
-                    result.PublishedAt = releaseTimeUtc;
-
-                    // The auto-build is a rolling 'latest' tag with no comparable semver,
-                    // so "newer" means built/published after this binary was compiled.
-                    DateTime buildDate = GetBuildTimeUtc(Assembly.GetExecutingAssembly());
-
-                    // Allow 1 hour buffer for build server time differences
-                    if (releaseTimeUtc > buildDate.AddHours(1))
-                    {
-                        result.IsUpdateAvailable = true;
-                    }
-
-                    Log.Info($"UpdateService: Release '{tagName}' time {releaseTimeUtc:u}, build time {buildDate:u}, update available: {result.IsUpdateAvailable}");
-
-                    // Cache only successful checks; a transient failure should not
-                    // suppress retries for the next 15 minutes.
-                    _lastCheckTime = DateTime.UtcNow;
-                    _cachedResult = result;
-                }
-                else
-                {
-                    Log.Error($"UpdateService: GitHub API returned {(int)response.StatusCode} {response.StatusCode} for {url}");
-                }
+                return await _manager.CheckForUpdatesAsync();
             }
             catch (Exception ex)
             {
-                Log.Error($"UpdateService: Update check failed: {ex.Message}");
+                Log.Error($"UpdateService: update check failed: {ex.Message}");
+                return null;
             }
-
-            return result;
-        }
-        
-        private static DateTime ParseUtc(string value)
-        {
-            return DateTime.TryParse(value,
-                System.Globalization.CultureInfo.InvariantCulture,
-                System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal,
-                out var parsed) ? parsed : DateTime.MinValue;
         }
 
-        private static DateTime GetBuildTimeUtc(Assembly assembly)
+        /// <summary>Downloads the update package (delta when possible) in the background.</summary>
+        public async Task<bool> DownloadUpdatesAsync(UpdateInfo info)
         {
-            // Preferred: the BuildTimestampUtc assembly metadata stamped at compile
-            // time (see the csproj). Reliable across copies and CI builds.
-            foreach (var attr in assembly.GetCustomAttributes<AssemblyMetadataAttribute>())
-            {
-                if (attr.Key == "BuildTimestampUtc" &&
-                    DateTime.TryParse(attr.Value,
-                        System.Globalization.CultureInfo.InvariantCulture,
-                        System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal,
-                        out var stamped))
-                {
-                    return stamped;
-                }
-            }
-
-            // Fallback: file write time — fragile (any file copy refreshes it, which
-            // suppresses update notifications until the next real build).
             try
             {
-                string? location = Environment.ProcessPath;
-                if (!string.IsNullOrEmpty(location))
-                {
-                    return System.IO.File.GetLastWriteTimeUtc(location);
-                }
+                await _manager.DownloadUpdatesAsync(info);
+                return true;
             }
-            catch {}
-
-            return DateTime.MinValue;
+            catch (Exception ex)
+            {
+                Log.Error($"UpdateService: update download failed: {ex.Message}");
+                return false;
+            }
         }
+
+        /// <summary>
+        /// Applies the downloaded update and restarts into the new version. Terminates the
+        /// current process, so callers must persist any state first.
+        /// </summary>
+        public void ApplyUpdatesAndRestart(UpdateInfo info)
+        {
+            _manager.ApplyUpdatesAndRestart(info);
+        }
+
+        /// <summary>
+        /// Schedules the downloaded update to be applied after the process exits, without
+        /// relaunching. Used on normal shutdown so a user who ignored the restart toast is
+        /// still on the new version next launch. Safe to call when nothing is downloaded.
+        /// </summary>
+        public void ApplyUpdatesOnExit(UpdateInfo info)
+        {
+            try
+            {
+                _manager.WaitExitThenApplyUpdates(info, silent: true, restart: false);
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"UpdateService: scheduling apply-on-exit failed: {ex.Message}");
+            }
+        }
+
+        /// <summary>Version label for the pending update (e.g. "1.2.0").</summary>
+        public static string VersionLabel(UpdateInfo info)
+            => info.TargetFullRelease?.Version?.ToString() ?? "new version";
     }
 }

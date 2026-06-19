@@ -356,33 +356,34 @@
         <div class="wrap" style="padding: 2.5rem 2rem 1rem;">
           <span class="kicker">05 / Get it</span>
           <h2 id="download-heading">Download Packages</h2>
-          <p class="section-lede">Two builds, same application. Extract the ZIP, run the executable, and enable "Start with Windows" from the tray menu if you want to correct your display on every boot.</p>
+          <p class="section-lede">One self-contained app, two ways to get it. Run the installer (recommended) or grab the portable zip, then enable "Start with Windows" from the tray menu if you want to correct your display on every boot.</p>
         </div>
 
         <div class="download-panel">
           <div class="download-option">
-            <h3>Full Build</h3>
-            <p>Self-contained and ready offline.</p>
+            <h3>Installer</h3>
+            <p>Gloam-&lt;version&gt;-Setup.exe. The recommended way in.</p>
             <ul>
-              <li>No .NET installation required</li>
+              <li>Self-contained: no .NET runtime to install</li>
               <li>Bundles ArgyllCMS, so colorimeter calibration works immediately</li>
-              <li>Larger download, about 160 MB</li>
+              <li>Per-user install, no administrator prompt</li>
+              <li>Updates itself in the background: download it once</li>
             </ul>
           </div>
 
           <div class="download-option">
-            <h3>Lite Build</h3>
-            <p>A tiny download if you already have the runtime.</p>
+            <h3>Portable</h3>
+            <p>Gloam-&lt;version&gt;-Portable.zip. No install, no traces.</p>
             <ul>
-              <li>Requires the .NET 8 Desktop Runtime (Note: System-level runtime installation required if not present)</li>
-              <li>ArgyllCMS is downloaded automatically the first time calibration needs it</li>
-              <li>Very small download, about 200 KB</li>
+              <li>Also self-contained: no .NET runtime to install</li>
+              <li>Extract it anywhere and run the executable</li>
+              <li>Does not auto-update: replace it with a newer zip to upgrade</li>
             </ul>
           </div>
         </div>
 
         <div class="download-action-box">
-          <a class="btn btn-primary" href="https://github.com/davidtorcivia/gloam/releases/latest" target="_blank">Download Latest Release on GitHub</a>
+          <a class="btn btn-primary" href="https://github.com/davidtorcivia/gloam/releases" target="_blank">Download on GitHub</a>
         </div>
       </section>
 
@@ -464,7 +465,7 @@
         <span>Gloam. MIT licensed. Free for everyone.</span>
         <span class="footer-links">
           <a href="https://github.com/davidtorcivia/gloam">GitHub</a>
-          <a href="https://github.com/davidtorcivia/gloam/releases/latest">Releases</a>
+          <a href="https://github.com/davidtorcivia/gloam/releases">Releases</a>
           <a href="whitepaper.html">Technical whitepaper</a>
           <a href="guides.html">Guides</a>
         </span>

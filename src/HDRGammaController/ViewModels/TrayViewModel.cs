@@ -13,19 +13,13 @@ using HDRGammaController.Core;
 using HDRGammaController.Core.Calibration;
 using HDRGammaController.Services;
 using HDRGammaController.Interop;
+using Velopack;
 
 namespace HDRGammaController.ViewModels
 {
     public class TrayViewModel : ObservableObject, IDisposable
     {
         public event Action<string, string>? NotificationRequested;
-
-        /// <summary>
-        /// Raised (once) when an update is available, carrying the version label. The
-        /// subscriber attaches a "Download" action to the themed toast that opens the
-        /// release page — replacing the old click-the-balloon behavior.
-        /// </summary>
-        public event Action<UpdateInfo>? UpdateNotificationRequested;
 
         private readonly MonitorManager _monitorManager;
         private readonly ProfileManager _profileManager;
@@ -86,7 +80,7 @@ namespace HDRGammaController.ViewModels
             _toastService = toastService;
 
             _dispwinRunner.DispwinUnavailable += () =>
-                Application.Current.Dispatcher.Invoke(() =>
+                OnUiThread(() =>
                     NotificationRequested?.Invoke("ArgyllCMS Not Found",
                         "Native gamma apply failed and dispwin.exe is unavailable.\n" +
                         "Open Calibrate Display to download ArgyllCMS."));
@@ -95,7 +89,7 @@ namespace HDRGammaController.ViewModels
             {
                 // The hardware apply is thread-agnostic, but ApplyAll reads TrayItems,
                 // which belongs to the UI thread.
-                Application.Current.Dispatcher.Invoke(() => ApplyAll());
+                OnUiThread(() => ApplyAll());
             };
             _settingsManager.NightModeChanged += (newSettings) => _nightModeService.UpdateSettings(newSettings);
 
@@ -124,30 +118,42 @@ namespace HDRGammaController.ViewModels
             CheckForUpdates();
         }
         
-        /// <summary>
-        /// URL to open when the user clicks the update notification balloon.
-        /// Null until an update has actually been detected.
-        /// </summary>
-        public string? PendingUpdateUrl { get; private set; }
+        // The downloaded-and-ready update awaiting apply. Null until one is detected and
+        // fully downloaded. Applied either immediately (user clicks the toast) or, failing
+        // that, on the next normal exit (see Dispose).
+        private UpdateInfo? _pendingUpdate;
+        private bool _updateApplied;
 
         private async void CheckForUpdates()
         {
             // async void: any escaped exception would crash the process via the dispatcher.
             try
             {
+                // Dev (F5) and the portable zip have no Velopack install to update.
+                if (!_updateService.IsInstalled) return;
+
                 var info = await _updateService.CheckForUpdatesAsync();
-                if (info.IsUpdateAvailable)
+                if (info == null) return; // up to date
+
+                // Download silently in the background - no prompt, no manual download step.
+                if (!await _updateService.DownloadUpdatesAsync(info)) return;
+
+                _pendingUpdate = info;
+                string version = UpdateService.VersionLabel(info);
+                Log.Info($"TrayViewModel: update {version} downloaded and ready to apply.");
+
+                // One low-friction toast. Clicking restarts into the new version now; if it
+                // is ignored, the update is applied on the next normal exit anyway (Dispose).
+                if (_toastService != null)
                 {
-                     PendingUpdateUrl = !string.IsNullOrEmpty(info.ReleaseUrl)
-                         ? info.ReleaseUrl
-                         : $"https://github.com/davidtorcivia/gloam/releases";
-                     // Raise for subscribers (e.g. MainWindow) that attach a Download action
-                     // to the themed toast. Fall back to a plain notification otherwise.
-                     if (_toastService != null)
-                         UpdateNotificationRequested?.Invoke(info);
-                     else
-                         NotificationRequested?.Invoke("Update Available",
-                             $"A new version ({info.Version}) is available.\nClick here to download.");
+                    _toastService.Show("Update ready",
+                        $"Gloam {version} will install when you restart.",
+                        ToastKind.Success, "Restart now", ApplyPendingUpdate);
+                }
+                else
+                {
+                    NotificationRequested?.Invoke("Update ready",
+                        $"Gloam {version} will install the next time you restart the app.");
                 }
             }
             catch (Exception ex)
@@ -157,25 +163,46 @@ namespace HDRGammaController.ViewModels
         }
 
         /// <summary>
-        /// Opens the release page for a pending update. Wired to the tray balloon
-        /// click; without this the balloon's "Click here to download" did nothing.
+        /// Applies the downloaded update and restarts into it immediately. Wired to the
+        /// update toast's "Restart now" action. Velopack terminates the process from here.
         /// </summary>
-        public void OpenPendingUpdate()
+        public void ApplyPendingUpdate()
         {
-            string? url = PendingUpdateUrl;
-            if (string.IsNullOrEmpty(url)) return;
-
+            var info = _pendingUpdate;
+            if (info == null) return;
             try
             {
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = url,
-                    UseShellExecute = true
-                });
+                _updateApplied = true; // suppress the apply-on-exit path in Dispose
+                _updateService.ApplyUpdatesAndRestart(info);
             }
             catch (Exception ex)
             {
-                Log.Error($"TrayViewModel.OpenPendingUpdate: {ex.Message}");
+                _updateApplied = false;
+                Log.Error($"TrayViewModel.ApplyPendingUpdate: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Marshals an action onto the UI thread, but no-ops if the dispatcher is gone or
+        /// shutting down. The night-mode timer and the foreground-window hook fire on
+        /// background threads; a Dispatcher.Invoke after Application.Shutdown throws there,
+        /// where nothing catches it, and an unhandled exception on a non-UI thread tears down
+        /// the whole process. This guard turns that race into a harmless skip.
+        /// </summary>
+        private static void OnUiThread(Action action)
+        {
+            var dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher == null || dispatcher.HasShutdownStarted || dispatcher.HasShutdownFinished)
+                return;
+            try
+            {
+                dispatcher.Invoke(action);
+            }
+            catch (Exception ex)
+            {
+                // Most likely the dispatcher began shutting down between the check and the
+                // Invoke. Log and move on rather than letting it escape the timer/hook thread.
+                Log.Error($"TrayViewModel.OnUiThread: {ex.Message}");
             }
         }
         
@@ -218,7 +245,7 @@ namespace HDRGammaController.ViewModels
                 bool nowDisabled = (_applyService.NightModeManuallyDisabled = !_applyService.NightModeManuallyDisabled);
                 ApplyAll(); // Re-apply all calibrations with night mode toggled
                 _toastService?.Show("Gloam",
-                    nowDisabled ? "Night warmth disabled — day mode" : "Night warmth enabled",
+                    nowDisabled ? "Night warmth disabled - day mode" : "Night warmth enabled",
                     nowDisabled ? ToastKind.Info : ToastKind.Success);
                 return;
             }
@@ -371,7 +398,7 @@ namespace HDRGammaController.ViewModels
                 if (_applyService.UpdateBlockedMonitors(newBlocked))
                 {
                     Log.Info($"TrayViewModel: Block state changed. App={appName}, Blocked Count={newBlocked.Count}");
-                    Application.Current.Dispatcher.Invoke(() => ApplyAll());
+                    OnUiThread(() => ApplyAll());
                 }
             }
             catch (Exception ex)
@@ -400,7 +427,7 @@ namespace HDRGammaController.ViewModels
             // #22: replaced a parentless MessageBox.Show (called from the hotkey hook thread,
             // which could appear behind other windows / on the wrong monitor) with a themed,
             // non-modal toast. It confirms the recovery without stealing focus.
-            _toastService?.Show("Gloam", "Gamma cleared — safe mode", ToastKind.Warning);
+            _toastService?.Show("Gloam", "Gamma cleared - safe mode", ToastKind.Warning);
         }
 
         private ActionViewModel? _startupItem;
@@ -508,6 +535,13 @@ namespace HDRGammaController.ViewModels
 
         public void Dispose()
         {
+            // If an update was downloaded but the user never clicked "Restart now", apply it
+            // on the way out so the next launch is on the new version.
+            if (_pendingUpdate != null && !_updateApplied)
+            {
+                _updateService.ApplyUpdatesOnExit(_pendingUpdate);
+            }
+
             // Stops the night-mode and ramp-guard timers and unhooks the
             // foreground-window event hook.
             _applyService.Dispose();

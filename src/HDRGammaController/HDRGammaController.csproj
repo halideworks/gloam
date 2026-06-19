@@ -15,14 +15,14 @@
     <RollForward>LatestMajor</RollForward>
     <ApplicationIcon>app.ico</ApplicationIcon>
     <PublishTrimmed>false</PublishTrimmed>
-    <!-- Stamped at compile time; UpdateService compares it against the GitHub
-         release published_at, since the rolling 'latest' tag has no semver. -->
-    <BuildTimestampUtc>$([System.DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"))</BuildTimestampUtc>
+    <!-- Default version for local builds; CI overrides via /p:Version=<tag>. Velopack
+         compares the installed package version (vpk pack -v) to the release feed, so
+         keep this in sync with the tag the release is cut from. -->
+    <Version>1.0.0</Version>
+    <!-- Velopack requires its hooks to run before WPF spins up, so the entry point is a
+         custom Main in Program.cs rather than the App.xaml-generated one. -->
+    <StartupObject>HDRGammaController.Program</StartupObject>
   </PropertyGroup>
-
-  <ItemGroup>
-    <AssemblyMetadata Include="BuildTimestampUtc" Value="$(BuildTimestampUtc)" />
-  </ItemGroup>
 
   <ItemGroup>
     <Resource Include="app.ico" />
@@ -66,6 +66,7 @@
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageReference Include="Hardcodet.NotifyIcon.Wpf" Version="1.1.0" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
+    <PackageReference Include="Velopack" Version="1.2.0" />
   </ItemGroup>
 
 </Project>
