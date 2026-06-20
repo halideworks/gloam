@@ -299,7 +299,7 @@
               </span>
               No telemetry, fully local
             </h3>
-            <p>Your settings live in a local JSON file. The update checker is the only network call, and it only asks GitHub for the latest release tag.</p>
+            <p>Your settings live in a local JSON file. The only network calls are the auto-updater (it checks GitHub for new releases and downloads them) and, when you calibrate, the optional ArgyllCMS and spectral-correction downloads. No telemetry, no accounts.</p>
           </article>
         </div>
       </section>
@@ -447,6 +447,26 @@
             <div class="faq-body" style="padding-top: 1rem; opacity: 0.85; max-width: 800px;">
               <p>For SDR desktop calibration, DisplayCAL is mature and excellent, and Calman is a professional standard for TV and mastering workflows. If those fit your use case, use them.</p>
               <p>Gloam's focus is the HDR-native pipeline on Windows 11. Traditional tools apply corrections through the GPU gamma ramp and ICC profiles that the Advanced Color compositor largely ignores when HDR is on. Gloam builds a properly domain-wrapped MHC2 matrix plus PQ-domain tone LUTs, installs them through the association the HDR pipeline reads, and verifies by measuring through the applied profile. It's just a better option for most users using HDR without expensive professional software (though our math is built on the same principles).</p>
+            </div>
+          </details>
+
+          <details style="border-bottom: var(--border-thin) solid var(--border); padding: 1rem 0;">
+            <summary style="font-weight: 700; cursor: pointer; text-transform: uppercase; list-style: none; display: flex; justify-content: space-between; align-items: center;">
+              How do updates work?
+              <span style="font-size: 1.25rem;">+</span>
+            </summary>
+            <div class="faq-body" style="padding-top: 1rem; opacity: 0.85; max-width: 800px;">
+              <p>The installer keeps itself current. Gloam checks GitHub on launch, downloads new versions in the background (just the changed parts, as a delta), and offers a one-click restart to apply them - no re-downloading, no reinstalling, no administrator prompt. Every release is code-signed. The portable build does not auto-update; to upgrade it, replace it with a newer zip.</p>
+            </div>
+          </details>
+
+          <details style="border-bottom: var(--border-thin) solid var(--border); padding: 1rem 0;">
+            <summary style="font-weight: 700; cursor: pointer; text-transform: uppercase; list-style: none; display: flex; justify-content: space-between; align-items: center;">
+              Windows says it "protected my PC". Is something wrong?
+              <span style="font-size: 1.25rem;">+</span>
+            </summary>
+            <div class="faq-body" style="padding-top: 1rem; opacity: 0.85; max-width: 800px;">
+              <p>No. Gloam is code-signed; click <strong>More info</strong> and you will see the verified publisher. That dialog is Microsoft SmartScreen, which also weighs download reputation, and a brand-new release has not built any up yet, so it warns until enough people have installed it. Click <strong>More info</strong>, then <strong>Run anyway</strong>. It stops appearing as Gloam gains installs, and it is unrelated to whether the app is signed or safe.</p>
             </div>
           </details>
 
