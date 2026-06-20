@@ -20,7 +20,7 @@ permissions:
 #   AZURE_CLIENT_ID        Entra app (federated credential) client id
 #   AZURE_TENANT_ID        Entra tenant id
 #   AZURE_SUBSCRIPTION_ID  subscription holding the Trusted Signing account
-#   AZURE_SIGN_ENDPOINT    e.g. https://eastus.codesigning.azure.net
+#   AZURE_SIGN_ENDPOINT    abbreviated-region host, e.g. https://eus.codesigning.azure.net (East US)
 #   AZURE_SIGN_ACCOUNT     Trusted Signing account name
 #   AZURE_SIGN_PROFILE     certificate profile name
 # The Entra app needs the "Trusted Signing Certificate Profile Signer" role on the account,

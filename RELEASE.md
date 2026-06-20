@@ -27,7 +27,7 @@ The version comes from the tag. `UpdateService.RepoUrl` and the CI upload target
 
   | Variable | Value |
   |---|---|
-  | `AZURE_SIGN_ENDPOINT` | `https://eastus.codesigning.azure.net` |
+  | `AZURE_SIGN_ENDPOINT` | `https://eus.codesigning.azure.net` (abbreviated region, e.g. `eus` = East US) |
   | `AZURE_SIGN_ACCOUNT` | `gloam-sign` |
   | `AZURE_SIGN_PROFILE` | `gloam-public-trust` |
   | `AZURE_SUBSCRIPTION_ID` | *(subscription holding the signing account)* |
