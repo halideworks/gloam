@@ -47,6 +47,8 @@ A Windows System Tray application to manage HDR Gamma settings on a per-monitor 
 - **Per-user install**: installs into `%LocalAppData%\GloamApp` with no administrator prompt. Your settings, logs, and calibration reports live separately under `%LocalAppData%\Gloam` and survive an uninstall.
 - **Automatic updates**: future versions download in the background and install on restart; you never download an installer again.
 
+> **Seeing "Windows protected your PC"?** That is Microsoft SmartScreen, not a problem with the download. Gloam is code-signed - click **More info** and you will see the verified publisher **David Torcivia**. SmartScreen separately weighs download reputation, which a brand-new release has not built up yet, so it warns until enough people have installed it. Click **More info**, then **Run anyway**. This is expected for a new publisher and stops as the app gains installs.
+
 After installing, right-click the tray icon and enable "Start with Windows" if you want it to launch at login.
 
 ### Option 2: Portable (no install, no auto-update)
