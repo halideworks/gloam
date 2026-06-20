@@ -18,7 +18,7 @@
     <!-- Default version for local builds; CI overrides via /p:Version=<tag>. Velopack
          compares the installed package version (vpk pack -v) to the release feed, so
          keep this in sync with the tag the release is cut from. -->
-    <Version>1.0.0</Version>
+    <Version>1.0.1</Version>
     <!-- Velopack requires its hooks to run before WPF spins up, so the entry point is a
          custom Main in Program.cs rather than the App.xaml-generated one. -->
     <StartupObject>HDRGammaController.Program</StartupObject>

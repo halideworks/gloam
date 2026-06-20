@@ -50,6 +50,10 @@ namespace HDRGammaController.ViewModels
 
         public SettingsManager SettingsManager { get; }
 
+        /// <summary>App version (e.g. "v1.0.1") shown in the dashboard title bar.</summary>
+        public string AppVersion =>
+            "v" + (System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "?");
+
         public ObservableCollection<object> Items { get; } = new ObservableCollection<object>();
 
         public ICommand RefreshCommand { get; }
@@ -83,7 +87,7 @@ namespace HDRGammaController.ViewModels
 
             _editingNightMode = settingsManager.NightMode;
 
-            RefreshCommand = new RelayCommand(Refresh);
+            RefreshCommand = new RelayCommand(() => Refresh());
             ConfigureMonitorCommand = new RelayCommand<DashboardItem>(item =>
             {
                 if (item != null) ConfigureRequested?.Invoke(item);
@@ -195,7 +199,7 @@ namespace HDRGammaController.ViewModels
             if ((now - _lastRefreshTime).TotalMilliseconds >= RefreshThrottleMs)
             {
                 _lastRefreshTime = now;
-                Refresh();
+                Refresh(reEnumerate: false);
             }
             else if (!_refreshPending)
             {
@@ -204,12 +208,18 @@ namespace HDRGammaController.ViewModels
                 _ = Application.Current.Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
                 {
                     _refreshPending = false;
-                    Refresh();
+                    Refresh(reEnumerate: false);
                 }));
             }
         }
 
-        public void Refresh()
+        /// <param name="reEnumerate">
+        /// When true, re-scan the hardware via DXGI (use for open / manual / display change).
+        /// When false (night-mode blend ticks), reuse the cached monitor list: a blend tick
+        /// only changes tint values, and re-enumerating the hardware on every tick was the
+        /// dominant cost behind the apply/enumeration storm that could hang the display.
+        /// </param>
+        public void Refresh(bool reEnumerate = true)
         {
             // If night mode changed from elsewhere (tray hotkey toggle, another window, the
             // night-mode timer's blend tick), re-read the authoritative snapshot so the
@@ -222,7 +232,9 @@ namespace HDRGammaController.ViewModels
                     _editingNightMode = latest;
             }
 
-            var monitors = _monitorManager.EnumerateMonitors();
+            var monitors = (reEnumerate || _cachedMonitors == null)
+                ? _monitorManager.EnumerateMonitors()
+                : _cachedMonitors;
             _cachedMonitors = monitors; // Cache for preview operations
 
             // Night mode data

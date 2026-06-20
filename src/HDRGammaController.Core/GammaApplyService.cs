@@ -62,7 +62,12 @@ namespace HDRGammaController.Core
                     {
                         Log.Error($"GammaApplyService: apply failed ({item.Item1.FriendlyName}): {ex.Message}");
                     }
-                });
+                },
+                // Hard floor on hardware gamma-write rate per monitor. A night-mode fade only
+                // needs a couple of writes per second; this caps any runaway trigger (e.g. a
+                // display-change feedback loop) so SetDeviceGammaRamp can never be hammered
+                // fast enough to stall the compositor and hang the machine.
+                minIntervalMs: 250);
 
             _rampGuard = new System.Timers.Timer(10000) { AutoReset = true };
             _rampGuard.Elapsed += (_, _) =>

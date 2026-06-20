@@ -247,6 +247,9 @@
                         <Border Width="1" Height="16" Background="{DynamicResource ThemeTextDim}" Opacity="0.5" Margin="12,0"/>
                         <TextBlock Text="DASHBOARD" FontFamily="{StaticResource DisplayFont}" FontWeight="Bold"
                                    FontSize="12" Foreground="{DynamicResource ThemeTextDim}" VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding AppVersion}" FontFamily="{StaticResource DisplayFont}"
+                                   FontSize="11" Foreground="{DynamicResource ThemeTextDim}" Opacity="0.7"
+                                   VerticalAlignment="Center" Margin="10,0,0,0" ToolTip="App version"/>
                     </StackPanel>
 
                     <!-- Window controls -->

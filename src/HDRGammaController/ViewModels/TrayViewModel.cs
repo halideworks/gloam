@@ -183,11 +183,13 @@ namespace HDRGammaController.ViewModels
         }
 
         /// <summary>
-        /// Marshals an action onto the UI thread, but no-ops if the dispatcher is gone or
-        /// shutting down. The night-mode timer and the foreground-window hook fire on
-        /// background threads; a Dispatcher.Invoke after Application.Shutdown throws there,
-        /// where nothing catches it, and an unhandled exception on a non-UI thread tears down
-        /// the whole process. This guard turns that race into a harmless skip.
+        /// Marshals an action onto the UI thread WITHOUT blocking the caller, and no-ops if the
+        /// dispatcher is gone or shutting down. The night-mode timer and the foreground-window
+        /// hook fire on background threads. A synchronous Dispatcher.Invoke from there stalls the
+        /// background thread whenever the UI thread is busy or in a modal loop (e.g. a window
+        /// DragMove, whose OS-driven move loop does not pump the dispatcher), and an Invoke after
+        /// shutdown throws on the background thread, tearing down the process. BeginInvoke avoids
+        /// both: it queues and returns immediately, so the apply runs when the UI thread is free.
         /// </summary>
         private static void OnUiThread(Action action)
         {
@@ -196,12 +198,12 @@ namespace HDRGammaController.ViewModels
                 return;
             try
             {
-                dispatcher.Invoke(action);
+                dispatcher.BeginInvoke(action);
             }
             catch (Exception ex)
             {
                 // Most likely the dispatcher began shutting down between the check and the
-                // Invoke. Log and move on rather than letting it escape the timer/hook thread.
+                // BeginInvoke. Log and move on rather than letting it escape the timer/hook thread.
                 Log.Error($"TrayViewModel.OnUiThread: {ex.Message}");
             }
         }

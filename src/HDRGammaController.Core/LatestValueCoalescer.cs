@@ -32,14 +32,25 @@ namespace HDRGammaController.Core
             public readonly SemaphoreSlim Gate = new SemaphoreSlim(1, 1);
             public TValue? Pending;
             public bool HasPending;
+            // TickCount64 of the last completed work invocation for this key (0 = never).
+            // Only the single active runner reads/writes it, so no extra synchronization.
+            public long LastWorkTicks;
         }
 
         private readonly ConcurrentDictionary<TKey, Slot> _slots = new();
         private readonly Action<TKey, TValue> _work;
+        private readonly int _minIntervalMs;
 
-        public LatestValueCoalescer(Action<TKey, TValue> work)
+        /// <param name="minIntervalMs">
+        /// Optional floor on how often the work runs per key. When &gt; 0 the runner waits so
+        /// successive invocations for a key are at least this far apart, always applying the
+        /// freshest pending value. Caps hardware write rates so a runaway producer cannot
+        /// hammer the work (e.g. SetDeviceGammaRamp) fast enough to stall the display system.
+        /// </param>
+        public LatestValueCoalescer(Action<TKey, TValue> work, int minIntervalMs = 0)
         {
             _work = work ?? throw new ArgumentNullException(nameof(work));
+            _minIntervalMs = Math.Max(0, minIntervalMs);
         }
 
         /// <summary>Submit a value for the given key. Returns immediately.</summary>
@@ -108,6 +119,19 @@ namespace HDRGammaController.Core
         {
             while (true)
             {
+                // Nothing queued: return without waiting (don't penalize a lone apply).
+                lock (slot) { if (!slot.HasPending) return; }
+
+                // Rate-limit: keep successive invocations for this key at least _minIntervalMs
+                // apart. We hold the gate while sleeping, so producers only update Pending and
+                // we pick up the freshest value afterward - no lost updates, capped rate.
+                if (_minIntervalMs > 0 && slot.LastWorkTicks != 0)
+                {
+                    long sinceLast = Environment.TickCount64 - slot.LastWorkTicks;
+                    if (sinceLast < _minIntervalMs)
+                        Thread.Sleep((int)(_minIntervalMs - sinceLast));
+                }
+
                 TValue value;
                 lock (slot)
                 {
@@ -125,6 +149,7 @@ namespace HDRGammaController.Core
                     // failure modes. An unhandled exception here would orphan the gate
                     // via finally, but we'd prefer not to tear down the runner entirely.
                 }
+                slot.LastWorkTicks = Environment.TickCount64;
             }
         }
     }

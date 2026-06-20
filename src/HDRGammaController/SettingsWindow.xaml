@@ -398,24 +398,17 @@
                     </StackPanel>
                 </ScrollViewer>
 
-                <!-- Footer. The Live Preview checkbox is pinned left in its own column and
-                     the action buttons are right-aligned, with a flexible gap between them.
-                     Previously this was a single right-aligned StackPanel, so when the Apply
-                     button appeared (Live Preview off) the row overflowed to the left and
-                     clipped the checkbox label - leaving an unlabelled, truncated control. -->
-                <Grid Grid.Row="2" Margin="0,16,0,0">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-
-                    <CheckBox Grid.Column="0" Content="Live Preview"
+                <!-- Footer. Live Preview sits on its own row ABOVE the action buttons so the two
+                     never compete for horizontal space. Earlier single-row layouts (a right-
+                     aligned StackPanel, then a 2-column grid) still let the button group overlap
+                     and clip the checkbox to "Live P" once the Apply button appeared. -->
+                <StackPanel Grid.Row="2" Margin="0,16,0,0">
+                    <CheckBox Content="Live Preview"
                               Foreground="{DynamicResource ThemeText}"
-                              VerticalAlignment="Center" HorizontalAlignment="Left"
-                              Margin="0,0,16,0"
+                              HorizontalAlignment="Left" Margin="0,0,0,10"
                               IsChecked="{Binding IsLivePreview}"/>
 
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                         <Button Content="Apply" Command="{Binding ApplyCommand}" Margin="0,0,8,0">
                             <Button.Style>
                                 <Style TargetType="Button" BasedOn="{StaticResource ModernButton}">
@@ -436,7 +429,7 @@
                         <Button Content="Save &amp; Close" Style="{StaticResource ModernButton}"
                                 Command="{Binding SaveAndCloseCommand}"/>
                     </StackPanel>
-                </Grid>
+                </StackPanel>
             </Grid>
         </Grid>
     </Border>
