@@ -102,6 +102,50 @@ namespace HDRGammaController.Core.Calibration
                 return Result.Fail(
                     $"White ({white.Xyz.Y:F2} cd/m²) was not meaningfully brighter than black ({black.Xyz.Y:F2} cd/m²).");
 
+            if (hdrMode)
+            {
+                var hdrWire = measurements
+                    .Where(m => m.IsValid && m.Patch.Nits is not null)
+                    .OrderBy(m => m.Patch.Nits!.Value)
+                    .ToList();
+
+                // No wire-ladder data means the HDR LUT builder will use its documented
+                // SDR-mapped fallback. But if a ladder was captured, it must be believable:
+                // a failed FP16 renderer commonly leaves valid-looking near-black reads that
+                // would otherwise surface only as a late, cryptic install-time LUT error.
+                if (hdrWire.Count > 0)
+                {
+                    if (hdrWire.Count < 5)
+                        return Result.Fail(
+                            $"HDR wire-ladder captured only {hdrWire.Count} valid patches; at least five are needed to build a trustworthy PQ-domain LUT.");
+
+                    double maxRequestedNits = hdrWire.Max(m => m.Patch.Nits!.Value);
+                    if (maxRequestedNits < 100)
+                        return Result.Fail(
+                            $"HDR wire-ladder reached only {maxRequestedNits:F0} nits; highlight patches were not captured.");
+
+                    double wirePeak = hdrWire.Max(m => m.Xyz.Y);
+                    double wireFloor = hdrWire.Min(m => m.Xyz.Y);
+                    if (wirePeak < 1.0)
+                        return Result.Fail(
+                            $"HDR wire-ladder measured near black (peak {wirePeak:F3} cd/m²). The FP16 HDR patch renderer likely failed or was occluded.");
+                    if (wirePeak <= wireFloor + Math.Max(1.0, wirePeak * 0.05))
+                        return Result.Fail(
+                            "HDR wire-ladder has almost no luminance range. The HDR patch renderer or probe readings look stale.");
+
+                    double tolerance = Math.Max(1.0, wirePeak * 0.05);
+                    for (int i = 1; i < hdrWire.Count; i++)
+                    {
+                        if (hdrWire[i].Xyz.Y + tolerance < hdrWire[i - 1].Xyz.Y)
+                        {
+                            return Result.Fail(
+                                $"HDR wire-ladder is non-monotonic around {hdrWire[i].Patch.Name}: " +
+                                $"{hdrWire[i - 1].Xyz.Y:F2} -> {hdrWire[i].Xyz.Y:F2} cd/m².");
+                        }
+                    }
+                }
+            }
+
             var whites = valid
                 .Where(m => m.Patch.Category == PatchCategory.Grayscale &&
                             m.Patch.DisplayRgb.R >= 0.99 &&

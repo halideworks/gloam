@@ -38,6 +38,23 @@ namespace HDRGammaController.Tests
             return list;
         }
 
+        private static MeasurementResult WireMeas(double requestedNits, double measuredY)
+        {
+            var xyz = new CieXyz(0.95047 * measuredY, measuredY, 1.08883 * measuredY);
+            return new MeasurementResult
+            {
+                Patch = new ColorPatch
+                {
+                    Name = $"HDR wire {requestedNits:F0} nits",
+                    DisplayRgb = new LinearRgb(0.5, 0.5, 0.5),
+                    Category = PatchCategory.General,
+                    Nits = requestedNits
+                },
+                Xyz = xyz,
+                IsValid = true
+            };
+        }
+
         [Fact]
         public void Generate_GoodMeasurements_DoesNotThrowValidation()
         {
@@ -122,6 +139,57 @@ namespace HDRGammaController.Tests
             Assert.False(result.IsValid);
             Assert.Contains(result.Error!, text);
             Assert.Contains("dynamic contrast", text, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void MeasurementValidator_HdrWithoutWireLadder_AllowsSdrMappedFallback()
+        {
+            var result = CalibrationMeasurementValidator.ValidateForProfile(
+                GoodRamp(), StandardTargets.Rec709Pq, hdrMode: true);
+
+            Assert.True(result.IsValid, result.Error);
+        }
+
+        [Fact]
+        public void MeasurementValidator_HdrPlausibleWireLadder_Passes()
+        {
+            var list = GoodRamp();
+            foreach (double nits in new[] { 0, 2, 16, 100, 220, 450 })
+                list.Add(WireMeas(nits, Math.Max(nits * 0.9, 0.02)));
+
+            var result = CalibrationMeasurementValidator.ValidateForProfile(
+                list, StandardTargets.Rec709Pq, hdrMode: true);
+
+            Assert.True(result.IsValid, result.Error);
+        }
+
+        [Fact]
+        public void MeasurementValidator_HdrPartialWireLadder_Fails()
+        {
+            var list = GoodRamp();
+            foreach (double nits in new[] { 0, 2, 16, 100 })
+                list.Add(WireMeas(nits, Math.Max(nits * 0.9, 0.02)));
+
+            var result = CalibrationMeasurementValidator.ValidateForProfile(
+                list, StandardTargets.Rec709Pq, hdrMode: true);
+
+            Assert.False(result.IsValid);
+            Assert.Contains("wire-ladder", result.Error, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void MeasurementValidator_HdrNearBlackWireLadder_Fails()
+        {
+            var list = GoodRamp();
+            foreach (double nits in new[] { 0, 2, 16, 100, 220, 450 })
+                list.Add(WireMeas(nits, 0.02));
+
+            var result = CalibrationMeasurementValidator.ValidateForProfile(
+                list, StandardTargets.Rec709Pq, hdrMode: true);
+
+            Assert.False(result.IsValid);
+            Assert.Contains("HDR wire-ladder", result.Error, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("near black", result.Error, StringComparison.OrdinalIgnoreCase);
         }
 
         [Theory]
