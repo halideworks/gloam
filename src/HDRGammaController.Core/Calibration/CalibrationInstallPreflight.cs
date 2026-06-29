@@ -18,7 +18,8 @@ namespace HDRGammaController.Core.Calibration
             bool measuredHdrMode,
             double measuredSdrWhiteLevel,
             string? measuredDefaultProfile,
-            string? currentDefaultProfile)
+            string? currentDefaultProfile,
+            CalibrationTarget? target = null)
         {
             var messages = new List<(string Severity, string Message)>();
 
@@ -54,6 +55,8 @@ namespace HDRGammaController.Core.Calibration
                         $"Windows SDR white changed from {measuredSdrWhiteLevel:F0} to {currentMonitor.SdrWhiteLevel:F0} nits since measurement. " +
                         "Install can continue, but re-measuring at the current SDR white level is more accurate."));
                 }
+
+                AddHdrLuminanceMessages(messages, measuredMonitor, currentMonitor, target);
             }
 
             if (!SameProfile(measuredDefaultProfile, currentDefaultProfile))
@@ -66,6 +69,65 @@ namespace HDRGammaController.Core.Calibration
             }
 
             return messages;
+        }
+
+        private static void AddHdrLuminanceMessages(
+            List<(string Severity, string Message)> messages,
+            MonitorInfo measuredMonitor,
+            MonitorInfo currentMonitor,
+            CalibrationTarget? target)
+        {
+            if (currentMonitor.HdrPeakNits <= 0)
+            {
+                messages.Add((Warn,
+                    "HDR peak luminance metadata is unavailable at install time. Re-measuring after Windows display detection settles is safer."));
+                return;
+            }
+
+            if (currentMonitor.HdrMinNits < 0 ||
+                (currentMonitor.HdrMinNits > 0 && currentMonitor.HdrMinNits >= currentMonitor.HdrPeakNits))
+            {
+                messages.Add((Warn,
+                    $"Current HDR luminance metadata looks inconsistent ({currentMonitor.HdrMinNits:F3}-{currentMonitor.HdrPeakNits:F0} nits). " +
+                    "Install can continue, but verify HDR tone tracking carefully."));
+            }
+
+            if (currentMonitor.HdrMaxFullFrameNits > 0 &&
+                currentMonitor.HdrMaxFullFrameNits > currentMonitor.HdrPeakNits * 1.05)
+            {
+                messages.Add((Warn,
+                    $"Current HDR full-frame metadata ({currentMonitor.HdrMaxFullFrameNits:F0} nits) exceeds peak metadata ({currentMonitor.HdrPeakNits:F0} nits). " +
+                    "Confirm the display is reporting HDR data correctly before trusting highlight results."));
+            }
+
+            if (measuredMonitor.HdrPeakNits > 0)
+            {
+                double peakDelta = Math.Abs(currentMonitor.HdrPeakNits - measuredMonitor.HdrPeakNits);
+                double threshold = Math.Max(50.0, measuredMonitor.HdrPeakNits * 0.10);
+                if (peakDelta > threshold)
+                {
+                    messages.Add((Warn,
+                        $"HDR peak metadata changed from {measuredMonitor.HdrPeakNits:F0} to {currentMonitor.HdrPeakNits:F0} nits since measurement. " +
+                        "Install can continue, but re-measuring against the current HDR state is more accurate."));
+                }
+            }
+
+            if (target?.TransferFunction != TransferFunctionType.Pq)
+                return;
+
+            if (target.PeakLuminance is { } targetPeak && targetPeak > currentMonitor.HdrPeakNits * 1.10)
+            {
+                messages.Add((Warn,
+                    $"The measured HDR target peaks at {targetPeak:F0} nits, above the display's current reported {currentMonitor.HdrPeakNits:F0}-nit peak. " +
+                    "Highlights above the panel limit will be preserved or roll off rather than fully corrected."));
+            }
+
+            if (target.ReferenceWhite is { } referenceWhite && referenceWhite > currentMonitor.HdrPeakNits * 0.90)
+            {
+                messages.Add((Warn,
+                    $"The measured HDR reference white ({referenceWhite:F0} nits) is close to the display's current reported peak ({currentMonitor.HdrPeakNits:F0} nits). " +
+                    "Re-measure with lower Windows SDR content brightness or a brighter HDR display for reliable desktop calibration."));
+            }
         }
 
         private static bool SameProfile(string? left, string? right)

@@ -1190,7 +1190,8 @@ namespace HDRGammaController
                     ctx.HdrMode,
                     ctx.WhiteLevel,
                     ctx.MeasurementDefaultProfile,
-                    currentDefaultProfile);
+                    currentDefaultProfile,
+                    EffectiveTarget(ctx));
 
                 if (preflightMessages.Any(m => m.Severity == CalibrationInstallPreflight.Error))
                 {

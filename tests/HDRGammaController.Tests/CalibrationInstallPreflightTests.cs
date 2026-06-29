@@ -106,6 +106,76 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void BuildMessages_HdrPeakMetadataDisappeared_Warns()
+        {
+            var messages = CalibrationInstallPreflight.BuildMessages(
+                Monitor(hdrActive: true, sdrWhite: 200, hdrPeakNits: 900),
+                Monitor(hdrActive: true, sdrWhite: 200, hdrPeakNits: 0),
+                measuredHdrMode: true,
+                measuredSdrWhiteLevel: 200,
+                measuredDefaultProfile: "before.icm",
+                currentDefaultProfile: "before.icm",
+                target: StandardTargets.Rec709Pq);
+
+            Assert.Contains(messages, m =>
+                m.Severity == CalibrationInstallPreflight.Warn &&
+                m.Message.Contains("peak luminance metadata is unavailable", StringComparison.OrdinalIgnoreCase));
+        }
+
+        [Fact]
+        public void BuildMessages_HdrPeakMetadataChanged_Warns()
+        {
+            var messages = CalibrationInstallPreflight.BuildMessages(
+                Monitor(hdrActive: true, sdrWhite: 200, hdrPeakNits: 1000, hdrMinNits: 0.01),
+                Monitor(hdrActive: true, sdrWhite: 200, hdrPeakNits: 700, hdrMinNits: 0.01),
+                measuredHdrMode: true,
+                measuredSdrWhiteLevel: 200,
+                measuredDefaultProfile: "before.icm",
+                currentDefaultProfile: "before.icm",
+                target: StandardTargets.Rec709Pq);
+
+            Assert.Contains(messages, m =>
+                m.Severity == CalibrationInstallPreflight.Warn &&
+                m.Message.Contains("changed from 1000 to 700", StringComparison.OrdinalIgnoreCase));
+        }
+
+        [Fact]
+        public void BuildMessages_HdrTargetAboveCurrentPeak_Warns()
+        {
+            var messages = CalibrationInstallPreflight.BuildMessages(
+                Monitor(hdrActive: true, sdrWhite: 200, hdrPeakNits: 600, hdrMinNits: 0.01),
+                Monitor(hdrActive: true, sdrWhite: 200, hdrPeakNits: 600, hdrMinNits: 0.01),
+                measuredHdrMode: true,
+                measuredSdrWhiteLevel: 200,
+                measuredDefaultProfile: "before.icm",
+                currentDefaultProfile: "before.icm",
+                target: StandardTargets.Rec709Pq);
+
+            Assert.Contains(messages, m =>
+                m.Severity == CalibrationInstallPreflight.Warn &&
+                m.Message.Contains("above the display", StringComparison.OrdinalIgnoreCase) &&
+                m.Message.Contains("600", StringComparison.OrdinalIgnoreCase));
+        }
+
+        [Fact]
+        public void BuildMessages_HdrReferenceWhiteNearCurrentPeak_Warns()
+        {
+            var messages = CalibrationInstallPreflight.BuildMessages(
+                Monitor(hdrActive: true, sdrWhite: 200, hdrPeakNits: 220, hdrMinNits: 0.01),
+                Monitor(hdrActive: true, sdrWhite: 200, hdrPeakNits: 220, hdrMinNits: 0.01),
+                measuredHdrMode: true,
+                measuredSdrWhiteLevel: 200,
+                measuredDefaultProfile: "before.icm",
+                currentDefaultProfile: "before.icm",
+                target: StandardTargets.Rec709Pq);
+
+            Assert.Contains(messages, m =>
+                m.Severity == CalibrationInstallPreflight.Warn &&
+                m.Message.Contains("reference white", StringComparison.OrdinalIgnoreCase) &&
+                m.Message.Contains("220", StringComparison.OrdinalIgnoreCase));
+        }
+
+        [Fact]
         public void BuildMessages_UnchangedState_ReturnsNoMessages()
         {
             var messages = CalibrationInstallPreflight.BuildMessages(
@@ -122,6 +192,9 @@ namespace HDRGammaController.Tests
         private static MonitorInfo Monitor(
             bool hdrActive,
             double sdrWhite,
+            double hdrPeakNits = 0,
+            double hdrMinNits = 0,
+            double hdrMaxFullFrameNits = 0,
             string path = @"MONITOR\TEST\0001") => new()
         {
             DeviceName = @"\\.\DISPLAY1",
@@ -129,7 +202,10 @@ namespace HDRGammaController.Tests
             MonitorDevicePath = path,
             IsHdrActive = hdrActive,
             IsHdrCapable = true,
-            SdrWhiteLevel = sdrWhite
+            SdrWhiteLevel = sdrWhite,
+            HdrPeakNits = hdrPeakNits,
+            HdrMinNits = hdrMinNits,
+            HdrMaxFullFrameNits = hdrMaxFullFrameNits
         };
     }
 }
