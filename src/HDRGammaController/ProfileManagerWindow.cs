@@ -137,7 +137,7 @@ namespace HDRGammaController
         {
             try
             {
-                string prefix = _monitor.FriendlyName.Trim() + " - ";
+                string prefix = CalibrationProfileInstaller.BuildProfileNamePrefix(_monitor);
                 var rows = Directory.GetFiles(ColorStore, "*.icm")
                     .Concat(Directory.GetFiles(ColorStore, "*.icc"))
                     .Select(p => new FileInfo(p))

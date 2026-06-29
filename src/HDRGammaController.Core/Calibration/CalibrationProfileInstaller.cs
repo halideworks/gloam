@@ -404,7 +404,7 @@ namespace HDRGammaController.Core.Calibration
                 // disk — an invalid char or a >40-char name makes the stored name diverge from
                 // the raw FriendlyName, and a prefix off the raw name would match nothing, so
                 // cleanup would silently leave a stale association behind.
-                string prefix = Sanitize(monitor.FriendlyName) + " - ";
+                string prefix = BuildProfileNamePrefix(monitor);
                 var names = new List<string>();
                 foreach (var valueName in new[] { "ICMProfile", "ICMProfileAC" })
                 {
@@ -537,11 +537,20 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         private static string BuildProfileName(MonitorInfo monitor, CalibrationTarget target)
         {
-            string monitorName = Sanitize(string.IsNullOrWhiteSpace(monitor.FriendlyName) ? "Display" : monitor.FriendlyName);
+            string monitorName = SanitizeProfileNameComponent(string.IsNullOrWhiteSpace(monitor.FriendlyName) ? "Display" : monitor.FriendlyName);
             string targetName = Sanitize(ShortTargetName(target));
             string stamp = DateTime.Now.ToString("yyyy-MM-dd HHmm");
             return $"{monitorName} - {targetName} - {stamp}.icm";
         }
+
+        /// <summary>
+        /// Prefix used by all Gloam-generated profile filenames for a monitor. This must
+        /// match <see cref="BuildProfileName"/> so profile listing and stale-association
+        /// cleanup can find profiles whose raw EDID names contained invalid filename
+        /// characters or exceeded the 40-character component limit.
+        /// </summary>
+        public static string BuildProfileNamePrefix(MonitorInfo monitor)
+            => SanitizeProfileNameComponent(string.IsNullOrWhiteSpace(monitor.FriendlyName) ? "Display" : monitor.FriendlyName) + " - ";
 
         private static string ShortTargetName(CalibrationTarget t)
         {
@@ -553,6 +562,9 @@ namespace HDRGammaController.Core.Calibration
         }
 
         private static string Sanitize(string s)
+            => SanitizeProfileNameComponent(s);
+
+        public static string SanitizeProfileNameComponent(string s)
         {
             foreach (char c in Path.GetInvalidFileNameChars()) s = s.Replace(c, ' ');
             s = s.Replace("  ", " ").Trim();

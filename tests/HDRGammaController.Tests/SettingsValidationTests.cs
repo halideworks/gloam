@@ -73,6 +73,34 @@ namespace HDRGammaController.Tests
             Assert.Equal("factory.icm", selected);
         }
 
+        [Fact]
+        public void BuildProfileNamePrefix_SanitizesInvalidMonitorNameCharacters()
+        {
+            var monitor = new MonitorInfo { FriendlyName = "Panel:Name/With*Invalid?Chars" };
+
+            string prefix = CalibrationProfileInstaller.BuildProfileNamePrefix(monitor);
+
+            Assert.Equal("Panel Name With Invalid Chars - ", prefix);
+            Assert.DoesNotContain(':', prefix);
+            Assert.DoesNotContain('/', prefix);
+            Assert.DoesNotContain('*', prefix);
+            Assert.DoesNotContain('?', prefix);
+        }
+
+        [Fact]
+        public void BuildProfileNamePrefix_TruncatesLikeInstalledProfileNames()
+        {
+            var monitor = new MonitorInfo
+            {
+                FriendlyName = "Very Long Professional Reference Monitor Name With EDID Suffix 123456"
+            };
+
+            string prefix = CalibrationProfileInstaller.BuildProfileNamePrefix(monitor);
+
+            Assert.Equal("Very Long Professional Reference Monitor - ", prefix);
+            Assert.Equal(43, prefix.Length);
+        }
+
         #region MonitorProfileData Validation
 
         [Fact]
