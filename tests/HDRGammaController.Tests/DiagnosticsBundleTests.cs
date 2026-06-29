@@ -148,6 +148,44 @@ namespace HDRGammaController.Tests
             }
         }
 
+        [Fact]
+        public void BuildUniqueBundlePath_UsesPlainTimestampWhenAvailable()
+        {
+            string dir = CreateTempDirectory();
+            try
+            {
+                var timestamp = new DateTimeOffset(2026, 6, 29, 10, 11, 12, TimeSpan.Zero);
+
+                string path = DiagnosticsBundle.BuildUniqueBundlePath(dir, timestamp);
+
+                Assert.Equal(Path.Combine(dir, "Gloam-Diagnostics-20260629-101112.zip"), path);
+            }
+            finally
+            {
+                DeleteDirectory(dir);
+            }
+        }
+
+        [Fact]
+        public void BuildUniqueBundlePath_AddsSuffixWhenTimestampCollides()
+        {
+            string dir = CreateTempDirectory();
+            try
+            {
+                var timestamp = new DateTimeOffset(2026, 6, 29, 10, 11, 12, TimeSpan.Zero);
+                File.WriteAllText(Path.Combine(dir, "Gloam-Diagnostics-20260629-101112.zip"), "");
+                File.WriteAllText(Path.Combine(dir, "Gloam-Diagnostics-20260629-101112-02.zip"), "");
+
+                string path = DiagnosticsBundle.BuildUniqueBundlePath(dir, timestamp);
+
+                Assert.Equal(Path.Combine(dir, "Gloam-Diagnostics-20260629-101112-03.zip"), path);
+            }
+            finally
+            {
+                DeleteDirectory(dir);
+            }
+        }
+
         private static CalibrationProfile BuildReport(string monitorDevicePath, string monitorName)
         {
             return new CalibrationProfile

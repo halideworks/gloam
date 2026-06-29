@@ -38,8 +38,7 @@ namespace HDRGammaController.Core
             if (settingsManager == null) throw new ArgumentNullException(nameof(settingsManager));
 
             Directory.CreateDirectory(outputDirectory);
-            string stamp = DateTimeOffset.Now.ToString("yyyyMMdd-HHmmss");
-            string zipPath = Path.Combine(outputDirectory, $"Gloam-Diagnostics-{stamp}.zip");
+            string zipPath = BuildUniqueBundlePath(outputDirectory, DateTimeOffset.Now);
 
             using var zip = ZipFile.Open(zipPath, ZipArchiveMode.Create);
             AddText(zip, "manifest.json", BuildManifest(monitors, includeCalibrationReports));
@@ -51,6 +50,23 @@ namespace HDRGammaController.Core
             AddThirdPartyNotices(zip);
 
             return zipPath;
+        }
+
+        internal static string BuildUniqueBundlePath(string outputDirectory, DateTimeOffset timestamp)
+        {
+            string stamp = timestamp.ToString("yyyyMMdd-HHmmss");
+            string basePath = Path.Combine(outputDirectory, $"Gloam-Diagnostics-{stamp}.zip");
+            if (!File.Exists(basePath))
+                return basePath;
+
+            for (int i = 2; i <= 999; i++)
+            {
+                string candidate = Path.Combine(outputDirectory, $"Gloam-Diagnostics-{stamp}-{i:D2}.zip");
+                if (!File.Exists(candidate))
+                    return candidate;
+            }
+
+            return Path.Combine(outputDirectory, $"Gloam-Diagnostics-{stamp}-{Guid.NewGuid():N}.zip");
         }
 
         internal static string SanitizeText(string text)
