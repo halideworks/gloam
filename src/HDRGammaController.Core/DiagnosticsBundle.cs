@@ -326,10 +326,25 @@ namespace HDRGammaController.Core
 
         private static void AddThirdPartyNotices(ZipArchive zip)
         {
-            string notices = Path.Combine(AppContext.BaseDirectory, "THIRD_PARTY_NOTICES.txt");
-            if (!File.Exists(notices))
-                notices = Path.Combine(Environment.CurrentDirectory, "THIRD_PARTY_NOTICES.txt");
-            AddSanitizedFileIfExists(zip, notices, "THIRD_PARTY_NOTICES.txt");
+            string? notices = ResolveThirdPartyNoticesPath(AppContext.BaseDirectory);
+            if (notices != null)
+            {
+                AddSanitizedFileIfExists(zip, notices, "THIRD_PARTY_NOTICES.txt");
+                return;
+            }
+
+            AddText(zip, "THIRD_PARTY_NOTICES.missing.txt",
+                "THIRD_PARTY_NOTICES.txt was not found beside the application executable. " +
+                "Release packaging should bundle this file with Gloam.");
+        }
+
+        internal static string? ResolveThirdPartyNoticesPath(string baseDirectory)
+        {
+            if (string.IsNullOrWhiteSpace(baseDirectory))
+                return null;
+
+            string notices = Path.Combine(baseDirectory, "THIRD_PARTY_NOTICES.txt");
+            return File.Exists(notices) ? notices : null;
         }
 
         private static void AddSanitizedFileIfExists(ZipArchive zip, string path, string entryName)

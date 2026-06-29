@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Text.Json.Nodes;
 using HDRGammaController.Core;
 using HDRGammaController.Core.Calibration;
@@ -109,6 +110,44 @@ namespace HDRGammaController.Tests
             Assert.DoesNotContain(rawPath, manifest, StringComparison.OrdinalIgnoreCase);
         }
 
+        [Fact]
+        public void ResolveThirdPartyNoticesPath_UsesApplicationBaseDirectory()
+        {
+            string appBase = CreateTempDirectory();
+            try
+            {
+                string notices = Path.Combine(appBase, "THIRD_PARTY_NOTICES.txt");
+                File.WriteAllText(notices, "notices");
+
+                Assert.Equal(notices, DiagnosticsBundle.ResolveThirdPartyNoticesPath(appBase));
+            }
+            finally
+            {
+                DeleteDirectory(appBase);
+            }
+        }
+
+        [Fact]
+        public void ResolveThirdPartyNoticesPath_DoesNotFallBackToCurrentDirectory()
+        {
+            string originalCurrentDirectory = Environment.CurrentDirectory;
+            string appBase = CreateTempDirectory();
+            string currentDirectory = CreateTempDirectory();
+            try
+            {
+                File.WriteAllText(Path.Combine(currentDirectory, "THIRD_PARTY_NOTICES.txt"), "wrong file");
+                Environment.CurrentDirectory = currentDirectory;
+
+                Assert.Null(DiagnosticsBundle.ResolveThirdPartyNoticesPath(appBase));
+            }
+            finally
+            {
+                Environment.CurrentDirectory = originalCurrentDirectory;
+                DeleteDirectory(appBase);
+                DeleteDirectory(currentDirectory);
+            }
+        }
+
         private static CalibrationProfile BuildReport(string monitorDevicePath, string monitorName)
         {
             return new CalibrationProfile
@@ -153,6 +192,26 @@ namespace HDRGammaController.Tests
                     }
                 }
             };
+        }
+
+        private static string CreateTempDirectory()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "GloamDiagnosticsBundleTests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            return dir;
+        }
+
+        private static void DeleteDirectory(string dir)
+        {
+            try
+            {
+                if (Directory.Exists(dir))
+                    Directory.Delete(dir, recursive: true);
+            }
+            catch
+            {
+                // Best-effort cleanup for test temp files.
+            }
         }
     }
 }
