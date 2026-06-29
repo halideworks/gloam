@@ -1,0 +1,90 @@
+param(
+    [string]$ReleaseDir = "Releases",
+
+    [string]$Version = "",
+
+    [string]$ExpectedPublisher = "David Torcivia"
+)
+
+$ErrorActionPreference = "Stop"
+
+if (-not (Test-Path -LiteralPath $ReleaseDir -PathType Container)) {
+    throw "Release directory '$ReleaseDir' does not exist."
+}
+
+$releaseRoot = (Resolve-Path -LiteralPath $ReleaseDir).Path
+$failures = New-Object System.Collections.Generic.List[string]
+
+function Add-Failure([string]$message) {
+    $script:failures.Add($message) | Out-Null
+}
+
+function Get-Artifact([string]$pattern, [string]$description) {
+    $matches = @(Get-ChildItem -LiteralPath $releaseRoot -Filter $pattern -File)
+    if ($matches.Count -eq 0) {
+        Add-Failure "Missing $description matching '$pattern'."
+        return $null
+    }
+    if ($matches.Count -gt 1) {
+        Add-Failure "Expected one $description matching '$pattern', found $($matches.Count): $($matches.Name -join ', ')."
+        return $null
+    }
+    return $matches[0]
+}
+
+function Test-Signature([string]$path, [string]$description) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        Add-Failure "Cannot validate signature for missing $description '$path'."
+        return
+    }
+
+    $signature = Get-AuthenticodeSignature -LiteralPath $path
+    if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+        Add-Failure "$description is not signed with a valid Authenticode signature: $($signature.Status) $($signature.StatusMessage)"
+        return
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedPublisher)) {
+        $subject = $signature.SignerCertificate.Subject
+        if ($subject -notlike "*$ExpectedPublisher*") {
+            Add-Failure "$description signer subject '$subject' does not contain expected publisher '$ExpectedPublisher'."
+        }
+    }
+}
+
+$versionPattern = if ([string]::IsNullOrWhiteSpace($Version)) { "*" } else { $Version }
+$setup = Get-Artifact "Gloam-$versionPattern-Setup.exe" "signed installer"
+$portable = Get-Artifact "Gloam-$versionPattern-Portable.zip" "portable package"
+
+if ($setup -ne $null) {
+    Test-Signature $setup.FullName "Installer '$($setup.Name)'"
+}
+
+if ($portable -ne $null) {
+    $extractRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("GloamPortableSignature-" + [Guid]::NewGuid().ToString("N"))
+    try {
+        Expand-Archive -LiteralPath $portable.FullName -DestinationPath $extractRoot -Force
+        $portableExe = @(Get-ChildItem -LiteralPath $extractRoot -Filter "Gloam.exe" -File -Recurse)
+        if ($portableExe.Count -eq 0) {
+            Add-Failure "Portable package '$($portable.Name)' does not contain Gloam.exe."
+        }
+        elseif ($portableExe.Count -gt 1) {
+            Add-Failure "Portable package '$($portable.Name)' contains multiple Gloam.exe files."
+        }
+        else {
+            Test-Signature $portableExe[0].FullName "Portable Gloam.exe"
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $extractRoot -PathType Container) {
+            Remove-Item -LiteralPath $extractRoot -Recurse -Force
+        }
+    }
+}
+
+if ($failures.Count -gt 0) {
+    $message = "Signed release artifact validation failed:`n - " + ($failures -join "`n - ")
+    throw $message
+}
+
+Write-Host "Signed release artifact validation passed for '$releaseRoot'."

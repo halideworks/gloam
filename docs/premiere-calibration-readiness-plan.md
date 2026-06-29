@@ -87,4 +87,4 @@ Hardware compatibility matrix work is intentionally excluded from the implementa
 - Use structured `ProcessStartInfo.ArgumentList` for external tools.
 - Verify Argyll archive integrity before extraction.
 - Validate package-level notices and required bundled files before packing.
-- Future work: add signed-file checks in CI.
+- Verify signed release artifacts in CI before upload: the installer must have a valid Authenticode signature, and the portable ZIP must contain a signed `Gloam.exe`.

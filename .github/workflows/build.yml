@@ -132,6 +132,11 @@ jobs:
           --icon src/HDRGammaController/app.ico
           --azureTrustedSignFile azure-sign.json
 
+      - name: Verify signed release artifacts
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: ./scripts/Test-SignedReleaseArtifacts.ps1 -ReleaseDir Releases -Version ${{ steps.ver.outputs.version }}
+
       - name: Upload to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         run: >
