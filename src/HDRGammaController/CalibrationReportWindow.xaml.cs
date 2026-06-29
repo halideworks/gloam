@@ -1433,6 +1433,10 @@ namespace HDRGammaController
             }
         }
 
+        private sealed record PqTrackingSweepResult(
+            string Summary,
+            IReadOnlyList<MeasurementResult> Readings);
+
         /// <summary>
         /// HDR PQ-tracking verify: FP16 wire patches through the applied profile, graded in
         /// ABSOLUTE nits against ST.2084 plus ΔE ITP against D65 gray at each level. Runs
@@ -1440,7 +1444,7 @@ namespace HDRGammaController
         /// corrected this range); rungs stay below the LUT's identity blend at the panel's
         /// reachable peak. Returns the report line, or null when not applicable.
         /// </summary>
-        private async Task<string?> RunPqTrackingSweepAsync(
+        private async Task<PqTrackingSweepResult?> RunPqTrackingSweepAsync(
             PatchDisplayWindow patchWindow, ColorimeterService colorimeter,
             ApplyContext ctx, System.Threading.CancellationToken token)
         {
@@ -1493,7 +1497,9 @@ namespace HDRGammaController
             catch (Exception ex)
             {
                 Log.Info($"CalibrationReportWindow: PQ tracking sweep failed: {ex.Message}");
-                return $"HDR PQ tracking sweep failed ({ex.Message}).";
+                return new PqTrackingSweepResult(
+                    $"HDR PQ tracking sweep failed ({ex.Message}).",
+                    Array.Empty<MeasurementResult>());
             }
             finally
             {
@@ -1501,7 +1507,9 @@ namespace HDRGammaController
             }
 
             if (readings.Count == 0)
-                return "HDR PQ tracking sweep returned no valid readings.";
+                return new PqTrackingSweepResult(
+                    "HDR PQ tracking sweep returned no valid readings.",
+                    Array.Empty<MeasurementResult>());
 
             double sumAbsErr = 0, worstErr = 0, worstNits = 0, itpSum = 0, itpMax = 0;
             foreach (var (requested, m) in readings)
@@ -1520,9 +1528,10 @@ namespace HDRGammaController
                          $"({err:+0.0%;-0.0%}), xy ({m.Xyz.ToChromaticity().X:F4},{m.Xyz.ToChromaticity().Y:F4}), ITP {itp:F1}");
             }
 
-            return $"HDR PQ tracking (FP16 through profile, {readings.Count} levels to {readings[^1].Requested:F0} nits): " +
-                   $"avg luminance error {sumAbsErr / readings.Count:P1}, worst {worstErr:+0.0%;-0.0%} at {worstNits:F0} nits; " +
-                   $"ΔE ITP avg {itpSum / readings.Count:F1}, max {itpMax:F1} vs D65 gray.";
+            string summary = $"HDR PQ tracking (FP16 through profile, {readings.Count} levels to {readings[^1].Requested:F0} nits): " +
+                             $"avg luminance error {sumAbsErr / readings.Count:P1}, worst {worstErr:+0.0%;-0.0%} at {worstNits:F0} nits; " +
+                             $"ΔE ITP avg {itpSum / readings.Count:F1}, max {itpMax:F1} vs D65 gray.";
+            return new PqTrackingSweepResult(summary, readings.Select(r => r.M).ToList());
         }
 
         /// <summary>
@@ -1802,17 +1811,19 @@ namespace HDRGammaController
                     if (ctx.CaptureSounds)
                         CalibrationSounds.PlayCapture();
                 }
-                _verifyMeasurements = results;
-
                 // HDR PQ-TRACKING SWEEP: when the applied profile was built from the FP16
                 // wire ladder, verify it the same way - wire-exact FP16 patches THROUGH the
                 // profile, graded in absolute nits against the PQ spec. Only rungs inside
                 // the corrected region (below the LUT's identity blend near the panel's
                 // reachable peak) are graded; above it the LUT intentionally passes the
                 // panel's own rolloff through.
-                string? pqSummary = ctx.HdrMode
+                var pqTracking = ctx.HdrMode
                     ? await RunPqTrackingSweepAsync(patchWindow, colorimeter, ctx, verifyCts.Token)
                     : null;
+                var persistedVerifyMeasurements = new List<MeasurementResult>(results);
+                if (pqTracking?.Readings.Count > 0)
+                    persistedVerifyMeasurements.AddRange(pqTracking.Readings);
+                _verifyMeasurements = persistedVerifyMeasurements;
 
                 var after = CalibrationVerifier.ComputeMetrics(results, ctx.Target);
                 var activation = _measurements != null
@@ -1844,8 +1855,8 @@ namespace HDRGammaController
                     $"Grayscale residual split: tone {after.AverageGrayscaleToneDeltaE:F2} / color {after.AverageGrayscaleColorDeltaE:F2} ΔE2000 " +
                     $"(tone near black is mostly instrument noise; color is a visible cast). " +
                     $"ΔE ITP avg {after.AverageItpDeltaE:F1}, max {after.MaxItpDeltaE:F1} (BT.2124; ~3x ΔE2000 scale, 1 unit ≈ 1 JND).";
-                if (pqSummary != null)
-                    Vm.VerifyDetailText += "\n" + pqSummary;
+                if (pqTracking != null)
+                    Vm.VerifyDetailText += "\n" + pqTracking.Summary;
                 if (activation != null)
                     Vm.VerifyDetailText += "\n" + activation.Message;
                 Vm.IsVerifyDetailVisible = true;

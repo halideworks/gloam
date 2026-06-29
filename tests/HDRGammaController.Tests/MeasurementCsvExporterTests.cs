@@ -31,6 +31,36 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void BuildCsv_ExportsHdrPqTrackingRowsWithPatchNits()
+        {
+            var accuracy = Measurement(0, "White", PatchCategory.Grayscale, 1.0, 1.0, 1.0,
+                new CieXyz(95, 100, 108), sequenceIndex: 0);
+            var pq = Measurement(1, "PQ 320 nits", PatchCategory.General, 0.5, 0.5, 0.5,
+                new CieXyz(303, 319, 347), sequenceIndex: 100, nits: 320.0);
+
+            string csv = MeasurementCsvExporter.BuildCsv("report-hdr", "verification", new[] { accuracy, pq });
+
+            Assert.Contains("patch_nits", csv);
+            Assert.Contains("PQ 320 nits", csv);
+            Assert.Contains(",320,", csv);
+            Assert.True(csv.IndexOf("White", StringComparison.Ordinal) < csv.IndexOf("PQ 320 nits", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public void ComputeMetrics_IgnoresHdrPqTrackingRows()
+        {
+            var accuracy = Measurement(0, "White", PatchCategory.Grayscale, 1.0, 1.0, 1.0,
+                new CieXyz(95, 100, 108), sequenceIndex: 0);
+            var pq = Measurement(1, "PQ 320 nits", PatchCategory.General, 0.5, 0.5, 0.5,
+                new CieXyz(303, 319, 347), sequenceIndex: 100, nits: 320.0);
+
+            var metrics = CalibrationVerifier.ComputeMetrics(new[] { accuracy, pq }, StandardTargets.Rec709Pq);
+
+            Assert.Single(metrics.PatchResults);
+            Assert.Equal("White", metrics.PatchResults[0].Name);
+        }
+
+        [Fact]
         public void Save_CreatesParentDirectoryAndUtf8Csv()
         {
             string dir = Path.Combine(Path.GetTempPath(), $"gloam-csv-test-{Guid.NewGuid():N}");
