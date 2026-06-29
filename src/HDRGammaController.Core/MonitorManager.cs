@@ -144,7 +144,7 @@ namespace HDRGammaController.Core
                         {
                             Dxgi.DXGI_OUTPUT_DESC1 desc1;
                             output6.GetDesc1(out desc1);
-                            bool isHdrActive = desc1.ColorSpace == Dxgi.DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+                            bool isHdrActive = DxgiColorSpaceInfo.IsHdr(desc1.ColorSpace);
                             bool hasHdrMetadata = desc1.MaxLuminance > 0 || desc1.MaxFullFrameLuminance > 0;
 
                             var monitorInfo = new MonitorInfo
