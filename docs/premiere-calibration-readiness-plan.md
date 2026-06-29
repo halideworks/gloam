@@ -74,7 +74,7 @@ Hardware compatibility matrix work is intentionally excluded from the implementa
 
 ## 11. Diagnostics And Supportability
 
-- Rotate app and colorimeter logs instead of deleting them at size limit.
+- Rotate app and colorimeter logs through a shared archive-retention helper instead of truncating or deleting support evidence at size limit.
 - Export a sanitized diagnostics zip with manifest, monitor/HDR topology, logs, settings, calibration profile summary, and third-party notices.
 - Redact user-scoped paths and usernames from bundle text.
 - Add user-controlled inclusion of saved calibration reports and detailed verification CSVs.

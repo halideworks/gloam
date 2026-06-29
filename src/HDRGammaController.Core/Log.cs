@@ -33,7 +33,7 @@ namespace HDRGammaController.Core
                 {
                     string path = filePath ?? DefaultFilePath;
                     Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                    RotateIfNeeded(path);
+                    LogFileRotator.RotateIfNeeded(path, MaxBytes, MaxArchives);
                     _filePath = path;
                 }
                 catch
@@ -56,25 +56,10 @@ namespace HDRGammaController.Core
                 if (_filePath == null) return;
                 try
                 {
-                    RotateIfNeeded(_filePath);
+                    LogFileRotator.RotateIfNeeded(_filePath, MaxBytes, MaxArchives);
                     File.AppendAllText(_filePath, line + Environment.NewLine);
                 }
                 catch { /* logging must never take the app down */ }
-            }
-        }
-
-        private static void RotateIfNeeded(string path)
-        {
-            var info = new FileInfo(path);
-            if (!info.Exists || info.Length <= MaxBytes) return;
-
-            for (int i = MaxArchives; i >= 1; i--)
-            {
-                string source = i == 1 ? path : $"{path}.{i - 1}";
-                string dest = $"{path}.{i}";
-                if (!File.Exists(source)) continue;
-                if (i == MaxArchives && File.Exists(dest)) File.Delete(dest);
-                File.Move(source, dest, overwrite: true);
             }
         }
     }

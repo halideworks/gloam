@@ -43,8 +43,9 @@ namespace HDRGammaController.Core.Calibration
         private SpotreadSession? _session;
         private bool _sessionHdrMode;
 
-        // Log file for debugging spotread communication
-        private static readonly string LogFilePath = Path.Combine(AppPaths.DataDir, "colorimeter.log");
+        // Log file for debugging spotread communication. Resolved dynamically so isolated
+        // smoke/test data roots do not accidentally write to the user's real data folder.
+        private static string LogFilePath => Path.Combine(AppPaths.DataDir, "colorimeter.log");
 
         // Serialize appends: spotread emits on stdout/stderr, and the persistent session plus
         // any transient one-shot measurement can both be logging concurrently.
@@ -65,28 +66,13 @@ namespace HDRGammaController.Core.Calibration
                 // lines intact and ordered (the file is append-only and tiny).
                 lock (_logLock)
                 {
-                    RotateLogIfNeeded(LogFilePath);
+                    LogFileRotator.RotateIfNeeded(LogFilePath, MaxLogBytes, MaxLogArchives);
                     File.AppendAllText(LogFilePath, $"[{timestamp}] {message}{Environment.NewLine}");
                 }
             }
             catch
             {
                 // Ignore logging errors
-            }
-        }
-
-        private static void RotateLogIfNeeded(string path)
-        {
-            var info = new FileInfo(path);
-            if (!info.Exists || info.Length <= MaxLogBytes) return;
-
-            for (int i = MaxLogArchives; i >= 1; i--)
-            {
-                string source = i == 1 ? path : $"{path}.{i - 1}";
-                string dest = $"{path}.{i}";
-                if (!File.Exists(source)) continue;
-                if (i == MaxLogArchives && File.Exists(dest)) File.Delete(dest);
-                File.Move(source, dest, overwrite: true);
             }
         }
 
