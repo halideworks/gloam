@@ -37,12 +37,9 @@ namespace HDRGammaController.Core.Calibration
                     return path;
             }
 
-            // PRIORITY 4: Search PATH environment variable
-            string? pathFromEnv = SearchPathEnvironmentVariable();
-            if (pathFromEnv != null)
-                return pathFromEnv;
-
-            // PRIORITY 5: Search DisplayCAL bundled ArgyllCMS (last resort - may be old)
+            // PRIORITY 4: Search DisplayCAL bundled ArgyllCMS (last resort - may be old).
+            // Deliberately do not search PATH: calibration executes spotread.exe, so discovery
+            // is restricted to app-managed and known install locations to avoid binary planting.
             foreach (var path in SearchDisplayCalArgyll())
             {
                 if (IsValidArgyllBinPath(path))
@@ -101,35 +98,6 @@ namespace HDRGammaController.Core.Calibration
                 "DisplayCAL", "dl");
             yield return Path.Combine(dcDl, "Argyll_V3.5.0", "bin");
             yield return Path.Combine(dcDl, "Argyll_V3.3.0", "bin");
-        }
-
-        /// <summary>
-        /// Searches the PATH environment variable for ArgyllCMS tools.
-        /// </summary>
-        private static string? SearchPathEnvironmentVariable()
-        {
-            string? pathEnv = Environment.GetEnvironmentVariable("PATH");
-            if (string.IsNullOrEmpty(pathEnv))
-                return null;
-
-            foreach (var dir in pathEnv.Split(Path.PathSeparator))
-            {
-                if (string.IsNullOrWhiteSpace(dir))
-                    continue;
-
-                try
-                {
-                    string spotreadPath = Path.Combine(dir, "spotread.exe");
-                    if (File.Exists(spotreadPath))
-                        return dir;
-                }
-                catch
-                {
-                    // Ignore invalid paths in PATH variable
-                }
-            }
-
-            return null;
         }
 
         /// <summary>

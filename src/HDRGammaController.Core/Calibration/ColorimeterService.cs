@@ -49,6 +49,8 @@ namespace HDRGammaController.Core.Calibration
         // Serialize appends: spotread emits on stdout/stderr, and the persistent session plus
         // any transient one-shot measurement can both be logging concurrently.
         private static readonly object _logLock = new();
+        private const long MaxLogBytes = 5_000_000;
+        private const int MaxLogArchives = 3;
 
         private static void Log(string message)
         {
@@ -63,12 +65,28 @@ namespace HDRGammaController.Core.Calibration
                 // lines intact and ordered (the file is append-only and tiny).
                 lock (_logLock)
                 {
+                    RotateLogIfNeeded(LogFilePath);
                     File.AppendAllText(LogFilePath, $"[{timestamp}] {message}{Environment.NewLine}");
                 }
             }
             catch
             {
                 // Ignore logging errors
+            }
+        }
+
+        private static void RotateLogIfNeeded(string path)
+        {
+            var info = new FileInfo(path);
+            if (!info.Exists || info.Length <= MaxLogBytes) return;
+
+            for (int i = MaxLogArchives; i >= 1; i--)
+            {
+                string source = i == 1 ? path : $"{path}.{i - 1}";
+                string dest = $"{path}.{i}";
+                if (!File.Exists(source)) continue;
+                if (i == MaxLogArchives && File.Exists(dest)) File.Delete(dest);
+                File.Move(source, dest, overwrite: true);
             }
         }
 
@@ -422,7 +440,7 @@ namespace HDRGammaController.Core.Calibration
             Log("=== Starting colorimeter detection ===");
 
             // Use help output to get the instrument list (spotread doesn't support -l)
-            var listResult = await RunSpotreadCommandAsync("-?", TimeSpan.FromSeconds(10), cancellationToken);
+            var listResult = await RunSpotreadCommandAsync(TimeSpan.FromSeconds(10), cancellationToken, "-?");
             if (listResult != null)
             {
                 Log($"spotread -? output: {listResult}");
@@ -456,18 +474,22 @@ namespace HDRGammaController.Core.Calibration
         /// <summary>
         /// Runs a spotread command and returns the combined output.
         /// </summary>
-        private async Task<string?> RunSpotreadCommandAsync(string args, TimeSpan timeout, CancellationToken cancellationToken)
+        private async Task<string?> RunSpotreadCommandAsync(TimeSpan timeout, CancellationToken cancellationToken, params string[] args)
         {
             if (string.IsNullOrEmpty(_spotreadPath))
                 return null;
 
-            var psi = new ProcessStartInfo(_spotreadPath, args)
+            var psi = new ProcessStartInfo(_spotreadPath)
             {
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true
             };
+            foreach (string arg in args)
+            {
+                psi.ArgumentList.Add(arg);
+            }
 
             try
             {

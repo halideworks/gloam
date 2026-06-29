@@ -68,6 +68,7 @@ if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)" }
 #    (ICM templates are already copied to the output by the csproj.)
 Copy-Item "README.md" $PublishDir
 Copy-Item "LICENSE.txt" $PublishDir
+Copy-Item "THIRD_PARTY_NOTICES.txt" $PublishDir
 
 $argyllRoot = Download-Argyll
 $bundleRoot = Join-Path $PublishDir "argyll_cache\$argyllVersion"

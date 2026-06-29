@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Xunit;
 using HDRGammaController.Core.Calibration;
 
@@ -125,6 +126,35 @@ namespace HDRGammaController.Tests
             Assert.True(metrics.ItpDeltaEs.Count > 0, "ITP values should be computed");
             Assert.True(metrics.AverageItpDeltaE > 0);
             Assert.True(metrics.MaxItpDeltaE >= metrics.AverageItpDeltaE);
+        }
+
+        [Fact]
+        public void Metrics_NormalizationPrefersWhitePatchOverBrightestPatch()
+        {
+            var target = StandardTargets.SrgbGamma22;
+            var measurements = BuildGrayscale(target, whiteNits: 100.0);
+
+            var redPatch = new ColorPatch
+            {
+                Name = "Overbright red",
+                DisplayRgb = new LinearRgb(1, 0, 0),
+                Category = PatchCategory.Primary,
+                Index = measurements.Count
+            };
+            // An HDR/display-processing anomaly can make a saturated patch's Y exceed white.
+            // That must not become the normalization anchor for the whole report.
+            measurements.Add(new MeasurementResult
+            {
+                Patch = redPatch,
+                Xyz = new CieXyz(95, 150, 5),
+                IsValid = true
+            });
+
+            var metrics = CalibrationVerifier.ComputeMetrics(measurements, target);
+            var white = metrics.PatchResults.Single(p => p.Name == "Gray 100%");
+
+            Assert.True(white.DeltaE < 0.5,
+                $"white should stay near-perfect when a non-white patch is brightest, got {white.DeltaE:F2}");
         }
     }
 }

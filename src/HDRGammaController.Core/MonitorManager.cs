@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Win32;
@@ -143,6 +144,8 @@ namespace HDRGammaController.Core
                         {
                             Dxgi.DXGI_OUTPUT_DESC1 desc1;
                             output6.GetDesc1(out desc1);
+                            bool isHdrActive = desc1.ColorSpace == Dxgi.DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+                            bool hasHdrMetadata = desc1.MaxLuminance > 0 || desc1.MaxFullFrameLuminance > 0;
 
                             var monitorInfo = new MonitorInfo
                             {
@@ -150,11 +153,18 @@ namespace HDRGammaController.Core
                                 AdapterLuid = adapterDesc.AdapterLuid,
                                 OutputId = outputIndex,
                                 HMonitor = desc1.Monitor,
-                                IsHdrCapable = (desc1.ColorSpace == Dxgi.DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020),
-                                IsHdrActive = (desc1.ColorSpace == Dxgi.DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020),
+                                // DXGI color space tells us the CURRENT path state, not the
+                                // monitor's capability. Capability is inferred from HDR
+                                // luminance metadata as well so HDR-capable displays do not
+                                // become "incapable" just because HDR is toggled off.
+                                IsHdrCapable = isHdrActive || hasHdrMetadata,
+                                IsHdrActive = isHdrActive,
+                                DxgiColorSpace = desc1.ColorSpace,
+                                BitsPerColor = desc1.BitsPerColor,
                                 MonitorBounds = desc1.DesktopCoordinates,
                                 HdrPeakNits = desc1.MaxLuminance,
                                 HdrMinNits = desc1.MinLuminance,
+                                HdrMaxFullFrameNits = desc1.MaxFullFrameLuminance,
                             };
 
                             EnrichWithGdiData(monitorInfo);
@@ -277,15 +287,26 @@ namespace HDRGammaController.Core
                 if (string.IsNullOrEmpty(deviceId)) return null;
                 
                 // Parse the device ID to extract manufacturer and product code
-                string[] parts = deviceId.Split('\\');
+                string[] parts = deviceId.Split('\\', StringSplitOptions.RemoveEmptyEntries);
                 if (parts.Length < 2) return null;
                 
                 string monitorId = parts[1]; // e.g., "GSM5B08"
+                string? instancePath = parts.Length > 2 ? string.Join("\\", parts.Skip(2)) : null;
                 
                 // Search in DISPLAY registry for matching monitors
                 using (var displayKey = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Enum\DISPLAY"))
                 {
                     if (displayKey == null) return null;
+
+                    if (!string.IsNullOrEmpty(instancePath))
+                    {
+                        using var exactKey = displayKey.OpenSubKey($@"{monitorId}\{instancePath}\Device Parameters");
+                        byte[]? exactEdid = exactKey?.GetValue("EDID") as byte[];
+                        if (exactEdid != null && exactEdid.Length >= 128)
+                        {
+                            return exactEdid;
+                        }
+                    }
                     
                     foreach (string subKeyName in displayKey.GetSubKeyNames())
                     {

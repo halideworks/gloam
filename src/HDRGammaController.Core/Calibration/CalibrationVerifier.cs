@@ -63,7 +63,16 @@ namespace HDRGammaController.Core.Calibration
             // ΔEs (DisplayRgb is a placeholder) and blow up peakY normalization (the ladder
             // reaches far above SDR white), wrecking every number in the report.
             var valid = measurements.Where(m => m.IsValid && m.Patch.Nits is null).ToList();
-            double peakY = valid.Count > 0 ? valid.Max(m => m.Xyz.Y) : 1.0;
+            var whiteMeasurement = valid
+                .Where(m => m.Patch.Category == PatchCategory.Grayscale &&
+                            m.Patch.DisplayRgb.R >= 0.99 &&
+                            m.Patch.DisplayRgb.G >= 0.99 &&
+                            m.Patch.DisplayRgb.B >= 0.99)
+                .OrderByDescending(m => m.Xyz.Y)
+                .FirstOrDefault();
+            double peakY = whiteMeasurement != null
+                ? whiteMeasurement.Xyz.Y
+                : valid.Count > 0 ? valid.Max(m => m.Xyz.Y) : 1.0;
             if (peakY <= 0) peakY = 1.0;
 
             // Tone reference for the patches. For PQ (HDR) targets the patches are still SDR

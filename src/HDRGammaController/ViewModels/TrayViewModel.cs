@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -50,6 +51,7 @@ namespace HDRGammaController.ViewModels
         public ICommand StartupCommand { get; }
         public ICommand DashboardCommand { get; }
         public ICommand CalibrateCommand { get; }
+        public ICommand ExportDiagnosticsCommand { get; }
 
         public TrayViewModel(
             MonitorManager monitorManager,
@@ -100,6 +102,7 @@ namespace HDRGammaController.ViewModels
             StartupCommand = new RelayCommand(ToggleStartup);
             DashboardCommand = new RelayCommand(OpenDashboard);
             CalibrateCommand = new RelayCommand(OpenCalibration);
+            ExportDiagnosticsCommand = new RelayCommand(ExportDiagnostics);
 
             RefreshMonitors();
 
@@ -535,6 +538,31 @@ namespace HDRGammaController.ViewModels
             }
         }
 
+        private void ExportDiagnostics()
+        {
+            try
+            {
+                List<MonitorInfo> activeMonitors;
+                lock (_activeMonitorsLock) { activeMonitors = _activeMonitors.ToList(); }
+
+                string outputDir = Path.Combine(AppPaths.DataDir, "Diagnostics");
+                string path = new DiagnosticsBundle().Create(outputDir, activeMonitors, _settingsManager);
+                Log.Info($"TrayViewModel: diagnostics bundle exported to {path}");
+
+                string message = $"Saved to {path}";
+                if (_toastService != null)
+                    _toastService.Show("Diagnostics exported", message, ToastKind.Success);
+                else
+                    NotificationRequested?.Invoke("Diagnostics exported", message);
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"TrayViewModel.ExportDiagnostics: {ex}");
+                _toastService?.Show("Diagnostics failed", ex.Message, ToastKind.Error);
+                NotificationRequested?.Invoke("Diagnostics failed", ex.Message);
+            }
+        }
+
         public void Dispose()
         {
             // If an update was downloaded but the user never clicked "Restart now", apply it
@@ -611,6 +639,7 @@ namespace HDRGammaController.ViewModels
             // Startup toggle with checkmark
             _startupItem = new ActionViewModel(StartupLabel(), StartupCommand, staysOpenOnClick: true);
             TrayItems.Add(_startupItem);
+            TrayItems.Add(new ActionViewModel("Export Diagnostics", ExportDiagnosticsCommand));
             TrayItems.Add(new ActionViewModel("Refresh", RefreshCommand, staysOpenOnClick: true));
             TrayItems.Add(new ActionViewModel("Exit", ExitCommand));
         }

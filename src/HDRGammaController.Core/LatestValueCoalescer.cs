@@ -25,7 +25,7 @@ namespace HDRGammaController.Core
     /// to close the race where a producer's update landed between the runner's null-check
     /// and its release.
     /// </summary>
-    public sealed class LatestValueCoalescer<TKey, TValue> where TKey : notnull
+    public sealed class LatestValueCoalescer<TKey, TValue> : IDisposable where TKey : notnull
     {
         private sealed class Slot
         {
@@ -40,6 +40,7 @@ namespace HDRGammaController.Core
         private readonly ConcurrentDictionary<TKey, Slot> _slots = new();
         private readonly Action<TKey, TValue> _work;
         private readonly int _minIntervalMs;
+        private int _disposed;
 
         /// <param name="minIntervalMs">
         /// Optional floor on how often the work runs per key. When &gt; 0 the runner waits so
@@ -56,9 +57,12 @@ namespace HDRGammaController.Core
         /// <summary>Submit a value for the given key. Returns immediately.</summary>
         public void Submit(TKey key, TValue value)
         {
+            if (Volatile.Read(ref _disposed) != 0) return;
+
             var slot = _slots.GetOrAdd(key, _ => new Slot());
             lock (slot)
             {
+                if (Volatile.Read(ref _disposed) != 0) return;
                 slot.Pending = value;
                 slot.HasPending = true;
             }
@@ -93,6 +97,8 @@ namespace HDRGammaController.Core
 
         private void TryStartRunner(TKey key, Slot slot)
         {
+            if (Volatile.Read(ref _disposed) != 0) return;
+
             if (!slot.Gate.Wait(0)) return;
             _ = Task.Run(() =>
             {
@@ -110,7 +116,7 @@ namespace HDRGammaController.Core
                     // re-kick ourselves — otherwise the pending update is orphaned.
                     bool stillPending;
                     lock (slot) { stillPending = slot.HasPending; }
-                    if (stillPending) TryStartRunner(key, slot);
+                    if (stillPending && Volatile.Read(ref _disposed) == 0) TryStartRunner(key, slot);
                 }
             });
         }
@@ -119,6 +125,16 @@ namespace HDRGammaController.Core
         {
             while (true)
             {
+                if (Volatile.Read(ref _disposed) != 0)
+                {
+                    lock (slot)
+                    {
+                        slot.Pending = default;
+                        slot.HasPending = false;
+                    }
+                    return;
+                }
+
                 // Nothing queued: return without waiting (don't penalize a lone apply).
                 lock (slot) { if (!slot.HasPending) return; }
 
@@ -150,6 +166,20 @@ namespace HDRGammaController.Core
                     // via finally, but we'd prefer not to tear down the runner entirely.
                 }
                 slot.LastWorkTicks = Environment.TickCount64;
+            }
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+
+            foreach (var slot in _slots.Values)
+            {
+                lock (slot)
+                {
+                    slot.Pending = default;
+                    slot.HasPending = false;
+                }
             }
         }
     }

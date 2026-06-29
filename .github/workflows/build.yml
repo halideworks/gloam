@@ -12,8 +12,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # publish GitHub Releases
-  id-token: write   # OIDC token for azure/login (no client secret stored)
+  contents: read
 
 # --- Required repository configuration (Settings -> Secrets and variables -> Actions) ---
 # Variables (not secrets - OIDC means no signing secret to store):
@@ -27,8 +26,35 @@ permissions:
 # and a federated credential scoped to: repo:${{ github.repository }}:ref:refs/tags/v*
 
 jobs:
+  validate:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore src/HDRGammaController.sln
+
+      - name: Test
+        run: dotnet test src/HDRGammaController.sln --configuration Release --no-restore
+
+      - name: Vulnerability scan
+        run: dotnet list src/HDRGammaController.sln package --vulnerable --include-transitive
+
   build:
     runs-on: windows-latest
+    needs: validate
+    permissions:
+      contents: write   # publish GitHub Releases
+      id-token: write   # OIDC token for azure/login (no client secret stored)
     # Tag builds run in the 'release' GitHub Environment so the OIDC token subject is
     # exactly repo:halideworks/gloam:environment:release - the Azure federated credential
     # matches the subject exactly and cannot wildcard a tag ref like refs/tags/v*. Non-tag

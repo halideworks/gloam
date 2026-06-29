@@ -15,9 +15,8 @@ namespace HDRGammaController.Core
         private static readonly object Sync = new object();
         private static string? _filePath;
 
-        // Simple cap: start fresh rather than rotate. A tray app's diagnostics are
-        // only interesting for the recent past.
-        private const long MaxBytes = 1_000_000;
+        private const long MaxBytes = 5_000_000;
+        private const int MaxArchives = 3;
 
         /// <summary>Default log location under LocalApplicationData.</summary>
         public static string DefaultFilePath => Path.Combine(AppPaths.DataDir, "app.log");
@@ -34,11 +33,7 @@ namespace HDRGammaController.Core
                 {
                     string path = filePath ?? DefaultFilePath;
                     Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                    var info = new FileInfo(path);
-                    if (info.Exists && info.Length > MaxBytes)
-                    {
-                        info.Delete();
-                    }
+                    RotateIfNeeded(path);
                     _filePath = path;
                 }
                 catch
@@ -59,8 +54,27 @@ namespace HDRGammaController.Core
             lock (Sync)
             {
                 if (_filePath == null) return;
-                try { File.AppendAllText(_filePath, line + Environment.NewLine); }
+                try
+                {
+                    RotateIfNeeded(_filePath);
+                    File.AppendAllText(_filePath, line + Environment.NewLine);
+                }
                 catch { /* logging must never take the app down */ }
+            }
+        }
+
+        private static void RotateIfNeeded(string path)
+        {
+            var info = new FileInfo(path);
+            if (!info.Exists || info.Length <= MaxBytes) return;
+
+            for (int i = MaxArchives; i >= 1; i--)
+            {
+                string source = i == 1 ? path : $"{path}.{i - 1}";
+                string dest = $"{path}.{i}";
+                if (!File.Exists(source)) continue;
+                if (i == MaxArchives && File.Exists(dest)) File.Delete(dest);
+                File.Move(source, dest, overwrite: true);
             }
         }
     }

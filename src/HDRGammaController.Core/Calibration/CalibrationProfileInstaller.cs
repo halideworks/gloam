@@ -2,8 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Security.Cryptography;
-using System.Text;
 using HDRGammaController.Interop;
 
 namespace HDRGammaController.Core.Calibration
@@ -52,6 +50,13 @@ namespace HDRGammaController.Core.Calibration
 
             if (hdrMode && measurements == null)
                 return new InstallResult(false, "", "HDR install needs the calibration measurements to build PQ-domain LUTs.");
+
+            if (measurements != null)
+            {
+                var measurementValidation = CalibrationMeasurementValidator.ValidateForProfile(measurements, target, hdrMode);
+                if (!measurementValidation.IsValid)
+                    return new InstallResult(false, "", "Measurement validation failed: " + measurementValidation.Error);
+            }
 
             string? template = FindTemplate(whiteLevel);
             if (template == null)
@@ -347,6 +352,13 @@ namespace HDRGammaController.Core.Calibration
             try
             {
                 Wcs.DisassociateColorProfileFromDevice(null, profileName, monitor.MonitorDevicePath);
+                if (DisplayConfig.TryGetPathForGdiName(monitor.DeviceName, out var adapterId, out uint sourceId, out _))
+                {
+                    Wcs.ColorProfileRemoveDisplayAssociation(
+                        Wcs.WCS_PROFILE_MANAGEMENT_SCOPE.WCS_PROFILE_MANAGEMENT_SCOPE_CURRENT_USER,
+                        profileName, adapterId, sourceId,
+                        dissociateAdvancedColor: true);
+                }
                 Wcs.UninstallColorProfile(null, profileName, true);
                 Log.Info($"CalibrationProfileInstaller: Removed '{profileName}' from {monitor.FriendlyName}.");
             }
@@ -442,13 +454,6 @@ namespace HDRGammaController.Core.Calibration
             foreach (char c in Path.GetInvalidFileNameChars()) s = s.Replace(c, ' ');
             s = s.Replace("  ", " ").Trim();
             return s.Length > 40 ? s[..40].Trim() : s;
-        }
-
-        private static string ShortHash(string input)
-        {
-            using var md5 = MD5.Create();
-            byte[] hash = md5.ComputeHash(Encoding.UTF8.GetBytes(input));
-            return Convert.ToHexString(hash)[..8];
         }
     }
 }

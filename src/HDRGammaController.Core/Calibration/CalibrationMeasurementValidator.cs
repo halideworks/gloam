@@ -1,0 +1,114 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace HDRGammaController.Core.Calibration
+{
+    /// <summary>
+    /// Coarse physical sanity checks for colorimeter measurement sets. These gates catch
+    /// broken sessions before they become installed profiles: covered sensors, stale reads,
+    /// non-monotonic grayscale, missing white/black anchors, or impossible primaries.
+    /// </summary>
+    public static class CalibrationMeasurementValidator
+    {
+        public readonly record struct Result(bool IsValid, string? Error)
+        {
+            public static Result Ok() => new(true, null);
+            public static Result Fail(string error) => new(false, error);
+        }
+
+        public static Result ValidateForProfile(
+            IEnumerable<MeasurementResult>? measurements,
+            CalibrationTarget target,
+            bool hdrMode)
+        {
+            if (measurements == null)
+                return Result.Fail("No measurements were provided.");
+
+            var valid = measurements
+                .Where(m => m.IsValid && m.Patch.Nits is null)
+                .ToList();
+            if (valid.Count < 10)
+                return Result.Fail(
+                    $"Only {valid.Count} valid accuracy measurements were available - too few to build a trustworthy profile.");
+
+            double peak = valid.Max(m => m.Xyz.Y);
+            double floor = valid.Min(m => m.Xyz.Y);
+            if (peak < 1.0)
+                return Result.Fail(
+                    $"All measurements were near-black (peak {peak:F3} cd/m²). Check that the sensor is flush against the patch.");
+            if (peak <= floor * 1.5)
+                return Result.Fail(
+                    "The measurements show almost no luminance range. The probe likely returned stale or repeated readings.");
+
+            var white = FindPatch(valid, 1, 1, 1);
+            var black = FindPatch(valid, 0, 0, 0);
+            if (white == null)
+                return Result.Fail("The measurement set is missing a valid white patch.");
+            if (black == null)
+                return Result.Fail("The measurement set is missing a valid black patch.");
+            if (white.Xyz.Y <= black.Xyz.Y + Math.Max(1.0, peak * 0.05))
+                return Result.Fail(
+                    $"White ({white.Xyz.Y:F2} cd/m²) was not meaningfully brighter than black ({black.Xyz.Y:F2} cd/m²).");
+
+            var whites = valid
+                .Where(m => m.Patch.Category == PatchCategory.Grayscale &&
+                            m.Patch.DisplayRgb.R >= 0.99 &&
+                            m.Patch.DisplayRgb.G >= 0.99 &&
+                            m.Patch.DisplayRgb.B >= 0.99)
+                .ToList();
+            if (whites.Count > 1)
+            {
+                double minY = whites.Min(m => m.Xyz.Y);
+                double maxY = whites.Max(m => m.Xyz.Y);
+                if (minY > 0 && (maxY - minY) / minY > 0.08)
+                    return Result.Fail($"Repeated white patches drifted by more than 8% ({minY:F1}-{maxY:F1} cd/m²). Let the display warm up and retry.");
+
+                var first = whites[0].Chromaticity;
+                foreach (var w in whites.Skip(1))
+                {
+                    if (first.DistanceTo(w.Chromaticity) > 0.01)
+                        return Result.Fail("Repeated white patches changed chromaticity noticeably during the run.");
+                }
+            }
+
+            var grayscale = valid
+                .Where(m => m.Patch.Category == PatchCategory.Grayscale)
+                .OrderBy(m => m.Patch.DisplayRgb.R)
+                .ToList();
+            if (grayscale.Count < 5)
+                return Result.Fail("At least five valid grayscale measurements are required.");
+
+            double monotonicTolerance = Math.Max(0.25, peak * 0.02);
+            for (int i = 1; i < grayscale.Count; i++)
+            {
+                if (grayscale[i].Xyz.Y + monotonicTolerance < grayscale[i - 1].Xyz.Y)
+                {
+                    return Result.Fail(
+                        $"Grayscale is non-monotonic around {grayscale[i].Patch.Name}: " +
+                        $"{grayscale[i - 1].Xyz.Y:F2} -> {grayscale[i].Xyz.Y:F2} cd/m².");
+                }
+            }
+
+            foreach (var primary in valid.Where(m => m.Patch.Category == PatchCategory.Primary))
+            {
+                if (primary.Xyz.Y <= black.Xyz.Y + 0.5)
+                    return Result.Fail($"{primary.Patch.Name} measured near black; the displayed patch or probe reading is invalid.");
+
+                var xy = primary.Chromaticity;
+                if (!double.IsFinite(xy.X) || !double.IsFinite(xy.Y) ||
+                    xy.X <= 0 || xy.Y <= 0 || xy.X > 0.8 || xy.Y > 0.9 || xy.X + xy.Y > 1.1)
+                    return Result.Fail($"{primary.Patch.Name} measured an impossible chromaticity {xy}.");
+            }
+
+            return Result.Ok();
+        }
+
+        private static MeasurementResult? FindPatch(
+            IReadOnlyList<MeasurementResult> measurements, double r, double g, double b)
+            => measurements.FirstOrDefault(m =>
+                Math.Abs(m.Patch.DisplayRgb.R - r) < 0.02 &&
+                Math.Abs(m.Patch.DisplayRgb.G - g) < 0.02 &&
+                Math.Abs(m.Patch.DisplayRgb.B - b) < 0.02);
+    }
+}

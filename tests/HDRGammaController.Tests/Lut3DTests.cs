@@ -70,6 +70,32 @@ namespace HDRGammaController.Tests
             Assert.Throws<InvalidOperationException>(() => gen.Generate());
         }
 
+        [Fact]
+        public void MeasurementValidator_NonMonotonicGrayscale_Fails()
+        {
+            var list = GoodRamp();
+            list[7] = Meas(7 / 11.0, 7 / 11.0, 7 / 11.0, list[5].Xyz.Y * 0.5);
+
+            var result = CalibrationMeasurementValidator.ValidateForProfile(
+                list, StandardTargets.SrgbGamma22, hdrMode: false);
+
+            Assert.False(result.IsValid);
+            Assert.Contains("non-monotonic", result.Error, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void MeasurementValidator_RepeatedWhiteDrift_Fails()
+        {
+            var list = GoodRamp();
+            list.Add(Meas(1, 1, 1, 90));
+
+            var result = CalibrationMeasurementValidator.ValidateForProfile(
+                list, StandardTargets.SrgbGamma22, hdrMode: false);
+
+            Assert.False(result.IsValid);
+            Assert.Contains("white", result.Error, StringComparison.OrdinalIgnoreCase);
+        }
+
         [Theory]
         [InlineData(2.2)]
         [InlineData(2.4)]
@@ -441,6 +467,33 @@ namespace HDRGammaController.Tests
                 if (System.IO.File.Exists(tempPath))
                     System.IO.File.Delete(tempPath);
             }
+        }
+
+        #endregion
+
+        #region Gamut Mapping Tests
+
+        [Fact]
+        public void CompressToGamut_OutOfRangeColor_ReturnsInGamut()
+        {
+            var compressed = Lut3DGenerator.CompressToGamut(new LinearRgb(1.3, 0.4, -0.2));
+
+            Assert.True(compressed.IsInGamut);
+        }
+
+        [Fact]
+        public void CompressToGamut_PreservesHueDirectionBetterThanClipping()
+        {
+            var source = new LinearRgb(1.4, 0.35, -0.1);
+            var compressed = Lut3DGenerator.CompressToGamut(source);
+            var clipped = source.Clamp();
+
+            double gray = Math.Clamp(0.2126 * source.R + 0.7152 * source.G + 0.0722 * source.B, 0, 1);
+            double compressedRatioRg = (compressed.R - gray) / (compressed.G - gray);
+            double sourceRatioRg = (source.R - gray) / (source.G - gray);
+            double clippedRatioRg = (clipped.R - gray) / (clipped.G - gray);
+
+            Assert.True(Math.Abs(compressedRatioRg - sourceRatioRg) < Math.Abs(clippedRatioRg - sourceRatioRg));
         }
 
         #endregion

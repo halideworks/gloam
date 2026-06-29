@@ -23,9 +23,15 @@ namespace HDRGammaController.Core
         public bool IsHdrCapable { get; set; }
         
         /// <summary>
-        /// True if the OS is currently outputting HDR (ST.2084).
+        /// True if the OS is currently outputting Advanced Color HDR as ST.2084/PQ.
         /// </summary>
         public bool IsHdrActive { get; set; }
+
+        /// <summary>Raw DXGI color-space enum for diagnostics.</summary>
+        public int DxgiColorSpace { get; set; }
+
+        /// <summary>DXGI bits-per-color for the active output path.</summary>
+        public int BitsPerColor { get; set; }
 
         public GammaMode CurrentGamma { get; set; } = GammaMode.Gamma24;
         
@@ -43,6 +49,7 @@ namespace HDRGammaController.Core
         /// <summary>Panel HDR range from DXGI (display-reported metadata), nits. 0 = unknown.</summary>
         public double HdrPeakNits { get; set; }
         public double HdrMinNits { get; set; }
+        public double HdrMaxFullFrameNits { get; set; }
 
         // DisplayConfig identity (adapter LUID + source id) — required by the Advanced Color
         // profile association APIs, which is the association list Windows uses in HDR.

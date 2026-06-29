@@ -124,8 +124,17 @@ namespace HDRGammaController.Core.Calibration
             //
             // -N disables the colorimeter's initial dark calibration. i1 Display Plus
             // doesn't need a lens cap calibration, so this is safe and avoids a ~5s stall.
-            string args = $"-v -N -c {instrumentIndex} -e -y {displayFlag}";
-            if (hdrMode) args += " -H";
+            var args = new System.Collections.Generic.List<string>
+            {
+                "-v",
+                "-N",
+                "-c",
+                instrumentIndex.ToString(CultureInfo.InvariantCulture),
+                "-e",
+                "-y",
+                displayFlag
+            };
+            if (hdrMode) args.Add("-H");
             // Spectral correction sample (.ccss) or matrix (.ccmx): replaces the generic
             // display-type calibration with one matched to the actual panel spectrum.
             // Essential on narrow-primary panels (QD-OLED) where the generic corrections
@@ -139,10 +148,11 @@ namespace HDRGammaController.Core.Calibration
                     throw new InvalidOperationException(
                         $"The meter correction file is not a valid CGATS correction:\n{correctionFilePath}\n" +
                         "Re-download it from the corrections database, or clear it to use the built-in display-type correction.");
-                args += $" -X \"{correctionFilePath}\"";
+                args.Add("-X");
+                args.Add(correctionFilePath);
             }
 
-            var psi = new ProcessStartInfo(spotreadPath, args)
+            var psi = new ProcessStartInfo(spotreadPath)
             {
                 UseShellExecute = false,
                 CreateNoWindow = true,
@@ -151,6 +161,10 @@ namespace HDRGammaController.Core.Calibration
                 RedirectStandardError = true,
                 WorkingDirectory = Path.GetDirectoryName(spotreadPath)
             };
+            foreach (string arg in args)
+            {
+                psi.ArgumentList.Add(arg);
+            }
 
             // Puts spotread into line-at-a-time mode so WriteAsync(" \r\n") triggers a
             // measurement rather than being swallowed by its raw-key reader.
@@ -165,7 +179,7 @@ namespace HDRGammaController.Core.Calibration
             var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
             var session = new SpotreadSession(process, log);
 
-            log($"SpotreadSession starting: {spotreadPath} {args}");
+            log($"SpotreadSession starting: {spotreadPath} {string.Join(" ", args)}");
             process.Start();
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();

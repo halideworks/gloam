@@ -188,6 +188,8 @@ namespace HDRGammaController.Core
         // Reads that hand out mutable objects (GetMonitorProfile, ExcludedApps) return COPIES so
         // callers can't mutate shared state out from under us after the lock releases.
         private readonly object _dataLock = new();
+        private readonly object _saveLock = new();
+        private long _dataVersion;
 
         private SettingsData _data = new SettingsData();
 
@@ -207,7 +209,7 @@ namespace HDRGammaController.Core
 
         public void SetDarkTheme(bool dark)
         {
-            lock (_dataLock) { _data.DarkTheme = dark; }
+            lock (_dataLock) { _data.DarkTheme = dark; _dataVersion++; }
             Save();
         }
 
@@ -265,6 +267,7 @@ namespace HDRGammaController.Core
                                 lock (_dataLock)
                                 {
                                     _data = loaded;
+                                    _dataVersion++;
                                 }
                                 Save();
                                 return;
@@ -289,6 +292,7 @@ namespace HDRGammaController.Core
             lock (_dataLock)
             {
                 _data = loaded ?? new SettingsData();
+                _dataVersion++;
             }
         }
 
@@ -296,34 +300,52 @@ namespace HDRGammaController.Core
         {
             string json;
             int profileCount;
+            long snapshotVersion;
             lock (_dataLock)
             {
-                var options = new JsonSerializerOptions
-                {
-                    WriteIndented = true,
-                    Converters = { new JsonStringEnumConverter() }
-                };
+                var options = CreateJsonOptions();
                 json = JsonSerializer.Serialize(_data, options);
                 profileCount = _data.MonitorProfiles.Count;
+                snapshotVersion = _dataVersion;
             }
 
-            // File I/O happens OUTSIDE the lock — the serialize snapshot is already taken, so a
-            // concurrent mutator can't keep the lock held across a slow disk write (or, worse,
-            // deadlock against a re-entrant Save from a NightModeChanged handler).
+            // File I/O happens outside _dataLock so a slow disk write cannot block UI/settings
+            // reads. _saveLock serializes writers, and the version check below prevents an older
+            // snapshot from overwriting a newer settings state when two Save() calls overlap.
             try
             {
-                Directory.CreateDirectory(AppDataPath);
-                // Write-then-rename so a crash mid-write can't leave a truncated settings.json.
-                string tempPath = SettingsFilePath + ".tmp";
-                File.WriteAllText(tempPath, json);
-                File.Move(tempPath, SettingsFilePath, overwrite: true);
-                Log.Info($"SettingsManager: Saved {profileCount} monitor profiles.");
+                lock (_saveLock)
+                {
+                    lock (_dataLock)
+                    {
+                        if (snapshotVersion != _dataVersion)
+                        {
+                            var options = CreateJsonOptions();
+                            json = JsonSerializer.Serialize(_data, options);
+                            profileCount = _data.MonitorProfiles.Count;
+                            snapshotVersion = _dataVersion;
+                        }
+                    }
+
+                    Directory.CreateDirectory(AppDataPath);
+                    // Write-then-rename so a crash mid-write can't leave a truncated settings.json.
+                    string tempPath = SettingsFilePath + $".{Guid.NewGuid():N}.tmp";
+                    File.WriteAllText(tempPath, json);
+                    File.Move(tempPath, SettingsFilePath, overwrite: true);
+                    Log.Info($"SettingsManager: Saved {profileCount} monitor profiles (v{snapshotVersion}).");
+                }
             }
             catch (Exception ex)
             {
                 Log.Info($"SettingsManager: Failed to save settings: {ex.Message}");
             }
         }
+
+        private static JsonSerializerOptions CreateJsonOptions() => new()
+        {
+            WriteIndented = true,
+            Converters = { new JsonStringEnumConverter() }
+        };
 
         public GammaMode? GetProfileForMonitor(string monitorDevicePath)
         {
@@ -358,6 +380,7 @@ namespace HDRGammaController.Core
                     return;
                 }
                 profile.GammaMode = mode;
+                _dataVersion++;
                 changed = true;
             }
             if (changed) Save();
@@ -387,6 +410,7 @@ namespace HDRGammaController.Core
             lock (_dataLock)
             {
                 _data.MonitorProfiles[monitorDevicePath] = profile;
+                _dataVersion++;
             }
             Save();
         }
@@ -396,6 +420,7 @@ namespace HDRGammaController.Core
             lock (_dataLock)
             {
                 _data.NightMode = NightModeSettingsData.FromNightModeSettings(settings);
+                _dataVersion++;
             }
             Save();
             // Raised outside the lock; handlers may call back into settings (deadlock risk).
@@ -417,6 +442,7 @@ namespace HDRGammaController.Core
                     _data.MonitorProfiles[monitorDevicePath] = profile;
                 }
                 profile.Mhc2ProfileName = profileName;
+                _dataVersion++;
             }
             Save();
         }
@@ -438,6 +464,7 @@ namespace HDRGammaController.Core
                 profile.MeterCorrectionPath = ccssPath;
                 profile.CalibDisplayType = displayType;
                 profile.CalibWhitePointOnly = whitePointOnly;
+                _dataVersion++;
             }
             Save();
         }
@@ -463,6 +490,7 @@ namespace HDRGammaController.Core
             lock (_dataLock)
             {
                 _data.ExcludedApps = apps ?? new List<AppExclusionRule>();
+                _dataVersion++;
             }
             Save();
         }

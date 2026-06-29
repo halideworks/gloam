@@ -77,22 +77,29 @@ namespace HDRGammaController.Tests
         [Fact]
         public void NoLostUpdates_UnderConcurrentProducers()
         {
-            // Producers race to submit monotonically increasing values. After all producers
-            // finish and the coalescer goes idle, the last invocation MUST reflect the
-            // highest-numbered submission overall — otherwise we lost a late update.
-            int maxSeen = -1;
+            // Producers race to submit values, and each submission gets a global sequence.
+            // After all producers finish and the coalescer goes idle, the final invocation
+            // must carry the value from the submission with the highest sequence. Numeric
+            // payload order is deliberately decoupled from producer/thread identity: the
+            // highest payload is not necessarily the final wall-clock submission.
+            int latestSubmittedSeq = -1;
+            int latestSubmittedValue = -1;
+            int finalSeenSeq = -1;
+            int finalSeenValue = -1;
             var c = new LatestValueCoalescer<string, int>((_, v) =>
             {
                 Thread.Sleep(1);
-                // Update the high-water mark observed by the work function. The LAST
-                // invocation should raise this to the overall max.
+                int seq = v >> 16;
+                int payload = v & 0xFFFF;
                 int prev;
-                do { prev = maxSeen; } while (v > prev && Interlocked.CompareExchange(ref maxSeen, v, prev) != prev);
+                do { prev = finalSeenSeq; } while (seq > prev && Interlocked.CompareExchange(ref finalSeenSeq, seq, prev) != prev);
+                if (seq == Volatile.Read(ref finalSeenSeq))
+                    Volatile.Write(ref finalSeenValue, payload);
             });
 
             const int producers = 8;
             const int perProducer = 500;
-            int overallMax = producers * perProducer - 1;
+            int sequence = -1;
 
             var threads = new Thread[producers];
             for (int p = 0; p < producers; p++)
@@ -102,7 +109,11 @@ namespace HDRGammaController.Tests
                 {
                     for (int i = 0; i < perProducer; i++)
                     {
-                        c.Submit("k", pCopy * perProducer + i);
+                        int payload = pCopy * perProducer + i;
+                        int seq = Interlocked.Increment(ref sequence);
+                        Volatile.Write(ref latestSubmittedValue, payload);
+                        Volatile.Write(ref latestSubmittedSeq, seq);
+                        c.Submit("k", (seq << 16) | payload);
                     }
                 });
                 threads[p].Start();
@@ -110,18 +121,8 @@ namespace HDRGammaController.Tests
             foreach (var t in threads) t.Join();
 
             Assert.True(c.WaitForIdle("k", TimeSpan.FromSeconds(10)));
-            // The last-value-wins guarantee is only about what the runner eventually saw,
-            // not which producer wrote last. Since producers submit {0..499}, {500..999}, etc.
-            // and the runner always dequeues the *latest* Pending, the final invocation
-            // must reflect a value >= the maximum any producer submitted. We can assert
-            // the observed max equals the overall max since producers are sequential per-thread
-            // and the final Submit by whichever producer finishes last is monotonic.
-            // A weaker but still meaningful assertion: no value was silently dropped past the max.
-            Assert.True(maxSeen <= overallMax, $"Saw impossible value {maxSeen}");
-            // And the final state must reflect *some* value from the last producer activity —
-            // if updates were being lost, we'd occasionally see maxSeen < overallMax - perProducer.
-            Assert.True(maxSeen >= overallMax - perProducer + 1,
-                $"Lost late updates: observed max {maxSeen}, overall max {overallMax}");
+            Assert.Equal(latestSubmittedSeq, finalSeenSeq);
+            Assert.Equal(latestSubmittedValue, finalSeenValue);
         }
 
         [Fact]
@@ -207,6 +208,19 @@ namespace HDRGammaController.Tests
 
             Assert.True(c.WaitForIdle("k", TimeSpan.FromSeconds(5)));
             Assert.Equal(1, okInvocations);
+        }
+
+        [Fact]
+        public void Dispose_DropsLaterSubmits()
+        {
+            int invocations = 0;
+            var c = new LatestValueCoalescer<string, int>((_, _) => Interlocked.Increment(ref invocations));
+
+            c.Dispose();
+            c.Submit("k", 1);
+
+            Thread.Sleep(50);
+            Assert.Equal(0, invocations);
         }
     }
 }

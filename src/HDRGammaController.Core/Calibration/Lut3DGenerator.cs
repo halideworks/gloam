@@ -65,7 +65,9 @@ namespace HDRGammaController.Core.Calibration
             // from them. Without this, a probe that connected but never actually read the
             // screen (ambient light, a sharing-violation returning stale/zero data) yields
             // a garbage LUT that the app would report as a successful calibration.
-            ValidateMeasurements();
+            var validation = CalibrationMeasurementValidator.ValidateForProfile(_measurements, _target, hdrMode: false);
+            if (!validation.IsValid)
+                throw new InvalidOperationException(validation.Error);
 
             // Step 1: Build display characterization from measurements
             progress?.Invoke(5);
@@ -110,47 +112,6 @@ namespace HDRGammaController.Core.Calibration
 
             progress?.Invoke(100);
             return lut;
-        }
-
-        /// <summary>
-        /// Guards against measurement sets that are physically impossible for a working
-        /// probe pointed at a display, so we fail with an actionable error instead of
-        /// silently emitting a useless correction. Thresholds are deliberately loose —
-        /// only grossly-broken data trips them, never a merely-imperfect measurement.
-        /// </summary>
-        private void ValidateMeasurements()
-        {
-            var valid = _measurements.Where(m => m.IsValid).ToList();
-            if (valid.Count < 10)
-                throw new InvalidOperationException(
-                    $"Only {valid.Count} of {_measurements.Count} measurements were valid - " +
-                    "too few to calibrate. The colorimeter may have lost contact with the screen.");
-
-            double peak = valid.Max(m => m.Xyz.Y);
-            double floor = valid.Min(m => m.Xyz.Y);
-
-            // A working probe on any lit display reads at least ~1 nit on white. Near-zero
-            // peak means it never saw the screen (covered sensor, ambient, or stale reads).
-            if (peak < 1.0)
-                throw new InvalidOperationException(
-                    $"All measurements were near-black (peak {peak:F3} cd/m²). The colorimeter " +
-                    "isn't reading the screen - check that the sensor is flush against the patch " +
-                    "and that no other program is holding the device.");
-
-            // White must be meaningfully brighter than black, or there's no tone curve to
-            // fit (e.g. the probe returned the same value for every patch).
-            var white = FindMeasurementByRgb(1, 1, 1);
-            var black = FindMeasurementByRgb(0, 0, 0);
-            if (white != null && black != null && white.Xyz.Y <= black.Xyz.Y * 1.5)
-                throw new InvalidOperationException(
-                    $"White ({white.Xyz.Y:F2} cd/m²) was not meaningfully brighter than black " +
-                    $"({black.Xyz.Y:F2} cd/m²). Measurements look invalid - the probe may not " +
-                    "have been reading the displayed patches.");
-
-            if (peak <= floor * 1.5)
-                throw new InvalidOperationException(
-                    "The measured grayscale shows almost no luminance range - the probe likely " +
-                    "returned the same reading for every patch. Re-seat the colorimeter and retry.");
         }
 
         /// <summary>
@@ -381,17 +342,36 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         private LinearRgb ApplyGamutMapping(LinearRgb rgb)
         {
-            // Simple clipping gamut mapping
-            // More sophisticated approaches (compression toward neutral) could be added
+            return CompressToGamut(rgb);
+        }
+
+        /// <summary>
+        /// Hue-preserving gamut compression: keep the corrected color on the same line from
+        /// neutral gray to the requested RGB and reduce saturation until every channel fits.
+        /// This avoids the hue skews caused by independent channel clipping.
+        /// </summary>
+        internal static LinearRgb CompressToGamut(LinearRgb rgb)
+        {
             if (rgb.IsInGamut)
                 return rgb;
 
-            // Clip to valid range
-            double r = Math.Clamp(rgb.R, 0, 1);
-            double g = Math.Clamp(rgb.G, 0, 1);
-            double b = Math.Clamp(rgb.B, 0, 1);
+            double gray = Math.Clamp(0.2126 * rgb.R + 0.7152 * rgb.G + 0.0722 * rgb.B, 0, 1);
+            var neutral = new LinearRgb(gray, gray, gray);
+            double lo = 0;
+            double hi = 1;
 
-            return new LinearRgb(r, g, b);
+            for (int i = 0; i < 32; i++)
+            {
+                double mid = (lo + hi) * 0.5;
+                var candidate = neutral + (rgb - neutral) * mid;
+                if (candidate.IsInGamut)
+                    lo = mid;
+                else
+                    hi = mid;
+            }
+
+            var compressed = neutral + (rgb - neutral) * lo;
+            return compressed.Clamp();
         }
 
         /// <summary>

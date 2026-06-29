@@ -1,0 +1,46 @@
+Gloam third-party notices
+=========================
+
+This file summarizes third-party components redistributed with Gloam release
+artifacts. It is not a substitute for the full license texts shipped by those
+projects.
+
+ArgyllCMS
+---------
+
+Gloam Full / installer builds bundle ArgyllCMS command-line executables such as
+spotread.exe and dispwin.exe for colorimeter measurement and gamma-ramp fallback.
+
+Project: https://www.argyllcms.com/
+Bundled version: ArgyllCMS 3.5.0
+License: GNU Affero General Public License version 3
+Source: https://www.argyllcms.com/Argyll_V3.5.0_src.zip
+
+Gloam invokes ArgyllCMS executables as separate processes and does not link
+against ArgyllCMS code. The ArgyllCMS binaries are redistributed unmodified.
+When updating the bundled ArgyllCMS version, update this notice, the pinned
+download hash in the source tree, and the packaged license/source reference.
+
+Velopack
+--------
+
+Project: https://velopack.io/
+License: MIT
+
+CommunityToolkit.Mvvm
+---------------------
+
+Project: https://github.com/CommunityToolkit/dotnet
+License: MIT
+
+Hardcodet.NotifyIcon.Wpf
+------------------------
+
+Project: https://github.com/hardcodet/wpf-notifyicon
+License: The Code Project Open License (CPOL)
+
+Microsoft.Extensions.DependencyInjection
+----------------------------------------
+
+Project: https://github.com/dotnet/runtime
+License: MIT

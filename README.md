@@ -28,6 +28,7 @@ A Windows System Tray application to manage HDR Gamma settings on a per-monitor 
 - **System Tray Integration**: Unobtrusive background operation with dark/light mode support
 - **Start with Windows**: Toggle auto-start from the tray menu
 - **Auto-Download ArgyllCMS**: Downloads ArgyllCMS automatically when calibration features need it
+- **Support Diagnostics Export**: Builds a sanitized zip with logs, settings, monitor/HDR state, calibration-profile summaries, and third-party notices for bug reports.
 
 ## Requirements
 
@@ -93,7 +94,7 @@ dotnet publish src/HDRGammaController -c Release -r win-x64 --self-contained tru
    - **Night Mode**: Enable "Sunrise/Sunset" for automatic adjustment based on your location (Latitude/Longitude).
    - **Calibration**: Adjust Brightness, Temperature, Tint, and RGB Gains/Offsets for fine-tuning your display's white point and color balance.
 
-   **Note**: All settings are saved automatically to `%LOCALAPPDATA%\Gloam\settings.json`. Diagnostic logs are written to `%LOCALAPPDATA%\Gloam\app.log` - include this file when reporting issues.
+   **Note**: All settings are saved automatically to `%LOCALAPPDATA%\Gloam\settings.json`. For bug reports, use **Export Diagnostics** from the tray menu; it writes a sanitized zip to `%LOCALAPPDATA%\Gloam\Diagnostics`.
 
 Your selections are automatically saved and restored on next launch.
 
@@ -143,4 +144,4 @@ For a detailed explanation of the mathematics and engineering behind this tool, 
 
 This project is licensed under the MIT License.
 
-ArgyllCMS is licensed under the AGPL v3 license. This application calls `dispwin` as a separate process and does not link against AGPL code.
+ArgyllCMS is licensed under the AGPL v3 license. This application calls `dispwin` and `spotread` as separate processes and does not link against AGPL code. See [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt) for bundled third-party notices.

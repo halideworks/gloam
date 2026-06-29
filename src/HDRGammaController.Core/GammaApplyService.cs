@@ -82,6 +82,7 @@ namespace HDRGammaController.Core
         {
             _rampGuard.Stop();
             _rampGuard.Dispose();
+            _coalescer.Dispose();
         }
 
         /// <summary>

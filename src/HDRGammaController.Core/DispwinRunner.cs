@@ -167,13 +167,14 @@ namespace HDRGammaController.Core
                 var map = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
                 try
                 {
-                    var psi = new ProcessStartInfo(_dispwinPath, "-?")
+                    var psi = new ProcessStartInfo(_dispwinPath)
                     {
                         UseShellExecute = false,
                         CreateNoWindow = true,
                         RedirectStandardOutput = true,
                         RedirectStandardError = true
                     };
+                    psi.ArgumentList.Add("-?");
                     using var p = Process.Start(psi);
                     if (p != null)
                     {
@@ -287,42 +288,6 @@ namespace HDRGammaController.Core
                 Log.Info($"DispwinRunner: Error searching AppData: {ex.Message}");
             }
 
-            // 4. Search in PATH (last resort, validates full path before returning)
-            string pathResult = FindInPath("dispwin.exe");
-            if (!string.IsNullOrEmpty(pathResult))
-            {
-                Log.Info($"DispwinRunner: Found dispwin in PATH: {pathResult}");
-                return pathResult;
-            }
-
-            return string.Empty;
-        }
-        
-        /// <summary>
-        /// Searches PATH for a file and returns its full path, or empty string if not found.
-        /// </summary>
-        private string FindInPath(string fileName)
-        {
-            var pathEnv = Environment.GetEnvironmentVariable("PATH");
-            if (string.IsNullOrEmpty(pathEnv)) return string.Empty;
-
-            foreach (var dir in pathEnv.Split(Path.PathSeparator))
-            {
-                try
-                {
-                    if (string.IsNullOrWhiteSpace(dir)) continue;
-                    string fullPath = Path.Combine(dir, fileName);
-                    if (File.Exists(fullPath))
-                    {
-                        // Return full resolved path, not just the filename
-                        return Path.GetFullPath(fullPath);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log.Info($"DispwinRunner: Error checking PATH entry '{dir}': {ex.Message}");
-                }
-            }
             return string.Empty;
         }
 
@@ -457,9 +422,8 @@ namespace HDRGammaController.Core
                 }
 
                 int argIndex = ResolveDisplayIndex(monitor);
-                string args = $"-d {argIndex} \"{calFile}\"";
-                Log.Info($"DispwinRunner.ApplyGamma: Running dispwin with args: {args}");
-                if (RunDispwin(args))
+                Log.Info($"DispwinRunner.ApplyGamma: Running dispwin for display {argIndex} with temp CAL file.");
+                if (RunDispwin("-d", argIndex.ToString(CultureInfo.InvariantCulture), calFile))
                 {
                     RecordApplied(monitor, lutR, lutG, lutB);
                 }
@@ -549,7 +513,7 @@ namespace HDRGammaController.Core
 
              if (!EnsureConfigured()) return;
              int argIndex = ResolveDisplayIndex(monitor);
-             RunDispwin($"-d {argIndex} -c");
+             RunDispwin("-d", argIndex.ToString(CultureInfo.InvariantCulture), "-c");
         }
 
         private static bool LutsEqual(double[] a, double[] b)
@@ -564,18 +528,22 @@ namespace HDRGammaController.Core
         }
 
         /// <returns>True if dispwin ran to completion with exit code 0.</returns>
-        private bool RunDispwin(string args)
+        private bool RunDispwin(params string[] args)
         {
-            Log.Info($"DispwinRunner.RunDispwin: Executing '{_dispwinPath}' with args '{args}'");
+            Log.Info($"DispwinRunner.RunDispwin: Executing '{_dispwinPath}' with args '{string.Join(" ", args)}'");
             try
             {
-                var psi = new ProcessStartInfo(_dispwinPath, args)
+                var psi = new ProcessStartInfo(_dispwinPath)
                 {
                     UseShellExecute = false,
                     CreateNoWindow = true,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true
                 };
+                foreach (string arg in args)
+                {
+                    psi.ArgumentList.Add(arg);
+                }
                 using var p = Process.Start(psi);
                 if (p == null)
                 {
