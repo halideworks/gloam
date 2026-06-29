@@ -76,6 +76,8 @@ Write-Host "Bundling $argyllVersion from $argyllRoot"
 New-Item -ItemType Directory -Path (Split-Path $bundleRoot) -Force | Out-Null
 Copy-Item $argyllRoot $bundleRoot -Recurse
 
+& ".\scripts\Test-PublishOutput.ps1" -PublishDir $PublishDir -ArgyllVersion $argyllVersion
+
 if ($PublishOnly) {
     Write-Host "`nPublish-only complete: '$PublishDir' is ready for 'vpk pack'."
     return

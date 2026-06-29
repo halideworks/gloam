@@ -7,7 +7,8 @@ Hardware compatibility matrix work is intentionally excluded from the implementa
 
 - Require release CI to restore, build, run the full test suite, and check transitive package vulnerabilities before packaging.
 - Keep signing/package jobs dependent on the validation job.
-- Add package smoke checks: expected files present, Argyll tools present, third-party notices present, app launches far enough to initialize logging.
+- Run package smoke checks before Velopack packing: expected runtime files present, Argyll tools present, profile templates bundled, and third-party notices present.
+- Future work: add a launch smoke check that initializes logging in an isolated, non-interactive CI-safe mode.
 - Add regression tests around every color-math bug fixed in production.
 
 ## 2. Display Identity And Topology
@@ -84,4 +85,5 @@ Hardware compatibility matrix work is intentionally excluded from the implementa
 - Do not execute `dispwin` or `spotread` from arbitrary current-directory or PATH locations.
 - Use structured `ProcessStartInfo.ArgumentList` for external tools.
 - Verify Argyll archive integrity before extraction.
-- Future work: add package-level notice validation and signed-file checks in CI.
+- Validate package-level notices and required bundled files before packing.
+- Future work: add signed-file checks in CI.
