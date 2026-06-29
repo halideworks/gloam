@@ -10,6 +10,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using HDRGammaController.Core.Calibration;
 
 namespace HDRGammaController.Core
@@ -25,6 +26,10 @@ namespace HDRGammaController.Core
         {
             WriteIndented = true
         };
+
+        private static readonly Regex MonitorIdentifierRegex = new(
+            @"\\\\\?\\DISPLAY#[^\s,""'<>,]+|MONITOR\\[^\s,""'<>,]+|DISPLAY#[^\s,""'<>,]+",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
         public string Create(
             string outputDirectory,
@@ -92,7 +97,7 @@ namespace HDRGammaController.Core
             if (!string.IsNullOrWhiteSpace(userName))
                 sanitized = sanitized.Replace(userName, "%USERNAME%", StringComparison.OrdinalIgnoreCase);
 
-            return sanitized;
+            return MonitorIdentifierRegex.Replace(sanitized, match => "monitor-" + HashId(match.Value));
         }
 
         internal static string BuildManifest(IEnumerable<MonitorInfo> monitors, bool includeCalibrationReports)
@@ -445,17 +450,7 @@ namespace HDRGammaController.Core
         }
 
         private static string SanitizeJsonKey(string key)
-        {
-            string sanitized = SanitizeText(key);
-            return LooksLikeMonitorIdentifier(sanitized)
-                ? "monitor-" + HashId(sanitized)
-                : sanitized;
-        }
-
-        private static bool LooksLikeMonitorIdentifier(string value)
-            => value.Contains("DISPLAY#", StringComparison.OrdinalIgnoreCase) ||
-               value.Contains(@"MONITOR\", StringComparison.OrdinalIgnoreCase) ||
-               value.Contains(@"\\?\DISPLAY", StringComparison.OrdinalIgnoreCase);
+            => SanitizeText(key);
 
         private static string UniqueJsonKey(JsonObject obj, string desired)
         {

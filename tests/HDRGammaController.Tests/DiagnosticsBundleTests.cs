@@ -29,6 +29,20 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void SanitizeText_RedactsMonitorIdentifiersInLogs()
+        {
+            string displayPath = @"\\?\DISPLAY#ACME123#INSTANCE#UID";
+            string monitorPath = @"MONITOR\ACME123\{4d36e96e-e325-11ce-bfc1-08002be10318}\0008";
+            string input = $"Installing profile for {displayPath}\nGDI monitor={monitorPath}";
+
+            string result = DiagnosticsBundle.SanitizeText(input);
+
+            Assert.DoesNotContain(displayPath, result, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(monitorPath, result, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("monitor-", result);
+        }
+
+        [Fact]
         public void BuildCalibrationReportSummaryCsv_SanitizesPathsAndEscapesFields()
         {
             string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -134,6 +148,24 @@ namespace HDRGammaController.Tests
             Assert.DoesNotContain(rawMonitorPath, sanitized, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain(userProfile, sanitized, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("%USERPROFILE%", sanitized);
+        }
+
+        [Fact]
+        public void SanitizeJson_RedactsMonitorPathStringValues()
+        {
+            string rawMonitorPath = @"\\?\DISPLAY#ACME123#INSTANCE#UID";
+            string json = $$"""
+            {
+              "MonitorDevicePath": "{{JsonEscape(rawMonitorPath)}}",
+              "Notes": "Measured {{JsonEscape(rawMonitorPath)}} during HDR verification"
+            }
+            """;
+
+            string sanitized = DiagnosticsBundle.SanitizeJson(json);
+
+            Assert.DoesNotContain(rawMonitorPath, sanitized, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("DISPLAY#ACME123", sanitized, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("monitor-", sanitized);
         }
 
         [Fact]
