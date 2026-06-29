@@ -38,6 +38,42 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void BuildMessages_PhysicalDisplayChanged_BlocksInstall()
+        {
+            var measured = Monitor(hdrActive: false, sdrWhite: 200, path: @"MONITOR\MEASURED\0001");
+            var current = Monitor(hdrActive: false, sdrWhite: 200, path: @"MONITOR\OTHER\0001");
+
+            var messages = CalibrationInstallPreflight.BuildMessages(
+                measured,
+                current,
+                measuredHdrMode: false,
+                measuredSdrWhiteLevel: 200,
+                measuredDefaultProfile: "before.icm",
+                currentDefaultProfile: "before.icm");
+
+            Assert.Contains(messages, m =>
+                m.Severity == CalibrationInstallPreflight.Error &&
+                m.Message.Contains("different physical display", StringComparison.OrdinalIgnoreCase));
+        }
+
+        [Fact]
+        public void BuildMessages_SamePhysicalDisplayWithDifferentCasing_DoesNotWarn()
+        {
+            var measured = Monitor(hdrActive: false, sdrWhite: 200, path: @"MONITOR\TEST\0001");
+            var current = Monitor(hdrActive: false, sdrWhite: 200, path: @" monitor\test\0001 ");
+
+            var messages = CalibrationInstallPreflight.BuildMessages(
+                measured,
+                current,
+                measuredHdrMode: false,
+                measuredSdrWhiteLevel: 200,
+                measuredDefaultProfile: "default.icm",
+                currentDefaultProfile: "default.icm");
+
+            Assert.Empty(messages);
+        }
+
+        [Fact]
         public void BuildMessages_HdrSdrWhiteChanged_Warns()
         {
             var messages = CalibrationInstallPreflight.BuildMessages(
@@ -83,11 +119,14 @@ namespace HDRGammaController.Tests
             Assert.Empty(messages);
         }
 
-        private static MonitorInfo Monitor(bool hdrActive, double sdrWhite) => new()
+        private static MonitorInfo Monitor(
+            bool hdrActive,
+            double sdrWhite,
+            string path = @"MONITOR\TEST\0001") => new()
         {
             DeviceName = @"\\.\DISPLAY1",
             FriendlyName = "Test Display",
-            MonitorDevicePath = @"MONITOR\TEST\0001",
+            MonitorDevicePath = path,
             IsHdrActive = hdrActive,
             IsHdrCapable = true,
             SdrWhiteLevel = sdrWhite

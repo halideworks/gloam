@@ -30,6 +30,13 @@ namespace HDRGammaController.Core.Calibration
                 return messages;
             }
 
+            if (!SameIdentity(measuredMonitor.MonitorDevicePath, currentMonitor.MonitorDevicePath))
+            {
+                messages.Add((Error,
+                    "The refreshed display no longer matches the monitor that was measured. " +
+                    "Do not install this calibration on a different physical display; re-open calibration after display detection settles."));
+            }
+
             if (currentMonitor.IsHdrActive != measuredHdrMode)
             {
                 messages.Add((Error, measuredHdrMode
@@ -66,6 +73,14 @@ namespace HDRGammaController.Core.Calibration
 
         private static string? Normalize(string? profile)
             => string.IsNullOrWhiteSpace(profile) ? null : profile.Trim();
+
+        private static bool SameIdentity(string? measuredPath, string? currentPath)
+        {
+            string? measured = Normalize(measuredPath);
+            string? current = Normalize(currentPath);
+            return measured == null || current == null ||
+                   string.Equals(measured, current, StringComparison.OrdinalIgnoreCase);
+        }
 
         private static string DisplayProfile(string? profile)
             => string.IsNullOrWhiteSpace(profile) ? "none" : profile.Trim();
