@@ -1,6 +1,8 @@
 using System;
+using System.Text.Json.Nodes;
 using HDRGammaController.Core;
 using HDRGammaController.Core.Calibration;
+using HDRGammaController.Interop;
 using Xunit;
 
 namespace HDRGammaController.Tests
@@ -65,6 +67,46 @@ namespace HDRGammaController.Tests
             string csv = DiagnosticsBundle.BuildDetailedVerificationCsv(new[] { report });
 
             Assert.Equal(string.Empty, csv);
+        }
+
+        [Fact]
+        public void BuildManifest_IncludesDecodedDisplayTopologyWithoutRawMonitorPath()
+        {
+            string rawPath = @"\\?\DISPLAY#ACME123#INSTANCE#UID";
+            var monitor = new MonitorInfo
+            {
+                DeviceName = @"\\.\DISPLAY7",
+                FriendlyName = "Reference HDR",
+                MonitorDevicePath = rawPath,
+                IsHdrCapable = true,
+                IsHdrActive = true,
+                DxgiColorSpace = 12,
+                BitsPerColor = 3,
+                SdrWhiteLevel = 203,
+                HdrMinNits = 0.005,
+                HdrPeakNits = 1000,
+                HdrMaxFullFrameNits = 650,
+                AdapterLuid = new Dxgi.LUID { HighPart = 1, LowPart = 2 },
+                OutputId = 4,
+                MonitorBounds = new Dxgi.RECT { Left = -1920, Top = 0, Right = 0, Bottom = 1080 },
+                HasDisplayConfigIds = true,
+                DisplayConfigAdapterId = new Dxgi.LUID { HighPart = 3, LowPart = 4 },
+                DisplayConfigSourceId = 9
+            };
+
+            string manifest = DiagnosticsBundle.BuildManifest(new[] { monitor }, includeCalibrationReports: true);
+            var root = JsonNode.Parse(manifest)!;
+            var mon = root["Monitors"]![0]!;
+
+            Assert.Equal(12, mon["DxgiColorSpace"]!.GetValue<int>());
+            Assert.Equal("RGB_FULL_G2084_NONE_P2020", mon["DxgiColorSpaceName"]!.GetValue<string>());
+            Assert.Equal(3, mon["BitsPerColor"]!.GetValue<int>());
+            Assert.Equal("10 bpc", mon["BitsPerColorName"]!.GetValue<string>());
+            Assert.Equal(1920, mon["Bounds"]!["Width"]!.GetValue<int>());
+            Assert.Equal(1080, mon["Bounds"]!["Height"]!.GetValue<int>());
+            Assert.Equal(9, mon["DisplayConfigSourceId"]!.GetValue<int>());
+            Assert.NotEmpty(mon["MonitorDevicePathHash"]!.GetValue<string>());
+            Assert.DoesNotContain(rawPath, manifest, StringComparison.OrdinalIgnoreCase);
         }
 
         private static CalibrationProfile BuildReport(string monitorDevicePath, string monitorName)

@@ -15,14 +15,14 @@ Hardware compatibility matrix work is intentionally excluded from the implementa
 
 - Persist by stable monitor instance path, not volatile display index or HMONITOR.
 - Resolve EDID by exact monitor instance path before model-name fallback.
-- Include raw DXGI color-space, bits-per-color, HDR metadata, DisplayConfig adapter/source identity, and bounds in diagnostics.
+- Include raw and decoded DXGI color-space, bits-per-color, HDR metadata, DisplayConfig adapter/source identity, and bounds in diagnostics.
 - Detect topology changes with debounce and invalidate previously-applied ramp state before reapply.
 
 ## 3. HDR State Modeling
 
 - Separate "HDR currently active" from "display has HDR metadata/capability."
 - Gate HDR calibration install on the same HDR/SDR mode used during measurement.
-- Record SDR white, HDR min/peak/full-frame metadata, and color-space enum in diagnostics.
+- Record SDR white, HDR min/peak/full-frame metadata, and raw plus decoded color-space enum in diagnostics.
 - Run install-time preflight against freshly-enumerated display state and warn/block when Windows HDR, SDR white, or default profile state changes between measure and install.
 
 ## 4. Apply Pipeline Stability
