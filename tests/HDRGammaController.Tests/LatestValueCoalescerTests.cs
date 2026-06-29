@@ -211,6 +211,74 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void NewerSubmit_CancelsActiveWorkForSameKey()
+        {
+            var firstStarted = new ManualResetEventSlim();
+            var firstCancelled = new ManualResetEventSlim();
+            var releaseFirst = new ManualResetEventSlim();
+            int finalValue = -1;
+
+            var c = new LatestValueCoalescer<string, int>((_, v, token) =>
+            {
+                if (v == 1)
+                {
+                    firstStarted.Set();
+                    while (!releaseFirst.IsSet)
+                    {
+                        if (token.IsCancellationRequested)
+                        {
+                            firstCancelled.Set();
+                            releaseFirst.Wait(TimeSpan.FromSeconds(5));
+                            return;
+                        }
+                        Thread.Sleep(1);
+                    }
+                    return;
+                }
+
+                finalValue = v;
+            });
+
+            c.Submit("k", 1);
+            Assert.True(firstStarted.Wait(TimeSpan.FromSeconds(2)));
+
+            c.Submit("k", 2);
+
+            Assert.True(firstCancelled.Wait(TimeSpan.FromSeconds(2)));
+            releaseFirst.Set();
+            Assert.True(c.WaitForIdle("k", TimeSpan.FromSeconds(5)));
+            Assert.Equal(2, finalValue);
+        }
+
+        [Fact]
+        public void NewerSubmit_DoesNotCancelDifferentKey()
+        {
+            var aStarted = new ManualResetEventSlim();
+            var releaseA = new ManualResetEventSlim();
+            var aWasCancelled = false;
+
+            var c = new LatestValueCoalescer<string, int>((key, _, token) =>
+            {
+                if (key == "a")
+                {
+                    aStarted.Set();
+                    releaseA.Wait(TimeSpan.FromSeconds(5));
+                    aWasCancelled = token.IsCancellationRequested;
+                }
+            });
+
+            c.Submit("a", 1);
+            Assert.True(aStarted.Wait(TimeSpan.FromSeconds(2)));
+
+            c.Submit("b", 1);
+            Assert.True(c.WaitForIdle("b", TimeSpan.FromSeconds(2)));
+            releaseA.Set();
+
+            Assert.True(c.WaitForIdle("a", TimeSpan.FromSeconds(5)));
+            Assert.False(aWasCancelled);
+        }
+
+        [Fact]
         public void Dispose_DropsLaterSubmits()
         {
             int invocations = 0;

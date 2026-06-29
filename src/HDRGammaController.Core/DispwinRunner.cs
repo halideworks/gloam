@@ -6,6 +6,7 @@ using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Globalization;
+using System.Threading;
 using HDRGammaController.Core.Calibration;
 
 namespace HDRGammaController.Core
@@ -334,8 +335,21 @@ namespace HDRGammaController.Core
         /// <param name="whiteLevel">SDR white level in nits.</param>
         /// <param name="calibration">User calibration settings (brightness, temperature, etc.).</param>
         /// <param name="calibrationProfile">Optional display calibration profile for color-accurate correction.</param>
-        public void ApplyGamma(MonitorInfo monitor, GammaMode mode, double whiteLevel, CalibrationSettings calibration, DisplayCalibrationProfile? calibrationProfile, bool skipIfBypassed = false)
+        public void ApplyGamma(
+            MonitorInfo monitor,
+            GammaMode mode,
+            double whiteLevel,
+            CalibrationSettings calibration,
+            DisplayCalibrationProfile? calibrationProfile,
+            bool skipIfBypassed = false,
+            CancellationToken cancellationToken = default)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                Log.Info($"DispwinRunner.ApplyGamma: cancelled before LUT generation for {monitor.DeviceName}");
+                return;
+            }
+
             bool hasProfile = calibrationProfile != null;
             Log.Info($"DispwinRunner.ApplyGamma: monitor={monitor.DeviceName}, mode={mode}, whiteLevel={whiteLevel}, hasCalibration={calibration.HasAdjustments}, hasProfile={hasProfile}");
 
@@ -365,6 +379,12 @@ namespace HDRGammaController.Core
 
             Log.Info($"DispwinRunner.ApplyGamma: Generated LUTs with {lutR.Length} entries");
 
+            if (cancellationToken.IsCancellationRequested)
+            {
+                Log.Info($"DispwinRunner.ApplyGamma: cancelled before hardware write for {monitor.DeviceName}");
+                return;
+            }
+
             // Skip the ramp rewrite entirely when this display already has exactly
             // this LUT loaded.
             string applyKey = monitor.DeviceName;
@@ -384,6 +404,12 @@ namespace HDRGammaController.Core
             if (skipIfBypassed && CalibrationStateManager.IsDeviceInBypass(monitor))
             {
                 Log.Info($"DispwinRunner.ApplyGamma: skipping apply for {monitor.DeviceName} (calibration bypass active)");
+                return;
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                Log.Info($"DispwinRunner.ApplyGamma: cancelled after bypass check for {monitor.DeviceName}");
                 return;
             }
 
@@ -423,7 +449,7 @@ namespace HDRGammaController.Core
 
                 int argIndex = ResolveDisplayIndex(monitor);
                 Log.Info($"DispwinRunner.ApplyGamma: Running dispwin for display {argIndex} with temp CAL file.");
-                if (RunDispwin("-d", argIndex.ToString(CultureInfo.InvariantCulture), calFile))
+                if (RunDispwin(cancellationToken, "-d", argIndex.ToString(CultureInfo.InvariantCulture), calFile))
                 {
                     RecordApplied(monitor, lutR, lutG, lutB);
                 }
@@ -513,7 +539,7 @@ namespace HDRGammaController.Core
 
              if (!EnsureConfigured()) return;
              int argIndex = ResolveDisplayIndex(monitor);
-             RunDispwin("-d", argIndex.ToString(CultureInfo.InvariantCulture), "-c");
+             RunDispwin(CancellationToken.None, "-d", argIndex.ToString(CultureInfo.InvariantCulture), "-c");
         }
 
         private static bool LutsEqual(double[] a, double[] b)
@@ -529,6 +555,10 @@ namespace HDRGammaController.Core
 
         /// <returns>True if dispwin ran to completion with exit code 0.</returns>
         private bool RunDispwin(params string[] args)
+            => RunDispwin(CancellationToken.None, args);
+
+        /// <returns>True if dispwin ran to completion with exit code 0.</returns>
+        private bool RunDispwin(CancellationToken cancellationToken, params string[] args)
         {
             Log.Info($"DispwinRunner.RunDispwin: Executing '{_dispwinPath}' with args '{string.Join(" ", args)}'");
             try
@@ -556,7 +586,21 @@ namespace HDRGammaController.Core
                 var stdoutTask = p.StandardOutput.ReadToEndAsync();
                 var stderrTask = p.StandardError.ReadToEndAsync();
 
-                if (!p.WaitForExit(5000))
+                long deadline = Environment.TickCount64 + 5000;
+                while (!p.WaitForExit(100))
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        Log.Info("DispwinRunner.RunDispwin: Cancelled, killing process");
+                        try { p.Kill(entireProcessTree: true); } catch { }
+                        return false;
+                    }
+
+                    if (Environment.TickCount64 >= deadline)
+                        break;
+                }
+
+                if (!p.HasExited)
                 {
                     Log.Info("DispwinRunner.RunDispwin: Timed out after 5s, killing process");
                     try { p.Kill(entireProcessTree: true); } catch { }

@@ -31,7 +31,7 @@ Hardware compatibility matrix work is intentionally excluded from the implementa
 - Rate-limit hardware gamma writes so slider drags, night-mode fades, and display-change storms cannot hammer the compositor.
 - Dispose the apply coalescer on shutdown so queued writes cannot run after services are torn down.
 - Re-check calibration bypass immediately before hardware writes.
-- Future work: add cancellation-aware apply work for long external fallback calls.
+- Cancel stale coalesced apply work for the same monitor and terminate stale `dispwin` fallback calls when newer work supersedes them.
 
 ## 5. Measurement Validity Gates
 

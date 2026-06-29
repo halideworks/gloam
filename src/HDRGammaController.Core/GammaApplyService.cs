@@ -39,10 +39,13 @@ namespace HDRGammaController.Core
             _nightModeService = nightModeService ?? throw new ArgumentNullException(nameof(nightModeService));
 
             _coalescer = new LatestValueCoalescer<IntPtr, (MonitorInfo, GammaMode, CalibrationSettings, double)>(
-                (_, item) =>
+                (_, item, cancellationToken) =>
                 {
                     try
                     {
+                        if (cancellationToken.IsCancellationRequested)
+                            return;
+
                         // Coalescer-time bypass re-check (TOCTOU close): RequestApply checked bypass
                         // on the caller thread, but the coalesced work runs later — a calibration may
                         // have called EnterBypassMode in between. Re-evaluate immediately before the
@@ -56,7 +59,8 @@ namespace HDRGammaController.Core
                         // skipIfBypassed: re-check bypass inside ApplyGamma immediately before the
                         // hardware write, closing the window between this coalesced callback and the
                         // syscall (a calibration could call EnterBypassMode during LUT generation).
-                        _dispwinRunner.ApplyGamma(item.Item1, item.Item2, item.Item4, item.Item3, calibrationProfile: null, skipIfBypassed: true);
+                        _dispwinRunner.ApplyGamma(item.Item1, item.Item2, item.Item4, item.Item3,
+                            calibrationProfile: null, skipIfBypassed: true, cancellationToken: cancellationToken);
                     }
                     catch (Exception ex)
                     {

@@ -24,6 +24,10 @@ namespace HDRGammaController.Core
     /// Pending in a loop, then releases the gate and double-checks Pending after release
     /// to close the race where a producer's update landed between the runner's null-check
     /// and its release.
+    ///
+    /// Work callbacks may optionally accept a cancellation token. A newer submit for the
+    /// same key cancels the active token so slow external work can stand down before the
+    /// freshest pending value applies. Different keys never cancel each other.
     /// </summary>
     public sealed class LatestValueCoalescer<TKey, TValue> : IDisposable where TKey : notnull
     {
@@ -32,13 +36,14 @@ namespace HDRGammaController.Core
             public readonly SemaphoreSlim Gate = new SemaphoreSlim(1, 1);
             public TValue? Pending;
             public bool HasPending;
+            public CancellationTokenSource? ActiveCts;
             // TickCount64 of the last completed work invocation for this key (0 = never).
             // Only the single active runner reads/writes it, so no extra synchronization.
             public long LastWorkTicks;
         }
 
         private readonly ConcurrentDictionary<TKey, Slot> _slots = new();
-        private readonly Action<TKey, TValue> _work;
+        private readonly Action<TKey, TValue, CancellationToken> _work;
         private readonly int _minIntervalMs;
         private int _disposed;
 
@@ -49,6 +54,17 @@ namespace HDRGammaController.Core
         /// hammer the work (e.g. SetDeviceGammaRamp) fast enough to stall the display system.
         /// </param>
         public LatestValueCoalescer(Action<TKey, TValue> work, int minIntervalMs = 0)
+            : this(work == null
+                ? throw new ArgumentNullException(nameof(work))
+                : (key, value, _) => work(key, value), minIntervalMs)
+        {
+        }
+
+        /// <summary>
+        /// Creates a coalescer whose active work token is cancelled when a newer value is
+        /// submitted for the same key, or when the coalescer is disposed.
+        /// </summary>
+        public LatestValueCoalescer(Action<TKey, TValue, CancellationToken> work, int minIntervalMs = 0)
         {
             _work = work ?? throw new ArgumentNullException(nameof(work));
             _minIntervalMs = Math.Max(0, minIntervalMs);
@@ -65,6 +81,7 @@ namespace HDRGammaController.Core
                 if (Volatile.Read(ref _disposed) != 0) return;
                 slot.Pending = value;
                 slot.HasPending = true;
+                slot.ActiveCts?.Cancel();
             }
             TryStartRunner(key, slot);
         }
@@ -131,6 +148,7 @@ namespace HDRGammaController.Core
                     {
                         slot.Pending = default;
                         slot.HasPending = false;
+                        slot.ActiveCts?.Cancel();
                     }
                     return;
                 }
@@ -149,21 +167,36 @@ namespace HDRGammaController.Core
                 }
 
                 TValue value;
+                CancellationTokenSource workCts;
                 lock (slot)
                 {
                     if (!slot.HasPending) return;
                     value = slot.Pending!;
                     slot.Pending = default;
                     slot.HasPending = false;
+                    slot.ActiveCts?.Dispose();
+                    slot.ActiveCts = new CancellationTokenSource();
+                    workCts = slot.ActiveCts;
                 }
 
-                try { _work(key, value); }
+                try { _work(key, value, workCts.Token); }
                 catch
                 {
                     // Swallowing is deliberate: the coalescer is a dispatcher, not an
                     // error handler. Work callbacks are expected to handle their own
                     // failure modes. An unhandled exception here would orphan the gate
                     // via finally, but we'd prefer not to tear down the runner entirely.
+                }
+                finally
+                {
+                    lock (slot)
+                    {
+                        if (ReferenceEquals(slot.ActiveCts, workCts))
+                        {
+                            slot.ActiveCts = null;
+                        }
+                    }
+                    workCts.Dispose();
                 }
                 slot.LastWorkTicks = Environment.TickCount64;
             }
@@ -179,6 +212,7 @@ namespace HDRGammaController.Core
                 {
                     slot.Pending = default;
                     slot.HasPending = false;
+                    slot.ActiveCts?.Cancel();
                 }
             }
         }
