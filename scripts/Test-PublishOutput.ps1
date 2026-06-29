@@ -2,7 +2,9 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$PublishDir,
 
-    [string]$ArgyllVersion = "Argyll_V3.5.0"
+    [string]$ArgyllVersion = "Argyll_V3.5.0",
+
+    [switch]$SkipLaunchSmoke
 )
 
 $ErrorActionPreference = "Stop"
@@ -44,6 +46,67 @@ function Test-RequiredText([string]$relativePath, [string]$pattern, [string]$des
     }
 }
 
+function Quote-ProcessArgument([string]$value) {
+    '"' + ($value -replace '"', '\"') + '"'
+}
+
+function Test-LaunchSmoke {
+    if ($SkipLaunchSmoke) {
+        Write-Host "Launch smoke skipped."
+        return
+    }
+
+    $exe = Join-Path $publishRoot "Gloam.exe"
+    if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+        Add-Failure "Cannot run launch smoke because Gloam.exe is missing."
+        return
+    }
+
+    $smokeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("GloamLaunchSmoke-" + [Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $smokeRoot -Force | Out-Null
+
+    try {
+        $psi = [System.Diagnostics.ProcessStartInfo]::new()
+        $psi.FileName = $exe
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $psi.Arguments = "--smoke --data-dir " + (Quote-ProcessArgument $smokeRoot)
+
+        $process = [System.Diagnostics.Process]::Start($psi)
+        if ($process -eq $null) {
+            Add-Failure "Launch smoke failed to start Gloam.exe."
+            return
+        }
+
+        if (-not $process.WaitForExit(15000)) {
+            try { $process.Kill($true) } catch { }
+            Add-Failure "Launch smoke timed out after 15 seconds."
+            return
+        }
+
+        if ($process.ExitCode -ne 0) {
+            Add-Failure "Launch smoke exited with code $($process.ExitCode)."
+            return
+        }
+
+        $smokeLog = Join-Path $smokeRoot "app.log"
+        if (-not (Test-Path -LiteralPath $smokeLog -PathType Leaf)) {
+            Add-Failure "Launch smoke did not create an isolated app.log."
+            return
+        }
+
+        $logText = Get-Content -LiteralPath $smokeLog -Raw
+        if ($logText -notmatch "Launch smoke: completed\.") {
+            Add-Failure "Launch smoke log did not contain the completion marker."
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $smokeRoot -PathType Container) {
+            Remove-Item -LiteralPath $smokeRoot -Recurse -Force
+        }
+    }
+}
+
 $requiredFiles = @(
     "Gloam.exe",
     "Gloam.dll",
@@ -82,6 +145,8 @@ if (Test-Path -LiteralPath $argyllBin -PathType Container) {
         Add-Failure "Argyll tools appear to be nested incorrectly under '$unexpectedNestedRoot'."
     }
 }
+
+Test-LaunchSmoke
 
 if ($failures.Count -gt 0) {
     $message = "Publish output validation failed:`n - " + ($failures -join "`n - ")

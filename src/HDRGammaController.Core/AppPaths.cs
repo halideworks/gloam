@@ -12,6 +12,9 @@ namespace HDRGammaController.Core
     /// </summary>
     public static class AppPaths
     {
+        private static string? _dataDirOverride;
+        private static string? _roamingDataDirOverride;
+
         /// <summary>User-facing data folder name (the brand).</summary>
         public const string DataFolderName = "Gloam";
 
@@ -22,14 +25,28 @@ namespace HDRGammaController.Core
         /// %LocalAppData%\Gloam - settings.json, app.log, reports, corrections,
         /// downloaded Argyll, extracted ICM templates.
         /// </summary>
-        public static string DataDir => Path.Combine(
+        public static string DataDir => _dataDirOverride ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             DataFolderName);
 
         /// <summary>%AppData%\Gloam - roaming data (calibration profile JSON).</summary>
-        public static string RoamingDataDir => Path.Combine(
+        public static string RoamingDataDir => _roamingDataDirOverride ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             DataFolderName);
+
+        /// <summary>
+        /// Overrides the app-owned data directories for this process only. Used by launch
+        /// smoke tests and isolated test processes so validation never touches a user's real
+        /// Gloam settings, logs, reports, or downloaded Argyll tools.
+        /// </summary>
+        public static void UseDataDirectoriesForCurrentProcess(string? dataDir, string? roamingDataDir = null)
+        {
+            _dataDirOverride = NormalizeOverride(dataDir);
+            _roamingDataDirOverride = NormalizeOverride(roamingDataDir);
+        }
+
+        private static string? NormalizeOverride(string? path)
+            => string.IsNullOrWhiteSpace(path) ? null : Path.GetFullPath(path);
 
         /// <summary>
         /// One-time rebrand migration: if the old HDRGammaController data folder exists

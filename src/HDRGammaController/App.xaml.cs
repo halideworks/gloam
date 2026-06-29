@@ -20,7 +20,7 @@ namespace HDRGammaController
         /// </summary>
         public static IServiceProvider Services { get; private set; } = null!;
 
-        private static ServiceProvider ConfigureServices()
+        internal static ServiceProvider ConfigureServices()
         {
             var services = new ServiceCollection();
 

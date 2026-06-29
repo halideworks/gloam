@@ -8,7 +8,7 @@ Hardware compatibility matrix work is intentionally excluded from the implementa
 - Require release CI to restore, build, run the full test suite, and check transitive package vulnerabilities before packaging.
 - Keep signing/package jobs dependent on the validation job.
 - Run package smoke checks before Velopack packing: expected runtime files present, Argyll tools present, profile templates bundled, and third-party notices present.
-- Future work: add a launch smoke check that initializes logging in an isolated, non-interactive CI-safe mode.
+- Run a launch smoke check from the published `Gloam.exe` in isolated, non-interactive mode so logging, bundled resources, settings, and service composition are validated before packing.
 - Add regression tests around every color-math bug fixed in production.
 
 ## 2. Display Identity And Topology
@@ -38,7 +38,7 @@ Hardware compatibility matrix work is intentionally excluded from the implementa
 - Reject measurement sets with too few valid patches, near-black peak, flat/stale luminance, missing white/black anchors, non-monotonic grayscale, impossible primaries, or repeated-white drift.
 - Run the same validator before LUT generation and profile install.
 - Prefer explicit measured white over brightest saturated primary when normalizing verification metrics.
-- Future work: expose the validator result in the calibration UI before install with targeted recovery text.
+- Expose the validator result in the calibration report before install with targeted recovery text and block Apply when integrity checks fail.
 
 ## 6. Profile Lifecycle
 

@@ -187,9 +187,9 @@ namespace HDRGammaController.Core
     public class SettingsManager
     {
         // Use LocalApplicationData to avoid Resilio Sync corruption
-        private static readonly string AppDataPath = AppPaths.DataDir;
+        private static string AppDataPath => AppPaths.DataDir;
 
-        private static readonly string SettingsFilePath = Path.Combine(AppDataPath, "settings.json");
+        private static string SettingsFilePath => Path.Combine(AppDataPath, "settings.json");
 
         // SettingsManager is a DI singleton read/written from the UI thread, the night-mode
         // timer's threadpool thread (via Dispatcher.Invoke → RequestApply), and any background
@@ -533,7 +533,7 @@ namespace HDRGammaController.Core
 
         #region Calibration Profile Management
 
-        private static readonly string CalibrationProfilesPath = Path.Combine(AppDataPath, "CalibrationProfiles");
+        private static string CalibrationProfilesPath => Path.Combine(AppDataPath, "CalibrationProfiles");
 
         /// <summary>
         /// Saves a calibration profile to disk.
