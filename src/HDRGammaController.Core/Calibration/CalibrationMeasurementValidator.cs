@@ -34,6 +34,10 @@ namespace HDRGammaController.Core.Calibration
             {
                 recovery = "Re-run calibration from the beginning and let the full patch sequence complete without skipping failed reads.";
             }
+            else if (normalized.Contains("wire-ladder"))
+            {
+                recovery = "Re-run HDR calibration with the HDR patch window visible on the measured display, and confirm Windows HDR stays enabled for the entire PQ sweep.";
+            }
             else if (normalized.Contains("near-black") ||
                      normalized.Contains("measured near black") ||
                      normalized.Contains("not meaningfully brighter"))
@@ -104,20 +108,23 @@ namespace HDRGammaController.Core.Calibration
 
             if (hdrMode)
             {
-                var hdrWire = measurements
-                    .Where(m => m.IsValid && m.Patch.Nits is not null)
+                var hdrWireAttempts = measurements
+                    .Where(m => m.Patch.Nits is not null)
                     .OrderBy(m => m.Patch.Nits!.Value)
+                    .ToList();
+                var hdrWire = hdrWireAttempts
+                    .Where(m => m.IsValid)
                     .ToList();
 
                 // No wire-ladder data means the HDR LUT builder will use its documented
-                // SDR-mapped fallback. But if a ladder was captured, it must be believable:
-                // a failed FP16 renderer commonly leaves valid-looking near-black reads that
-                // would otherwise surface only as a late, cryptic install-time LUT error.
-                if (hdrWire.Count > 0)
+                // SDR-mapped fallback. But if a ladder was requested, it must produce enough
+                // valid, believable rows: a failed FP16 renderer or probe session should not
+                // disappear and be treated as an intentional fallback.
+                if (hdrWireAttempts.Count > 0)
                 {
                     if (hdrWire.Count < 5)
                         return Result.Fail(
-                            $"HDR wire-ladder captured only {hdrWire.Count} valid patches; at least five are needed to build a trustworthy PQ-domain LUT.");
+                            $"HDR wire-ladder captured only {hdrWire.Count} valid patches out of {hdrWireAttempts.Count}; at least five are needed to build a trustworthy PQ-domain LUT.");
 
                     double maxRequestedNits = hdrWire.Max(m => m.Patch.Nits!.Value);
                     if (maxRequestedNits < 100)

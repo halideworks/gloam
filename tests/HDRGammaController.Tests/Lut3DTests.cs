@@ -38,7 +38,7 @@ namespace HDRGammaController.Tests
             return list;
         }
 
-        private static MeasurementResult WireMeas(double requestedNits, double measuredY)
+        private static MeasurementResult WireMeas(double requestedNits, double measuredY, bool isValid = true)
         {
             var xyz = new CieXyz(0.95047 * measuredY, measuredY, 1.08883 * measuredY);
             return new MeasurementResult
@@ -51,7 +51,7 @@ namespace HDRGammaController.Tests
                     Nits = requestedNits
                 },
                 Xyz = xyz,
-                IsValid = true
+                IsValid = isValid
             };
         }
 
@@ -175,6 +175,22 @@ namespace HDRGammaController.Tests
 
             Assert.False(result.IsValid);
             Assert.Contains("wire-ladder", result.Error, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void MeasurementValidator_HdrInvalidWireLadderAttempts_Fails()
+        {
+            var list = GoodRamp();
+            foreach (double nits in new[] { 0, 2, 16, 100, 220, 450 })
+                list.Add(WireMeas(nits, 0.0, isValid: false));
+
+            var result = CalibrationMeasurementValidator.ValidateForProfile(
+                list, StandardTargets.Rec709Pq, hdrMode: true);
+
+            Assert.False(result.IsValid);
+            Assert.Contains("wire-ladder", result.Error, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("0 valid patches out of 6", result.Error, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("Windows HDR", CalibrationMeasurementValidator.BuildRecoveryText(result), StringComparison.OrdinalIgnoreCase);
         }
 
         [Fact]
