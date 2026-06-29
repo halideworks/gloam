@@ -23,7 +23,7 @@ Hardware compatibility matrix work is intentionally excluded from the implementa
 - Separate "HDR currently active" from "display has HDR metadata/capability."
 - Gate HDR calibration install on the same HDR/SDR mode used during measurement.
 - Record SDR white, HDR min/peak/full-frame metadata, and color-space enum in diagnostics.
-- Future work: add an in-app preflight row that warns when Windows HDR, SDR white, or Advanced Color profile state changes between measure and install.
+- Run install-time preflight against freshly-enumerated display state and warn/block when Windows HDR, SDR white, or default profile state changes between measure and install.
 
 ## 4. Apply Pipeline Stability
 

@@ -71,7 +71,8 @@ namespace HDRGammaController
             GammaMode PreviousGammaMode = GammaMode.WindowsDefault,
             CalibrationSettings? PreviousSettings = null,
             double PatchSize = 600, double PatchOffsetX = 0, double PatchOffsetY = 0,
-            bool CaptureSounds = false);
+            bool CaptureSounds = false,
+            string? MeasurementDefaultProfile = null);
         private ApplyContext? _applyContext;
         private bool _profileApplied;
 
@@ -1134,18 +1135,55 @@ namespace HDRGammaController
             try
             {
                 Vm.StatusText = "Applying profile…";
-                string? previousDefaultProfile = null;
-                if (ctx.Monitor.MonitorDevicePath.Length > 0)
+                MonitorInfo? installMonitor = ResolveCurrentMonitor(ctx.Monitor);
+                string? currentDefaultProfile = installMonitor != null
+                    ? CalibrationProfileInstaller.GetCurrentDefaultProfile(installMonitor, ctx.HdrMode)
+                    : null;
+                var preflightMessages = CalibrationInstallPreflight.BuildMessages(
+                    ctx.Monitor,
+                    installMonitor,
+                    ctx.HdrMode,
+                    ctx.WhiteLevel,
+                    ctx.MeasurementDefaultProfile,
+                    currentDefaultProfile);
+
+                if (preflightMessages.Any(m => m.Severity == CalibrationInstallPreflight.Error))
                 {
-                    var saved = ctx.SettingsManager?.GetMonitorProfile(ctx.Monitor.MonitorDevicePath);
+                    Vm.StatusText = "Apply blocked by preflight.";
+                    ConfirmDialog.Info(this, "Install Preflight",
+                        string.Join("\n\n", preflightMessages
+                            .Where(m => m.Severity == CalibrationInstallPreflight.Error)
+                            .Select(m => m.Message)));
+                    return;
+                }
+
+                if (preflightMessages.Count > 0)
+                {
+                    bool continueInstall = ConfirmDialog.Confirm(this, "Install Preflight",
+                        string.Join("\n\n", preflightMessages.Select(m => m.Message)) +
+                        "\n\nContinue installing this profile?",
+                        confirmLabel: "Install",
+                        cancelLabel: "Cancel");
+                    if (!continueInstall)
+                    {
+                        Vm.StatusText = "Apply cancelled.";
+                        return;
+                    }
+                }
+
+                installMonitor ??= ctx.Monitor;
+                string? previousDefaultProfile = null;
+                if (installMonitor.MonitorDevicePath.Length > 0)
+                {
+                    var saved = ctx.SettingsManager?.GetMonitorProfile(installMonitor.MonitorDevicePath);
                     previousDefaultProfile = CalibrationProfileInstaller.SelectPreviousProfileBackup(
-                        CalibrationProfileInstaller.GetCurrentDefaultProfile(ctx.Monitor, ctx.HdrMode),
+                        currentDefaultProfile ?? CalibrationProfileInstaller.GetCurrentDefaultProfile(installMonitor, ctx.HdrMode),
                         saved?.Mhc2ProfileName,
                         saved?.PreviousColorProfileName);
                 }
 
                 var result = CalibrationProfileInstaller.Install(
-                    ctx.Monitor, _activeCharacterization, EffectiveTarget(ctx),
+                    installMonitor, _activeCharacterization, EffectiveTarget(ctx),
                     ctx.LutR, ctx.LutG, ctx.LutB, ctx.WhiteLevel,
                     hdrMode: ctx.HdrMode, measurements: _measurements);
 
@@ -1177,6 +1215,25 @@ namespace HDRGammaController
             finally
             {
                 Vm.IsApplyEnabled = true;
+            }
+        }
+
+        private static MonitorInfo? ResolveCurrentMonitor(MonitorInfo measuredMonitor)
+        {
+            try
+            {
+                var monitors = new MonitorManager().EnumerateMonitors();
+                return monitors.FirstOrDefault(m =>
+                           !string.IsNullOrEmpty(m.MonitorDevicePath) &&
+                           string.Equals(m.MonitorDevicePath, measuredMonitor.MonitorDevicePath, StringComparison.OrdinalIgnoreCase))
+                       ?? monitors.FirstOrDefault(m =>
+                           !string.IsNullOrEmpty(m.DeviceName) &&
+                           string.Equals(m.DeviceName, measuredMonitor.DeviceName, StringComparison.OrdinalIgnoreCase));
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"CalibrationReportWindow: install preflight monitor refresh failed: {ex.Message}");
+                return null;
             }
         }
 

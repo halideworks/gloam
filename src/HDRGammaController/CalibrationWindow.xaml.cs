@@ -1344,7 +1344,8 @@ namespace HDRGammaController
                     PatchSize: _patchSize,
                     PatchOffsetX: _patchOffsetX,
                     PatchOffsetY: _patchOffsetY,
-                    CaptureSounds: Vm.SoundOnCapture));
+                    CaptureSounds: Vm.SoundOnCapture,
+                    MeasurementDefaultProfile: CalibrationProfileInstaller.GetCurrentDefaultProfile(monitor, _measuredInHdr)));
 
                 // Hands-free: the report applies the profile and verifies on open.
                 reportWindow.AutoApplyOnLoad = true;
