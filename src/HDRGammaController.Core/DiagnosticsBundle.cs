@@ -384,7 +384,7 @@ namespace HDRGammaController.Core
             AddText(zip, entryName, text);
         }
 
-        private static string SanitizeJson(string text)
+        internal static string SanitizeJson(string text)
         {
             try
             {
@@ -416,6 +416,14 @@ namespace HDRGammaController.Core
                     {
                         SanitizeJsonNode(child);
                     }
+
+                    string sanitizedKey = SanitizeJsonKey(key);
+                    if (!string.Equals(sanitizedKey, key, StringComparison.Ordinal))
+                    {
+                        child = obj[key];
+                        obj.Remove(key);
+                        obj[UniqueJsonKey(obj, sanitizedKey)] = child;
+                    }
                 }
             }
             else if (node is JsonArray arr)
@@ -434,6 +442,33 @@ namespace HDRGammaController.Core
                     }
                 }
             }
+        }
+
+        private static string SanitizeJsonKey(string key)
+        {
+            string sanitized = SanitizeText(key);
+            return LooksLikeMonitorIdentifier(sanitized)
+                ? "monitor-" + HashId(sanitized)
+                : sanitized;
+        }
+
+        private static bool LooksLikeMonitorIdentifier(string value)
+            => value.Contains("DISPLAY#", StringComparison.OrdinalIgnoreCase) ||
+               value.Contains(@"MONITOR\", StringComparison.OrdinalIgnoreCase) ||
+               value.Contains(@"\\?\DISPLAY", StringComparison.OrdinalIgnoreCase);
+
+        private static string UniqueJsonKey(JsonObject obj, string desired)
+        {
+            if (!obj.ContainsKey(desired)) return desired;
+
+            for (int i = 2; i <= 999; i++)
+            {
+                string candidate = $"{desired}-{i}";
+                if (!obj.ContainsKey(candidate))
+                    return candidate;
+            }
+
+            return $"{desired}-{Guid.NewGuid():N}";
         }
 
         private static void AddText(ZipArchive zip, string entryName, string text)

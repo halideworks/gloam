@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Text.Json.Nodes;
 using HDRGammaController.Core;
 using HDRGammaController.Core.Calibration;
@@ -108,6 +109,48 @@ namespace HDRGammaController.Tests
             Assert.Equal(9, mon["DisplayConfigSourceId"]!.GetValue<int>());
             Assert.NotEmpty(mon["MonitorDevicePathHash"]!.GetValue<string>());
             Assert.DoesNotContain(rawPath, manifest, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void SanitizeJson_RedactsMonitorPathKeysAndUserScopedValues()
+        {
+            string rawMonitorPath = @"\\?\DISPLAY#ACME123#INSTANCE#UID";
+            string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            string json = $$"""
+            {
+              "MonitorProfiles": {
+                "{{JsonEscape(rawMonitorPath)}}": {
+                  "MeterCorrectionPath": "{{JsonEscape(Path.Combine(userProfile, "Corrections", "panel.ccss"))}}"
+                }
+              }
+            }
+            """;
+
+            string sanitized = DiagnosticsBundle.SanitizeJson(json);
+            var root = JsonNode.Parse(sanitized)!;
+            var profileKey = root["MonitorProfiles"]!.AsObject().Select(kvp => kvp.Key).Single();
+
+            Assert.StartsWith("monitor-", profileKey, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(rawMonitorPath, sanitized, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(userProfile, sanitized, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("%USERPROFILE%", sanitized);
+        }
+
+        [Fact]
+        public void SanitizeJson_RedactsUserScopedObjectKeys()
+        {
+            string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            string rawKey = Path.Combine(userProfile, "Documents", "probe.txt");
+            string json = $$"""
+            {
+              "{{JsonEscape(rawKey)}}": "present"
+            }
+            """;
+
+            string sanitized = DiagnosticsBundle.SanitizeJson(json);
+
+            Assert.DoesNotContain(userProfile, sanitized, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("%USERPROFILE%", sanitized);
         }
 
         [Fact]
@@ -238,6 +281,9 @@ namespace HDRGammaController.Tests
             Directory.CreateDirectory(dir);
             return dir;
         }
+
+        private static string JsonEscape(string value)
+            => value.Replace(@"\", @"\\").Replace("\"", "\\\"");
 
         private static void DeleteDirectory(string dir)
         {
