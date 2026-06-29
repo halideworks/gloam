@@ -64,9 +64,10 @@ namespace HDRGammaController
         public sealed record ApplyContext(
             MonitorInfo Monitor, CalibrationTarget Target,
             double[] LutR, double[] LutG, double[] LutB, double WhiteLevel,
-            Action<string>? OnInstalled, ColorimeterService? Colorimeter = null,
+            Action<string, string?>? OnInstalled, ColorimeterService? Colorimeter = null,
             bool HdrMode = false,
             CalibrationStateManager? StateManager = null,
+            SettingsManager? SettingsManager = null,
             GammaMode PreviousGammaMode = GammaMode.WindowsDefault,
             CalibrationSettings? PreviousSettings = null,
             double PatchSize = 600, double PatchOffsetX = 0, double PatchOffsetY = 0,
@@ -1104,6 +1105,16 @@ namespace HDRGammaController
             try
             {
                 Vm.StatusText = "Applying profile…";
+                string? previousDefaultProfile = null;
+                if (ctx.Monitor.MonitorDevicePath.Length > 0)
+                {
+                    var saved = ctx.SettingsManager?.GetMonitorProfile(ctx.Monitor.MonitorDevicePath);
+                    previousDefaultProfile = CalibrationProfileInstaller.SelectPreviousProfileBackup(
+                        CalibrationProfileInstaller.GetCurrentDefaultProfile(ctx.Monitor, ctx.HdrMode),
+                        saved?.Mhc2ProfileName,
+                        saved?.PreviousColorProfileName);
+                }
+
                 var result = CalibrationProfileInstaller.Install(
                     ctx.Monitor, _activeCharacterization, EffectiveTarget(ctx),
                     ctx.LutR, ctx.LutG, ctx.LutB, ctx.WhiteLevel,
@@ -1115,7 +1126,7 @@ namespace HDRGammaController
                     _installedProfileName = result.ProfileName;
                     _profileEnabled = true;
                     Vm.ApplyButtonContent = "Disable Profile";
-                    ctx.OnInstalled?.Invoke(result.ProfileName);
+                    ctx.OnInstalled?.Invoke(result.ProfileName, previousDefaultProfile);
 
                     if (runVerify && ctx.Colorimeter != null)
                     {

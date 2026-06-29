@@ -21,6 +21,8 @@ namespace HDRGammaController.Tests
                 CalibrationProfileId = "calibration-id",
                 UseCalibrationForGamma = false,
                 Mhc2ProfileName = "gloam-profile.icm",
+                PreviousColorProfileName = "factory.icm",
+                PreviousColorProfileHdrMode = true,
                 MeterCorrectionPath = @"C:\corrections\panel.ccss",
                 CalibDisplayType = "Oled",
                 CalibWhitePointOnly = true
@@ -31,9 +33,44 @@ namespace HDRGammaController.Tests
             Assert.Equal(source.CalibrationProfileId, clone.CalibrationProfileId);
             Assert.Equal(source.UseCalibrationForGamma, clone.UseCalibrationForGamma);
             Assert.Equal(source.Mhc2ProfileName, clone.Mhc2ProfileName);
+            Assert.Equal(source.PreviousColorProfileName, clone.PreviousColorProfileName);
+            Assert.Equal(source.PreviousColorProfileHdrMode, clone.PreviousColorProfileHdrMode);
             Assert.Equal(source.MeterCorrectionPath, clone.MeterCorrectionPath);
             Assert.Equal(source.CalibDisplayType, clone.CalibDisplayType);
             Assert.Equal(source.CalibWhitePointOnly, clone.CalibWhitePointOnly);
+        }
+
+        [Fact]
+        public void SelectPreviousProfileBackup_PreservesExistingBackup()
+        {
+            string? selected = CalibrationProfileInstaller.SelectPreviousProfileBackup(
+                currentDefaultProfile: "current.icm",
+                activeGloamProfile: "gloam.icm",
+                existingBackup: "factory.icm");
+
+            Assert.Equal("factory.icm", selected);
+        }
+
+        [Fact]
+        public void SelectPreviousProfileBackup_DoesNotCaptureActiveGloamProfile()
+        {
+            string? selected = CalibrationProfileInstaller.SelectPreviousProfileBackup(
+                currentDefaultProfile: "gloam.icm",
+                activeGloamProfile: "gloam.icm",
+                existingBackup: null);
+
+            Assert.Null(selected);
+        }
+
+        [Fact]
+        public void SelectPreviousProfileBackup_CapturesNonGloamDefault()
+        {
+            string? selected = CalibrationProfileInstaller.SelectPreviousProfileBackup(
+                currentDefaultProfile: "factory.icm",
+                activeGloamProfile: "gloam.icm",
+                existingBackup: null);
+
+            Assert.Equal("factory.icm", selected);
         }
 
         #region MonitorProfileData Validation

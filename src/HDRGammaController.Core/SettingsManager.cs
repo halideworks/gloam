@@ -56,6 +56,16 @@ namespace HDRGammaController.Core
         public string? Mhc2ProfileName { get; set; }
 
         /// <summary>
+        /// Windows color profile that was the display default before Gloam made an MHC2
+        /// calibration active. Kept so explicit deactivation/delete can restore the user's
+        /// prior color-management state instead of leaving the display with no default.
+        /// </summary>
+        public string? PreviousColorProfileName { get; set; }
+
+        /// <summary>Whether <see cref="PreviousColorProfileName"/> came from HDR/Advanced Color.</summary>
+        public bool? PreviousColorProfileHdrMode { get; set; }
+
+        /// <summary>
         /// Colorimeter spectral correction file (.ccss/.ccmx) for this monitor's panel
         /// type. Three-filter colorimeters like the i1 Display read narrow-spectrum panels
         /// (QD-OLED especially) wrong without one — typically a green/magenta white error
@@ -117,6 +127,8 @@ namespace HDRGammaController.Core
             CalibrationProfileId = CalibrationProfileId,
             UseCalibrationForGamma = UseCalibrationForGamma,
             Mhc2ProfileName = Mhc2ProfileName,
+            PreviousColorProfileName = PreviousColorProfileName,
+            PreviousColorProfileHdrMode = PreviousColorProfileHdrMode,
             MeterCorrectionPath = MeterCorrectionPath,
             CalibDisplayType = CalibDisplayType,
             CalibWhitePointOnly = CalibWhitePointOnly
@@ -431,7 +443,11 @@ namespace HDRGammaController.Core
         /// Records (or clears, with null) the installed native MHC2 calibration profile for a
         /// monitor. Used by the apply path to compose night mode on top without double-gamma.
         /// </summary>
-        public void SetMhc2Calibration(string monitorDevicePath, string? profileName)
+        public void SetMhc2Calibration(
+            string monitorDevicePath,
+            string? profileName,
+            string? previousColorProfileName = null,
+            bool? previousColorProfileHdrMode = null)
         {
             if (string.IsNullOrEmpty(monitorDevicePath)) return;
             lock (_dataLock)
@@ -442,6 +458,26 @@ namespace HDRGammaController.Core
                     _data.MonitorProfiles[monitorDevicePath] = profile;
                 }
                 profile.Mhc2ProfileName = profileName;
+                if (!string.IsNullOrEmpty(previousColorProfileName))
+                {
+                    profile.PreviousColorProfileName = previousColorProfileName;
+                    profile.PreviousColorProfileHdrMode = previousColorProfileHdrMode;
+                }
+                _dataVersion++;
+            }
+            Save();
+        }
+
+        /// <summary>Clears the saved pre-Gloam Windows profile after it has been restored.</summary>
+        public void ClearMhc2PreviousColorProfile(string monitorDevicePath)
+        {
+            if (string.IsNullOrEmpty(monitorDevicePath)) return;
+            lock (_dataLock)
+            {
+                if (!_data.MonitorProfiles.TryGetValue(monitorDevicePath, out var profile))
+                    return;
+                profile.PreviousColorProfileName = null;
+                profile.PreviousColorProfileHdrMode = null;
                 _dataVersion++;
             }
             Save();

@@ -44,7 +44,7 @@ Hardware compatibility matrix work is intentionally excluded from the implementa
 - Disable existing app profiles before native measurement without deleting them.
 - Remove both SDR and Advanced Color profile associations on uninstall.
 - Retire stale app-created associations for a monitor before measuring native.
-- Future work: store and restore the previous Windows default profile per monitor after disabling/uninstalling an app profile.
+- Store the previous Windows default profile per monitor and restore it after explicit deactivation/deletion of the active Gloam profile.
 
 ## 7. HDR Verification
 

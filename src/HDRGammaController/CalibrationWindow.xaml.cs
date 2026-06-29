@@ -80,6 +80,8 @@ namespace HDRGammaController
         private readonly CalibrationSettings? _previousSettings;
         private bool _bypassApplied;
         private bool _measuredInHdr;
+        private string? _disabledProfileForMeasurement;
+        private bool _disabledProfileForMeasurementHdrMode;
 
         private int _patchSize = 600;
         // FP16 scRGB renderer for HDR wire-ladder patches (ColorPatch.Nits). Created lazily
@@ -256,6 +258,7 @@ namespace HDRGammaController
                     Log.Info($"CalibrationWindow: Failed to restore state: {ex.Message}");
                 }
             }
+            RestoreProfileDisabledForMeasurement();
 
             // Stop blocking screen saver
             PreventScreenSaver(false);
@@ -299,6 +302,24 @@ namespace HDRGammaController
             else if (e.Key == Key.Space && _isPaused)
             {
                 Resume_Click(sender, e);
+            }
+        }
+
+        private void RestoreProfileDisabledForMeasurement()
+        {
+            if (_targetMonitor == null || string.IsNullOrEmpty(_disabledProfileForMeasurement))
+                return;
+
+            string profileName = _disabledProfileForMeasurement;
+            _disabledProfileForMeasurement = null;
+            if (CalibrationProfileInstaller.Reenable(_targetMonitor, profileName, _disabledProfileForMeasurementHdrMode))
+            {
+                _settingsManager?.SetMhc2Calibration(_targetMonitor.MonitorDevicePath, profileName);
+                Log.Info($"CalibrationWindow: Restored calibration profile disabled for measurement: {profileName}");
+            }
+            else
+            {
+                Log.Info($"CalibrationWindow: Could not restore calibration profile disabled for measurement: {profileName}");
             }
         }
 
@@ -602,6 +623,8 @@ namespace HDRGammaController
                 if (_settingsManager?.GetMonitorProfile(_targetMonitor.MonitorDevicePath)?.Mhc2ProfileName is { } activeProfile)
                 {
                     Log.Info($"CalibrationWindow: Disabling active calibration profile '{activeProfile}' before measuring native (kept in color store).");
+                    _disabledProfileForMeasurement = activeProfile;
+                    _disabledProfileForMeasurementHdrMode = _targetMonitor.IsHdrActive;
                     CalibrationProfileInstaller.Disable(_targetMonitor, activeProfile);
                     _settingsManager?.SetMhc2Calibration(_targetMonitor.MonitorDevicePath, null);
                 }
@@ -1079,6 +1102,7 @@ namespace HDRGammaController
                     Log.Info($"CalibrationWindow: Failed to restore state: {ex.Message}");
                 }
             }
+            RestoreProfileDisabledForMeasurement();
 
             _isCancelled = false;
             Vm.IsMeasurementVisible = false;
@@ -1292,7 +1316,7 @@ namespace HDRGammaController
                 var monitor = _targetMonitor;
                 reportWindow.SetApplyContext(new CalibrationReportWindow.ApplyContext(
                     monitor, _calibrationTarget, corr.r, corr.g, corr.b, white,
-                    OnInstalled: profileName =>
+                    OnInstalled: (profileName, previousDefaultProfile) =>
                     {
                         // Retire the previous calibration's association before recording the
                         // new one — otherwise repeated applies stack associations in the
@@ -1303,12 +1327,18 @@ namespace HDRGammaController
 
                         // Persist the active calibration so the live apply path composes night
                         // mode on top of it instead of double-applying the gamma curve.
-                        _settingsManager?.SetMhc2Calibration(monitor.MonitorDevicePath, profileName);
+                        _settingsManager?.SetMhc2Calibration(
+                            monitor.MonitorDevicePath,
+                            profileName,
+                            previousDefaultProfile,
+                            _measuredInHdr);
+                        _disabledProfileForMeasurement = null;
                         Log.Info($"CalibrationWindow: Installed + recorded calibration profile {profileName}");
                     },
                     Colorimeter: _colorimeterService,
                     HdrMode: _measuredInHdr,
                     StateManager: _stateManager,
+                    SettingsManager: _settingsManager,
                     PreviousGammaMode: _previousGammaMode,
                     PreviousSettings: _previousSettings,
                     PatchSize: _patchSize,
@@ -1451,6 +1481,7 @@ namespace HDRGammaController
                         Log.Info($"CalibrationWindow: Failed to restore state: {ex.Message}");
                     }
                 }
+                RestoreProfileDisabledForMeasurement();
             }
 
             Vm.CompletionMessage = message;
@@ -1543,6 +1574,7 @@ namespace HDRGammaController
             {
                 Log.Info($"CalibrationWindow: Failed to restore state: {ex.Message}");
             }
+            RestoreProfileDisabledForMeasurement();
 
             // Show the driver installation dialog
             var dialog = new DriverInstallDialog

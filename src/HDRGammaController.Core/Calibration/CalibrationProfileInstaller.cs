@@ -21,6 +21,96 @@ namespace HDRGammaController.Core.Calibration
         public sealed record InstallResult(bool Success, string ProfileName, string? Error);
 
         /// <summary>
+        /// Chooses the Windows profile backup to preserve before activating a Gloam profile.
+        /// Existing backups win; otherwise capture the current default only if it is not
+        /// already the app's active calibration.
+        /// </summary>
+        public static string? SelectPreviousProfileBackup(
+            string? currentDefaultProfile,
+            string? activeGloamProfile,
+            string? existingBackup)
+        {
+            if (!string.IsNullOrWhiteSpace(existingBackup))
+                return existingBackup;
+            if (string.IsNullOrWhiteSpace(currentDefaultProfile))
+                return null;
+            if (!string.IsNullOrWhiteSpace(activeGloamProfile) &&
+                string.Equals(currentDefaultProfile, activeGloamProfile, StringComparison.OrdinalIgnoreCase))
+                return null;
+            return currentDefaultProfile;
+        }
+
+        /// <summary>Returns the currently-default Windows profile for this display/mode, if known.</summary>
+        public static string? GetCurrentDefaultProfile(MonitorInfo monitor, bool hdrMode)
+        {
+            if (monitor == null || string.IsNullOrEmpty(monitor.MonitorDevicePath)) return null;
+            try
+            {
+                if (hdrMode)
+                    return GetAdvancedColorAssociations(monitor).FirstOrDefault();
+
+                if (!Wcs.WcsGetDefaultColorProfileSize(
+                        Wcs.WCS_PROFILE_MANAGEMENT_SCOPE.WCS_PROFILE_MANAGEMENT_SCOPE_CURRENT_USER,
+                        monitor.MonitorDevicePath, Wcs.CPT_ICC, Wcs.CPST_PERCEPTUAL, 0,
+                        out int size) || size <= 1)
+                    return null;
+
+                var buffer = new char[size];
+                if (!Wcs.WcsGetDefaultColorProfile(
+                        Wcs.WCS_PROFILE_MANAGEMENT_SCOPE.WCS_PROFILE_MANAGEMENT_SCOPE_CURRENT_USER,
+                        monitor.MonitorDevicePath, Wcs.CPT_ICC, Wcs.CPST_PERCEPTUAL, 0,
+                        size, buffer))
+                    return null;
+
+                return new string(buffer).TrimEnd('\0');
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"CalibrationProfileInstaller: default profile query failed: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Restores a previously-captured Windows profile as the display default. The profile
+        /// must already exist in the Windows color store.
+        /// </summary>
+        public static bool RestoreDefaultProfile(MonitorInfo monitor, string profileName, bool hdrMode)
+        {
+            if (string.IsNullOrEmpty(monitor.MonitorDevicePath) || string.IsNullOrEmpty(profileName)) return false;
+            try
+            {
+                if (hdrMode)
+                {
+                    if (!DisplayConfig.TryGetPathForGdiName(monitor.DeviceName, out var adapterId, out uint sourceId, out _))
+                        return false;
+
+                    int hr = Wcs.ColorProfileAddDisplayAssociation(
+                        Wcs.WCS_PROFILE_MANAGEMENT_SCOPE.WCS_PROFILE_MANAGEMENT_SCOPE_CURRENT_USER,
+                        profileName, adapterId, sourceId,
+                        setAsDefault: true, associateAsAdvancedColor: true);
+                    if (hr != 0)
+                    {
+                        Log.Info($"CalibrationProfileInstaller: restore Advanced Color default failed (HRESULT 0x{hr:X8}) for {profileName}");
+                        return false;
+                    }
+                    return true;
+                }
+
+                if (!Wcs.AssociateColorProfileWithDevice(null, profileName, monitor.MonitorDevicePath))
+                    return false;
+                return Wcs.WcsSetDefaultColorProfile(
+                    Wcs.WCS_PROFILE_MANAGEMENT_SCOPE.WCS_PROFILE_MANAGEMENT_SCOPE_CURRENT_USER,
+                    monitor.MonitorDevicePath, Wcs.CPT_ICC, Wcs.CPST_PERCEPTUAL, 0, profileName);
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"CalibrationProfileInstaller: restore default failed: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
         /// Builds and installs the calibrated profile for <paramref name="monitor"/>. Returns
         /// the installed profile filename so callers can record it (and later revert).
         /// </summary>
@@ -307,15 +397,7 @@ namespace HDRGammaController.Core.Calibration
                 return;
             try
             {
-                // Discovery via the ICM association registry: the device key suffix is the
-                // last path segment of MonitorDevicePath (e.g. ...\0002 → key "0002").
-                string suffix = monitor.MonitorDevicePath.TrimEnd('\\');
-                int cut = suffix.LastIndexOf('\\');
-                if (cut < 0) return;
-                suffix = suffix[(cut + 1)..];
-
-                using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
-                    $@"Software\Microsoft\Windows NT\CurrentVersion\ICM\ProfileAssociations\Display\{{4d36e96e-e325-11ce-bfc1-08002be10318}}\{suffix}");
+                using var key = OpenProfileAssociationKey(monitor);
                 if (key == null) return;
 
                 // Derive the prefix from the SAME Sanitize() form BuildProfileName writes on
@@ -343,6 +425,27 @@ namespace HDRGammaController.Core.Calibration
             {
                 Log.Info($"CalibrationProfileInstaller: DisableAllForMonitor failed (non-fatal): {ex.Message}");
             }
+        }
+
+        private static Microsoft.Win32.RegistryKey? OpenProfileAssociationKey(MonitorInfo monitor)
+        {
+            string suffix = monitor.MonitorDevicePath.TrimEnd('\\');
+            int cut = suffix.LastIndexOf('\\');
+            if (cut < 0) return null;
+            suffix = suffix[(cut + 1)..];
+
+            return Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+                $@"Software\Microsoft\Windows NT\CurrentVersion\ICM\ProfileAssociations\Display\{{4d36e96e-e325-11ce-bfc1-08002be10318}}\{suffix}");
+        }
+
+        private static IReadOnlyList<string> GetAdvancedColorAssociations(MonitorInfo monitor)
+        {
+            using var key = OpenProfileAssociationKey(monitor);
+            if (key?.GetValue("ICMProfileAC") is string[] multi)
+                return multi.Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
+            if (key?.GetValue("ICMProfileAC") is string single && !string.IsNullOrWhiteSpace(single))
+                return new[] { single };
+            return Array.Empty<string>();
         }
 
         /// <summary>Fully removes a previously-installed calibration profile from a monitor.</summary>

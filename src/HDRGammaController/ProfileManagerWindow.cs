@@ -130,6 +130,9 @@ namespace HDRGammaController
         private string? ActiveProfileName =>
             _settings?.GetMonitorProfile(_monitor.MonitorDevicePath)?.Mhc2ProfileName;
 
+        private MonitorProfileData? ActiveMonitorProfile =>
+            _settings?.GetMonitorProfile(_monitor.MonitorDevicePath);
+
         private void Refresh()
         {
             try
@@ -187,11 +190,21 @@ namespace HDRGammaController
         {
             if (_list.SelectedItems.Count != 1 || Selected is not { } row) return;
             string? previous = ActiveProfileName;
+            var saved = ActiveMonitorProfile;
+            string? previousDefault = CalibrationProfileInstaller.SelectPreviousProfileBackup(
+                CalibrationProfileInstaller.GetCurrentDefaultProfile(_monitor, _monitor.IsHdrActive),
+                previous,
+                saved?.PreviousColorProfileName);
+
             if (CalibrationProfileInstaller.Reenable(_monitor, row.Name, _monitor.IsHdrActive))
             {
                 if (!string.IsNullOrEmpty(previous) && !string.Equals(previous, row.Name, StringComparison.OrdinalIgnoreCase))
                     CalibrationProfileInstaller.Disable(_monitor, previous);
-                _settings?.SetMhc2Calibration(_monitor.MonitorDevicePath, row.Name);
+                _settings?.SetMhc2Calibration(
+                    _monitor.MonitorDevicePath,
+                    row.Name,
+                    previousDefault,
+                    _monitor.IsHdrActive);
                 SetStatus($"Activated: {row.Name}");
             }
             else
@@ -205,15 +218,29 @@ namespace HDRGammaController
         {
             var rows = SelectedRows;
             if (rows.Count == 0) return;
+            string? activeBefore = ActiveProfileName;
+            bool touchedActive = false;
+            string restoreMessage = "";
             foreach (var row in rows)
             {
+                bool wasActive = string.Equals(row.Name, activeBefore, StringComparison.OrdinalIgnoreCase);
                 CalibrationProfileInstaller.Disable(_monitor, row.Name);
-                if (string.Equals(row.Name, ActiveProfileName, StringComparison.OrdinalIgnoreCase))
+                if (wasActive)
+                {
+                    touchedActive = true;
+                    restoreMessage = RestorePreviousProfileIfAvailable();
                     _settings?.SetMhc2Calibration(_monitor.MonitorDevicePath, null);
+                }
             }
-            SetStatus(rows.Count == 1
-                ? $"Deactivated: {rows[0].Name} (file kept in the color store)."
-                : $"Deactivated {rows.Count} profiles (files kept in the color store).");
+            if (!string.IsNullOrEmpty(restoreMessage))
+                SetStatus(restoreMessage);
+            else
+            {
+                SetStatus(rows.Count == 1
+                    ? $"Deactivated: {rows[0].Name} (file kept in the color store)."
+                    : $"Deactivated {rows.Count} profiles (files kept in the color store)." +
+                      (touchedActive ? " No previous Windows profile was recorded to restore." : ""));
+            }
             Refresh();
         }
 
@@ -229,14 +256,40 @@ namespace HDRGammaController
             if (!ConfirmDialog.Confirm(this, rows.Count == 1 ? "Delete Profile" : "Delete Profiles",
                     message, "Delete", "Cancel"))
                 return;
+            string? activeBefore = ActiveProfileName;
+            string restoreMessage = "";
             foreach (var row in rows)
             {
+                bool wasActive = string.Equals(row.Name, activeBefore, StringComparison.OrdinalIgnoreCase);
                 CalibrationProfileInstaller.Uninstall(_monitor, row.Name);
-                if (string.Equals(row.Name, ActiveProfileName, StringComparison.OrdinalIgnoreCase))
+                if (wasActive)
+                {
+                    restoreMessage = RestorePreviousProfileIfAvailable();
                     _settings?.SetMhc2Calibration(_monitor.MonitorDevicePath, null);
+                }
             }
-            SetStatus(rows.Count == 1 ? $"Deleted: {rows[0].Name}" : $"Deleted {rows.Count} profiles.");
+            if (!string.IsNullOrEmpty(restoreMessage))
+                SetStatus(restoreMessage);
+            else
+                SetStatus(rows.Count == 1 ? $"Deleted: {rows[0].Name}" : $"Deleted {rows.Count} profiles.");
             Refresh();
+        }
+
+        private string RestorePreviousProfileIfAvailable()
+        {
+            var profile = ActiveMonitorProfile;
+            string? previous = profile?.PreviousColorProfileName;
+            if (string.IsNullOrWhiteSpace(previous))
+                return "";
+
+            bool hdrMode = profile?.PreviousColorProfileHdrMode ?? _monitor.IsHdrActive;
+            if (CalibrationProfileInstaller.RestoreDefaultProfile(_monitor, previous, hdrMode))
+            {
+                _settings?.ClearMhc2PreviousColorProfile(_monitor.MonitorDevicePath);
+                return $"Restored previous Windows color profile: {previous}";
+            }
+
+            return $"Gloam profile disabled, but Windows refused to restore previous profile: {previous}";
         }
     }
 }
