@@ -500,7 +500,7 @@ namespace HDRGammaController.ViewModels
                     reason = "Requires the display to be in HDR mode.";
                 else if (!option.RequiresHdr && hdr)
                     reason = "This is an SDR target; switch the display to SDR to use it.";
-                else if (gamut != null && !TargetFitsGamut(option.Target, gamut))
+                else if (gamut != null && !GamutReachability.TargetFitsEdidGamut(option.Target, gamut))
                     reason = "Exceeds this display's gamut - it can't reproduce these primaries.";
 
                 option.IsEnabled = reason == null;
@@ -616,43 +616,6 @@ namespace HDRGammaController.ViewModels
             DisplayType.LcdCcfl => "CCFL LCD",
             _ => type.ToString()
         };
-
-        /// <summary>
-        /// Whether the display can reasonably reach the target, using the SAME drive-value
-        /// metric as the apply-time gamut guard (so setup and apply agree). We build the
-        /// display's RGB→XYZ from its EDID primaries, derive the correction matrix toward the
-        /// target, and ask how hard it drives the channels for the target's PRIMARIES.
-        /// A small overshoot (e.g. a 98%-P3 panel reaching for P3's green corner) is fine; only
-        /// a genuinely wider gamut (Rec.2020 on a P3 panel) blows past the limit. White (1,1,1)
-        /// is excluded: the matrix is ABSOLUTE, so a panel white that differs from the target
-        /// white drives white above 1.0 — a luminance shift the installer's UniformScale
-        /// absorbs, NOT unreachable gamut, so it must not grey out an otherwise in-gamut target.
-        /// </summary>
-        private static bool TargetFitsGamut(CalibrationTarget t, EdidColorInfo g)
-        {
-            try
-            {
-                var displayRgbToXyz = ColorMath.CalculateRgbToXyzMatrix(
-                    new Chromaticity(g.RedX, g.RedY), new Chromaticity(g.GreenX, g.GreenY),
-                    new Chromaticity(g.BlueX, g.BlueY), new Chromaticity(g.WhiteX, g.WhiteY));
-                // Same ABSOLUTE construction as Mhc2ProfileBuilder.BuildGamutMatrix, so setup
-                // and apply measure the same drive values.
-                var matrix = ColorMath.MultiplyMatrices(ColorMath.Invert3x3(displayRgbToXyz), t.RgbToXyzMatrix);
-
-                double max = 0;
-                // Primaries only — mirrors CalibrationProfileInstaller.MaxPrimaryDrive.
-                (double, double, double)[] primaries = { (1, 0, 0), (0, 1, 0), (0, 0, 1) };
-                foreach (var (a, b, c) in primaries)
-                    for (int r = 0; r < 3; r++)
-                        max = Math.Max(max, matrix[r, 0] * a + matrix[r, 1] * b + matrix[r, 2] * c);
-                // Matches the installer's gamut guard threshold so setup and apply never disagree.
-                return max <= 1.3;
-            }
-            catch
-            {
-                return true; // if the EDID is unusable, don't block - the apply guard still protects.
-            }
-        }
 
         #region Colorimeter init
 

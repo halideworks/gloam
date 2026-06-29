@@ -187,8 +187,8 @@ namespace HDRGammaController.Core.Calibration
             // so white (1,1,1) drives above 1.0 whenever the panel white differs from the target
             // white — that is a luminance shift UniformScale absorbs, not unreachable gamut, and
             // must not trip this reject.
-            double maxPrimaryDrive = MaxPrimaryDrive(matrix);
-            if (maxPrimaryDrive > 1.3) // keep in sync with the setup-time EDID filter
+            double maxPrimaryDrive = GamutReachability.MaxPrimaryDrive(matrix);
+            if (!GamutReachability.IsReachable(maxPrimaryDrive))
                 return new InstallResult(false, "",
                     $"The chosen target ('{target.Name}') needs primaries about {maxPrimaryDrive:P0} of this " +
                     "display's maximum - i.e. a wider gamut than the panel can physically produce, so the " +
@@ -482,23 +482,6 @@ namespace HDRGammaController.Core.Calibration
             double max = 0;
             (double, double, double)[] contents = { (1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 1) };
             foreach (var (a, b, c) in contents)
-                for (int r = 0; r < 3; r++)
-                    max = Math.Max(max, m[r, 0] * a + m[r, 1] * b + m[r, 2] * c);
-            return max;
-        }
-
-        /// <summary>
-        /// Largest display drive value the matrix demands for the target's PRIMARIES ONLY
-        /// (content R/G/B = (1,0,0),(0,1,0),(0,0,1) — white (1,1,1) is excluded). This is the
-        /// gamut-REACH metric: &gt; ~1.3 means a target primary asks for more than the panel can
-        /// emit (genuinely wider gamut → clip and cast). White overshoot is deliberately left
-        /// out here because it is a luminance shift UniformScale absorbs, not unreachable gamut.
-        /// </summary>
-        private static double MaxPrimaryDrive(double[,] m)
-        {
-            double max = 0;
-            (double, double, double)[] primaries = { (1, 0, 0), (0, 1, 0), (0, 0, 1) };
-            foreach (var (a, b, c) in primaries)
                 for (int r = 0; r < 3; r++)
                     max = Math.Max(max, m[r, 0] * a + m[r, 1] * b + m[r, 2] * c);
             return max;
