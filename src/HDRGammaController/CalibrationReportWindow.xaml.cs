@@ -1815,6 +1815,12 @@ namespace HDRGammaController
                     : null;
 
                 var after = CalibrationVerifier.ComputeMetrics(results, ctx.Target);
+                var activation = _measurements != null
+                    ? VerificationAnalysis.AnalyzeProfileActivation(
+                        CalibrationVerifier.ComputeMetrics(_measurements, ctx.Target).PatchResults,
+                        after.PatchResults,
+                        ctx.Target.WhitePointOnly)
+                    : null;
                 Vm.AfterAvgText = $"{after.AverageDeltaE:F2}";
                 Vm.AfterMaxText = $"{after.MaxDeltaE:F2}";
                 Vm.AfterGrayscaleText = $"{after.AverageGrayscaleDeltaE:F2}";
@@ -1840,6 +1846,8 @@ namespace HDRGammaController
                     $"ΔE ITP avg {after.AverageItpDeltaE:F1}, max {after.MaxItpDeltaE:F1} (BT.2124; ~3x ΔE2000 scale, 1 unit ≈ 1 JND).";
                 if (pqSummary != null)
                     Vm.VerifyDetailText += "\n" + pqSummary;
+                if (activation != null)
+                    Vm.VerifyDetailText += "\n" + activation.Message;
                 Vm.IsVerifyDetailVisible = true;
 
                 // Detailed sweep: hand the per-patch results to the Detailed Verification
@@ -1860,8 +1868,18 @@ namespace HDRGammaController
 
                 // Refresh recommendations with verify-aware guidance.
                 PopulateRecommendations(afterGrade, after);
-                Vm.StatusText = $"Verified through the applied profile: average ΔE {after.AverageDeltaE:F2} " +
-                                $"({results.Count(r => r.IsValid)} of {patches.Count} patches).";
+                if (activation?.ShouldWarn == true)
+                {
+                    Vm.StatusText = $"Verified, but profile activation is suspect: average ΔE {after.AverageDeltaE:F2} " +
+                                    $"({results.Count(r => r.IsValid)} of {patches.Count} patches).";
+                    Vm.StatusBrush = CalibrationReportViewModel.AmberBrush;
+                }
+                else
+                {
+                    Vm.StatusText = $"Verified through the applied profile: average ΔE {after.AverageDeltaE:F2} " +
+                                    $"({results.Count(r => r.IsValid)} of {patches.Count} patches).";
+                    Vm.StatusBrush = CalibrationReportViewModel.GreenBrush;
+                }
 
                 // Overlay the corrected response on the charts: the native curves alone read
                 // as alarming even when the corrected result is good.
@@ -1870,6 +1888,8 @@ namespace HDRGammaController
                 CalibrationSounds.PlayCompletion();
                 Log.Info($"CalibrationReportWindow: Verify pass avg dE {after.AverageDeltaE:F2}, " +
                          $"max {after.MaxDeltaE:F2}, gray {after.AverageGrayscaleDeltaE:F2}, primary {after.AveragePrimaryDeltaE:F2}.");
+                if (activation != null)
+                    Log.Info($"CalibrationReportWindow: {activation.Message}");
 
                 // Re-save the report snapshot so the "after" column (and the verified
                 // grade the disc now shows) survive into the saved-reports browser.

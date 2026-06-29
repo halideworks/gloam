@@ -193,6 +193,110 @@ namespace HDRGammaController.Tests
             Assert.DoesNotContain("Memory colors", text);
         }
 
+        // ------------------------------------------------------------------ profile activation sentinel
+
+        [Fact]
+        public void ProfileActivationSentinel_ClearImprovement_Passes()
+        {
+            var native = new[]
+            {
+                new PatchDeltaE("White", PatchCategory.Grayscale, 4.0),
+                new PatchDeltaE("Gray 80%", PatchCategory.Grayscale, 3.5),
+                new PatchDeltaE("Gray 40%", PatchCategory.Grayscale, 3.0),
+                new PatchDeltaE("Red", PatchCategory.Primary, 2.8),
+            };
+            var verified = new[]
+            {
+                new PatchDeltaE("White", PatchCategory.Grayscale, 1.2),
+                new PatchDeltaE("Gray 80%", PatchCategory.Grayscale, 1.1),
+                new PatchDeltaE("Gray 40%", PatchCategory.Grayscale, 1.3),
+                new PatchDeltaE("Red", PatchCategory.Primary, 1.4),
+            };
+
+            var result = VerificationAnalysis.AnalyzeProfileActivation(
+                native, verified, whitePointOnly: false);
+
+            Assert.Equal(ProfileActivationStatus.Passed, result.Status);
+            Assert.False(result.ShouldWarn);
+            Assert.Equal(4, result.ComparedPatchCount);
+            Assert.Contains("passed", result.Message, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void ProfileActivationSentinel_NativeAlreadyGood_IsNotActionable()
+        {
+            var native = new[]
+            {
+                new PatchDeltaE("White", PatchCategory.Grayscale, 0.8),
+                new PatchDeltaE("Gray 80%", PatchCategory.Grayscale, 0.9),
+                new PatchDeltaE("Gray 40%", PatchCategory.Grayscale, 0.7),
+            };
+            var verified = new[]
+            {
+                new PatchDeltaE("White", PatchCategory.Grayscale, 0.7),
+                new PatchDeltaE("Gray 80%", PatchCategory.Grayscale, 0.8),
+                new PatchDeltaE("Gray 40%", PatchCategory.Grayscale, 0.7),
+            };
+
+            var result = VerificationAnalysis.AnalyzeProfileActivation(
+                native, verified, whitePointOnly: true);
+
+            Assert.Equal(ProfileActivationStatus.InsufficientSignal, result.Status);
+            Assert.False(result.ShouldWarn);
+            Assert.Contains("already low", result.Message, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void ProfileActivationSentinel_NoExpectedMovement_Warns()
+        {
+            var native = new[]
+            {
+                new PatchDeltaE("White", PatchCategory.Grayscale, 4.0),
+                new PatchDeltaE("Gray 80%", PatchCategory.Grayscale, 3.8),
+                new PatchDeltaE("Gray 40%", PatchCategory.Grayscale, 3.6),
+                new PatchDeltaE("Red", PatchCategory.Primary, 3.4),
+            };
+            var verified = new[]
+            {
+                new PatchDeltaE("White", PatchCategory.Grayscale, 3.9),
+                new PatchDeltaE("Gray 80%", PatchCategory.Grayscale, 3.7),
+                new PatchDeltaE("Gray 40%", PatchCategory.Grayscale, 3.6),
+                new PatchDeltaE("Red", PatchCategory.Primary, 3.3),
+            };
+
+            var result = VerificationAnalysis.AnalyzeProfileActivation(
+                native, verified, whitePointOnly: false);
+
+            Assert.Equal(ProfileActivationStatus.Warning, result.Status);
+            Assert.True(result.ShouldWarn);
+            Assert.Contains("did not detect the expected movement", result.Message, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void ProfileActivationSentinel_WhitePointOnly_IgnoresPrimaries()
+        {
+            var native = new[]
+            {
+                new PatchDeltaE("White", PatchCategory.Grayscale, 4.0),
+                new PatchDeltaE("Gray 80%", PatchCategory.Grayscale, 3.8),
+                new PatchDeltaE("Gray 40%", PatchCategory.Grayscale, 3.6),
+                new PatchDeltaE("Red", PatchCategory.Primary, 9.0),
+            };
+            var verified = new[]
+            {
+                new PatchDeltaE("White", PatchCategory.Grayscale, 1.1),
+                new PatchDeltaE("Gray 80%", PatchCategory.Grayscale, 1.0),
+                new PatchDeltaE("Gray 40%", PatchCategory.Grayscale, 1.2),
+                new PatchDeltaE("Red", PatchCategory.Primary, 9.1),
+            };
+
+            var result = VerificationAnalysis.AnalyzeProfileActivation(
+                native, verified, whitePointOnly: true);
+
+            Assert.Equal(ProfileActivationStatus.Passed, result.Status);
+            Assert.Equal(3, result.ComparedPatchCount);
+        }
+
         // ------------------------------------------------------------------ detailed patch set
 
         [Fact]

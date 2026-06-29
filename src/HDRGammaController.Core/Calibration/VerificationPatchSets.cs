@@ -142,6 +142,29 @@ namespace HDRGammaController.Core.Calibration
         }
     }
 
+    public enum ProfileActivationStatus
+    {
+        Passed,
+        InsufficientSignal,
+        Warning
+    }
+
+    /// <summary>
+    /// Result of the post-install activation sentinel: compare native-vs-verified patch
+    /// errors for the same measured patches. A warning does not prove Windows ignored the
+    /// profile, but it flags the professional failure mode we care about: after installing,
+    /// a clearly inaccurate native panel did not measurably move toward the target.
+    /// </summary>
+    public sealed record ProfileActivationCheck(
+        ProfileActivationStatus Status,
+        int ComparedPatchCount,
+        double NativeAverageDeltaE,
+        double VerifiedAverageDeltaE,
+        string Message)
+    {
+        public bool ShouldWarn => Status == ProfileActivationStatus.Warning;
+    }
+
     /// <summary>
     /// The detailed-verification math kept WPF-free so it is unit-testable: ΔE histogram
     /// bucketing, worst-patch ranking and the per-category breakdown.
@@ -217,6 +240,89 @@ namespace HDRGammaController.Core.Calibration
                 MemoryColorsDeltaE = Avg(memory),
             };
         }
+
+        /// <summary>
+        /// Activation sentinel for the installed profile. It reuses patches already measured
+        /// by the verify sweep, so it adds no extra meter time: native and verified ΔE are
+        /// compared only for matching grayscale patches (and primaries for full correction).
+        /// When native error is already tiny, the check is intentionally non-actionable
+        /// because a no-op and a successful subtle correction are indistinguishable.
+        /// </summary>
+        public static ProfileActivationCheck AnalyzeProfileActivation(
+            IEnumerable<PatchDeltaE>? nativePatches,
+            IEnumerable<PatchDeltaE>? verifiedPatches,
+            bool whitePointOnly)
+        {
+            var nativeByKey = Eligible(nativePatches, whitePointOnly)
+                .GroupBy(Key)
+                .ToDictionary(g => g.Key, g => g.First().DeltaE, StringComparer.OrdinalIgnoreCase);
+
+            var pairs = Eligible(verifiedPatches, whitePointOnly)
+                .Select(p => (Patch: p, Key: Key(p)))
+                .Where(p => nativeByKey.ContainsKey(p.Key))
+                .Select(p => (Native: nativeByKey[p.Key], Verified: p.Patch.DeltaE))
+                .ToList();
+
+            if (pairs.Count < 3)
+            {
+                return new ProfileActivationCheck(
+                    ProfileActivationStatus.InsufficientSignal,
+                    pairs.Count,
+                    0,
+                    0,
+                    "Profile activation sentinel: not enough matching native and verified patches to confirm profile movement.");
+            }
+
+            double nativeAverage = pairs.Average(p => p.Native);
+            double verifiedAverage = pairs.Average(p => p.Verified);
+            double improvement = nativeAverage - verifiedAverage;
+            double relative = nativeAverage > 0 ? improvement / nativeAverage : 0;
+
+            if (nativeAverage < 2.0)
+            {
+                return new ProfileActivationCheck(
+                    ProfileActivationStatus.InsufficientSignal,
+                    pairs.Count,
+                    nativeAverage,
+                    verifiedAverage,
+                    $"Profile activation sentinel: native error on comparable patches was already low (avg ΔE {nativeAverage:F2}), so no large movement is expected.");
+            }
+
+            if (improvement >= 0.5 || relative >= 0.20 || verifiedAverage <= 1.5)
+            {
+                return new ProfileActivationCheck(
+                    ProfileActivationStatus.Passed,
+                    pairs.Count,
+                    nativeAverage,
+                    verifiedAverage,
+                    $"Profile activation sentinel passed: comparable patches moved from avg ΔE {nativeAverage:F2} native to {verifiedAverage:F2} verified.");
+            }
+
+            return new ProfileActivationCheck(
+                ProfileActivationStatus.Warning,
+                pairs.Count,
+                nativeAverage,
+                verifiedAverage,
+                $"Profile activation sentinel warning: comparable patches were avg ΔE {nativeAverage:F2} native and {verifiedAverage:F2} after install, so the verification did not detect the expected movement toward target. Confirm the Windows color profile is active for this display and that verification ran on the same HDR/SDR mode used during measurement.");
+        }
+
+        private static IEnumerable<PatchDeltaE> Eligible(IEnumerable<PatchDeltaE>? patches, bool whitePointOnly)
+        {
+            if (patches == null) yield break;
+            foreach (var p in patches)
+            {
+                if (!double.IsFinite(p.DeltaE)) continue;
+                if (p.Name.Equals("Black", StringComparison.OrdinalIgnoreCase)) continue;
+                if (p.Category == PatchCategory.Grayscale ||
+                    (!whitePointOnly && p.Category == PatchCategory.Primary))
+                {
+                    yield return p;
+                }
+            }
+        }
+
+        private static string Key(PatchDeltaE patch)
+            => $"{patch.Category}:{patch.Name}".ToLowerInvariant();
 
         /// <summary>
         /// Optional caveat line shown under the category breakdown so the saturation and

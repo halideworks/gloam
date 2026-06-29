@@ -51,7 +51,7 @@ Hardware compatibility matrix work is intentionally excluded from the implementa
 
 - Verify HDR profiles with FP16/scRGB PQ wire patches, absolute-nit targets, and dE ITP.
 - Keep SDR and HDR verification metrics separate in reports.
-- Future work: add an automated post-install "profile visibly active" check by measuring a small sentinel patch through the applied profile.
+- Run an automated post-install profile-activation sentinel during verification by comparing matching native and verified patches and warning when an inaccurate panel does not measurably move toward target.
 
 ## 8. Color Engine
 
