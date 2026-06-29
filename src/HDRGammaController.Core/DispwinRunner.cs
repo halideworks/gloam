@@ -220,73 +220,14 @@ namespace HDRGammaController.Core
         
         private string FindDispwin()
         {
-            // SECURITY: Do NOT search current directory first (DLL/EXE planting risk)
-            // Only search controlled/admin-protected locations
-
-            // 1. Search in our local app data directory (controlled by this app)
-            string localAppData = Path.Combine(ArgyllDownloader.LocalArgyllBinDir, "dispwin.exe");
-            if (File.Exists(localAppData))
+            // SECURITY: Use the same trusted ArgyllCMS discovery path as spotread. The
+            // shared finder avoids PATH/current-directory lookup and only returns a complete
+            // bin directory containing both spotread.exe and dispwin.exe.
+            string? dispwinPath = ArgyllPathFinder.FindArgyllToolPath("dispwin.exe");
+            if (!string.IsNullOrEmpty(dispwinPath))
             {
-                Log.Info($"DispwinRunner: Found dispwin in LocalAppData: {localAppData}");
-                return localAppData;
-            }
-
-            // Self-contained Full package: a fixed, versioned path under the application
-            // directory. Do not scan the current directory or PATH for an arbitrary exe.
-            string bundled = Path.Combine(AppContext.BaseDirectory, "argyll_cache",
-                ArgyllDownloader.ArgyllVersion, "bin", "dispwin.exe");
-            if (File.Exists(bundled))
-            {
-                Log.Info($"DispwinRunner: Found bundled dispwin: {bundled}");
-                return bundled;
-            }
-
-            // 2. Search common Program Files locations (admin-protected)
-            var trustedPaths = new[]
-            {
-                @"C:\Program Files\ArgyllCMS\bin\dispwin.exe",
-                @"C:\Program Files (x86)\ArgyllCMS\bin\dispwin.exe",
-                @"C:\Program Files\Argyll_V3.5.0\bin\dispwin.exe",
-                @"C:\Program Files\Argyll_V3.3.0\bin\dispwin.exe",
-                @"C:\Program Files\DisplayCAL\Argyll\bin\dispwin.exe",
-                @"C:\Program Files (x86)\DisplayCAL\Argyll\bin\dispwin.exe",
-                @"C:\Program Files\Argyll\bin\dispwin.exe",
-                @"C:\Program Files (x86)\Argyll\bin\dispwin.exe",
-                @"C:\Argyll\bin\dispwin.exe",
-                @"C:\ArgyllCMS\bin\dispwin.exe"
-            };
-
-            foreach (var path in trustedPaths)
-            {
-                if (File.Exists(path))
-                {
-                    Log.Info($"DispwinRunner: Found dispwin at trusted path: {path}");
-                    return path;
-                }
-            }
-
-            // 3. Search DisplayCAL's AppData download location (user-controlled but common)
-            try
-            {
-                string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-                string displayCalDir = Path.Combine(appData, "DisplayCAL", "dl");
-                if (Directory.Exists(displayCalDir))
-                {
-                    // Look for Argyll_V* directories
-                    foreach (var argyllDir in Directory.GetDirectories(displayCalDir, "Argyll_*"))
-                    {
-                        string dispwinPath = Path.Combine(argyllDir, "bin", "dispwin.exe");
-                        if (File.Exists(dispwinPath))
-                        {
-                            Log.Info($"DispwinRunner: Found dispwin in DisplayCAL dir: {dispwinPath}");
-                            return dispwinPath;
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Info($"DispwinRunner: Error searching AppData: {ex.Message}");
+                Log.Info($"DispwinRunner: Found dispwin through ArgyllPathFinder: {dispwinPath}");
+                return dispwinPath;
             }
 
             return string.Empty;

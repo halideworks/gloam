@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 
 namespace HDRGammaController.Core.Calibration
 {
@@ -50,16 +51,55 @@ namespace HDRGammaController.Core.Calibration
         }
 
         /// <summary>
+        /// Finds a specific executable from a trusted, complete ArgyllCMS bin directory.
+        /// </summary>
+        /// <remarks>
+        /// The executable name must be a simple file name, not a path. This keeps callers
+        /// from accidentally turning the shared finder into an arbitrary process launcher.
+        /// </remarks>
+        public static string? FindArgyllToolPath(string executableName)
+        {
+            if (string.IsNullOrWhiteSpace(executableName))
+                throw new ArgumentException("Executable name is required.", nameof(executableName));
+
+            string fileName = Path.GetFileName(executableName);
+            if (!string.Equals(fileName, executableName, StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Executable name must not contain a directory path.", nameof(executableName));
+
+            string? binPath = FindArgyllBinPath();
+            if (binPath == null)
+                return null;
+
+            foreach (string candidate in CandidateExecutableNames(fileName))
+            {
+                string toolPath = Path.Combine(binPath, candidate);
+                if (File.Exists(toolPath))
+                    return toolPath;
+            }
+
+            return null;
+        }
+
+        /// <summary>
         /// Checks if a directory is a valid ArgyllCMS bin directory.
         /// </summary>
-        private static bool IsValidArgyllBinPath(string path)
+        internal static bool IsValidArgyllBinPath(string path)
         {
             if (string.IsNullOrEmpty(path) || !Directory.Exists(path))
                 return false;
 
-            // Check for spotread.exe (primary colorimeter tool)
-            return File.Exists(Path.Combine(path, "spotread.exe")) ||
-                   File.Exists(Path.Combine(path, "spotread"));
+            return HasExecutable(path, "spotread") && HasExecutable(path, "dispwin");
+        }
+
+        private static bool HasExecutable(string binPath, string executableBaseName)
+            => CandidateExecutableNames(executableBaseName)
+                .Any(name => File.Exists(Path.Combine(binPath, name)));
+
+        private static IEnumerable<string> CandidateExecutableNames(string executableName)
+        {
+            yield return executableName;
+            if (!executableName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                yield return executableName + ".exe";
         }
 
         /// <summary>
