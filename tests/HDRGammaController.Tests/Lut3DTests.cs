@@ -96,6 +96,34 @@ namespace HDRGammaController.Tests
             Assert.Contains("white", result.Error, StringComparison.OrdinalIgnoreCase);
         }
 
+        [Fact]
+        public void MeasurementValidator_RecoveryText_ForValidSet_ReportsPassedChecks()
+        {
+            var result = CalibrationMeasurementValidator.ValidateForProfile(
+                GoodRamp(), StandardTargets.SrgbGamma22, hdrMode: false);
+
+            string text = CalibrationMeasurementValidator.BuildRecoveryText(result);
+
+            Assert.True(result.IsValid);
+            Assert.Contains("passed integrity checks", text, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void MeasurementValidator_RecoveryText_ForNonMonotonicRamp_TargetsDynamicToneChanges()
+        {
+            var list = GoodRamp();
+            list[7] = Meas(7 / 11.0, 7 / 11.0, 7 / 11.0, list[5].Xyz.Y * 0.5);
+
+            var result = CalibrationMeasurementValidator.ValidateForProfile(
+                list, StandardTargets.SrgbGamma22, hdrMode: false);
+
+            string text = CalibrationMeasurementValidator.BuildRecoveryText(result);
+
+            Assert.False(result.IsValid);
+            Assert.Contains(result.Error!, text);
+            Assert.Contains("dynamic contrast", text, StringComparison.OrdinalIgnoreCase);
+        }
+
         [Theory]
         [InlineData(2.2)]
         [InlineData(2.4)]

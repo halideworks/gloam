@@ -75,8 +75,13 @@ namespace HDRGammaController
             string? MeasurementDefaultProfile = null);
         private ApplyContext? _applyContext;
         private bool _profileApplied;
+        private bool _measurementInstallBlocked;
 
-        public void SetApplyContext(ApplyContext context) => _applyContext = context;
+        public void SetApplyContext(ApplyContext context)
+        {
+            _applyContext = context;
+            RefreshMeasurementValidation();
+        }
 
         /// <summary>
         /// Hands-free mode: apply the profile and run the verification sweep as soon as the
@@ -138,7 +143,7 @@ namespace HDRGammaController
 
             Loaded += async (_, _) =>
             {
-                if (!AutoApplyOnLoad || _applyContext == null) return;
+                if (!AutoApplyOnLoad || _applyContext == null || _measurementInstallBlocked) return;
                 // Let the tray's window-closed re-apply land first; the verify bypass then
                 // clears it cleanly instead of racing it.
                 await Task.Delay(600);
@@ -645,6 +650,39 @@ namespace HDRGammaController
             }
         }
 
+        private bool RefreshMeasurementValidation()
+        {
+            if (_isHistorical || _applyContext == null || _measurements == null)
+            {
+                _measurementInstallBlocked = false;
+                Vm.IsMeasurementValidationVisible = false;
+                return true;
+            }
+
+            var result = CalibrationMeasurementValidator.ValidateForProfile(
+                _measurements,
+                EffectiveTarget(_applyContext),
+                _applyContext.HdrMode);
+
+            Vm.IsMeasurementValidationVisible = true;
+            Vm.MeasurementValidationText = CalibrationMeasurementValidator.BuildRecoveryText(result);
+
+            if (result.IsValid)
+            {
+                _measurementInstallBlocked = false;
+                Vm.MeasurementValidationBrush = CalibrationReportViewModel.GreenBrush;
+                return true;
+            }
+
+            _measurementInstallBlocked = true;
+            Vm.MeasurementValidationBrush = CalibrationReportViewModel.RedBrush;
+            Vm.IsApplyEnabled = false;
+            Vm.StatusText = "Apply blocked: measurement validation failed.";
+            Vm.StatusBrush = CalibrationReportViewModel.RedBrush;
+            Vm.ApplyButtonContent = "Apply Blocked";
+            return false;
+        }
+
         private static string FormatTimeSpan(TimeSpan time)
         {
             if (time.TotalHours >= 1)
@@ -1130,6 +1168,13 @@ namespace HDRGammaController
                 return;
             }
 
+            if (!RefreshMeasurementValidation())
+            {
+                ConfirmDialog.Info(this, "Measurement Validation",
+                    Vm.MeasurementValidationText);
+                return;
+            }
+
             var ctx = _applyContext;
             Vm.IsApplyEnabled = false;
             try
@@ -1214,7 +1259,7 @@ namespace HDRGammaController
             }
             finally
             {
-                Vm.IsApplyEnabled = true;
+                Vm.IsApplyEnabled = !_measurementInstallBlocked;
             }
         }
 

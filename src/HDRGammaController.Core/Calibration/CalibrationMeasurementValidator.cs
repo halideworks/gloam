@@ -17,6 +17,57 @@ namespace HDRGammaController.Core.Calibration
             public static Result Fail(string error) => new(false, error);
         }
 
+        public static string BuildRecoveryText(Result result)
+        {
+            if (result.IsValid)
+                return "Measurement set passed integrity checks: patch count, luminance range, anchors, grayscale monotonicity and primary chromaticities are plausible.";
+
+            string error = result.Error ?? "Measurement validation failed.";
+            string normalized = error.ToLowerInvariant();
+            string recovery;
+
+            if (normalized.Contains("no measurements") ||
+                normalized.Contains("too few") ||
+                normalized.Contains("missing a valid white") ||
+                normalized.Contains("missing a valid black") ||
+                normalized.Contains("at least five valid grayscale"))
+            {
+                recovery = "Re-run calibration from the beginning and let the full patch sequence complete without skipping failed reads.";
+            }
+            else if (normalized.Contains("near-black") ||
+                     normalized.Contains("measured near black") ||
+                     normalized.Contains("not meaningfully brighter"))
+            {
+                recovery = "Check that the meter is flush on the active patch, the patch window is visible on the measured display and the display is not blanked or covered.";
+            }
+            else if (normalized.Contains("almost no luminance range") ||
+                     normalized.Contains("stale") ||
+                     normalized.Contains("repeated readings"))
+            {
+                recovery = "Restart the meter session, keep the patch window focused and disable overlays or power-saving behavior that could freeze the probe readings.";
+            }
+            else if (normalized.Contains("white") ||
+                     normalized.Contains("drifted") ||
+                     normalized.Contains("changed chromaticity"))
+            {
+                recovery = "Let the display warm up, disable dynamic brightness/local dimming while measuring and keep ambient light stable before retrying.";
+            }
+            else if (normalized.Contains("non-monotonic"))
+            {
+                recovery = "Re-run after disabling dynamic contrast, adaptive brightness, VRR/black-frame insertion and any vendor enhancement that can change tone response between patches.";
+            }
+            else if (normalized.Contains("impossible chromaticity"))
+            {
+                recovery = "Confirm the meter spectral correction matches the panel, remove ICC/GPU corrections before measuring and verify the color patch is not being color-managed by another app.";
+            }
+            else
+            {
+                recovery = "Fix the measurement setup, then re-run calibration before installing a profile.";
+            }
+
+            return $"{error} {recovery}";
+        }
+
         public static Result ValidateForProfile(
             IEnumerable<MeasurementResult>? measurements,
             CalibrationTarget target,

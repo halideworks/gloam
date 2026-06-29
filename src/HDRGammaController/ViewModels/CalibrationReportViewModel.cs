@@ -282,6 +282,15 @@ namespace HDRGammaController.ViewModels
         private string _profilePathText = "--";
         public string ProfilePathText { get => _profilePathText; set => SetProperty(ref _profilePathText, value); }
 
+        private string _measurementValidationText = "";
+        public string MeasurementValidationText { get => _measurementValidationText; set => SetProperty(ref _measurementValidationText, value); }
+
+        private Brush _measurementValidationBrush = DimBrush;
+        public Brush MeasurementValidationBrush { get => _measurementValidationBrush; set => SetProperty(ref _measurementValidationBrush, value); }
+
+        private bool _isMeasurementValidationVisible;
+        public bool IsMeasurementValidationVisible { get => _isMeasurementValidationVisible; set => SetProperty(ref _isMeasurementValidationVisible, value); }
+
         #endregion
 
         #region Recommendations

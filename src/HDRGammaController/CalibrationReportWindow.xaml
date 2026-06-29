@@ -537,6 +537,7 @@
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
 
                             <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,0,12">
@@ -563,6 +564,22 @@
                                 <TextBlock Text="Profile Location" Style="{StaticResource MetricLabel}"/>
                                 <TextBlock Text="{Binding ProfilePathText}" Style="{StaticResource MetricValue}" TextWrapping="Wrap" FontSize="11"/>
                             </StackPanel>
+
+                            <Border Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2"
+                                    Margin="0,12,0,0"
+                                    Padding="10"
+                                    BorderBrush="{Binding MeasurementValidationBrush}"
+                                    BorderThickness="1"
+                                    Background="#101010"
+                                    Visibility="{Binding IsMeasurementValidationVisible, Converter={StaticResource BoolToVis}}">
+                                <StackPanel>
+                                    <TextBlock Text="Measurement Integrity" Style="{StaticResource MetricLabel}"/>
+                                    <TextBlock Text="{Binding MeasurementValidationText}"
+                                               Foreground="{Binding MeasurementValidationBrush}"
+                                               TextWrapping="Wrap"
+                                               FontSize="12"/>
+                                </StackPanel>
+                            </Border>
                         </Grid>
                     </StackPanel>
                 </Border>
