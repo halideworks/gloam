@@ -9,13 +9,21 @@ namespace HDRGammaController.Tests
 {
     public class CalibrationSetupPreflightTests
     {
-        private static MonitorInfo Monitor(bool hdrActive = false, bool hdrCapable = false) => new()
+        private static MonitorInfo Monitor(
+            bool hdrActive = false,
+            bool hdrCapable = false,
+            double hdrPeakNits = 0,
+            double hdrMinNits = 0,
+            double hdrMaxFullFrameNits = 0) => new()
         {
             FriendlyName = "Test Display",
             MonitorDevicePath = @"\\?\DISPLAY#TEST#0001",
             IsHdrActive = hdrActive,
             IsHdrCapable = hdrCapable || hdrActive,
-            SdrWhiteLevel = 200
+            SdrWhiteLevel = 200,
+            HdrPeakNits = hdrPeakNits,
+            HdrMinNits = hdrMinNits,
+            HdrMaxFullFrameNits = hdrMaxFullFrameNits
         };
 
         [Fact]
@@ -80,6 +88,62 @@ namespace HDRGammaController.Tests
                 monitorProfile: new MonitorProfileData { Mhc2ProfileName = "Gloam Test.icm" });
 
             Assert.Contains(messages, m => m.Severity == "INFO" && m.Message.Contains("bypassed", StringComparison.OrdinalIgnoreCase));
+        }
+
+        [Fact]
+        public void Preflight_HdrTargetWithMissingPeakMetadata_Warns()
+        {
+            var messages = CalibrationSetupViewModel.BuildPreflightMessages(
+                Monitor(hdrActive: true, hdrPeakNits: 0),
+                StandardTargets.Rec709Pq,
+                selectedOption: null,
+                DisplayType.LcdLed,
+                detectedDisplayType: null,
+                correction: new CorrectionChoice("Built-in", null),
+                whitePointOnly: false,
+                monitorProfile: null);
+
+            Assert.Contains(messages, m =>
+                m.Severity == "WARN" &&
+                m.Message.Contains("peak luminance metadata", StringComparison.OrdinalIgnoreCase));
+        }
+
+        [Fact]
+        public void Preflight_HdrTargetAboveReportedPeak_Warns()
+        {
+            var messages = CalibrationSetupViewModel.BuildPreflightMessages(
+                Monitor(hdrActive: true, hdrPeakNits: 600, hdrMinNits: 0.01, hdrMaxFullFrameNits: 420),
+                StandardTargets.Rec709Pq,
+                selectedOption: null,
+                DisplayType.LcdLed,
+                detectedDisplayType: null,
+                correction: new CorrectionChoice("Built-in", null),
+                whitePointOnly: false,
+                monitorProfile: null);
+
+            Assert.Contains(messages, m =>
+                m.Severity == "WARN" &&
+                m.Message.Contains("above this display", StringComparison.OrdinalIgnoreCase) &&
+                m.Message.Contains("600", StringComparison.OrdinalIgnoreCase));
+        }
+
+        [Fact]
+        public void Preflight_HdrReferenceWhiteNearReportedPeak_Warns()
+        {
+            var messages = CalibrationSetupViewModel.BuildPreflightMessages(
+                Monitor(hdrActive: true, hdrPeakNits: 220, hdrMinNits: 0.01, hdrMaxFullFrameNits: 180),
+                StandardTargets.Rec709Pq,
+                selectedOption: null,
+                DisplayType.LcdLed,
+                detectedDisplayType: null,
+                correction: new CorrectionChoice("Built-in", null),
+                whitePointOnly: false,
+                monitorProfile: null);
+
+            Assert.Contains(messages, m =>
+                m.Severity == "WARN" &&
+                m.Message.Contains("reference white", StringComparison.OrdinalIgnoreCase) &&
+                m.Message.Contains("220", StringComparison.OrdinalIgnoreCase));
         }
     }
 }

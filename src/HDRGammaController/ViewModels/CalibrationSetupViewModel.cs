@@ -545,6 +545,8 @@ namespace HDRGammaController.ViewModels
                     items.Add(("ERROR", "Windows HDR is active but the selected target is SDR. Switch Windows HDR off or choose an HDR target."));
                 if (monitor.SdrWhiteLevel < 80 || monitor.SdrWhiteLevel > 500)
                     items.Add(("WARN", $"Windows SDR white is {monitor.SdrWhiteLevel:F0} nits. Confirm this is intentional before measuring HDR desktop behavior."));
+                if (target != null && target.TransferFunction == TransferFunctionType.Pq)
+                    AddHdrLuminanceWarnings(items, monitor, target);
             }
             else
             {
@@ -572,6 +574,38 @@ namespace HDRGammaController.ViewModels
                 items.Add(("INFO", $"Existing Gloam profile '{monitorProfile.Mhc2ProfileName}' will be bypassed while measuring native response."));
 
             return items;
+        }
+
+        private static void AddHdrLuminanceWarnings(
+            List<(string Severity, string Message)> items,
+            MonitorInfo monitor,
+            CalibrationTarget target)
+        {
+            if (monitor.HdrPeakNits <= 0)
+            {
+                items.Add(("WARN", "HDR peak luminance metadata is unavailable. Verify Windows HDR is on and the selected display is the one being measured."));
+                return;
+            }
+
+            if (monitor.HdrMinNits < 0 || (monitor.HdrMinNits > 0 && monitor.HdrMinNits >= monitor.HdrPeakNits))
+            {
+                items.Add(("WARN", $"HDR luminance metadata looks inconsistent ({monitor.HdrMinNits:F3}-{monitor.HdrPeakNits:F0} nits). Treat the resulting HDR tone report cautiously."));
+            }
+
+            if (monitor.HdrMaxFullFrameNits > 0 && monitor.HdrMaxFullFrameNits > monitor.HdrPeakNits * 1.05)
+            {
+                items.Add(("WARN", $"HDR full-frame metadata ({monitor.HdrMaxFullFrameNits:F0} nits) exceeds peak metadata ({monitor.HdrPeakNits:F0} nits). Confirm the display is reporting HDR data correctly."));
+            }
+
+            if (target.PeakLuminance is { } targetPeak && targetPeak > monitor.HdrPeakNits * 1.10)
+            {
+                items.Add(("WARN", $"The selected HDR target peaks at {targetPeak:F0} nits, above this display's reported {monitor.HdrPeakNits:F0}-nit peak. Highlights above the panel limit will be preserved or roll off rather than fully corrected."));
+            }
+
+            if (target.ReferenceWhite is { } referenceWhite && referenceWhite > monitor.HdrPeakNits * 0.90)
+            {
+                items.Add(("WARN", $"The selected HDR reference white ({referenceWhite:F0} nits) is close to this display's reported peak ({monitor.HdrPeakNits:F0} nits). Lower Windows SDR content brightness or use a brighter HDR display for reliable desktop calibration."));
+            }
         }
 
         private void RefreshPreflight()
