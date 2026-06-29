@@ -69,7 +69,7 @@ Hardware compatibility matrix work is intentionally excluded from the implementa
 - Keep one calibration flow active at a time because only one probe can own the instrument.
 - Surface calibration/measurement failures with actionable probe, driver, HDR-mode, and profile-association messages.
 - Add tray diagnostics export for support.
-- Future work: add an in-flow preflight checklist for HDR mode, SDR white, meter correction, warm-up time, and panel target reachability.
+- Add an in-flow preflight checklist for HDR mode, SDR white, meter correction, warm-up time, existing profile bypass, and panel target reachability.
 
 ## 11. Diagnostics And Supportability
 

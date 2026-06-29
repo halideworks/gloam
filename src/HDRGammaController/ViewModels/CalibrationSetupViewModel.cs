@@ -69,6 +69,20 @@ namespace HDRGammaController.ViewModels
         public override string ToString() => Label;
     }
 
+    public class CalibrationPreflightItem
+    {
+        public string Severity { get; }
+        public string Message { get; }
+        public Brush Brush { get; }
+
+        public CalibrationPreflightItem(string severity, string message, Brush brush)
+        {
+            Severity = severity;
+            Message = message;
+            Brush = brush;
+        }
+    }
+
     public class CalibrationSetupViewModel : ObservableObject
     {
         private static readonly Brush SuccessBrush = CreateFrozen(Color.FromRgb(0x22, 0xC5, 0x5E));
@@ -85,10 +99,12 @@ namespace HDRGammaController.ViewModels
         private readonly List<MonitorInfo> _monitors;
         private readonly SettingsManager? _settingsManager;
         private bool _loadingPrefs;
+        private bool _colorimeterReady;
 
         public ObservableCollection<MonitorChoice> Monitors { get; }
         public ObservableCollection<TargetOption> Targets { get; }
         public ObservableCollection<CorrectionChoice> Corrections { get; } = new();
+        public ObservableCollection<CalibrationPreflightItem> PreflightItems { get; } = new();
 
         public ICommand IdentifyCommand { get; }
         public ICommand RefreshColorimeterCommand { get; }
@@ -133,6 +149,14 @@ namespace HDRGammaController.ViewModels
                 new("HDR Desktop PQ (sRGB gamut) - recommended for HDR", StandardTargets.Rec709Pq, requiresHdr: true),
                 new("BT.2020 PQ (HDR)", StandardTargets.Rec2020Pq, requiresHdr: true),
             };
+            foreach (var target in Targets)
+            {
+                target.PropertyChanged += (_, e) =>
+                {
+                    if (e.PropertyName == nameof(TargetOption.IsSelected))
+                        RefreshPreflight();
+                };
+            }
 
             PopulateCorrectionFiles();
 
@@ -147,6 +171,7 @@ namespace HDRGammaController.ViewModels
             RefreshColorimeterCommand = new AsyncRelayCommand(RefreshColorimeterAsync);
             StartCommand = new RelayCommand(Start);
             CancelCommand = new RelayCommand(() => CloseRequested?.Invoke(false));
+            RefreshPreflight();
         }
 
         /// <summary>Identify flash + colorimeter detection; called once from the view's Loaded.</summary>
@@ -257,6 +282,7 @@ namespace HDRGammaController.ViewModels
             {
                 WhitePointOnly = true;
             }
+            RefreshPreflight();
         }
 
         #endregion
@@ -284,14 +310,22 @@ namespace HDRGammaController.ViewModels
         public bool WhitePointOnly
         {
             get => _whitePointOnly;
-            set => SetProperty(ref _whitePointOnly, value);
+            set
+            {
+                if (SetProperty(ref _whitePointOnly, value))
+                    RefreshPreflight();
+            }
         }
 
         private CorrectionChoice? _selectedCorrection;
         public CorrectionChoice? SelectedCorrection
         {
             get => _selectedCorrection;
-            set => SetProperty(ref _selectedCorrection, value);
+            set
+            {
+                if (SetProperty(ref _selectedCorrection, value))
+                    RefreshPreflight();
+            }
         }
 
         #region Colorimeter status
@@ -323,6 +357,8 @@ namespace HDRGammaController.ViewModels
             get => _canStart;
             set => SetProperty(ref _canStart, value);
         }
+
+        public bool HasPreflightItems => PreflightItems.Count > 0;
 
         #endregion
 
@@ -479,7 +515,107 @@ namespace HDRGammaController.ViewModels
                 var fallback = Targets.FirstOrDefault(t => t.IsEnabled);
                 if (fallback != null) fallback.IsSelected = true;
             }
+            RefreshPreflight();
         }
+
+        public static IReadOnlyList<(string Severity, string Message)> BuildPreflightMessages(
+            MonitorInfo? monitor,
+            CalibrationTarget? target,
+            TargetOption? selectedOption,
+            DisplayType displayType,
+            DisplayType? detectedDisplayType,
+            CorrectionChoice? correction,
+            bool whitePointOnly,
+            MonitorProfileData? monitorProfile)
+        {
+            var items = new List<(string Severity, string Message)>();
+
+            if (monitor == null)
+            {
+                items.Add(("ERROR", "Select a display before starting calibration."));
+                return items;
+            }
+
+            if (selectedOption != null && !selectedOption.IsEnabled)
+                items.Add(("ERROR", selectedOption.DisabledReason ?? "The selected target is not available for this display state."));
+
+            if (monitor.IsHdrActive)
+            {
+                if (target != null && target.TransferFunction != TransferFunctionType.Pq)
+                    items.Add(("ERROR", "Windows HDR is active but the selected target is SDR. Switch Windows HDR off or choose an HDR target."));
+                if (monitor.SdrWhiteLevel < 80 || monitor.SdrWhiteLevel > 500)
+                    items.Add(("WARN", $"Windows SDR white is {monitor.SdrWhiteLevel:F0} nits. Confirm this is intentional before measuring HDR desktop behavior."));
+            }
+            else
+            {
+                if (target != null && target.TransferFunction == TransferFunctionType.Pq)
+                    items.Add(("ERROR", "The selected HDR target requires Windows HDR to be active on this display."));
+                else if (monitor.IsHdrCapable)
+                    items.Add(("WARN", "This HDR-capable display is currently in SDR mode; HDR targets are unavailable until Windows HDR is enabled."));
+            }
+
+            if (detectedDisplayType is { } detected && detected != displayType)
+                items.Add(("WARN", $"Panel detection suggests {DisplayTypeLabel(detected)}, but {DisplayTypeLabel(displayType)} is selected."));
+
+            bool correctionRecommended = displayType is DisplayType.Oled or DisplayType.LcdWideGamut ||
+                                         detectedDisplayType is DisplayType.Oled or DisplayType.LcdWideGamut;
+            if (correctionRecommended && string.IsNullOrEmpty(correction?.Path))
+                items.Add(("WARN", "Use a panel-matched CCSS/CCMX meter correction for OLED and wide-gamut displays."));
+
+            if (displayType == DisplayType.Oled && !whitePointOnly && monitor.IsHdrActive)
+                items.Add(("WARN", "OLED HDR measurements usually behave better with white-point-only correction unless you have verified full gamut correction on this panel."));
+
+            if (displayType == DisplayType.Oled || monitor.IsHdrActive)
+                items.Add(("INFO", "Warm the display for at least 30 minutes and avoid panel compensation cycles during measurement."));
+
+            if (!string.IsNullOrEmpty(monitorProfile?.Mhc2ProfileName))
+                items.Add(("INFO", $"Existing Gloam profile '{monitorProfile.Mhc2ProfileName}' will be bypassed while measuring native response."));
+
+            return items;
+        }
+
+        private void RefreshPreflight()
+        {
+            var monitor = _selectedMonitor?.Model;
+            var selectedOption = Targets.FirstOrDefault(t => t.IsSelected);
+            var profile = monitor != null ? _settingsManager?.GetMonitorProfile(monitor.MonitorDevicePath ?? "") : null;
+
+            PreflightItems.Clear();
+            foreach (var item in BuildPreflightMessages(
+                         monitor,
+                         selectedOption?.Target,
+                         selectedOption,
+                         _displayType,
+                         DetectedDisplayType,
+                         SelectedCorrection,
+                         WhitePointOnly,
+                         profile))
+            {
+                PreflightItems.Add(new CalibrationPreflightItem(item.Severity, item.Message, BrushForSeverity(item.Severity)));
+            }
+
+            OnPropertyChanged(nameof(HasPreflightItems));
+            RefreshCanStart();
+        }
+
+        private void RefreshCanStart()
+            => CanStart = _colorimeterReady && !PreflightItems.Any(i => i.Severity == "ERROR");
+
+        private static Brush BrushForSeverity(string severity) => severity switch
+        {
+            "ERROR" => ErrorBrush,
+            "WARN" => WarningBrush,
+            _ => SuccessBrush
+        };
+
+        private static string DisplayTypeLabel(DisplayType type) => type switch
+        {
+            DisplayType.LcdLed => "LCD LED",
+            DisplayType.Oled => "OLED",
+            DisplayType.LcdWideGamut => "wide-gamut LCD",
+            DisplayType.LcdCcfl => "CCFL LCD",
+            _ => type.ToString()
+        };
 
         /// <summary>
         /// Whether the display can reasonably reach the target, using the SAME drive-value
@@ -568,7 +704,8 @@ namespace HDRGammaController.ViewModels
                         StatusText = "ArgyllCMS not installed";
                         StatusBrush = ErrorBrush;
                         StatusDetailText = "Click Refresh to try downloading again";
-                        CanStart = false;
+                        _colorimeterReady = false;
+                        RefreshCanStart();
                         return;
                     }
                 }
@@ -592,7 +729,8 @@ namespace HDRGammaController.ViewModels
                     StatusText = "Detection timed out";
                     StatusBrush = ErrorBrush;
                     StatusDetailText = "Check colorimeter connection and USB drivers";
-                    CanStart = false;
+                    _colorimeterReady = false;
+                    RefreshCanStart();
                     return;
                 }
 
@@ -604,7 +742,8 @@ namespace HDRGammaController.ViewModels
                 StatusBrush = ErrorBrush;
                 StatusDetailText = "Check console for details";
                 Log.Info($"Colorimeter initialization error: {ex}");
-                CanStart = false;
+                _colorimeterReady = false;
+                RefreshCanStart();
             }
         }
 
@@ -631,7 +770,8 @@ namespace HDRGammaController.ViewModels
             StatusText = "Searching...";
             StatusBrush = WarningBrush;
             StatusDetailText = "";
-            CanStart = false;
+            _colorimeterReady = false;
+            RefreshCanStart();
 
             if (ColorimeterService != null)
             {
@@ -651,7 +791,8 @@ namespace HDRGammaController.ViewModels
                 StatusText = "Colorimeter service unavailable";
                 StatusBrush = ErrorBrush;
                 StatusDetailText = "";
-                CanStart = false;
+                _colorimeterReady = false;
+                RefreshCanStart();
                 return;
             }
 
@@ -660,14 +801,16 @@ namespace HDRGammaController.ViewModels
                 StatusText = "Connected and ready";
                 StatusBrush = SuccessBrush;
                 StatusDetailText = ColorimeterService.ConnectedColorimeter?.Model ?? "Unknown model";
-                CanStart = true;
+                _colorimeterReady = true;
+                RefreshCanStart();
             }
             else
             {
                 StatusText = "No colorimeter detected";
                 StatusBrush = WarningBrush;
                 StatusDetailText = "Connect your colorimeter and click Refresh";
-                CanStart = false;
+                _colorimeterReady = false;
+                RefreshCanStart();
             }
         }
 
@@ -703,6 +846,17 @@ namespace HDRGammaController.ViewModels
 
         private void Start()
         {
+            RefreshPreflight();
+            if (!_colorimeterReady || PreflightItems.Any(i => i.Severity == "ERROR"))
+            {
+                StatusText = !_colorimeterReady ? "Colorimeter not ready" : "Preflight requires attention";
+                StatusBrush = ErrorBrush;
+                StatusDetailText = !_colorimeterReady
+                    ? "Connect your colorimeter and click Refresh"
+                    : PreflightItems.First(i => i.Severity == "ERROR").Message;
+                return;
+            }
+
             ResultMonitor = _selectedMonitor?.Model ?? (_monitors.Count > 0 ? _monitors[0] : null);
 
             var target = Targets.FirstOrDefault(t => t.IsSelected)?.Target ?? StandardTargets.SrgbGamma22;

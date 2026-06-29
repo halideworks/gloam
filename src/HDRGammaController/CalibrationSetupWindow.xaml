@@ -214,6 +214,30 @@
                         </StackPanel>
                     </Border>
 
+                    <!-- Preflight -->
+                    <TextBlock Text="Preflight" FontWeight="SemiBold" FontSize="13" Margin="0,0,0,8"
+                               Visibility="{Binding HasPreflightItems, Converter={StaticResource BoolToVis}}"/>
+                    <Border Background="{StaticResource CardBackground}" BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="2" Padding="12" Margin="0,0,0,20"
+                            Visibility="{Binding HasPreflightItems, Converter={StaticResource BoolToVis}}">
+                        <ItemsControl ItemsSource="{Binding PreflightItems}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="0,0,0,8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Border Background="{Binding Brush}" Padding="5,1" Margin="0,1,8,0" VerticalAlignment="Top">
+                                            <TextBlock Text="{Binding Severity}" FontSize="9" FontWeight="SemiBold" Foreground="#1E1E1E"/>
+                                        </Border>
+                                        <TextBlock Grid.Column="1" Text="{Binding Message}" TextWrapping="Wrap"
+                                                   Foreground="{DynamicResource ThemeText}" FontSize="11"/>
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Border>
+
                     <!-- Colorimeter Status -->
                     <TextBlock Text="Colorimeter Status" FontWeight="SemiBold" FontSize="13" Margin="0,0,0,8"/>
                     <Border Background="{StaticResource CardBackground}" BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="2" Padding="12" Margin="0,0,0,16">
@@ -252,4 +276,3 @@
         </Grid>
     </Border>
 </Window>
-
