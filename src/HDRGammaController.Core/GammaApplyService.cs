@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using HDRGammaController.Core.Calibration;
 
 namespace HDRGammaController.Core
@@ -28,6 +29,7 @@ namespace HDRGammaController.Core
         private readonly LatestValueCoalescer<IntPtr, (MonitorInfo Monitor, GammaMode Mode, CalibrationSettings Calibration, double WhiteLevel)> _coalescer;
 
         private HashSet<IntPtr> _blockedMonitors = new HashSet<IntPtr>();
+        private int _disposed;
 
         /// <summary>Hotkey override: forces day mode regardless of the schedule.</summary>
         public bool NightModeManuallyDisabled { get; set; }
@@ -84,6 +86,8 @@ namespace HDRGammaController.Core
 
         public void Dispose()
         {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+
             _rampGuard.Stop();
             _rampGuard.Dispose();
             _coalescer.Dispose();

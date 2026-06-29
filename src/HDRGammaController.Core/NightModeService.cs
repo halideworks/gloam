@@ -486,6 +486,7 @@ namespace HDRGammaController.Core
         {
             lock (_stateLock)
             {
+                if (_disposed) return;
                 _disposed = true;
                 _timer.Stop();
                 _timer.Dispose();
