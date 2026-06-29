@@ -216,6 +216,7 @@ namespace HDRGammaController.Core
             if (reports.Count == 0)
             {
                 AddText(zip, "reports/README.txt", "No readable calibration reports were found.");
+                AddRawMeasurementCsvs(zip, reportsDir);
                 return;
             }
 
@@ -224,6 +225,18 @@ namespace HDRGammaController.Core
             string detailedCsv = BuildDetailedVerificationCsv(reports);
             if (!string.IsNullOrWhiteSpace(detailedCsv))
                 AddText(zip, "reports/detailed-verification-patches.csv", detailedCsv);
+            AddRawMeasurementCsvs(zip, reportsDir);
+        }
+
+        private static void AddRawMeasurementCsvs(ZipArchive zip, string reportsDir)
+        {
+            string measurementDir = Path.Combine(reportsDir, "measurements");
+            if (!Directory.Exists(measurementDir)) return;
+
+            foreach (string file in Directory.GetFiles(measurementDir, "*.csv").OrderBy(Path.GetFileName))
+            {
+                AddSanitizedFileIfExists(zip, file, $"reports/raw-measurements/{Path.GetFileName(file)}");
+            }
         }
 
         internal static string BuildCalibrationReportSummaryCsv(IEnumerable<CalibrationProfile> reports)

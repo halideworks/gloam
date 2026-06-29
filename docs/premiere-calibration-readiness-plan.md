@@ -78,7 +78,7 @@ Hardware compatibility matrix work is intentionally excluded from the implementa
 - Export a sanitized diagnostics zip with manifest, monitor/HDR topology, logs, settings, calibration profile summary, and third-party notices.
 - Redact user-scoped paths and usernames from bundle text.
 - Add user-controlled inclusion of saved calibration reports and detailed verification CSVs.
-- Future work: persist raw XYZ measurement reports separately so diagnostics can export complete raw measurement CSVs.
+- Persist raw XYZ measurement CSVs alongside saved reports and include them in the opt-in diagnostics export.
 
 ## 12. Distribution, Legal, And Security
 

@@ -339,11 +339,40 @@ namespace HDRGammaController
                         $"{safeName}_{DateTime.Now:yyyyMMdd_HHmmss}.json");
                 }
                 _profile.SaveToFile(_reportSavePath);
+                PersistRawMeasurementCsvs();
                 Log.Info($"CalibrationReportWindow: report snapshot saved to {_reportSavePath}");
             }
             catch (Exception ex)
             {
                 Log.Info($"CalibrationReportWindow: report snapshot save failed (report unaffected): {ex.Message}");
+            }
+        }
+
+        private void PersistRawMeasurementCsvs()
+        {
+            if (_profile == null || string.IsNullOrEmpty(_reportSavePath)) return;
+
+            string reportDir = Path.GetDirectoryName(_reportSavePath) ?? CalibrationProfile.GetReportsDirectory();
+            string measurementDir = Path.Combine(reportDir, "measurements");
+            string baseName = Path.GetFileNameWithoutExtension(_reportSavePath);
+            string reportId = _profile.Id.ToString();
+
+            if (_measurements is { Count: > 0 })
+            {
+                MeasurementCsvExporter.Save(
+                    Path.Combine(measurementDir, $"{baseName}_native-measurements.csv"),
+                    reportId,
+                    "native",
+                    _measurements);
+            }
+
+            if (_verifyMeasurements is { Count: > 0 })
+            {
+                MeasurementCsvExporter.Save(
+                    Path.Combine(measurementDir, $"{baseName}_verification-measurements.csv"),
+                    reportId,
+                    "verification",
+                    _verifyMeasurements);
             }
         }
 
