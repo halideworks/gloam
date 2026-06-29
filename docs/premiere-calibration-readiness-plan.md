@@ -77,7 +77,8 @@ Hardware compatibility matrix work is intentionally excluded from the implementa
 - Rotate app and colorimeter logs instead of deleting them at size limit.
 - Export a sanitized diagnostics zip with manifest, monitor/HDR topology, logs, settings, calibration profile summary, and third-party notices.
 - Redact user-scoped paths and usernames from bundle text.
-- Future work: add optional user-controlled inclusion of full calibration reports and raw measurement CSVs.
+- Add user-controlled inclusion of saved calibration reports and detailed verification CSVs.
+- Future work: persist raw XYZ measurement reports separately so diagnostics can export complete raw measurement CSVs.
 
 ## 12. Distribution, Legal, And Security
 

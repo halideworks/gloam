@@ -545,8 +545,23 @@ namespace HDRGammaController.ViewModels
                 List<MonitorInfo> activeMonitors;
                 lock (_activeMonitorsLock) { activeMonitors = _activeMonitors.ToList(); }
 
+                bool includeReports = false;
+                var owner = Application.Current?.Windows
+                    .OfType<Window>()
+                    .FirstOrDefault(w => w.IsActive && w.IsVisible)
+                    ?? Application.Current?.MainWindow;
+                if (owner != null)
+                {
+                    includeReports = ConfirmDialog.Confirm(owner,
+                        "Diagnostics Export",
+                        "Include saved calibration report snapshots and detailed verification CSVs in the support bundle?\n\n" +
+                        "Choose Summary Only for the smallest bundle.",
+                        confirmLabel: "Include Reports",
+                        cancelLabel: "Summary Only");
+                }
+
                 string outputDir = Path.Combine(AppPaths.DataDir, "Diagnostics");
-                string path = new DiagnosticsBundle().Create(outputDir, activeMonitors, _settingsManager);
+                string path = new DiagnosticsBundle().Create(outputDir, activeMonitors, _settingsManager, includeReports);
                 Log.Info($"TrayViewModel: diagnostics bundle exported to {path}");
 
                 string message = $"Saved to {path}";
