@@ -76,11 +76,11 @@ if ($portable -ne $null) {
         if ($portableExe.Count -eq 0) {
             Add-Failure "Portable package '$($portable.Name)' does not contain Gloam.exe."
         }
-        elseif ($portableExe.Count -gt 1) {
-            Add-Failure "Portable package '$($portable.Name)' contains multiple Gloam.exe files."
-        }
         else {
-            Test-Signature $portableExe[0].FullName "Portable Gloam.exe"
+            foreach ($exe in $portableExe) {
+                $relativePath = [System.IO.Path]::GetRelativePath($extractRoot, $exe.FullName)
+                Test-Signature $exe.FullName "Portable Gloam.exe '$relativePath'"
+            }
         }
     }
     finally {
