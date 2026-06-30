@@ -55,8 +55,8 @@ function Test-Signature([string]$path, [string]$description) {
 }
 
 $versionPattern = if ([string]::IsNullOrWhiteSpace($Version)) { "*" } else { $Version }
-$setup = Get-Artifact "Gloam-$versionPattern-Setup.exe" "signed installer"
-$portable = Get-Artifact "Gloam-$versionPattern-Portable.zip" "portable package"
+$setup = Get-Artifact "$ExpectedPackId-$versionPattern-Setup.exe" "signed installer"
+$portable = Get-Artifact "$ExpectedPackId-$versionPattern-Portable.zip" "portable package"
 $fullPackage = Get-Artifact "$ExpectedPackId-$versionPattern-full.nupkg" "Velopack full package"
 
 if ($setup -ne $null) {

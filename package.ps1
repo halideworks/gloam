@@ -146,7 +146,7 @@ if (-not (Get-Command vpk -ErrorAction SilentlyContinue)) {
     $env:PATH = "$env:PATH;$env:USERPROFILE\.dotnet\tools"
 }
 
-# 4. Pack: emits Gloam-<ver>-Setup.exe, a portable zip, and (delta) nupkgs in $ReleaseDir.
+# 4. Pack: emits GloamApp-<ver>-Setup.exe, a portable zip, and (delta) nupkgs in $ReleaseDir.
 #    Local builds are unsigned; CI re-packs with --azureTrustedSignFile (see build.yml).
 #    NOTE: packId is "GloamApp" (not "Gloam") on purpose. Velopack installs into and OWNS
 #    %LocalAppData%\<packId>, and uninstall deletes that whole tree. The app's data dir is
