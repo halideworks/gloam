@@ -1,5 +1,6 @@
 using System;
 using HDRGammaController.Core;
+using HDRGammaController.ViewModels;
 using Xunit;
 
 namespace HDRGammaController.Tests
@@ -62,6 +63,68 @@ namespace HDRGammaController.Tests
             var time = point.GetTimeOfDay(double.NaN, double.NegativeInfinity);
 
             Assert.Equal(TimeSpan.FromHours(19), time);
+        }
+
+        [Fact]
+        public void SchedulePointViewModel_ClampsEditableColorAndFadeValues()
+        {
+            var model = new NightModeSchedulePoint
+            {
+                TriggerType = ScheduleTriggerType.FixedTime,
+                TargetKelvin = 6500,
+                FadeMinutes = 30
+            };
+            var vm = new SchedulePointViewModel(model);
+
+            vm.TargetKelvin = 10_000;
+            vm.FadeMinutes = 10_000;
+
+            Assert.Equal(NightModeSettings.MaxKelvin, model.TargetKelvin);
+            Assert.Equal(NightModeSettings.MaxFadeMinutes, model.FadeMinutes);
+
+            vm.TargetKelvin = 100;
+            vm.FadeMinutes = -10;
+
+            Assert.Equal(NightModeSettings.MinKelvin, model.TargetKelvin);
+            Assert.Equal(0, model.FadeMinutes);
+        }
+
+        [Fact]
+        public void SchedulePointViewModel_NormalizesTimeAndSunOffsetEdits()
+        {
+            var model = new NightModeSchedulePoint
+            {
+                TriggerType = ScheduleTriggerType.FixedTime,
+                Time = TimeSpan.Zero
+            };
+            var vm = new SchedulePointViewModel(model);
+
+            vm.DisplayTime = "2400";
+            Assert.Equal(TimeSpan.Zero, model.Time);
+            Assert.Equal("00:00", vm.DisplayTime);
+
+            vm.TriggerType = ScheduleTriggerType.Sunset;
+            vm.DisplayTime = "999m";
+
+            Assert.Equal(NightModeSettings.MaxSunOffsetMinutes, model.OffsetMinutes);
+            Assert.Equal($"+{NightModeSettings.MaxSunOffsetMinutes}m", vm.DisplayTime);
+        }
+
+        [Fact]
+        public void NightModeScheduleViewModel_CommitLocation_ClampsTextAndSettings()
+        {
+            var settings = new NightModeSettings();
+            var vm = new NightModeScheduleViewModel();
+            vm.Initialize(settings);
+
+            vm.LatitudeText = "999";
+            vm.LongitudeText = "-999";
+            vm.CommitLocation();
+
+            Assert.Equal(90.0, settings.Latitude);
+            Assert.Equal(-180.0, settings.Longitude);
+            Assert.Equal("90.00", vm.LatitudeText);
+            Assert.Equal("-180.00", vm.LongitudeText);
         }
     }
 }

@@ -97,11 +97,16 @@ namespace HDRGammaController.ViewModels
         /// </summary>
         public void CommitLocation()
         {
-            if (double.TryParse(LatitudeText, out double lat)) Latitude = lat;
-            if (double.TryParse(LongitudeText, out double lon)) Longitude = lon;
+            if (double.TryParse(LatitudeText, out double lat))
+                Latitude = NightModeSettings.ClampLatitude(lat);
+            if (double.TryParse(LongitudeText, out double lon))
+                Longitude = NightModeSettings.ClampLongitude(lon);
 
             _settings.Latitude = Latitude;
             _settings.Longitude = Longitude;
+
+            LatitudeText = Latitude.HasValue ? Latitude.Value.ToString("F2") : "";
+            LongitudeText = Longitude.HasValue ? Longitude.Value.ToString("F2") : "";
         }
 
         /// <summary>Rebuilds the row list from the settings, sorted chronologically.</summary>
@@ -160,9 +165,9 @@ namespace HDRGammaController.ViewModels
             get
             {
                 if (Model.TriggerType == ScheduleTriggerType.FixedTime)
-                    return Model.Time.ToString(@"hh\:mm");
+                    return NightModeSettings.NormalizeTimeOfDay(Model.Time).ToString(@"hh\:mm");
                 else
-                    return (Model.OffsetMinutes >= 0 ? "+" : "") + Model.OffsetMinutes + "m";
+                    return (Model.OffsetMinutes >= 0 ? "+" : "") + NightModeSettings.ClampOffsetMinutes(Model.OffsetMinutes) + "m";
             }
             set
             {
@@ -170,11 +175,12 @@ namespace HDRGammaController.ViewModels
                 {
                     var parsed = ParseTimeInput(value);
                     if (parsed.HasValue)
-                        Model.Time = parsed.Value;
+                        Model.Time = NightModeSettings.NormalizeTimeOfDay(parsed.Value);
                 }
                 else
                 {
-                    if (double.TryParse(value.Replace("m", ""), out var d)) Model.OffsetMinutes = d;
+                    if (double.TryParse(value.Replace("m", ""), out var d))
+                        Model.OffsetMinutes = NightModeSettings.ClampOffsetMinutes(d);
                 }
                 OnPropertyChanged();
                 Notify();
@@ -225,13 +231,13 @@ namespace HDRGammaController.ViewModels
         public int TargetKelvin
         {
             get => Model.TargetKelvin;
-            set { Model.TargetKelvin = value; OnPropertyChanged(); Notify(); }
+            set { Model.TargetKelvin = NightModeSettings.ClampKelvin(value); OnPropertyChanged(); Notify(); }
         }
 
         public int FadeMinutes
         {
             get => Model.FadeMinutes;
-            set { Model.FadeMinutes = value; OnPropertyChanged(); Notify(); }
+            set { Model.FadeMinutes = NightModeSettings.ClampFadeMinutes(value); OnPropertyChanged(); Notify(); }
         }
 
         /// <summary>

@@ -135,24 +135,24 @@ namespace HDRGammaController.Core
             return (StartTime, EndTime);
         }
 
-        internal static int ClampKelvin(int kelvin) => Math.Clamp(kelvin, MinKelvin, MaxKelvin);
+        public static int ClampKelvin(int kelvin) => Math.Clamp(kelvin, MinKelvin, MaxKelvin);
 
-        internal static int ClampFadeMinutes(int minutes) => Math.Clamp(minutes, 0, MaxFadeMinutes);
+        public static int ClampFadeMinutes(int minutes) => Math.Clamp(minutes, 0, MaxFadeMinutes);
 
-        internal static double ClampOffsetMinutes(double minutes) =>
+        public static double ClampOffsetMinutes(double minutes) =>
             double.IsFinite(minutes) ? Math.Clamp(minutes, -MaxSunOffsetMinutes, MaxSunOffsetMinutes) : 0.0;
 
-        internal static double? ClampLatitude(double? latitude) =>
+        public static double? ClampLatitude(double? latitude) =>
             latitude.HasValue && double.IsFinite(latitude.Value)
                 ? Math.Clamp(latitude.Value, -90.0, 90.0)
                 : null;
 
-        internal static double? ClampLongitude(double? longitude) =>
+        public static double? ClampLongitude(double? longitude) =>
             longitude.HasValue && double.IsFinite(longitude.Value)
                 ? Math.Clamp(longitude.Value, -180.0, 180.0)
                 : null;
 
-        internal static TimeSpan NormalizeTimeOfDay(TimeSpan time)
+        public static TimeSpan NormalizeTimeOfDay(TimeSpan time)
         {
             long ticks = time.Ticks % TimeSpan.TicksPerDay;
             if (ticks < 0) ticks += TimeSpan.TicksPerDay;
