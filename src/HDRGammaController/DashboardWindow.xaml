@@ -4,9 +4,7 @@
         xmlns:local="clr-namespace:HDRGammaController"
         xmlns:vm="clr-namespace:HDRGammaController.ViewModels"
         Title="Gloam - Dashboard"
-        Height="Auto" Width="1040"
-        SizeToContent="Height"
-        MaxHeight="900"
+        Width="1040" Height="760"
         MinWidth="820" MinHeight="600"
         WindowStartupLocation="CenterScreen"
         Background="Transparent"
@@ -16,7 +14,7 @@
         ResizeMode="CanResizeWithGrip">
 
     <!--
-        Brutalist dashboard. Component styles + theme tokens are shared:
+        Dashboard. Component styles + theme tokens are shared:
         tokens/fonts in App.xaml, control styles in Themes/Brutalist.xaml (merged below).
         Light/dark is app-wide via App.BrutalistTheme; the title-bar toggle flips it.
         View model and bindings are unchanged.
@@ -50,16 +48,16 @@
                                        TextTrimming="CharacterEllipsis" Foreground="{DynamicResource ThemeText}"/>
                             <StackPanel Grid.Column="1" Orientation="Horizontal">
                                 <!-- Calibrating: amber outline -->
-                                <Border BorderBrush="{DynamicResource ThemeAmber}" BorderThickness="2" Padding="6,2" Margin="0,0,6,0"
+                                <Border BorderBrush="{DynamicResource ThemeAmber}" BorderThickness="1" Padding="6,2" Margin="0,0,6,0"
                                         Visibility="{Binding IsCalibrating, Converter={StaticResource BoolToVis}}"
                                         ToolTip="A calibration is measuring this display; its gamma, brightness and temperature settings are bypassed until it finishes">
-                                    <TextBlock Text="CALIBRATING" FontFamily="{StaticResource DisplayFont}"
+                                    <TextBlock Text="Calibrating" FontFamily="{StaticResource DisplayFont}"
                                                FontSize="9" FontWeight="Bold" Foreground="{DynamicResource ThemeAmber}"/>
                                 </Border>
                                 <!-- HDR = filled accent, SDR = outline.
                                      Defaults live in the Style (not local attributes), else the
                                      local value would beat the DataTrigger and the fill never applies. -->
-                                <Border Padding="7,2" BorderThickness="2">
+                                <Border Padding="7,2" BorderThickness="1">
                                     <Border.Style>
                                         <Style TargetType="Border">
                                             <Setter Property="Background" Value="Transparent"/>
@@ -100,19 +98,19 @@
                                     </Style.Triggers>
                                 </Style>
                             </StackPanel.Style>
-                            <TextBlock Text="GAMMA MODE" Style="{StaticResource FieldLabel}"/>
+                            <TextBlock Text="Gamma mode" Style="{StaticResource FieldLabel}"/>
                             <TextBlock Text="{Binding CurrentGamma}" Style="{StaticResource MonoValue}" Margin="0,1,0,10"/>
 
-                            <TextBlock Text="BRIGHTNESS" Style="{StaticResource FieldLabel}"/>
+                            <TextBlock Text="Brightness" Style="{StaticResource FieldLabel}"/>
                             <ProgressBar Value="{Binding CurrentBrightness}" Height="6" Margin="0,3,0,3"/>
                             <TextBlock Text="{Binding CurrentBrightness, StringFormat={}{0}%}" Style="{StaticResource MonoValue}" Margin="0,0,0,10"/>
 
-                            <TextBlock Text="COLOR TEMP" Style="{StaticResource FieldLabel}"/>
+                            <TextBlock Text="Color temp" Style="{StaticResource FieldLabel}"/>
                             <TextBlock Text="{Binding CurrentTemperatureText}" Style="{StaticResource MonoValue}" Margin="0,1,0,0"/>
                         </StackPanel>
 
                         <!-- Actions -->
-                        <Button Grid.Row="2" Content="CONFIGURE SETTINGS"
+                        <Button Grid.Row="2" Content="Configure"
                                 Command="{Binding DataContext.ConfigureMonitorCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                 CommandParameter="{Binding}">
                             <Button.Style>
@@ -138,7 +136,7 @@
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
 
-                        <TextBlock Text="NIGHT MODE AUTO-DISABLE" FontFamily="{StaticResource DisplayFont}"
+                        <TextBlock Text="Night mode auto-disable" FontFamily="{StaticResource DisplayFont}"
                                    FontSize="14" FontWeight="Bold" Margin="0,0,0,10" Foreground="{DynamicResource ThemeText}"/>
 
                         <Grid Grid.Row="1">
@@ -148,7 +146,7 @@
                                 <RowDefinition Height="*"/>
                             </Grid.RowDefinitions>
 
-                            <TextBlock Text="DISABLE NIGHT MODE FOR:" Style="{StaticResource FieldLabel}" Margin="0,0,0,8"/>
+                            <TextBlock Text="Disable night mode for" Style="{StaticResource FieldLabel}" Margin="0,0,0,8"/>
 
                             <!-- Add New (ComboBox) -->
                             <Grid Grid.Row="1" Margin="0,0,0,12">
@@ -170,7 +168,7 @@
                                     </ComboBox.Resources>
                                 </ComboBox>
 
-                                <Button Grid.Column="1" Content="ADD" Padding="14,6"
+                                <Button Grid.Column="1" Content="Add" Padding="14,6"
                                         Command="{Binding DataContext.AddExcludedAppCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                         CommandParameter="{Binding}"/>
                             </Grid>
@@ -205,7 +203,7 @@
                                                        FontFamily="{StaticResource MonoFont}" FontSize="12"
                                                        Foreground="{DynamicResource ThemeText}"/>
 
-                                            <CheckBox Grid.Column="1" Content="ALL SCREENS" IsChecked="{Binding FullDisable}"
+                                            <CheckBox Grid.Column="1" Content="All screens" IsChecked="{Binding FullDisable}"
                                                       VerticalAlignment="Center" Margin="0,0,12,0"
                                                       Foreground="{DynamicResource ThemeTextDim}" FontSize="10"
                                                       FontFamily="{StaticResource DisplayFont}" FontWeight="Bold"
@@ -226,8 +224,7 @@
         </ResourceDictionary>
     </Window.Resources>
 
-    <!-- Outer window frame: black in both themes (visible on light, seamless on dark) -->
-    <Border Background="{DynamicResource ThemeBg}" BorderBrush="{DynamicResource ThemeWindowFrame}" BorderThickness="2">
+    <Border Background="{DynamicResource ThemeBg}" BorderBrush="{DynamicResource ThemeWindowFrame}" BorderThickness="1">
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="48"/>
@@ -236,7 +233,7 @@
 
             <!-- Custom Title Bar -->
             <Border Grid.Row="0" Background="{DynamicResource ThemeSurface}"
-                    BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="0,0,0,3"
+                    BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="0,0,0,1"
                     MouseLeftButtonDown="TitleBar_MouseDown">
                 <Grid Margin="16,0">
                     <!-- Brand -->
@@ -245,7 +242,7 @@
                         <TextBlock Text="GLOAM" FontFamily="{StaticResource DisplayFont}" FontWeight="ExtraBold"
                                    FontSize="16" Foreground="{DynamicResource ThemeText}" VerticalAlignment="Center"/>
                         <Border Width="1" Height="16" Background="{DynamicResource ThemeTextDim}" Opacity="0.5" Margin="12,0"/>
-                        <TextBlock Text="DASHBOARD" FontFamily="{StaticResource DisplayFont}" FontWeight="Bold"
+                        <TextBlock Text="Dashboard" FontFamily="{StaticResource DisplayFont}" FontWeight="Bold"
                                    FontSize="12" Foreground="{DynamicResource ThemeTextDim}" VerticalAlignment="Center"/>
                         <TextBlock Text="{Binding AppVersion}" FontFamily="{StaticResource DisplayFont}"
                                    FontSize="11" Foreground="{DynamicResource ThemeTextDim}" Opacity="0.7"
@@ -280,58 +277,17 @@
 
                     <!-- Heading with kicker -->
                     <StackPanel VerticalAlignment="Center">
-                        <TextBlock Text="01 / DISPLAYS" Style="{StaticResource Kicker}" Margin="0,0,0,4"/>
-                        <TextBlock Text="ACTIVE MONITORS" FontFamily="{StaticResource DisplayFont}"
-                                   FontWeight="ExtraBold" FontSize="28" Foreground="{DynamicResource ThemeText}"/>
+                        <TextBlock Text="Displays" Style="{StaticResource Kicker}" Margin="0,0,0,4"/>
+                        <TextBlock Text="Active monitors" FontFamily="{StaticResource DisplayFont}"
+                                   FontWeight="ExtraBold" FontSize="26" Foreground="{DynamicResource ThemeText}"/>
                     </StackPanel>
 
                     <!-- Controls -->
                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                        <Button Content="REFRESH" Command="{Binding RefreshCommand}" Margin="0,0,10,0"/>
+                        <Button Content="Refresh" Command="{Binding RefreshCommand}" Margin="0,0,10,0"/>
 
-                        <ToggleButton x:Name="NightModeToggle" Content="NIGHT MODE"
-                                      Height="38" Padding="18,0" VerticalAlignment="Center"
-                                      IsChecked="{Binding IsNightModeEnabled}"
-                                      MouseRightButtonUp="NightModeToggle_RightClick">
-                             <ToggleButton.Style>
-                                 <Style TargetType="ToggleButton">
-                                     <Setter Property="Foreground" Value="{DynamicResource ThemeText}"/>
-                                     <Setter Property="FontFamily" Value="{DynamicResource DisplayFont}"/>
-                                     <Setter Property="FontWeight" Value="Bold"/>
-                                     <Setter Property="FontSize" Value="12"/>
-                                     <Setter Property="Cursor" Value="Hand"/>
-                                     <Setter Property="Template">
-                                         <Setter.Value>
-                                             <ControlTemplate TargetType="ToggleButton">
-                                                 <Border x:Name="border" Background="Transparent"
-                                                         BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="2"
-                                                         Padding="{TemplateBinding Padding}">
-                                                     <ContentPresenter x:Name="cp" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                                       TextElement.Foreground="{DynamicResource ThemeText}"/>
-                                                 </Border>
-                                                 <ControlTemplate.Triggers>
-                                                     <Trigger Property="IsChecked" Value="True">
-                                                         <Setter TargetName="border" Property="Background" Value="{DynamicResource ThemeAccent}"/>
-                                                         <Setter TargetName="border" Property="BorderBrush" Value="{DynamicResource ThemeAccent}"/>
-                                                         <Setter TargetName="cp" Property="TextElement.Foreground" Value="{DynamicResource ThemeOnAccent}"/>
-                                                     </Trigger>
-                                                     <Trigger Property="IsMouseOver" Value="True">
-                                                         <Setter TargetName="border" Property="BorderBrush" Value="{DynamicResource ThemeAccent}"/>
-                                                     </Trigger>
-                                                 </ControlTemplate.Triggers>
-                                             </ControlTemplate>
-                                         </Setter.Value>
-                                     </Setter>
-                                 </Style>
-                             </ToggleButton.Style>
-                             <ToggleButton.ContextMenu>
-                                 <ContextMenu>
-                                     <MenuItem Header="Pause for 1 Hour" Command="{Binding Pause1hCommand}"/>
-                                     <MenuItem Header="Pause for 4 Hours" Command="{Binding Pause4hCommand}"/>
-                                     <MenuItem Header="Pause Until Morning" Command="{Binding PauseUntilMorningCommand}"/>
-                                 </ContextMenu>
-                             </ToggleButton.ContextMenu>
-                        </ToggleButton>
+                        <Button Content="{Binding NightModeModeLabel}" Command="{Binding CycleNightModeCommand}"
+                                Padding="16,9" MinWidth="166"/>
                     </StackPanel>
                 </Grid>
 
@@ -348,11 +304,11 @@
                         <!-- Night Mode Schedule -->
                         <Expander Margin="0,24,0,0" IsExpanded="True" Foreground="{DynamicResource ThemeText}">
                             <Expander.Header>
-                                <TextBlock Text="NIGHT MODE SCHEDULE &amp; SETTINGS"
+                                <TextBlock Text="Night mode schedule"
                                            FontFamily="{StaticResource DisplayFont}" FontWeight="Bold" FontSize="14"
                                            Foreground="{DynamicResource ThemeText}"/>
                             </Expander.Header>
-                            <Border BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="2" Margin="0,10,0,0" Padding="16">
+                            <Border BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1" Margin="0,10,0,0" Padding="16">
                                 <StackPanel>
                                     <TextBlock Text="Configure the automatic night mode schedule."
                                                Foreground="{DynamicResource ThemeTextDim}" FontFamily="{StaticResource BodyFont}"

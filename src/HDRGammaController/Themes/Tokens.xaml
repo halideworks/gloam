@@ -2,7 +2,7 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <!--
-        BRUTALIST DESIGN TOKENS (shared, app-wide).
+        DESIGN TOKENS (shared, app-wide).
         Passive: only elements that opt in via {DynamicResource Theme*} are affected,
         so windows that don't reference them keep their existing chrome.
         App.BrutalistTheme swaps the Theme* entries at runtime for light/dark.
@@ -15,31 +15,31 @@
     <FontFamily x:Key="MonoFont">pack://application:,,,/Gloam;component/Fonts/#Cascadia Mono</FontFamily>
 
     <!-- Theme tokens (DARK defaults) -->
-    <SolidColorBrush x:Key="ThemeBg"        Color="#000000"/>
-    <SolidColorBrush x:Key="ThemeSurface"   Color="#141414"/>
-    <SolidColorBrush x:Key="ThemeHover"     Color="#1F1F1F"/>
-    <SolidColorBrush x:Key="ThemeText"      Color="#FFFFFF"/>
-    <SolidColorBrush x:Key="ThemeTextDim"   Color="#9C9C9C"/>
-    <SolidColorBrush x:Key="ThemeBorder"    Color="#FFFFFF"/>
-    <SolidColorBrush x:Key="ThemeAccent"    Color="#FF3C2F"/>
+    <SolidColorBrush x:Key="ThemeBg"        Color="#0E1116"/>
+    <SolidColorBrush x:Key="ThemeSurface"   Color="#171C23"/>
+    <SolidColorBrush x:Key="ThemeHover"     Color="#222A34"/>
+    <SolidColorBrush x:Key="ThemeText"      Color="#F4F7FA"/>
+    <SolidColorBrush x:Key="ThemeTextDim"   Color="#A8B0BC"/>
+    <SolidColorBrush x:Key="ThemeBorder"    Color="#465567"/>
+    <SolidColorBrush x:Key="ThemeAccent"    Color="#E35F52"/>
     <SolidColorBrush x:Key="ThemeOnAccent"  Color="#FFFFFF"/>
-    <SolidColorBrush x:Key="ThemeTrack"     Color="#333333"/>
-    <SolidColorBrush x:Key="ThemeAmber"     Color="#F59E0B"/>
-    <!-- Outer window frame = the themed border (white in dark, black in light). -->
-    <SolidColorBrush x:Key="ThemeWindowFrame" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="ThemeMeter"     Color="#82B7F2"/>
+    <SolidColorBrush x:Key="ThemeTrack"     Color="#29313B"/>
+    <SolidColorBrush x:Key="ThemeAmber"     Color="#D89A2B"/>
+    <SolidColorBrush x:Key="ThemeWindowFrame" Color="#364252"/>
 
     <!-- Legacy aliases: the older windows reference these keys via StaticResource.
          App.BrutalistTheme keeps each pointed at the token brush below, so dropping a
          window's local definition opts it into the themed palette with no other edits.
          (Dark defaults; swapped at runtime.) -->
-    <SolidColorBrush x:Key="AccentBrush"        Color="#FF3C2F"/>
-    <SolidColorBrush x:Key="AccentHoverBrush"   Color="#FF3C2F"/>
-    <SolidColorBrush x:Key="CardBackground"     Color="#141414"/>
-    <SolidColorBrush x:Key="CardBorder"         Color="#FFFFFF"/>
-    <SolidColorBrush x:Key="TextDim"            Color="#9C9C9C"/>
-    <SolidColorBrush x:Key="InputBackground"    Color="#141414"/>
-    <SolidColorBrush x:Key="DropdownBackground" Color="#141414"/>
-    <SolidColorBrush x:Key="DarkAccent"         Color="#FF3C2F"/>
-    <SolidColorBrush x:Key="DarkCardBorder"     Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="AccentBrush"        Color="#E35F52"/>
+    <SolidColorBrush x:Key="AccentHoverBrush"   Color="#E35F52"/>
+    <SolidColorBrush x:Key="CardBackground"     Color="#171C23"/>
+    <SolidColorBrush x:Key="CardBorder"         Color="#465567"/>
+    <SolidColorBrush x:Key="TextDim"            Color="#A8B0BC"/>
+    <SolidColorBrush x:Key="InputBackground"    Color="#171C23"/>
+    <SolidColorBrush x:Key="DropdownBackground" Color="#171C23"/>
+    <SolidColorBrush x:Key="DarkAccent"         Color="#E35F52"/>
+    <SolidColorBrush x:Key="DarkCardBorder"     Color="#465567"/>
 
 </ResourceDictionary>

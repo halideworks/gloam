@@ -48,6 +48,7 @@ namespace HDRGammaController.Core
             using var zip = ZipFile.Open(zipPath, ZipArchiveMode.Create);
             AddText(zip, "manifest.json", BuildManifest(monitors, includeCalibrationReports));
             AddSanitizedFileIfExists(zip, Path.Combine(AppPaths.DataDir, "settings.json"), "settings.sanitized.json");
+            AddSanitizedFileIfExists(zip, Path.Combine(AppPaths.DataDir, "update-state.json"), "update-state.sanitized.json");
             AddLogs(zip);
             AddCalibrationProfileSummary(zip, settingsManager);
             if (includeCalibrationReports)

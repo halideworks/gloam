@@ -3,14 +3,19 @@
 
     <!-- Shared implicit styles for the code-built utility windows (ProfileManagerWindow,
          CcssBrowserWindow, ReportHistoryWindow). These windows stay dark-fixed; styling
-         is brutalist (square, signal-red accent, hard borders, display headers). -->
+         is square and compact, aligned with the main app palette. -->
 
-    <SolidColorBrush x:Key="DarkAccent" Color="#FF3C2F"/>
-    <SolidColorBrush x:Key="DarkCardBorder" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="UtilitySurface" Color="#171C23"/>
+    <SolidColorBrush x:Key="UtilityHover" Color="#222A34"/>
+    <SolidColorBrush x:Key="UtilityText" Color="#F4F7FA"/>
+    <SolidColorBrush x:Key="UtilityTextDim" Color="#A8B0BC"/>
+    <SolidColorBrush x:Key="UtilityTrack" Color="#29313B"/>
+    <SolidColorBrush x:Key="DarkAccent" Color="#E35F52"/>
+    <SolidColorBrush x:Key="DarkCardBorder" Color="#465567"/>
 
     <Style TargetType="Button">
         <Setter Property="Background" Value="Transparent"/>
-        <Setter Property="Foreground" Value="White"/>
+        <Setter Property="Foreground" Value="{StaticResource UtilityText}"/>
         <Setter Property="FontFamily" Value="{DynamicResource DisplayFont}"/>
         <Setter Property="FontWeight" Value="Bold"/>
         <Setter Property="FontSize" Value="12"/>
@@ -21,12 +26,13 @@
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
                     <Border x:Name="Bd" Background="{TemplateBinding Background}"
-                            BorderBrush="#FFFFFF" BorderThickness="2" Padding="{TemplateBinding Padding}">
+                            BorderBrush="{StaticResource DarkCardBorder}" BorderThickness="1" Padding="{TemplateBinding Padding}">
                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Bd" Property="Opacity" Value="0.82"/>
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource UtilityHover}"/>
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource DarkAccent}"/>
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter TargetName="Bd" Property="Opacity" Value="0.40"/>
@@ -38,7 +44,7 @@
     </Style>
 
     <Style TargetType="GridViewColumnHeader">
-        <Setter Property="Foreground" Value="#BBBBBB"/>
+        <Setter Property="Foreground" Value="{StaticResource UtilityTextDim}"/>
         <Setter Property="FontFamily" Value="{DynamicResource DisplayFont}"/>
         <Setter Property="FontWeight" Value="Bold"/>
         <Setter Property="FontSize" Value="11"/>
@@ -46,8 +52,8 @@
             <Setter.Value>
                 <ControlTemplate TargetType="GridViewColumnHeader">
                     <Grid>
-                        <Border x:Name="HeaderBorder" Background="#1A1A1A"
-                                BorderBrush="{StaticResource DarkCardBorder}" BorderThickness="0,0,1,2"
+                        <Border x:Name="HeaderBorder" Background="{StaticResource UtilitySurface}"
+                                BorderBrush="{StaticResource DarkCardBorder}" BorderThickness="0,0,1,1"
                                 Padding="8,6">
                             <ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center"
                                               RecognizesAccessKey="True"/>
@@ -65,7 +71,7 @@
                     </Grid>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="HeaderBorder" Property="Background" Value="#2A2A2A"/>
+                            <Setter TargetName="HeaderBorder" Property="Background" Value="{StaticResource UtilityHover}"/>
                         </Trigger>
                         <Trigger Property="Role" Value="Padding">
                             <Setter TargetName="PART_HeaderGripper" Property="Visibility" Value="Collapsed"/>
@@ -77,7 +83,7 @@
     </Style>
 
     <Style TargetType="ListViewItem">
-        <Setter Property="Foreground" Value="#E0E0E0"/>
+        <Setter Property="Foreground" Value="{StaticResource UtilityText}"/>
         <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
         <Setter Property="Template">
             <Setter.Value>
@@ -88,11 +94,11 @@
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Bd" Property="Background" Value="#2A2A2A"/>
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource UtilityHover}"/>
                         </Trigger>
                         <Trigger Property="IsSelected" Value="True">
                             <Setter TargetName="Bd" Property="Background" Value="{StaticResource DarkAccent}"/>
-                            <Setter Property="Foreground" Value="White"/>
+                            <Setter Property="Foreground" Value="{StaticResource UtilityText}"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -107,13 +113,13 @@
             <Setter.Value>
                 <ControlTemplate TargetType="ScrollBar">
                     <Grid>
-                        <Border Background="#1A1A1A"/>
+                        <Border Background="Transparent"/>
                         <Track x:Name="PART_Track" IsDirectionReversed="True">
                             <Track.Thumb>
                                 <Thumb>
                                     <Thumb.Template>
                                         <ControlTemplate TargetType="Thumb">
-                                            <Border Background="#555555" Margin="2"/>
+                                            <Border Background="{StaticResource DarkCardBorder}" Margin="2"/>
                                         </ControlTemplate>
                                     </Thumb.Template>
                                 </Thumb>
@@ -131,13 +137,13 @@
                     <Setter.Value>
                         <ControlTemplate TargetType="ScrollBar">
                             <Grid>
-                                <Border Background="#1A1A1A"/>
+                                <Border Background="Transparent"/>
                                 <Track x:Name="PART_Track" IsDirectionReversed="False">
                                     <Track.Thumb>
                                         <Thumb>
                                             <Thumb.Template>
                                                 <ControlTemplate TargetType="Thumb">
-                                                    <Border Background="#555555" Margin="2"/>
+                                                    <Border Background="{StaticResource DarkCardBorder}" Margin="2"/>
                                                 </ControlTemplate>
                                             </Thumb.Template>
                                         </Thumb>

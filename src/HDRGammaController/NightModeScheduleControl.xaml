@@ -34,14 +34,14 @@
                 Drag points to adjust. Double-click to add.
             </TextBlock>
             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                 <Button x:Name="DetectBtn" Content="AUTO-DETECT LOCATION" Click="Detect_Click"
+                 <Button x:Name="DetectBtn" Content="Auto-detect location" Click="Detect_Click"
                          FontSize="11" Padding="12,6" Margin="0,0,10,0"/>
 
                  <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                     <TextBlock Text="LAT" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                     <TextBlock Text="Lat" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" Margin="0,0,4,0"/>
                      <TextBox Text="{Binding LatitudeText, UpdateSourceTrigger=PropertyChanged}" Width="56"
                               Padding="5,3" FontSize="11" LostFocus="Location_LostFocus"/>
-                     <TextBlock Text="LON" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" Margin="10,0,4,0"/>
+                     <TextBlock Text="Lon" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" Margin="10,0,4,0"/>
                      <TextBox Text="{Binding LongitudeText, UpdateSourceTrigger=PropertyChanged}" Width="56"
                               Padding="5,3" FontSize="11" LostFocus="Location_LostFocus"/>
                  </StackPanel>
@@ -50,7 +50,7 @@
 
         <!-- Graph Container -->
         <Border Grid.Row="1" Background="{DynamicResource ThemeBg}" BorderBrush="{DynamicResource ThemeBorder}"
-                BorderThickness="2" Margin="0,0,0,8">
+                BorderThickness="1" Margin="0,0,0,8">
             <Grid>
                  <Canvas x:Name="GridCanvas" IsHitTestVisible="False"/>
                  <Canvas x:Name="CurveCanvas" ClipToBounds="True" Background="Transparent"
@@ -61,7 +61,7 @@
 
                  <!-- Drag Readout Popup (In-Canvas Overlay) -->
                  <Border x:Name="DragOverlay" HorizontalAlignment="Left" VerticalAlignment="Top"
-                         Background="{DynamicResource ThemeSurface}" BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="2"
+                         Background="{DynamicResource ThemeSurface}" BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1"
                          Padding="8" IsHitTestVisible="False"
                          Visibility="{Binding IsDragOverlayVisible, Converter={StaticResource BoolToVis}}">
                      <StackPanel>
@@ -81,8 +81,8 @@
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
             <StackPanel Grid.Column="0" Orientation="Horizontal">
-                <Button Content="ADD POINT" Click="AddPoint_Click" Padding="12,6" Margin="0,0,8,0"/>
-                <Button Content="RESET DEFAULT" Click="Reset_Click" Padding="12,6"/>
+                <Button Content="Add point" Click="AddPoint_Click" Padding="12,6" Margin="0,0,8,0"/>
+                <Button Content="Reset default" Click="Reset_Click" Padding="12,6"/>
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                 <CheckBox IsChecked="{Binding UseUltraWarmMode}" VerticalAlignment="Center" Margin="0,0,8,0"/>
@@ -110,7 +110,7 @@
                     <Setter Property="FontWeight" Value="Bold"/>
                     <Setter Property="FontSize" Value="11"/>
                     <Setter Property="Padding" Value="8,6"/>
-                    <Setter Property="BorderThickness" Value="0,0,2,2"/>
+                    <Setter Property="BorderThickness" Value="0,0,1,1"/>
                     <Setter Property="BorderBrush" Value="{DynamicResource ThemeBorder}"/>
                 </Style>
                 <Style TargetType="DataGridCell">
@@ -136,7 +136,7 @@
 
             <DataGrid.Columns>
                 <!-- Trigger Type -->
-                <DataGridTemplateColumn Header="TYPE" Width="80">
+                <DataGridTemplateColumn Header="Type" Width="80">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>
                             <TextBlock Text="{Binding TriggerType}" Foreground="{DynamicResource ThemeText}"/>
@@ -150,7 +150,7 @@
                 </DataGridTemplateColumn>
 
                 <!-- Time / Offset -->
-                <DataGridTemplateColumn Header="TIME/OFFSET" Width="100">
+                <DataGridTemplateColumn Header="Time/offset" Width="100">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>
                             <TextBlock Text="{Binding DisplayTime}" FontFamily="{DynamicResource MonoFont}" Foreground="{DynamicResource ThemeText}"/>
@@ -164,7 +164,7 @@
                 </DataGridTemplateColumn>
 
                 <!-- Temp -->
-                <DataGridTemplateColumn Header="TEMP (K)" Width="74">
+                <DataGridTemplateColumn Header="Temp (K)" Width="74">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>
                             <TextBlock Text="{Binding TargetKelvin}" FontFamily="{DynamicResource MonoFont}" FontWeight="Bold" Foreground="{DynamicResource ThemeText}"/>
@@ -178,7 +178,7 @@
                 </DataGridTemplateColumn>
 
                 <!-- Fade -->
-                <DataGridTemplateColumn Header="FADE (M)" Width="64">
+                <DataGridTemplateColumn Header="Fade (m)" Width="64">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>
                             <TextBlock Text="{Binding FadeMinutes}" FontFamily="{DynamicResource MonoFont}" Foreground="{DynamicResource ThemeText}"/>
@@ -195,7 +195,7 @@
                 <DataGridTemplateColumn Width="*">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>
-                            <Button Content="DELETE" Click="DeleteRow_Click" Padding="10,4"
+                            <Button Content="Delete" Click="DeleteRow_Click" Padding="10,4"
                                     FontSize="10" HorizontalAlignment="Center"/>
                         </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>

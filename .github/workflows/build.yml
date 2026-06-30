@@ -49,6 +49,10 @@ jobs:
       - name: Vulnerability scan
         run: dotnet list src/HDRGammaController.sln package --vulnerable --include-transitive
 
+      - name: Update feed consistency
+        shell: pwsh
+        run: ./scripts/Test-UpdateFeedConsistency.ps1
+
   build:
     runs-on: windows-latest
     needs: validate
@@ -77,6 +81,9 @@ jobs:
           $ref = "${{ github.ref }}"
           if ($ref -like 'refs/tags/v*') {
             $v = "${{ github.ref_name }}" -replace '^v',''
+            if ($v -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
+              throw "Release tag '${{ github.ref_name }}' must be semver: vX.Y.Z or vX.Y.Z-prerelease"
+            }
           } else {
             # Non-release build (PR / manual): synthetic but valid semver.
             $v = "0.0.${{ github.run_number }}"

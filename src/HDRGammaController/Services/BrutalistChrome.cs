@@ -6,18 +6,18 @@ using System.Windows.Media;
 namespace HDRGammaController.Services
 {
     /// <summary>
-    /// Wraps a code-built window in the app's brutalist custom chrome: a hard white frame,
+    /// Wraps a code-built window in the app's custom chrome: a shared app frame,
     /// a dark header with the brand mark + display-font title, and a close glyph. Dark-fixed
     /// (these are calibration utility windows, consistent with the measurement UI). Replaces
     /// the stock OS title bar that <see cref="DarkTitleBar"/> only darkened.
     /// </summary>
     public static class BrutalistChrome
     {
-        private static readonly Brush Frame    = Brushes.White;
-        private static readonly Brush Bg       = new SolidColorBrush(Color.FromRgb(0x14, 0x14, 0x14));
-        private static readonly Brush HeaderBg = new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A));
-        private static readonly Brush Dim      = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88));
-        private static readonly Brush Accent   = new SolidColorBrush(Color.FromRgb(0xFF, 0x3C, 0x2F));
+        private static readonly Brush Frame    = new SolidColorBrush(Color.FromRgb(0x36, 0x42, 0x52));
+        private static readonly Brush Bg       = new SolidColorBrush(Color.FromRgb(0x0E, 0x11, 0x16));
+        private static readonly Brush HeaderBg = new SolidColorBrush(Color.FromRgb(0x17, 0x1C, 0x23));
+        private static readonly Brush Dim      = new SolidColorBrush(Color.FromRgb(0xA8, 0xB0, 0xBC));
+        private static readonly Brush Accent   = new SolidColorBrush(Color.FromRgb(0xE3, 0x5F, 0x52));
 
         public static void Apply(Window win, string title, UIElement content)
         {
@@ -37,8 +37,8 @@ namespace HDRGammaController.Services
             var header = new Border
             {
                 Background = HeaderBg,
-                BorderBrush = Frame,
-                BorderThickness = new Thickness(0, 0, 0, 3),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(0x46, 0x55, 0x67)),
+                BorderThickness = new Thickness(0, 0, 0, 1),
             };
             header.MouseLeftButtonDown += (_, e) => { if (e.ChangedButton == MouseButton.Left) win.DragMove(); };
 
@@ -52,7 +52,7 @@ namespace HDRGammaController.Services
             brand.Children.Add(new TextBlock
             {
                 Text = "GLOAM", FontFamily = display, FontWeight = FontWeights.ExtraBold,
-                FontSize = 14, Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center,
+                FontSize = 14, Foreground = new SolidColorBrush(Color.FromRgb(0xF4, 0xF7, 0xFA)), VerticalAlignment = VerticalAlignment.Center,
             });
             brand.Children.Add(new Border { Width = 1, Height = 14, Background = Dim, Opacity = 0.6, Margin = new Thickness(10, 0, 10, 0) });
             brand.Children.Add(new TextBlock
@@ -84,7 +84,7 @@ namespace HDRGammaController.Services
             {
                 Background = Bg,
                 BorderBrush = Frame,
-                BorderThickness = new Thickness(2),
+                BorderThickness = new Thickness(1),
                 Child = grid,
             };
         }

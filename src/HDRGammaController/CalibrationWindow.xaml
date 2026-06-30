@@ -8,7 +8,7 @@
         MinWidth="560" MinHeight="500"
         WindowStartupLocation="CenterScreen"
         Background="Transparent"
-        Foreground="White"
+        Foreground="#F4F7FA"
         FontFamily="{DynamicResource BodyFont}"
         WindowStyle="None"
         AllowsTransparency="True"
@@ -18,75 +18,29 @@
         KeyDown="Window_KeyDown">
 
     <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="pack://application:,,,/Gloam;component/Themes/Brutalist.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+
         <BooleanToVisibilityConverter x:Key="BoolToVis"/>
         <!-- Colors -->
-        <!-- Brutalist palette. This window stays dark-fixed (measurement needs a dark
+        <!-- Calibration palette. This window stays dark-fixed (measurement needs a dark
              surround + white patches), so colors are literal rather than themed. -->
-        <SolidColorBrush x:Key="AccentBrush" Color="#FF3C2F"/>
-        <SolidColorBrush x:Key="AccentHoverBrush" Color="#FF5B50"/>
-        <SolidColorBrush x:Key="WarningBrush" Color="#FFA500"/>
-        <SolidColorBrush x:Key="WarningBackgroundBrush" Color="#3D2800"/>
-        <SolidColorBrush x:Key="DarkSurround" Color="#1A1A1A"/>
-        <SolidColorBrush x:Key="CardBackground" Color="#2D2D2D"/>
-        <SolidColorBrush x:Key="CardBorder" Color="#3F3F3F"/>
-        <SolidColorBrush x:Key="TextDim" Color="#888888"/>
-        <SolidColorBrush x:Key="ProgressBackground" Color="#333333"/>
-        <SolidColorBrush x:Key="SuccessBrush" Color="#4CAF50"/>
-        <SolidColorBrush x:Key="ErrorBrush" Color="#F44336"/>
+        <SolidColorBrush x:Key="AccentBrush" Color="#D76A5F"/>
+        <SolidColorBrush x:Key="AccentHoverBrush" Color="#E07A70"/>
+        <SolidColorBrush x:Key="WarningBrush" Color="#D89A2B"/>
+        <SolidColorBrush x:Key="WarningBackgroundBrush" Color="#3A2A10"/>
+        <SolidColorBrush x:Key="DarkSurround" Color="#171C23"/>
+        <SolidColorBrush x:Key="CardBackground" Color="#20262F"/>
+        <SolidColorBrush x:Key="CardBorder" Color="#3A4654"/>
+        <SolidColorBrush x:Key="TextDim" Color="#A8B0BC"/>
+        <SolidColorBrush x:Key="ProgressBackground" Color="#29313B"/>
+        <SolidColorBrush x:Key="SuccessBrush" Color="#61B87A"/>
+        <SolidColorBrush x:Key="ErrorBrush" Color="#D85E5E"/>
 
-        <!-- Modern Button Style -->
-        <Style x:Key="ModernButton" TargetType="Button">
-            <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="FontWeight" Value="Medium"/>
-            <Setter Property="Padding" Value="16,8"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="border" Background="{TemplateBinding Background}"
-                                CornerRadius="0" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="{StaticResource AccentHoverBrush}"/>
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="border" Property="Opacity" Value="0.5"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <!-- Subtle Button Style -->
-        <Style x:Key="SubtleButton" TargetType="Button">
-            <Setter Property="Background" Value="#444444"/>
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="FontWeight" Value="Normal"/>
-            <Setter Property="Padding" Value="12,6"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="border" Background="{TemplateBinding Background}"
-                                CornerRadius="0" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="#555555"/>
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="border" Property="Opacity" Value="0.5"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
+        <Style x:Key="ModernButton" TargetType="Button" BasedOn="{StaticResource BrutBtnPrimary}"/>
+        <Style x:Key="SubtleButton" TargetType="Button" BasedOn="{StaticResource BrutBtnSecondary}"/>
 
         <!-- Radio Button Style -->
         <Style x:Key="ModernRadioButton" TargetType="RadioButton">
@@ -228,77 +182,10 @@
             </Setter>
         </Style>
 
-        <!-- Dark Mode ScrollBar Style - MUST be defined before ScrollViewer that uses it -->
-        <Style x:Key="DarkScrollBar" TargetType="ScrollBar">
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Width" Value="10"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="ScrollBar">
-                        <Grid>
-                            <Border Background="#252525" CornerRadius="0"/>
-                            <Track x:Name="PART_Track" IsDirectionReversed="True">
-                                <Track.Thumb>
-                                    <Thumb>
-                                        <Thumb.Template>
-                                            <ControlTemplate TargetType="Thumb">
-                                                <Border Background="#555555" CornerRadius="0" Margin="2"/>
-                                            </ControlTemplate>
-                                        </Thumb.Template>
-                                    </Thumb>
-                                </Track.Thumb>
-                            </Track>
-                        </Grid>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-            <Style.Triggers>
-                <Trigger Property="Orientation" Value="Horizontal">
-                    <Setter Property="Width" Value="Auto"/>
-                    <Setter Property="Height" Value="10"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-
-        <!-- Dark Mode ScrollViewer Style -->
-        <Style TargetType="ScrollViewer">
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="ScrollViewer">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <Grid.RowDefinitions>
-                                <RowDefinition/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
-                            <!-- Margin binding is what makes the ScrollViewer's declared Padding
-                                 actually apply; without it content rides the window edge. -->
-                            <ScrollContentPresenter Grid.Column="0" Grid.Row="0" Margin="{TemplateBinding Padding}"/>
-                            <ScrollBar x:Name="PART_VerticalScrollBar" Grid.Column="1" Grid.Row="0"
-                                       Value="{TemplateBinding VerticalOffset}"
-                                       Maximum="{TemplateBinding ScrollableHeight}"
-                                       ViewportSize="{TemplateBinding ViewportHeight}"
-                                       Visibility="{TemplateBinding ComputedVerticalScrollBarVisibility}"
-                                       Style="{StaticResource DarkScrollBar}"/>
-                            <ScrollBar x:Name="PART_HorizontalScrollBar" Grid.Column="0" Grid.Row="1"
-                                       Orientation="Horizontal"
-                                       Value="{TemplateBinding HorizontalOffset}"
-                                       Maximum="{TemplateBinding ScrollableWidth}"
-                                       ViewportSize="{TemplateBinding ViewportWidth}"
-                                       Visibility="{TemplateBinding ComputedHorizontalScrollBarVisibility}"
-                                       Style="{StaticResource DarkScrollBar}"/>
-                        </Grid>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
+        </ResourceDictionary>
     </Window.Resources>
 
-    <Border x:Name="RootBorder" Background="#141414" BorderBrush="#000000" BorderThickness="2">
+    <Border x:Name="RootBorder" Background="#0E1116" BorderBrush="#2A3340" BorderThickness="1">
     <Grid x:Name="RootGrid">
         <!-- Setup Panel (shown before calibration starts) -->
         <Grid Visibility="{Binding IsSetupVisible, Converter={StaticResource BoolToVis}}">
@@ -310,19 +197,19 @@
             </Grid.RowDefinitions>
 
             <!-- Titlebar -->
-            <Border Grid.Row="0" Background="#1A1A1A" BorderBrush="#FFFFFF" BorderThickness="0,0,0,3" MouseLeftButtonDown="TitleBar_MouseDown">
+            <Border Grid.Row="0" Background="#171C23" BorderBrush="#3A4654" BorderThickness="0,0,0,1" MouseLeftButtonDown="TitleBar_MouseDown">
                 <Grid Margin="16,0">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <local:BrandMark Width="20" Height="20" Margin="0,0,10,0" VerticalAlignment="Center" GapBrush="#1A1A1A"/>
+                        <local:BrandMark Width="20" Height="20" Margin="0,0,10,0" VerticalAlignment="Center" GapBrush="#171C23"/>
                         <TextBlock Text="GLOAM" FontFamily="{DynamicResource DisplayFont}" FontWeight="ExtraBold"
-                                   FontSize="14" Foreground="White" VerticalAlignment="Center"/>
-                        <Border Width="1" Height="14" Background="#888888" Opacity="0.6" Margin="10,0"/>
-                        <TextBlock Text="CALIBRATION" FontFamily="{DynamicResource DisplayFont}" FontWeight="Bold"
-                                   FontSize="11" Foreground="#888888" VerticalAlignment="Center"/>
+                                   FontSize="14" Foreground="#F4F7FA" VerticalAlignment="Center"/>
+                        <Border Width="1" Height="14" Background="#A8B0BC" Opacity="0.5" Margin="10,0"/>
+                        <TextBlock Text="Calibration" FontFamily="{DynamicResource DisplayFont}" FontWeight="Bold"
+                                   FontSize="11" Foreground="#A8B0BC" VerticalAlignment="Center"/>
                     </StackPanel>
                     <Button Content="&#x2715;" HorizontalAlignment="Right" VerticalAlignment="Center"
                             Style="{StaticResource SubtleButton}" Background="Transparent"
-                            Foreground="#888" Padding="8,4" Click="Cancel_Click"/>
+                            Foreground="#A8B0BC" Padding="8,4" Click="Cancel_Click"/>
                 </Grid>
             </Border>
 
@@ -438,7 +325,9 @@
             </ScrollViewer>
 
             <!-- Footer with Start Button -->
-            <Border Grid.Row="3" Background="#252525" CornerRadius="0" Padding="24,12">
+            <Border Grid.Row="3" Background="{DynamicResource ThemeSurface}"
+                    BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="0,1,0,0"
+                    Padding="24,14">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>

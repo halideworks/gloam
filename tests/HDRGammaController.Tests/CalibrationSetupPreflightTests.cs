@@ -44,6 +44,86 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void ViewModel_HdrInitialMonitor_SelectsOnlyHdrTarget()
+        {
+            var vm = new CalibrationSetupViewModel(new[] { Monitor(hdrActive: true) }.ToList(), settingsManager: null);
+
+            var selected = vm.Targets.Where(t => t.IsSelected).ToList();
+
+            var target = Assert.Single(selected);
+            Assert.Same(StandardTargets.Rec709Pq, target.Target);
+            Assert.True(target.IsEnabled);
+        }
+
+        [Fact]
+        public void ViewModel_PreferredMonitorPath_SelectsThatMonitor()
+        {
+            var first = Monitor();
+            first.FriendlyName = "First";
+            first.MonitorDevicePath = @"\\?\DISPLAY#FIRST#0001";
+            var second = Monitor();
+            second.FriendlyName = "Second";
+            second.MonitorDevicePath = @"\\?\DISPLAY#SECOND#0001";
+
+            var vm = new CalibrationSetupViewModel(
+                new[] { first, second }.ToList(),
+                settingsManager: null,
+                preferredMonitorDevicePath: second.MonitorDevicePath);
+
+            Assert.Equal(second.MonitorDevicePath, vm.SelectedMonitor?.Model.MonitorDevicePath);
+        }
+
+        [Fact]
+        public void ViewModel_PresetLabelsMatchGeneratedPatchCounts()
+        {
+            var vm = new CalibrationSetupViewModel(new[] { Monitor(hdrActive: false) }.ToList(), settingsManager: null);
+
+            int quick = PatchSetGenerator.GeneratePatchSet(StandardTargets.SrgbGamma22, PatchSetGenerator.CalibrationPreset.Quick).Count;
+            int standard = PatchSetGenerator.GeneratePatchSet(StandardTargets.SrgbGamma22, PatchSetGenerator.CalibrationPreset.Standard).Count;
+            int thorough = PatchSetGenerator.GeneratePatchSet(StandardTargets.SrgbGamma22, PatchSetGenerator.CalibrationPreset.Thorough).Count;
+
+            Assert.Contains($"({quick} patches)", vm.QuickPresetLabel);
+            Assert.Contains($"({standard} patches)", vm.StandardPresetLabel);
+            Assert.Contains($"({thorough} patches)", vm.ThoroughPresetLabel);
+        }
+
+        [Fact]
+        public void ViewModel_SavedCalibrationPrefs_RestoreTargetAndPreset()
+        {
+            string originalData = AppPaths.DataDir;
+            string originalRoaming = AppPaths.RoamingDataDir;
+            string tempDir = Path.Combine(Path.GetTempPath(), "gloam-test-" + Guid.NewGuid().ToString("N"));
+            var monitor = Monitor();
+
+            try
+            {
+                AppPaths.UseDataDirectoriesForCurrentProcess(tempDir, Path.Combine(tempDir, "roaming"));
+                var settings = new SettingsManager();
+                settings.SetCalibrationPrefs(
+                    monitor.MonitorDevicePath,
+                    ccssPath: null,
+                    displayType: DisplayType.Oled.ToString(),
+                    whitePointOnly: true,
+                    targetName: StandardTargets.Rec709Gamma24.Name,
+                    preset: PatchSetGenerator.CalibrationPreset.Thorough.ToString());
+
+                var vm = new CalibrationSetupViewModel(new[] { monitor }.ToList(), settings);
+
+                var selected = Assert.Single(vm.Targets, t => t.IsSelected);
+                Assert.Same(StandardTargets.Rec709Gamma24, selected.Target);
+                Assert.True(vm.IsPresetThorough);
+                Assert.True(vm.WhitePointOnly);
+                Assert.True(vm.IsOled);
+            }
+            finally
+            {
+                AppPaths.UseDataDirectoriesForCurrentProcess(originalData, originalRoaming);
+                if (Directory.Exists(tempDir))
+                    Directory.Delete(tempDir, recursive: true);
+            }
+        }
+
+        [Fact]
         public void Preflight_HdrCapableDisplayInSdr_WarnsAboutHdrTargets()
         {
             var messages = CalibrationSetupViewModel.BuildPreflightMessages(

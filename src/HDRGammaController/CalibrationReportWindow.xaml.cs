@@ -80,6 +80,7 @@ namespace HDRGammaController
         public void SetApplyContext(ApplyContext context)
         {
             _applyContext = context;
+            WindowBoundsPersistence.Attach(this, context.SettingsManager, "CalibrationReport");
             RefreshMeasurementValidation();
         }
 
@@ -1293,7 +1294,7 @@ namespace HDRGammaController
             }
         }
 
-        private void WhiteToolsButton_Click(object sender, RoutedEventArgs e)
+        private async void WhiteToolsButton_Click(object sender, RoutedEventArgs e)
         {
             if (_applyContext == null || _activeCharacterization == null)
             {
@@ -1302,44 +1303,27 @@ namespace HDRGammaController
                 return;
             }
 
-            var menu = new System.Windows.Controls.ContextMenu();
-            var reanchor = new System.Windows.Controls.MenuItem
+            var dialog = new WhiteToolsDialog(
+                canMeasure: _applyContext.Colorimeter != null,
+                canTrim: _profileApplied,
+                canValidateHdr: _applyContext.HdrMode && _applyContext.Colorimeter != null)
             {
-                Header = "Re-anchor white (measure)",
-                ToolTip = "Quick drift fix: re-measures only white and rebuilds the profile around the fresh " +
-                          "reading. Use after the panel has warmed up, or whenever an OLED has drifted.",
-                IsEnabled = _applyContext.Colorimeter != null,
+                Owner = this
             };
-            reanchor.Click += async (_, _) => await ReanchorWhiteAsync();
+            if (dialog.ShowDialog() != true) return;
 
-            var trim = new System.Windows.Controls.MenuItem
+            switch (dialog.SelectedAction)
             {
-                Header = "Visual white trim…",
-                ToolTip = "Nudge the target white by eye against a reference display; the result is baked " +
-                          "into the profile (fixes the metameric gap instruments can't see).",
-                IsEnabled = _profileApplied,
-            };
-            trim.Click += async (_, _) => await RunVisualWhiteTrimAsync();
-
-            menu.Items.Add(reanchor);
-            menu.Items.Add(trim);
-
-            if (_applyContext.HdrMode)
-            {
-                var hdrValidate = new System.Windows.Controls.MenuItem
-                {
-                    Header = "Validate HDR patch renderer (experimental)",
-                    ToolTip = "Certifies the FP16 scRGB patch path with the probe: checks that above-SDR-white " +
-                              "emission works and that the installed profile applies to it identically. Required " +
-                              "once before HDR-range calibration can be trusted.",
-                    IsEnabled = _applyContext.Colorimeter != null,
-                };
-                hdrValidate.Click += async (_, _) => await ValidateHdrRendererAsync();
-                menu.Items.Add(hdrValidate);
+                case WhiteToolAction.ReanchorWhite:
+                    await ReanchorWhiteAsync();
+                    break;
+                case WhiteToolAction.VisualTrim:
+                    await RunVisualWhiteTrimAsync();
+                    break;
+                case WhiteToolAction.ValidateHdrRenderer:
+                    await ValidateHdrRendererAsync();
+                    break;
             }
-
-            menu.PlacementTarget = (UIElement)sender;
-            menu.IsOpen = true;
         }
 
         /// <summary>

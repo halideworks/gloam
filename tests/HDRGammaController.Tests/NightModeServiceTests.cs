@@ -126,5 +126,58 @@ namespace HDRGammaController.Tests
             Assert.Equal("90.00", vm.LatitudeText);
             Assert.Equal("-180.00", vm.LongitudeText);
         }
+
+        [Fact]
+        public void ManualOverride_ForcesConfiguredNightTemperature()
+        {
+            using var service = new NightModeService(new NightModeSettings());
+            bool fired = false;
+            service.BlendChanged += _ => fired = true;
+
+            service.UpdateSettings(new NightModeSettings
+            {
+                Enabled = true,
+                ManualOverrideEnabled = true,
+                TemperatureKelvin = 3000
+            });
+
+            Assert.True(fired);
+            Assert.Equal(3000, service.CurrentNightKelvin);
+            Assert.True(service.IsNightModeActive);
+        }
+
+        [Fact]
+        public void ManualOverride_UsesWarmestConfiguredSchedulePoint()
+        {
+            var settings = new NightModeSettings
+            {
+                TemperatureKelvin = 2700,
+                Schedule =
+                {
+                    new NightModeSchedulePoint { TargetKelvin = 6500 },
+                    new NightModeSchedulePoint { TargetKelvin = 3400 },
+                    new NightModeSchedulePoint { TargetKelvin = 4200 }
+                }
+            };
+
+            Assert.Equal(3400, settings.GetManualOverrideKelvin());
+        }
+
+        [Fact]
+        public void PreviewKelvinOverride_UsesConfiguredNightModeAlgorithm()
+        {
+            var calibration = new CalibrationSettings { Algorithm = NightModeAlgorithm.Standard };
+            var nightMode = new NightModeSettings
+            {
+                Algorithm = NightModeAlgorithm.AccurateCIE1931,
+                UseUltraWarmMode = true
+            };
+
+            GammaApplyService.ApplyNightModeToCalibration(calibration, 3400, nightMode);
+
+            Assert.Equal((3400 - 6500) / 70.0, calibration.Temperature, 12);
+            Assert.Equal(NightModeAlgorithm.AccurateCIE1931, calibration.Algorithm);
+            Assert.True(calibration.UseUltraWarmMode);
+        }
     }
 }

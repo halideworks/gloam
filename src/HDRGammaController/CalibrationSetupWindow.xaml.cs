@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Input;
 using HDRGammaController.Core;
 using HDRGammaController.Core.Calibration;
+using HDRGammaController.Services;
 using HDRGammaController.ViewModels;
 using static HDRGammaController.Core.Calibration.PatchSetGenerator;
 
@@ -34,12 +35,17 @@ namespace HDRGammaController
         /// <summary>Gets the initialized colorimeter service.</summary>
         public ColorimeterService? ColorimeterService => _viewModel.ColorimeterService;
 
-        public CalibrationSetupWindow(List<MonitorInfo> monitors, SettingsManager? settingsManager = null)
+        public CalibrationSetupWindow(
+            List<MonitorInfo> monitors,
+            SettingsManager? settingsManager = null,
+            string? preferredMonitorDevicePath = null,
+            ColorimeterService? reusableColorimeterService = null)
         {
             InitializeComponent();
 
             _settingsManager = settingsManager;
-            _viewModel = new CalibrationSetupViewModel(monitors, settingsManager);
+            WindowBoundsPersistence.Attach(this, settingsManager, "CalibrationSetup");
+            _viewModel = new CalibrationSetupViewModel(monitors, settingsManager, preferredMonitorDevicePath, reusableColorimeterService);
             _viewModel.CloseRequested += result =>
             {
                 DialogResult = result;

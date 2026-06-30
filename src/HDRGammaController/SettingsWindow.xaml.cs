@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Input;
 using HDRGammaController.Core;
+using HDRGammaController.Services;
 using HDRGammaController.ViewModels;
 
 namespace HDRGammaController
@@ -22,6 +23,7 @@ namespace HDRGammaController
             Action<MonitorInfo, GammaMode, CalibrationSettings?, int?>? applyCallback = null)
         {
             InitializeComponent();
+            WindowBoundsPersistence.Attach(this, settingsManager, "MonitorSettings");
 
             _viewModel = new SettingsViewModel(initialMonitor, allMonitors, settingsManager, applyCallback);
             _viewModel.CloseRequested += Close;

@@ -186,7 +186,7 @@ namespace HDRGammaController
     }
 
     /// <summary>
-    /// App-wide light/dark swap for the brutalist design tokens defined in App.xaml.
+        /// App-wide light/dark swap for the design tokens defined in App.xaml.
     /// Replaces the Theme* brush entries in Application.Resources, which every
     /// {DynamicResource Theme*} consumer re-resolves. Swapping (not mutating) is
     /// required because sealed styles freeze the brushes they reference.
@@ -201,18 +201,18 @@ namespace HDRGammaController
 
         private static readonly (string Key, string Dark, string Light)[] Palette =
         {
-            ("ThemeBg",       "#000000", "#FFFFFF"),
-            ("ThemeSurface",  "#141414", "#F4F4F4"),
-            ("ThemeHover",    "#1F1F1F", "#ECECEC"),
-            ("ThemeText",     "#FFFFFF", "#000000"),
-            ("ThemeTextDim",  "#9C9C9C", "#595959"),
-            ("ThemeBorder",   "#FFFFFF", "#000000"),
-            ("ThemeAccent",   "#FF3C2F", "#E22B1F"),
+            ("ThemeBg",       "#0E1116", "#F7F8FA"),
+            ("ThemeSurface",  "#171C23", "#FFFFFF"),
+            ("ThemeHover",    "#222A34", "#EEF1F4"),
+            ("ThemeText",     "#F4F7FA", "#15191F"),
+            ("ThemeTextDim",  "#A8B0BC", "#64707D"),
+            ("ThemeBorder",   "#465567", "#B9C4D0"),
+            ("ThemeAccent",   "#E35F52", "#CF4A40"),
             ("ThemeOnAccent", "#FFFFFF", "#FFFFFF"),
-            ("ThemeTrack",    "#333333", "#DDDDDD"),
-            ("ThemeAmber",    "#F59E0B", "#B45309"),
-            // Outer window frame: white in dark, black in light (matches the themed border).
-            ("ThemeWindowFrame", "#FFFFFF", "#000000"),
+            ("ThemeMeter",    "#82B7F2", "#327CC7"),
+            ("ThemeTrack",    "#29313B", "#DFE5EC"),
+            ("ThemeAmber",    "#D89A2B", "#B87512"),
+            ("ThemeWindowFrame", "#364252", "#B9C4D0"),
         };
 
         // Legacy resource keys the older windows use, kept pointed at a token brush so

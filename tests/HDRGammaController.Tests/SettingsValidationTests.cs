@@ -25,7 +25,9 @@ namespace HDRGammaController.Tests
                 PreviousColorProfileHdrMode = true,
                 MeterCorrectionPath = @"C:\corrections\panel.ccss",
                 CalibDisplayType = "Oled",
-                CalibWhitePointOnly = true
+                CalibWhitePointOnly = true,
+                CalibTargetName = "HDR Desktop PQ (sRGB gamut)",
+                CalibPreset = "Thorough"
             };
 
             var clone = source.Clone();
@@ -38,6 +40,8 @@ namespace HDRGammaController.Tests
             Assert.Equal(source.MeterCorrectionPath, clone.MeterCorrectionPath);
             Assert.Equal(source.CalibDisplayType, clone.CalibDisplayType);
             Assert.Equal(source.CalibWhitePointOnly, clone.CalibWhitePointOnly);
+            Assert.Equal(source.CalibTargetName, clone.CalibTargetName);
+            Assert.Equal(source.CalibPreset, clone.CalibPreset);
         }
 
         [Fact]
@@ -165,11 +169,13 @@ namespace HDRGammaController.Tests
             var settings = new NightModeSettingsData();
 
             Assert.False(settings.Enabled);
+            Assert.False(settings.ManualOverrideEnabled);
             Assert.False(settings.UseAutoSchedule);
             Assert.Null(settings.Latitude);
             Assert.Null(settings.Longitude);
             Assert.Equal(2700, settings.TemperatureKelvin);
             Assert.Equal(30, settings.FadeMinutes);
+            Assert.Equal(NightModeAlgorithm.AccurateCIE1931, settings.Algorithm);
         }
 
         [Fact]
@@ -529,6 +535,21 @@ namespace HDRGammaController.Tests
                 AppPaths.UseDataDirectoriesForCurrentProcess(originalData, originalRoaming);
                 DeleteDirectory(tempDir);
             }
+        }
+
+        [Fact]
+        public void NightModeSettingsData_RoundTripsManualOverride()
+        {
+            var data = NightModeSettingsData.FromNightModeSettings(new NightModeSettings
+            {
+                Enabled = true,
+                ManualOverrideEnabled = true
+            });
+
+            var settings = data.ToNightModeSettings();
+
+            Assert.True(settings.Enabled);
+            Assert.True(settings.ManualOverrideEnabled);
         }
 
         #endregion

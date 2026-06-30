@@ -208,12 +208,11 @@ END_DATA
         }
 
         [Fact]
-        public void NegativeCcssSpectralSample_Rejected()
+        public void NegativeCcssSpectralSample_Passes()
         {
-            var broken = ValidCcss.Replace("0.7 0.2", "-0.7 0.2");
-            var result = CgatsValidator.Validate(broken, "ccss");
-            Assert.False(result.IsValid);
-            Assert.Contains("negative spectral", result.Error ?? "");
+            var correction = ValidCcss.Replace("0.7 0.2", "-0.7 0.2");
+            var result = CgatsValidator.Validate(correction, "ccss");
+            Assert.True(result.IsValid, result.Error ?? "expected negative spectral samples to be accepted");
         }
     }
 }

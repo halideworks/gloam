@@ -25,7 +25,7 @@ namespace HDRGammaController
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             ResizeMode = ResizeMode.NoResize;
             ShowInTaskbar = false;
-            Foreground = Brushes.White;
+            Foreground = new SolidColorBrush(Color.FromRgb(0xF4, 0xF7, 0xFA));
 
             Button MakeButton(string label, bool accent)
             {
@@ -34,9 +34,10 @@ namespace HDRGammaController
                     Content = label,
                     Padding = new Thickness(16, 7, 16, 7),
                     Margin = new Thickness(8, 0, 0, 0),
-                    Background = new SolidColorBrush(accent ? Color.FromRgb(0xFF, 0x3C, 0x2F) : Color.FromRgb(0x3D, 0x3D, 0x3D)),
-                    Foreground = Brushes.White,
-                    BorderThickness = new Thickness(0),
+                    Background = new SolidColorBrush(accent ? Color.FromRgb(0xE3, 0x5F, 0x52) : Color.FromRgb(0x17, 0x1C, 0x23)),
+                    Foreground = new SolidColorBrush(Color.FromRgb(0xF4, 0xF7, 0xFA)),
+                    BorderBrush = new SolidColorBrush(accent ? Color.FromRgb(0xE3, 0x5F, 0x52) : Color.FromRgb(0x46, 0x55, 0x67)),
+                    BorderThickness = new Thickness(1),
                     MinWidth = 80,
                 };
                 return b;
@@ -85,16 +86,16 @@ namespace HDRGammaController
                 FontFamily = body,
                 FontSize = 13,
                 TextWrapping = TextWrapping.Wrap,
-                Foreground = new SolidColorBrush(Color.FromRgb(0xCC, 0xCC, 0xCC)),
+                Foreground = new SolidColorBrush(Color.FromRgb(0xA8, 0xB0, 0xBC)),
             });
             stack.Children.Add(buttons);
 
-            // Dark-fixed brutalist: confirmations mostly appear over the dark calibration UI.
+            // Dark-fixed app chrome: confirmations mostly appear over calibration/utility UI.
             Content = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(0x14, 0x14, 0x14)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF)),
-                BorderThickness = new Thickness(2),
+                Background = new SolidColorBrush(Color.FromRgb(0x0E, 0x11, 0x16)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(0x36, 0x42, 0x52)),
+                BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(0),
                 Child = stack,
             };

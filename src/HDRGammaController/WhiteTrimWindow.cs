@@ -35,6 +35,10 @@ namespace HDRGammaController
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             Background = new SolidColorBrush(Color.FromRgb(0xBC, 0xBC, 0xBC)); // ~50% gray field
             WindowStyle = WindowStyle.SingleBorderWindow;
+            Resources.MergedDictionaries.Add(new ResourceDictionary
+            {
+                Source = new Uri("pack://application:,,,/Gloam;component/Themes/DarkControls.xaml", UriKind.Absolute),
+            });
             // The gray field is the measurement surface here (visually, against a reference
             // display); keep it opaque if a taskbar hover triggers Aero Peek mid-comparison.
             Services.WindowTheme.ExcludeFromPeek(this);
@@ -54,9 +58,10 @@ namespace HDRGammaController
                     Content = label,
                     Padding = new Thickness(12, 6, 12, 6),
                     Margin = new Thickness(4, 0, 4, 0),
-                    Background = new SolidColorBrush(Color.FromRgb(0x2d, 0x2d, 0x2d)),
-                    Foreground = Brushes.White,
-                    BorderThickness = new Thickness(0),
+                    Background = new SolidColorBrush(Color.FromRgb(0x17, 0x1C, 0x23)),
+                    Foreground = new SolidColorBrush(Color.FromRgb(0xF4, 0xF7, 0xFA)),
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(0x46, 0x55, 0x67)),
+                    BorderThickness = new Thickness(1),
                 };
                 b.Click += (_, _) => Nudge(dx, dy);
                 return b;
@@ -76,9 +81,10 @@ namespace HDRGammaController
                 Content = "Done - keep this white",
                 Padding = new Thickness(16, 7, 16, 7),
                 Margin = new Thickness(4, 0, 4, 0),
-                Background = new SolidColorBrush(Color.FromRgb(0xFF, 0x3C, 0x2F)),
-                Foreground = Brushes.White,
-                BorderThickness = new Thickness(0),
+                Background = new SolidColorBrush(Color.FromRgb(0xE3, 0x5F, 0x52)),
+                Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(0xE3, 0x5F, 0x52)),
+                BorderThickness = new Thickness(1),
             };
             done.Click += (_, _) => { Result = (_dx, _dy); DialogResult = true; Close(); };
 
@@ -87,9 +93,10 @@ namespace HDRGammaController
                 Content = "Cancel",
                 Padding = new Thickness(16, 7, 16, 7),
                 Margin = new Thickness(4, 0, 4, 0),
-                Background = new SolidColorBrush(Color.FromRgb(0x3d, 0x3d, 0x3d)),
-                Foreground = Brushes.White,
-                BorderThickness = new Thickness(0),
+                Background = new SolidColorBrush(Color.FromRgb(0x17, 0x1C, 0x23)),
+                Foreground = new SolidColorBrush(Color.FromRgb(0xF4, 0xF7, 0xFA)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(0x46, 0x55, 0x67)),
+                BorderThickness = new Thickness(1),
             };
             cancel.Click += (_, _) => { DialogResult = false; Close(); };
 

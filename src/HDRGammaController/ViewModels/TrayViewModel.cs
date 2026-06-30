@@ -122,10 +122,9 @@ namespace HDRGammaController.ViewModels
         }
         
         // The downloaded-and-ready update awaiting apply. Null until one is detected and
-        // fully downloaded. Applied either immediately (user clicks the toast) or, failing
-        // that, on the next normal exit (see Dispose).
+        // fully downloaded. Scheduled silently for the next normal app exit/restart.
         private UpdateInfo? _pendingUpdate;
-        private bool _updateApplied;
+        private bool _updateScheduled;
 
         private async void CheckForUpdates()
         {
@@ -135,29 +134,33 @@ namespace HDRGammaController.ViewModels
                 // Dev (F5) and the portable zip have no Velopack install to update.
                 if (!_updateService.IsInstalled) return;
 
+                if (_updateService.TrySchedulePendingUpdateOnExit())
+                {
+                    _pendingUpdate = null;
+                    _updateScheduled = true;
+                    return;
+                }
+
                 var info = await _updateService.CheckForUpdatesAsync();
-                if (info == null) return; // up to date
+                if (info == null)
+                {
+                    NotifyIfUpdateFailuresPersist();
+                    return; // up to date, throttled, or failed and logged
+                }
 
                 // Download silently in the background - no prompt, no manual download step.
-                if (!await _updateService.DownloadUpdatesAsync(info)) return;
+                if (!await _updateService.DownloadUpdatesAsync(info))
+                {
+                    NotifyIfUpdateFailuresPersist();
+                    return;
+                }
 
                 _pendingUpdate = info;
                 string version = UpdateService.VersionLabel(info);
-                Log.Info($"TrayViewModel: update {version} downloaded and ready to apply.");
-
-                // One low-friction toast. Clicking restarts into the new version now; if it
-                // is ignored, the update is applied on the next normal exit anyway (Dispose).
-                if (_toastService != null)
-                {
-                    _toastService.Show("Update ready",
-                        $"Gloam {version} will install when you restart.",
-                        ToastKind.Success, "Restart now", ApplyPendingUpdate);
-                }
-                else
-                {
-                    NotificationRequested?.Invoke("Update ready",
-                        $"Gloam {version} will install the next time you restart the app.");
-                }
+                _updateScheduled = _updateService.ApplyUpdatesOnExit(info);
+                Log.Info(_updateScheduled
+                    ? $"TrayViewModel: update {version} downloaded and scheduled for the next app restart."
+                    : $"TrayViewModel: update {version} downloaded but could not be scheduled yet; will retry on exit.");
             }
             catch (Exception ex)
             {
@@ -165,24 +168,15 @@ namespace HDRGammaController.ViewModels
             }
         }
 
-        /// <summary>
-        /// Applies the downloaded update and restarts into it immediately. Wired to the
-        /// update toast's "Restart now" action. Velopack terminates the process from here.
-        /// </summary>
-        public void ApplyPendingUpdate()
+        private void NotifyIfUpdateFailuresPersist()
         {
-            var info = _pendingUpdate;
-            if (info == null) return;
-            try
-            {
-                _updateApplied = true; // suppress the apply-on-exit path in Dispose
-                _updateService.ApplyUpdatesAndRestart(info);
-            }
-            catch (Exception ex)
-            {
-                _updateApplied = false;
-                Log.Error($"TrayViewModel.ApplyPendingUpdate: {ex.Message}");
-            }
+            if (!_updateService.ShouldNotifyPersistentFailure())
+                return;
+
+            _toastService?.Show("Update will retry later",
+                "Gloam could not check for updates. It will keep trying in the background.",
+                ToastKind.Info);
+            _updateService.MarkFailureNotified();
         }
 
         /// <summary>
@@ -459,11 +453,17 @@ namespace HDRGammaController.ViewModels
 
         private void OpenDashboard()
         {
-            var dashboard = new DashboardWindow(_monitorManager, _settingsManager, _nightModeService, RequestApply);
+            var dashboard = new DashboardWindow(_monitorManager, _settingsManager, _nightModeService, _updateService, RequestApply);
             dashboard.Show();
         }
 
         private void OpenCalibration()
+            => OpenCalibration(preferredMonitorDevicePath: null, calibrationUiState: null, reusableColorimeterService: null);
+
+        private void OpenCalibration(
+            string? preferredMonitorDevicePath,
+            CalibrationWindow.UiState? calibrationUiState = null,
+            ColorimeterService? reusableColorimeterService = null)
         {
             // Only one probe exists: if a calibration flow is already open (setup wizard,
             // live calibration, or a report window mid-verify), bring it to the front
@@ -483,7 +483,11 @@ namespace HDRGammaController.ViewModels
 
             List<MonitorInfo> activeMonitors;
             lock (_activeMonitorsLock) { activeMonitors = _activeMonitors; }
-            var setupWindow = new CalibrationSetupWindow(activeMonitors, _settingsManager);
+            var setupWindow = new CalibrationSetupWindow(
+                activeMonitors,
+                _settingsManager,
+                preferredMonitorDevicePath,
+                reusableColorimeterService);
             var dialogResult = setupWindow.ShowDialog();
 
             if (dialogResult == true &&
@@ -508,6 +512,8 @@ namespace HDRGammaController.ViewModels
                     currentMode,
                     currentSettings,
                     _settingsManager);
+                WindowBoundsPersistence.CopyBounds(calibrationWindow, setupWindow);
+                calibrationWindow.ApplyUiState(calibrationUiState);
 
                 // Handle calibration completion to refresh our state
                 calibrationWindow.CalibrationCompleted += (s, e) =>
@@ -521,8 +527,14 @@ namespace HDRGammaController.ViewModels
 
                 // Back: reopen the setup dialog after this window finishes closing
                 // (BeginInvoke so the modal setup doesn't block the close).
+                var selectedMonitorPath = setupWindow.SelectedMonitor.MonitorDevicePath;
                 calibrationWindow.BackRequested += (s, e) =>
-                    Application.Current.Dispatcher.BeginInvoke(new Action(OpenCalibration));
+                {
+                    var uiState = calibrationWindow.CaptureUiState();
+                    var colorimeterService = calibrationWindow.ColorimeterService;
+                    Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+                        OpenCalibration(selectedMonitorPath, uiState, colorimeterService)));
+                };
 
                 // When the calibration window closes, re-assert the correct live gamma through
                 // the apply path. This composes any freshly-installed MHC2 calibration with the
@@ -580,11 +592,11 @@ namespace HDRGammaController.ViewModels
 
         public void Dispose()
         {
-            // If an update was downloaded but the user never clicked "Restart now", apply it
-            // on the way out so the next launch is on the new version.
-            if (_pendingUpdate != null && !_updateApplied)
+            // If an update was downloaded but scheduling failed earlier, retry on the way
+            // out so the next launch can land on the new version.
+            if (_pendingUpdate != null && !_updateScheduled)
             {
-                _updateService.ApplyUpdatesOnExit(_pendingUpdate);
+                _updateScheduled = _updateService.ApplyUpdatesOnExit(_pendingUpdate);
             }
 
             // Stops the night-mode and ramp-guard timers and unhooks the

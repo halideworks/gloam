@@ -24,7 +24,7 @@ A Windows System Tray application to manage HDR Gamma settings on a per-monitor 
   - Meter spectral corrections (.ccss/.ccmx) with an in-app browser for the DisplayCAL community corrections database - essential for accurate readings on QD-OLED and wide-gamut panels
   - Per-monitor memory of display type, correction file, and calibration scope
   - Your gamma preference and night mode compose on top of the installed calibration
-- **Automatic Updates**: New versions download in the background and install on the next restart (one unobtrusive prompt, no manual re-download). Powered by Velopack; the per-user install needs no administrator rights.
+- **Automatic Updates**: New versions download in the background and install silently the next time the app exits/restarts. Powered by Velopack; the per-user install needs no administrator rights.
 - **System Tray Integration**: Unobtrusive background operation with dark/light mode support
 - **Start with Windows**: Toggle auto-start from the tray menu
 - **Auto-Download ArgyllCMS**: Downloads ArgyllCMS automatically when calibration features need it
@@ -46,7 +46,7 @@ A Windows System Tray application to manage HDR Gamma settings on a per-monitor 
 
 - **Self-contained**: no .NET Runtime required, and ArgyllCMS (`dispwin.exe`) is bundled so calibration works offline.
 - **Per-user install**: installs into `%LocalAppData%\GloamApp` with no administrator prompt. Your settings, logs, and calibration reports live separately under `%LocalAppData%\Gloam` and survive an uninstall.
-- **Automatic updates**: future versions download in the background and install on restart; you never download an installer again.
+- **Automatic updates**: future versions download in the background and install silently on app exit/restart; you never download an installer again.
 
 > **Seeing "Windows protected your PC"?** That is Microsoft SmartScreen, not a problem with the download. Gloam is code-signed - click **More info** and you will see the verified publisher **David Torcivia**. SmartScreen separately weighs download reputation, which a brand-new release has not built up yet, so it warns until enough people have installed it. Click **More info**, then **Run anyway**. This is expected for a new publisher and stops as the app gains installs.
 

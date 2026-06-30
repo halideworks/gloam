@@ -14,25 +14,18 @@
         reactive to the light/dark swap automatically.
     -->
 
-    <!-- The brutalist overlay card: hard 2px border, square corners, surface fill, plus a
-         hard offset "shadow" (zero blur, 3px offset) in the border colour — matches the
-         BrutBtn hover shadow idiom so the card lifts off the desktop. -->
+    <!-- Overlay card: quiet border, square corners, and a soft desktop shadow. -->
     <Style x:Key="OverlayCard" TargetType="Border">
         <Setter Property="Background" Value="{DynamicResource ThemeSurface}"/>
         <Setter Property="BorderBrush" Value="{DynamicResource ThemeBorder}"/>
-        <Setter Property="BorderThickness" Value="2"/>
+        <Setter Property="BorderThickness" Value="1"/>
         <Setter Property="Padding" Value="0"/>
         <Setter Property="SnapsToDevicePixels" Value="True"/>
-        <!-- Hard offset shadow (zero blur) in white: matches the dark-theme border colour and
-             the BrutBtn hover-shadow idiom, lifting the card off the desktop. In light theme
-             the white shadow is invisible against a light desktop, but the card's own black
-             2px border still fully defines it, so no information is lost. Tracking the swap
-             would require a Color resource + code-side swap, not worth it for a shadow tint. -->
         <Setter Property="Effect">
             <Setter.Value>
-                <DropShadowEffect Color="White"
-                                  BlurRadius="0" ShadowDepth="4" Direction="315"
-                                  Opacity="1" RenderingBias="Performance"/>
+                <DropShadowEffect Color="Black"
+                                  BlurRadius="18" ShadowDepth="4" Direction="315"
+                                  Opacity="0.35" RenderingBias="Quality"/>
             </Setter.Value>
         </Setter>
     </Style>

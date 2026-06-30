@@ -23,7 +23,7 @@
         </ResourceDictionary>
     </Window.Resources>
 
-    <Border Background="{DynamicResource ThemeBg}" BorderBrush="{DynamicResource ThemeWindowFrame}" BorderThickness="2">
+    <Border Background="{DynamicResource ThemeBg}" BorderBrush="{DynamicResource ThemeWindowFrame}" BorderThickness="1">
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="42"/>
@@ -33,12 +33,12 @@
 
             <!-- Title Bar -->
             <Border Grid.Row="0" Background="{DynamicResource ThemeSurface}"
-                    BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="0,0,0,3"
+                    BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="0,0,0,1"
                     MouseLeftButtonDown="TitleBar_MouseDown">
                 <Grid Margin="16,0">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                         <local:BrandMark Width="20" Height="20" Margin="0,0,10,0" VerticalAlignment="Center" GapBrush="{DynamicResource ThemeSurface}"/>
-                        <TextBlock Text="DOWNLOAD ARGYLLCMS" FontFamily="{DynamicResource DisplayFont}"
+                        <TextBlock Text="Download ArgyllCMS" FontFamily="{DynamicResource DisplayFont}"
                                    FontWeight="Bold" FontSize="13" Foreground="{DynamicResource ThemeText}"/>
                     </StackPanel>
                 </Grid>
@@ -60,7 +60,7 @@
                     <TextBlock x:Name="ProgressStatusText" Text="Downloading..." FontWeight="Bold" Margin="0,0,0,12"/>
                     <Grid Margin="0,0,0,8">
                         <Border Background="{DynamicResource ThemeTrack}" Height="6"/>
-                        <Border x:Name="ProgressBar" Background="{DynamicResource ThemeAccent}"
+                        <Border x:Name="ProgressBar" Background="{DynamicResource ThemeMeter}"
                                 Height="6" HorizontalAlignment="Left" Width="0"/>
                     </Grid>
                     <TextBlock x:Name="ProgressDetailText" Text="" Foreground="{DynamicResource ThemeTextDim}" FontSize="12"/>
@@ -81,7 +81,7 @@
 
             <!-- Footer Buttons -->
             <Border Grid.Row="2" Background="{DynamicResource ThemeSurface}"
-                    BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="0,3,0,0" Padding="24,12">
+                    BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="0,1,0,0" Padding="24,12">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>

@@ -82,7 +82,7 @@ namespace HDRGammaController.Core
         /// <summary>
         /// Algorithm to use for temperature adjustment.
         /// </summary>
-        public NightModeAlgorithm Algorithm { get; set; } = NightModeAlgorithm.Standard;
+        public NightModeAlgorithm Algorithm { get; set; } = NightModeAlgorithm.AccurateCIE1931;
 
         /// <summary>
         /// Enable enhanced warmth curve below 2800K for more dramatic visual changes.
@@ -163,7 +163,7 @@ namespace HDRGammaController.Core
             BlueOffset = ClampFinite(BlueOffset, -0.5, 0.5, 0.0),
             Algorithm = Enum.IsDefined(typeof(NightModeAlgorithm), Algorithm)
                 ? Algorithm
-                : NightModeAlgorithm.Standard,
+                : NightModeAlgorithm.AccurateCIE1931,
             UseUltraWarmMode = UseUltraWarmMode
         };
 

@@ -1,9 +1,9 @@
 
 param(
-    # Semantic version for this build. Local default is a throwaway; CI passes the tag
-    # (e.g. 1.2.0). Velopack compares the installed package version against the feed, so
-    # this must be the version the release is cut from.
-    [string]$Version = "0.0.1",
+    # Semantic version for this build. CI passes the tag (e.g. 1.2.0); local runs default
+    # to the project <Version> so Velopack's installed package version and the visible app
+    # version do not drift apart.
+    [string]$Version = "",
 
     # CI uses -PublishOnly to produce the publish dir + bundled assets, then runs
     # 'vpk download/pack/upload' itself (with Azure signing). Local runs omit it to get a
@@ -102,6 +102,13 @@ function Download-Argyll {
 #    files, and it lays its own Update.exe alongside the app exe.
 $repoRoot = (Resolve-Path -LiteralPath $PSScriptRoot).Path
 $projectPath = Join-Path $repoRoot $projectPath
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    [xml]$projectXml = Get-Content -Raw -LiteralPath $projectPath
+    $Version = $projectXml.Project.PropertyGroup.Version | Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($Version)) {
+        throw "Version was not provided and no <Version> was found in $projectPath."
+    }
+}
 $PublishDir = Remove-RepoChildDirectoryIfExists $PublishDir "Publish directory"
 $ReleaseDir = Resolve-RepoChildPath $ReleaseDir "Release directory"
 $argyllZip = Resolve-RepoChildPath $argyllZip "Argyll cache archive"

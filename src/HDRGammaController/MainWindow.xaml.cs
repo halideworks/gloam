@@ -50,9 +50,8 @@ namespace HDRGammaController
             {
                 toast?.Show(title, msg, ToastKind.Info);
             };
-            // Update notifications are raised directly by TrayViewModel through the toast
-            // service (silent background download + a "Restart now" action), so there is no
-            // separate update event to route here anymore.
+            // Updates are handled directly by TrayViewModel as silent background downloads
+            // scheduled for the next app exit/restart, so there is no update event to route.
 
             // Set DataContext for the specific bindings in XAML
             MyNotifyIcon.DataContext = _trayViewModel;

@@ -4,8 +4,8 @@
         xmlns:local="clr-namespace:HDRGammaController"
         xmlns:behaviors="clr-namespace:HDRGammaController.Behaviors"
         Title="Gloam - Settings"
-        Width="540" Height="760"
-        MinWidth="500" MinHeight="600"
+        Width="600" Height="780"
+        MinWidth="540" MinHeight="620"
         WindowStartupLocation="CenterScreen"
         Background="Transparent"
         Foreground="{DynamicResource ThemeText}"
@@ -19,7 +19,7 @@
                 <ResourceDictionary Source="pack://application:,,,/Gloam;component/Themes/Brutalist.xaml"/>
             </ResourceDictionary.MergedDictionaries>
 
-            <!-- Brutalist slider: square track, square accent thumb, optional center tick -->
+            <!-- Square slider: compact track, accent thumb, optional center tick -->
             <Style x:Key="ModernSlider" TargetType="Slider">
                 <Setter Property="Height" Value="24"/>
                 <Setter Property="Margin" Value="0,4"/>
@@ -120,11 +120,11 @@
                 </Style.Triggers>
             </Style>
 
-            <!-- Section card: hard square border -->
+            <!-- Section card -->
             <Style x:Key="SectionCard" TargetType="Border">
                 <Setter Property="Background" Value="{DynamicResource ThemeSurface}"/>
                 <Setter Property="BorderBrush" Value="{DynamicResource ThemeBorder}"/>
-                <Setter Property="BorderThickness" Value="2"/>
+                <Setter Property="BorderThickness" Value="1"/>
                 <Setter Property="Padding" Value="16"/>
                 <Setter Property="Margin" Value="0,0,0,12"/>
             </Style>
@@ -155,8 +155,7 @@
         </ResourceDictionary>
     </Window.Resources>
 
-    <!-- Outer frame: black in both themes (visible on light, seamless on dark) -->
-    <Border Background="{DynamicResource ThemeBg}" BorderBrush="{DynamicResource ThemeWindowFrame}" BorderThickness="2">
+    <Border Background="{DynamicResource ThemeBg}" BorderBrush="{DynamicResource ThemeWindowFrame}" BorderThickness="1">
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="44"/>
@@ -165,7 +164,7 @@
 
             <!-- Custom Title Bar -->
             <Border Grid.Row="0" Background="{DynamicResource ThemeSurface}"
-                    BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="0,0,0,3"
+                    BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="0,0,0,1"
                     MouseLeftButtonDown="TitleBar_MouseDown">
                 <Grid Margin="16,0">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
@@ -173,7 +172,7 @@
                         <TextBlock Text="GLOAM" FontFamily="{DynamicResource DisplayFont}" FontWeight="ExtraBold"
                                    FontSize="14" Foreground="{DynamicResource ThemeText}" VerticalAlignment="Center"/>
                         <Border Width="1" Height="14" Background="{DynamicResource ThemeTextDim}" Opacity="0.5" Margin="10,0"/>
-                        <TextBlock Text="SETTINGS" FontFamily="{DynamicResource DisplayFont}" FontWeight="Bold"
+                        <TextBlock Text="Settings" FontFamily="{DynamicResource DisplayFont}" FontWeight="Bold"
                                    FontSize="11" Foreground="{DynamicResource ThemeTextDim}" VerticalAlignment="Center"/>
                     </StackPanel>
                     <Button Content="&#x2715;" HorizontalAlignment="Right" VerticalAlignment="Center"
@@ -192,7 +191,7 @@
 
                 <!-- Monitor Selector Header -->
                 <StackPanel Grid.Row="0" Margin="0,0,0,16">
-                    <TextBlock Text="MONITOR" Style="{StaticResource FieldLabel}" Margin="0,0,0,4"/>
+                    <TextBlock Text="Monitor" Style="{StaticResource FieldLabel}" Margin="0,0,0,4"/>
                     <ComboBox ItemsSource="{Binding Monitors}" DisplayMemberPath="Label"
                               SelectedItem="{Binding SelectedMonitor}"/>
                 </StackPanel>
@@ -204,7 +203,7 @@
                         <!-- Gamma Section -->
                         <Border Style="{StaticResource SectionCard}">
                             <StackPanel>
-                                <TextBlock Text="GAMMA" Style="{StaticResource SectionHeader}"/>
+                                <TextBlock Text="Gamma" Style="{StaticResource SectionHeader}"/>
                                 <ComboBox SelectedIndex="{Binding GammaModeIndex}">
                                     <ComboBoxItem Content="Gamma 2.2"/>
                                     <ComboBoxItem Content="Gamma 2.4"/>
@@ -217,7 +216,7 @@
                         <Border Style="{StaticResource SectionCard}">
                             <StackPanel>
                                 <Grid>
-                                    <TextBlock Text="BRIGHTNESS" Style="{StaticResource SectionHeader}"/>
+                                    <TextBlock Text="Brightness" Style="{StaticResource SectionHeader}"/>
                                     <TextBlock Text="{Binding Value, ElementName=BrightnessSlider, StringFormat={}{0:F0}%}" Style="{StaticResource ValueDisplay}"/>
                                 </Grid>
                                 <Slider x:Name="BrightnessSlider" IsSnapToTickEnabled="True" TickFrequency="1" Style="{StaticResource ModernSlider}"
@@ -243,9 +242,9 @@
                         <!-- Temperature/Tint Section -->
                         <Border Style="{StaticResource SectionCard}">
                             <StackPanel>
-                                <TextBlock Text="COLOR TEMPERATURE" Style="{StaticResource SectionHeader}"/>
+                                <TextBlock Text="Color temperature" Style="{StaticResource SectionHeader}"/>
 
-                                <TextBlock Text="TEMPERATURE" Style="{StaticResource FieldLabel}"/>
+                                <TextBlock Text="Temperature" Style="{StaticResource FieldLabel}"/>
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
@@ -268,7 +267,7 @@
                                 </Grid>
 
                                 <!-- Tint Section -->
-                                <TextBlock Text="TINT" Style="{StaticResource FieldLabel}"/>
+                                <TextBlock Text="Tint" Style="{StaticResource FieldLabel}"/>
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
@@ -295,7 +294,7 @@
                         <!-- Night Mode Section -->
                         <Border Style="{StaticResource SectionCard}">
                             <StackPanel>
-                                <TextBlock Text="NIGHT MODE" Style="{StaticResource SectionHeader}"/>
+                                <TextBlock Text="Night mode" Style="{StaticResource SectionHeader}"/>
 
                                 <!-- Global Settings Moved to Dashboard -->
                                 <TextBlock Text="Global Night Mode settings are now managed in the Dashboard."
@@ -303,11 +302,11 @@
 
                                 <!-- Per Monitor Settings -->
                                 <Separator Margin="0,16,0,16" Background="{DynamicResource ThemeBorder}"/>
-                                <TextBlock Text="PER-MONITOR OVERRIDE" Style="{StaticResource SectionHeader}" FontSize="11" Margin="0,0,0,8" Foreground="{DynamicResource ThemeTextDim}"/>
+                                <TextBlock Text="Per-monitor override" Style="{StaticResource SectionHeader}" FontSize="11" Margin="0,0,0,8" Foreground="{DynamicResource ThemeTextDim}"/>
                                 <TextBlock Text="Fine-tune this monitor's temperature relative to the global setting."
                                            Foreground="{DynamicResource ThemeTextDim}" FontSize="11" Margin="0,-4,0,12" TextWrapping="Wrap"/>
 
-                                <TextBlock Text="TEMPERATURE OFFSET" Style="{StaticResource FieldLabel}"/>
+                                <TextBlock Text="Temperature offset" Style="{StaticResource FieldLabel}"/>
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
@@ -333,10 +332,10 @@
 
                         <!-- RGB Fine Tuning Section -->
                         <Border Style="{StaticResource SectionCard}">
-                            <Expander Header="RGB FINE TUNING" Foreground="{DynamicResource ThemeText}" FontFamily="{DynamicResource DisplayFont}" FontWeight="Bold" IsExpanded="False">
+                            <Expander Header="RGB fine tuning" Foreground="{DynamicResource ThemeText}" FontFamily="{DynamicResource DisplayFont}" FontWeight="Bold" IsExpanded="False">
                                 <StackPanel Margin="0,12,0,0">
                                     <!-- Red -->
-                                    <TextBlock Text="RED GAIN" Style="{StaticResource FieldLabel}"/>
+                                    <TextBlock Text="Red gain" Style="{StaticResource FieldLabel}"/>
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
@@ -354,7 +353,7 @@
                                     </Grid>
 
                                     <!-- Green -->
-                                    <TextBlock Text="GREEN GAIN" Style="{StaticResource FieldLabel}"/>
+                                    <TextBlock Text="Green gain" Style="{StaticResource FieldLabel}"/>
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
@@ -372,7 +371,7 @@
                                     </Grid>
 
                                     <!-- Blue -->
-                                    <TextBlock Text="BLUE GAIN" Style="{StaticResource FieldLabel}"/>
+                                    <TextBlock Text="Blue gain" Style="{StaticResource FieldLabel}"/>
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
@@ -389,7 +388,7 @@
                                                    behaviors:ClickToEdit.TargetSlider="{Binding ElementName=BlueGainSlider}"/>
                                     </Grid>
 
-                                    <Button Content="RESET RGB" Style="{StaticResource ModernButton}"
+                                    <Button Content="Reset RGB" Style="{StaticResource ModernButton}"
                                             Command="{Binding ResetRgbCommand}" Margin="0,12,0,0" HorizontalAlignment="Left"/>
                                 </StackPanel>
                             </Expander>

@@ -17,6 +17,22 @@ namespace HDRGammaController.Core
         public bool FullDisable { get; set; } = false;
     }
 
+    public class WindowBoundsData
+    {
+        public double Left { get; set; }
+        public double Top { get; set; }
+        public double Width { get; set; }
+        public double Height { get; set; }
+
+        public WindowBoundsData Clone() => new WindowBoundsData
+        {
+            Left = Left,
+            Top = Top,
+            Width = Width,
+            Height = Height
+        };
+    }
+
     /// <summary>
     /// Per-monitor profile data stored in settings.
     /// </summary>
@@ -78,6 +94,12 @@ namespace HDRGammaController.Core
 
         /// <summary>Last-used "white point correction only" choice in calibration setup.</summary>
         public bool? CalibWhitePointOnly { get; set; }
+
+        /// <summary>Last-used calibration target name in calibration setup.</summary>
+        public string? CalibTargetName { get; set; }
+
+        /// <summary>Last-used calibration preset in calibration setup (CalibrationPreset enum name).</summary>
+        public string? CalibPreset { get; set; }
         
         public CalibrationSettings ToCalibrationSettings() => new CalibrationSettings
         {
@@ -131,7 +153,9 @@ namespace HDRGammaController.Core
             PreviousColorProfileHdrMode = PreviousColorProfileHdrMode,
             MeterCorrectionPath = MeterCorrectionPath,
             CalibDisplayType = CalibDisplayType,
-            CalibWhitePointOnly = CalibWhitePointOnly
+            CalibWhitePointOnly = CalibWhitePointOnly,
+            CalibTargetName = CalibTargetName,
+            CalibPreset = CalibPreset
         };
     }
     
@@ -141,6 +165,7 @@ namespace HDRGammaController.Core
     public class NightModeSettingsData
     {
         public bool Enabled { get; set; } = false;
+        public bool ManualOverrideEnabled { get; set; } = false;
         public bool UseAutoSchedule { get; set; } = false;
         public double? Latitude { get; set; } = null;
         public double? Longitude { get; set; } = null;
@@ -148,7 +173,7 @@ namespace HDRGammaController.Core
         public string EndTime { get; set; } = "07:00";
         public int TemperatureKelvin { get; set; } = 2700;
         public int FadeMinutes { get; set; } = 30;
-        public NightModeAlgorithm Algorithm { get; set; } = NightModeAlgorithm.Standard;
+        public NightModeAlgorithm Algorithm { get; set; } = NightModeAlgorithm.AccurateCIE1931;
         public bool UseUltraWarmMode { get; set; } = false;
 
         public List<NightModeSchedulePoint> Schedule { get; set; } = new List<NightModeSchedulePoint>();
@@ -156,6 +181,7 @@ namespace HDRGammaController.Core
         public NightModeSettings ToNightModeSettings() => new NightModeSettings
         {
             Enabled = Enabled,
+            ManualOverrideEnabled = ManualOverrideEnabled,
             UseAutoSchedule = UseAutoSchedule,
             Latitude = NightModeSettings.ClampLatitude(Latitude),
             Longitude = NightModeSettings.ClampLongitude(Longitude),
@@ -167,7 +193,9 @@ namespace HDRGammaController.Core
                 : new TimeSpan(7, 0, 0),
             TemperatureKelvin = NightModeSettings.ClampKelvin(TemperatureKelvin),
             FadeMinutes = NightModeSettings.ClampFadeMinutes(FadeMinutes),
-            Algorithm = Algorithm,
+            Algorithm = Enum.IsDefined(typeof(NightModeAlgorithm), Algorithm)
+                ? Algorithm
+                : NightModeAlgorithm.AccurateCIE1931,
             UseUltraWarmMode = UseUltraWarmMode,
             Schedule = CloneSchedule(Schedule)
         };
@@ -175,6 +203,7 @@ namespace HDRGammaController.Core
         public static NightModeSettingsData FromNightModeSettings(NightModeSettings settings) => new NightModeSettingsData
         {
             Enabled = settings.Enabled,
+            ManualOverrideEnabled = settings.ManualOverrideEnabled,
             UseAutoSchedule = settings.UseAutoSchedule,
             Latitude = NightModeSettings.ClampLatitude(settings.Latitude),
             Longitude = NightModeSettings.ClampLongitude(settings.Longitude),
@@ -247,6 +276,30 @@ namespace HDRGammaController.Core
         public void SetDarkTheme(bool dark)
         {
             lock (_dataLock) { _data.DarkTheme = dark; _dataVersion++; }
+            Save();
+        }
+
+        public WindowBoundsData? GetWindowBounds(string key)
+        {
+            if (string.IsNullOrWhiteSpace(key)) return null;
+            lock (_dataLock)
+            {
+                return _data.WindowBounds.TryGetValue(key, out var bounds)
+                    ? bounds.Clone()
+                    : null;
+            }
+        }
+
+        public void SetWindowBounds(string key, WindowBoundsData bounds)
+        {
+            if (string.IsNullOrWhiteSpace(key)) return;
+            if (bounds.Width <= 0 || bounds.Height <= 0) return;
+
+            lock (_dataLock)
+            {
+                _data.WindowBounds[key] = bounds.Clone();
+                _dataVersion++;
+            }
             Save();
         }
 
@@ -509,10 +562,16 @@ namespace HDRGammaController.Core
         }
 
         /// <summary>
-        /// Records the calibration-setup choices for a monitor (meter correction file,
-        /// display type, white-point-only scope) so the next session opens pre-configured.
+        /// Records the calibration-setup choices for a monitor so the next session opens
+        /// pre-configured.
         /// </summary>
-        public void SetCalibrationPrefs(string monitorDevicePath, string? ccssPath, string displayType, bool whitePointOnly)
+        public void SetCalibrationPrefs(
+            string monitorDevicePath,
+            string? ccssPath,
+            string displayType,
+            bool whitePointOnly,
+            string? targetName = null,
+            string? preset = null)
         {
             if (string.IsNullOrEmpty(monitorDevicePath)) return;
             lock (_dataLock)
@@ -525,6 +584,8 @@ namespace HDRGammaController.Core
                 profile.MeterCorrectionPath = ccssPath;
                 profile.CalibDisplayType = displayType;
                 profile.CalibWhitePointOnly = whitePointOnly;
+                profile.CalibTargetName = targetName;
+                profile.CalibPreset = preset;
                 _dataVersion++;
             }
             Save();
@@ -752,6 +813,12 @@ namespace HDRGammaController.Core
                 // Fade duration: 0 to 120 minutes
                 nm.FadeMinutes = Math.Clamp(nm.FadeMinutes, 0, 120);
 
+                // Standard/Helland was the historical hidden default. Prefer the CIE path
+                // unless the user/config explicitly chose BlueReduction.
+                nm.Algorithm = nm.Algorithm == NightModeAlgorithm.BlueReduction
+                    ? NightModeAlgorithm.BlueReduction
+                    : NightModeAlgorithm.AccurateCIE1931;
+
                 // Validate schedule points
                 if (nm.Schedule != null)
                 {
@@ -767,6 +834,24 @@ namespace HDRGammaController.Core
                     }
                 }
             }
+
+            if (data.WindowBounds == null)
+                data.WindowBounds = new Dictionary<string, WindowBoundsData>();
+
+            foreach (var key in data.WindowBounds.Keys.ToList())
+            {
+                var bounds = data.WindowBounds[key];
+                if (bounds == null ||
+                    !double.IsFinite(bounds.Left) ||
+                    !double.IsFinite(bounds.Top) ||
+                    !double.IsFinite(bounds.Width) ||
+                    !double.IsFinite(bounds.Height) ||
+                    bounds.Width < 320 ||
+                    bounds.Height < 240)
+                {
+                    data.WindowBounds.Remove(key);
+                }
+            }
         }
 
         private static double ClampFinite(double value, double min, double max, double fallback) =>
@@ -779,6 +864,7 @@ namespace HDRGammaController.Core
             public List<AppExclusionRule> ExcludedApps { get; set; } = new List<AppExclusionRule>();
             // Brutalist UI theme: true = dark, false = light, null = follow OS.
             public bool? DarkTheme { get; set; } = null;
+            public Dictionary<string, WindowBoundsData> WindowBounds { get; set; } = new Dictionary<string, WindowBoundsData>();
         }
 
         private class LegacySettingsData

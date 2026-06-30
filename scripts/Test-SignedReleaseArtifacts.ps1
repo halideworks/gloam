@@ -3,7 +3,9 @@ param(
 
     [string]$Version = "",
 
-    [string]$ExpectedPublisher = "David Torcivia"
+    [string]$ExpectedPublisher = "David Torcivia",
+
+    [string]$ExpectedPackId = "GloamApp"
 )
 
 $ErrorActionPreference = "Stop"
@@ -55,6 +57,7 @@ function Test-Signature([string]$path, [string]$description) {
 $versionPattern = if ([string]::IsNullOrWhiteSpace($Version)) { "*" } else { $Version }
 $setup = Get-Artifact "Gloam-$versionPattern-Setup.exe" "signed installer"
 $portable = Get-Artifact "Gloam-$versionPattern-Portable.zip" "portable package"
+$fullPackage = Get-Artifact "$ExpectedPackId-$versionPattern-full.nupkg" "Velopack full package"
 
 if ($setup -ne $null) {
     Test-Signature $setup.FullName "Installer '$($setup.Name)'"
@@ -73,6 +76,50 @@ if ($portable -ne $null) {
         }
         else {
             Test-Signature $portableExe[0].FullName "Portable Gloam.exe"
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $extractRoot -PathType Container) {
+            Remove-Item -LiteralPath $extractRoot -Recurse -Force
+        }
+    }
+}
+
+if ($fullPackage -ne $null) {
+    $extractRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("GloamVelopackPackageSignature-" + [Guid]::NewGuid().ToString("N"))
+    try {
+        Expand-Archive -LiteralPath $fullPackage.FullName -DestinationPath $extractRoot -Force
+
+        $nuspec = @(Get-ChildItem -LiteralPath $extractRoot -Filter "*.nuspec" -File -Recurse)
+        if ($nuspec.Count -eq 0) {
+            Add-Failure "Velopack package '$($fullPackage.Name)' does not contain a .nuspec."
+        }
+        elseif ($nuspec.Count -gt 1) {
+            Add-Failure "Velopack package '$($fullPackage.Name)' contains multiple .nuspec files."
+        }
+        else {
+            [xml]$nuspecXml = Get-Content -Raw -LiteralPath $nuspec[0].FullName
+            $idNode = $nuspecXml.SelectSingleNode("/*[local-name()='package']/*[local-name()='metadata']/*[local-name()='id']")
+            $versionNode = $nuspecXml.SelectSingleNode("/*[local-name()='package']/*[local-name()='metadata']/*[local-name()='version']")
+            $packageId = if ($idNode -eq $null) { "" } else { $idNode.InnerText }
+            $packageVersion = if ($versionNode -eq $null) { "" } else { $versionNode.InnerText }
+            if ($packageId -ne $ExpectedPackId) {
+                Add-Failure "Velopack package id '$packageId' does not match expected '$ExpectedPackId'."
+            }
+            if (-not [string]::IsNullOrWhiteSpace($Version) -and $packageVersion -ne $Version) {
+                Add-Failure "Velopack package version '$packageVersion' does not match expected '$Version'."
+            }
+        }
+
+        $packageExe = @(Get-ChildItem -LiteralPath $extractRoot -Filter "Gloam.exe" -File -Recurse)
+        if ($packageExe.Count -eq 0) {
+            Add-Failure "Velopack package '$($fullPackage.Name)' does not contain Gloam.exe."
+        }
+        elseif ($packageExe.Count -gt 1) {
+            Add-Failure "Velopack package '$($fullPackage.Name)' contains multiple Gloam.exe files."
+        }
+        else {
+            Test-Signature $packageExe[0].FullName "Velopack package Gloam.exe"
         }
     }
     finally {

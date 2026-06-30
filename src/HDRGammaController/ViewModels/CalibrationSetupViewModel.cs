@@ -100,6 +100,7 @@ namespace HDRGammaController.ViewModels
         private readonly SettingsManager? _settingsManager;
         private bool _loadingPrefs;
         private bool _colorimeterReady;
+        private bool _updatingTargetSelection;
 
         public ObservableCollection<MonitorChoice> Monitors { get; }
         public ObservableCollection<TargetOption> Targets { get; }
@@ -135,10 +136,15 @@ namespace HDRGammaController.ViewModels
         public static string CorrectionsFolder => System.IO.Path.Combine(
             AppPaths.DataDir, "corrections");
 
-        public CalibrationSetupViewModel(List<MonitorInfo> monitors, SettingsManager? settingsManager)
+        public CalibrationSetupViewModel(
+            List<MonitorInfo> monitors,
+            SettingsManager? settingsManager,
+            string? preferredMonitorDevicePath = null,
+            ColorimeterService? reusableColorimeterService = null)
         {
             _monitors = monitors;
             _settingsManager = settingsManager;
+            ColorimeterService = reusableColorimeterService;
 
             Targets = new ObservableCollection<TargetOption>
             {
@@ -153,14 +159,21 @@ namespace HDRGammaController.ViewModels
                 target.PropertyChanged += (_, e) =>
                 {
                     if (e.PropertyName == nameof(TargetOption.IsSelected))
+                    {
+                        if (!_updatingTargetSelection && target.IsSelected)
+                            SelectTarget(target);
                         RefreshPreflight();
+                    }
                 };
             }
 
             PopulateCorrectionFiles();
 
             Monitors = new ObservableCollection<MonitorChoice>(monitors.Select(m => new MonitorChoice(m)));
-            _selectedMonitor = Monitors.FirstOrDefault();
+            _selectedMonitor = Monitors.FirstOrDefault(m =>
+                !string.IsNullOrWhiteSpace(preferredMonitorDevicePath) &&
+                string.Equals(m.Model.MonitorDevicePath, preferredMonitorDevicePath, StringComparison.OrdinalIgnoreCase))
+                ?? Monitors.FirstOrDefault();
             if (_selectedMonitor != null)
             {
                 LoadPrefsForSelectedMonitor();
@@ -177,7 +190,10 @@ namespace HDRGammaController.ViewModels
         public async Task OnLoadedAsync()
         {
             IdentifySelectedMonitor();
-            await InitializeColorimeterAsync();
+            if (ColorimeterService != null)
+                UpdateColorimeterStatus();
+            else
+                await InitializeColorimeterAsync();
         }
 
         private MonitorChoice? _selectedMonitor;
@@ -294,6 +310,13 @@ namespace HDRGammaController.ViewModels
         public bool IsPresetStandard { get => _preset == CalibrationPreset.Standard; set { if (value) SetPreset(CalibrationPreset.Standard); } }
         public bool IsPresetThorough { get => _preset == CalibrationPreset.Thorough; set { if (value) SetPreset(CalibrationPreset.Thorough); } }
 
+        public string QuickPresetLabel => PresetLabel("Quick", CalibrationPreset.Quick);
+        public string QuickPresetDetail => PresetDetail(CalibrationPreset.Quick, "Good accuracy");
+        public string StandardPresetLabel => PresetLabel("Standard", CalibrationPreset.Standard);
+        public string StandardPresetDetail => PresetDetail(CalibrationPreset.Standard, "Very good accuracy");
+        public string ThoroughPresetLabel => PresetLabel("Thorough", CalibrationPreset.Thorough);
+        public string ThoroughPresetDetail => PresetDetail(CalibrationPreset.Thorough, "Excellent accuracy");
+
         private void SetPreset(CalibrationPreset preset)
         {
             if (_preset == preset) return;
@@ -301,6 +324,36 @@ namespace HDRGammaController.ViewModels
             OnPropertyChanged(nameof(IsPresetQuick));
             OnPropertyChanged(nameof(IsPresetStandard));
             OnPropertyChanged(nameof(IsPresetThorough));
+        }
+
+        private string PresetLabel(string name, CalibrationPreset preset)
+            => $"{name} ({PatchCountFor(preset)} patches)";
+
+        private string PresetDetail(CalibrationPreset preset, string quality)
+            => $"{FormatEstimatedTime(PatchCountFor(preset))} - {quality}";
+
+        private int PatchCountFor(CalibrationPreset preset)
+        {
+            var target = Targets?.FirstOrDefault(t => t.IsSelected)?.Target ?? StandardTargets.SrgbGamma22;
+            return PatchSetGenerator.GeneratePatchSet(target, preset).Count;
+        }
+
+        private static string FormatEstimatedTime(int patchCount)
+        {
+            var time = TimeSpan.FromSeconds(patchCount * 3);
+            return time.TotalMinutes >= 60
+                ? $"~{time.Hours}h {time.Minutes}m"
+                : $"~{time.Minutes} minutes";
+        }
+
+        private void RefreshPresetLabels()
+        {
+            OnPropertyChanged(nameof(QuickPresetLabel));
+            OnPropertyChanged(nameof(QuickPresetDetail));
+            OnPropertyChanged(nameof(StandardPresetLabel));
+            OnPropertyChanged(nameof(StandardPresetDetail));
+            OnPropertyChanged(nameof(ThoroughPresetLabel));
+            OnPropertyChanged(nameof(ThoroughPresetDetail));
         }
 
         #endregion
@@ -355,6 +408,13 @@ namespace HDRGammaController.ViewModels
         {
             get => _canStart;
             set => SetProperty(ref _canStart, value);
+        }
+
+        private string _startBlockReason = "Waiting for colorimeter.";
+        public string StartBlockReason
+        {
+            get => _startBlockReason;
+            set => SetProperty(ref _startBlockReason, value);
         }
 
         public bool HasPreflightItems => PreflightItems.Count > 0;
@@ -441,6 +501,7 @@ namespace HDRGammaController.ViewModels
                 : null;
 
             SelectCorrectionPath(prefs?.MeterCorrectionPath, addIfMissing: !string.IsNullOrEmpty(prefs?.MeterCorrectionPath));
+            SelectSavedTarget(prefs?.CalibTargetName);
 
             DetectedDisplayType = monitor != null ? DetectPanelType(monitor) : null;
 
@@ -468,11 +529,27 @@ namespace HDRGammaController.ViewModels
                 {
                     WhitePointOnly = savedWpOnly;
                 }
+
+                if (Enum.TryParse(prefs?.CalibPreset, out CalibrationPreset savedPreset))
+                {
+                    SetPreset(savedPreset);
+                }
             }
             finally
             {
                 _loadingPrefs = false;
             }
+        }
+
+        private void SelectSavedTarget(string? targetName)
+        {
+            if (string.IsNullOrWhiteSpace(targetName)) return;
+
+            var target = Targets.FirstOrDefault(t =>
+                t.IsEnabled &&
+                string.Equals(t.Target.Name, targetName, StringComparison.OrdinalIgnoreCase));
+            if (target != null)
+                SelectTarget(target);
         }
 
         private void IdentifySelectedMonitor()
@@ -506,15 +583,33 @@ namespace HDRGammaController.ViewModels
                 option.DisabledReason = reason;
             }
 
-            // If the currently-checked target just got disabled, fall back to the first target
-            // that is still enabled (sRGB in SDR mode, the HDR desktop target in HDR mode).
-            var selected = Targets.FirstOrDefault(t => t.IsSelected);
-            if (selected != null && !selected.IsEnabled)
-            {
-                var fallback = Targets.FirstOrDefault(t => t.IsEnabled);
-                if (fallback != null) fallback.IsSelected = true;
-            }
+            ResolveTargetSelection(hdr);
             RefreshPreflight();
+        }
+
+        private void ResolveTargetSelection(bool hdr)
+        {
+            var selected = Targets.Where(t => t.IsSelected).ToList();
+            if (selected.Count == 1 && selected[0].IsEnabled) return;
+
+            var fallback = Targets.FirstOrDefault(t => t.IsEnabled && t.RequiresHdr == hdr)
+                           ?? Targets.FirstOrDefault(t => t.IsEnabled);
+            SelectTarget(fallback);
+        }
+
+        private void SelectTarget(TargetOption? selected)
+        {
+            _updatingTargetSelection = true;
+            try
+            {
+                foreach (var option in Targets)
+                    option.IsSelected = ReferenceEquals(option, selected);
+            }
+            finally
+            {
+                _updatingTargetSelection = false;
+            }
+            RefreshPresetLabels();
         }
 
         public static IReadOnlyList<(string Severity, string Message)> BuildPreflightMessages(
@@ -660,7 +755,26 @@ namespace HDRGammaController.ViewModels
         }
 
         private void RefreshCanStart()
-            => CanStart = _colorimeterReady && !PreflightItems.Any(i => i.Severity == "ERROR");
+        {
+            var criticalError = CriticalStartError();
+            CanStart = _colorimeterReady && criticalError == null;
+            StartBlockReason = criticalError != null
+                ? criticalError.Message
+                : !_colorimeterReady
+                    ? "Connect your colorimeter, then refresh."
+                    : "Ready to start calibration.";
+        }
+
+        private CalibrationPreflightItem? CriticalStartError()
+        {
+            return PreflightItems.FirstOrDefault(i =>
+                i.Severity == "ERROR" &&
+                (i.Message.StartsWith("Select a display", StringComparison.OrdinalIgnoreCase) ||
+                 i.Message.StartsWith("The selected target", StringComparison.OrdinalIgnoreCase) ||
+                 i.Message.Contains("requires Windows HDR", StringComparison.OrdinalIgnoreCase) ||
+                 i.Message.Contains("selected target is SDR", StringComparison.OrdinalIgnoreCase) ||
+                 i.Message.Contains("correction", StringComparison.OrdinalIgnoreCase)));
+        }
 
         private static Brush BrushForSeverity(string severity) => severity switch
         {
@@ -871,13 +985,14 @@ namespace HDRGammaController.ViewModels
         private void Start()
         {
             RefreshPreflight();
-            if (!_colorimeterReady || PreflightItems.Any(i => i.Severity == "ERROR"))
+            var criticalError = CriticalStartError();
+            if (!_colorimeterReady || criticalError != null)
             {
-                StatusText = !_colorimeterReady ? "Colorimeter not ready" : "Preflight requires attention";
+                StatusText = !_colorimeterReady ? "Colorimeter not ready" : "Calibration setup needs attention";
                 StatusBrush = ErrorBrush;
                 StatusDetailText = !_colorimeterReady
                     ? "Connect your colorimeter and click Refresh"
-                    : PreflightItems.First(i => i.Severity == "ERROR").Message;
+                    : criticalError!.Message;
                 return;
             }
 
@@ -896,7 +1011,8 @@ namespace HDRGammaController.ViewModels
             if (ResultMonitor != null)
                 _settingsManager?.SetCalibrationPrefs(
                     ResultMonitor.MonitorDevicePath, correction,
-                    _displayType.ToString(), WhitePointOnly);
+                    _displayType.ToString(), WhitePointOnly,
+                    target.Name, _preset.ToString());
 
             Log.Info($"CalibrationSetup.Start: Monitor={ResultMonitor?.FriendlyName ?? "null"}, Target={ResultTarget?.Name ?? "null"}, DisplayType={_displayType}, " +
                      $"Correction={(correction != null ? System.IO.Path.GetFileName(correction) : "built-in")}, Colorimeter={(ColorimeterService != null ? "present" : "null")}");

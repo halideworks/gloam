@@ -146,6 +146,16 @@ namespace HDRGammaController
 
         #endregion
 
+        public sealed record UiState(
+            bool IsFullScreenMode,
+            bool AlwaysOnTop,
+            bool SoundOnCompletion,
+            bool SoundOnCapture,
+            bool RunDetailedVerify,
+            int PatchSize,
+            double PatchOffsetX,
+            double PatchOffsetY);
+
         #region Constructor
 
         public CalibrationWindow()
@@ -160,6 +170,35 @@ namespace HDRGammaController
 
         /// <summary>All display state the XAML binds to.</summary>
         public CalibrationViewModel Vm { get; } = new CalibrationViewModel();
+
+        public ColorimeterService? ColorimeterService => _colorimeterService;
+
+        public UiState CaptureUiState() => new(
+            Vm.IsFullScreenMode,
+            Vm.AlwaysOnTop,
+            Vm.SoundOnCompletion,
+            Vm.SoundOnCapture,
+            Vm.RunDetailedVerify,
+            _patchSize,
+            _patchOffsetX,
+            _patchOffsetY);
+
+        public void ApplyUiState(UiState? state)
+        {
+            if (state == null) return;
+
+            Vm.IsFullScreenMode = state.IsFullScreenMode;
+            Vm.AlwaysOnTop = state.AlwaysOnTop;
+            Vm.SoundOnCompletion = state.SoundOnCompletion;
+            Vm.SoundOnCapture = state.SoundOnCapture;
+            Vm.RunDetailedVerify = state.RunDetailedVerify;
+            _patchSize = Math.Clamp(state.PatchSize, 120, 2000);
+            _patchOffsetX = state.PatchOffsetX;
+            _patchOffsetY = state.PatchOffsetY;
+            ApplyPatchOffset();
+            UpdatePatchSize();
+            UpdatePositioningPatchSize();
+        }
 
         public CalibrationWindow(ColorimeterService colorimeterService, CalibrationTarget target, CalibrationPreset preset)
             : this()
@@ -196,6 +235,11 @@ namespace HDRGammaController
             _previousGammaMode = previousGammaMode;
             _previousSettings = previousSettings;
             _settingsManager = settingsManager;
+            Services.WindowBoundsPersistence.Attach(
+                this,
+                settingsManager,
+                "CalibrationSetup",
+                shouldSave: () => Vm.IsSetupVisible && !_isCalibrationRunning);
 
             // Show bypass warning in the setup panel
             if (_previousGammaMode != GammaMode.WindowsDefault || previousSettings?.HasAdjustments == true)
@@ -591,16 +635,7 @@ namespace HDRGammaController
             Vm.IsPositioningVisible = false;
             Vm.ShowPositioningWindowedBanner = false;
             Vm.IsSetupVisible = true;
-
-            // Restore to original setup window size (as defined in XAML: 600x700)
-            ResizeMode = ResizeMode.CanResizeWithGrip;
-            Width = 600;
-            Height = 700;
-            Topmost = false;
-
-            // Center on screen
-            Left = (SystemParameters.PrimaryScreenWidth - Width) / 2;
-            Top = (SystemParameters.PrimaryScreenHeight - Height) / 2;
+            RestoreWindowMode();
         }
 
         private async void BeginMeasurement_Click(object sender, RoutedEventArgs e)

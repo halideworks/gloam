@@ -34,8 +34,8 @@ namespace HDRGammaController
             MinWidth = 760;
             MinHeight = 520;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
-            Background = new SolidColorBrush(Color.FromRgb(0x1e, 0x1e, 0x1e));
-            Foreground = new SolidColorBrush(Color.FromRgb(0xe0, 0xe0, 0xe0));
+            Background = new SolidColorBrush(Color.FromRgb(0x0E, 0x11, 0x16));
+            Foreground = new SolidColorBrush(Color.FromRgb(0xF4, 0xF7, 0xFA));
             Resources.MergedDictionaries.Add(new ResourceDictionary
             {
                 Source = new Uri("pack://application:,,,/Gloam;component/Themes/DarkControls.xaml", UriKind.Absolute),
@@ -48,11 +48,11 @@ namespace HDRGammaController
                 FontSize = 13,
                 FontFamily = Application.Current?.Resources["BodyFont"] as FontFamily,
                 Padding = new Thickness(8, 6, 8, 6),
-                Background = new SolidColorBrush(Color.FromRgb(0x1a, 0x1a, 0x1a)),
-                Foreground = Brushes.White,
-                BorderBrush = Brushes.White,
-                BorderThickness = new Thickness(2),
-                CaretBrush = Brushes.White,
+                Background = new SolidColorBrush(Color.FromRgb(0x17, 0x1C, 0x23)),
+                Foreground = new SolidColorBrush(Color.FromRgb(0xF4, 0xF7, 0xFA)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(0x46, 0x55, 0x67)),
+                BorderThickness = new Thickness(1),
+                CaretBrush = new SolidColorBrush(Color.FromRgb(0xF4, 0xF7, 0xFA)),
                 VerticalContentAlignment = VerticalAlignment.Center,
             };
             _query.KeyDown += async (_, e) => { if (e.Key == System.Windows.Input.Key.Enter) await SearchAsync(); };
@@ -65,15 +65,15 @@ namespace HDRGammaController
             _downloadButton.Click += (_, _) => DownloadSelected();
 
             var closeButton = MakeButton("Cancel");
-            closeButton.Background = new SolidColorBrush(Color.FromRgb(0x3d, 0x3d, 0x3d)); // secondary, not accent
+            closeButton.Background = new SolidColorBrush(Color.FromRgb(0x17, 0x1C, 0x23)); // secondary, not accent
             closeButton.Click += (_, _) => { DialogResult = false; Close(); };
 
             _list = new ListView
             {
-                Background = new SolidColorBrush(Color.FromRgb(0x1a, 0x1a, 0x1a)),
-                Foreground = new SolidColorBrush(Color.FromRgb(0xe0, 0xe0, 0xe0)),
-                BorderBrush = Brushes.White,
-                BorderThickness = new Thickness(2),
+                Background = new SolidColorBrush(Color.FromRgb(0x17, 0x1C, 0x23)),
+                Foreground = new SolidColorBrush(Color.FromRgb(0xF4, 0xF7, 0xFA)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(0x46, 0x55, 0x67)),
+                BorderThickness = new Thickness(1),
                 Margin = new Thickness(0, 10, 0, 10),
             };
             var grid = new GridView();
@@ -88,7 +88,7 @@ namespace HDRGammaController
 
             _status = new TextBlock
             {
-                Foreground = new SolidColorBrush(Color.FromRgb(0x90, 0x90, 0x90)),
+                Foreground = new SolidColorBrush(Color.FromRgb(0xA8, 0xB0, 0xBC)),
                 FontSize = 12,
                 VerticalAlignment = VerticalAlignment.Center,
                 Text = "Search the community database by display model. .ccss (spectral sample) entries are " +
@@ -134,9 +134,10 @@ namespace HDRGammaController
         {
             Content = content,
             Padding = new Thickness(14, 5, 14, 5),
-            Background = new SolidColorBrush(Color.FromRgb(0xFF, 0x3C, 0x2F)), // app accent
-            Foreground = Brushes.White,
-            BorderThickness = new Thickness(0),
+            Background = new SolidColorBrush(Color.FromRgb(0xE3, 0x5F, 0x52)),
+            Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(0xE3, 0x5F, 0x52)),
+            BorderThickness = new Thickness(1),
         };
 
         private static GridViewColumn Col(string header, string property, double width) => new()

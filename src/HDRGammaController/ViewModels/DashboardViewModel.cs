@@ -12,6 +12,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HDRGammaController.Core;
 using HDRGammaController.Core.Calibration;
+using HDRGammaController.Services;
 
 namespace HDRGammaController.ViewModels
 {
@@ -32,6 +33,7 @@ namespace HDRGammaController.ViewModels
 
         private readonly MonitorManager _monitorManager;
         private readonly NightModeService _nightModeService;
+        private readonly UpdateService _updateService;
         private readonly Action<MonitorInfo, GammaMode, CalibrationSettings?, int?> _applyCallback;
         private readonly Action<double> _blendChangedHandler;
         private readonly AppExclusionItem _appExclusionItem;
@@ -51,8 +53,7 @@ namespace HDRGammaController.ViewModels
         public SettingsManager SettingsManager { get; }
 
         /// <summary>App version (e.g. "v1.0.1") shown in the dashboard title bar.</summary>
-        public string AppVersion =>
-            "v" + (System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "?");
+        public string AppVersion => _updateService.DisplayVersion;
 
         public ObservableCollection<object> Items { get; } = new ObservableCollection<object>();
 
@@ -61,6 +62,7 @@ namespace HDRGammaController.ViewModels
         public ICommand Pause1hCommand { get; }
         public ICommand Pause4hCommand { get; }
         public ICommand PauseUntilMorningCommand { get; }
+        public ICommand CycleNightModeCommand { get; }
         public ICommand AddExcludedAppCommand { get; }
         public ICommand RemoveExcludedAppCommand { get; }
         public ICommand SaveExcludedAppsCommand { get; }
@@ -74,11 +76,13 @@ namespace HDRGammaController.ViewModels
             MonitorManager monitorManager,
             SettingsManager settingsManager,
             NightModeService nightModeService,
+            UpdateService updateService,
             Action<MonitorInfo, GammaMode, CalibrationSettings?, int?> applyCallback)
         {
             _monitorManager = monitorManager;
             SettingsManager = settingsManager;
             _nightModeService = nightModeService;
+            _updateService = updateService;
             _applyCallback = applyCallback;
 
             _appExclusionItem = new AppExclusionItem();
@@ -95,6 +99,7 @@ namespace HDRGammaController.ViewModels
             Pause1hCommand = new RelayCommand(() => _nightModeService.PauseUntil(DateTime.Now.AddHours(1)));
             Pause4hCommand = new RelayCommand(() => _nightModeService.PauseUntil(DateTime.Now.AddHours(4)));
             PauseUntilMorningCommand = new RelayCommand(() => _nightModeService.PauseUntil(DateTime.Today.AddDays(1).AddHours(7))); // 7 AM next day
+            CycleNightModeCommand = new RelayCommand(() => NightModeModeIndex = (NightModeModeIndex + 1) % 3);
             AddExcludedAppCommand = new RelayCommand<AppExclusionItem>(AddExcludedApp);
             RemoveExcludedAppCommand = new RelayCommand<AppExclusionRule>(RemoveExcludedApp);
             SaveExcludedAppsCommand = new RelayCommand(SaveExcludedApps);
@@ -133,10 +138,59 @@ namespace HDRGammaController.ViewModels
                 if (value == SettingsManager.NightMode.Enabled) return;
                 var updated = SettingsManager.NightMode;
                 updated.Enabled = value;
+                if (!value) updated.ManualOverrideEnabled = false;
                 SettingsManager.SetNightMode(updated);
-                OnPropertyChanged(nameof(IsNightModeEnabled));
+                OnNightModeModeChanged();
                 Refresh();
             }
+        }
+
+        public int NightModeModeIndex
+        {
+            get
+            {
+                var settings = SettingsManager.NightMode;
+                if (!settings.Enabled) return 0;
+                return settings.ManualOverrideEnabled ? 2 : 1;
+            }
+            set
+            {
+                value = Math.Clamp(value, 0, 2);
+                if (value == NightModeModeIndex) return;
+
+                var updated = SettingsManager.NightMode;
+                updated.Enabled = value != 0;
+                updated.ManualOverrideEnabled = value == 2;
+                SettingsManager.SetNightMode(updated);
+                OnNightModeModeChanged();
+                Refresh();
+            }
+        }
+
+        public string NightModeModeDescription
+        {
+            get
+            {
+                var settings = SettingsManager.NightMode;
+                if (!settings.Enabled) return "Daylight is forced; schedule and manual warmth are disabled.";
+                if (settings.ManualOverrideEnabled) return $"Forcing {settings.GetManualOverrideKelvin()}K until you switch back to Auto or Off.";
+                return "Schedule controls warmth automatically.";
+            }
+        }
+
+        public string NightModeModeLabel => NightModeModeIndex switch
+        {
+            0 => "Night Mode: Off",
+            1 => "Night Mode: Auto",
+            _ => "Night Mode: Manual"
+        };
+
+        private void OnNightModeModeChanged()
+        {
+            OnPropertyChanged(nameof(IsNightModeEnabled));
+            OnPropertyChanged(nameof(NightModeModeIndex));
+            OnPropertyChanged(nameof(NightModeModeLabel));
+            OnPropertyChanged(nameof(NightModeModeDescription));
         }
 
         /// <summary>
@@ -231,6 +285,7 @@ namespace HDRGammaController.ViewModels
                 if (!NightModeSettingsEqual(_editingNightMode, latest))
                     _editingNightMode = latest;
             }
+            OnNightModeModeChanged();
 
             var monitors = (reEnumerate || _cachedMonitors == null)
                 ? _monitorManager.EnumerateMonitors()
@@ -354,6 +409,7 @@ namespace HDRGammaController.ViewModels
             return a.Enabled == b.Enabled
                 && a.UseAutoSchedule == b.UseAutoSchedule
                 && a.Latitude == b.Latitude
+                && a.ManualOverrideEnabled == b.ManualOverrideEnabled
                 && a.Longitude == b.Longitude
                 && a.StartTime == b.StartTime
                 && a.EndTime == b.EndTime

@@ -2,6 +2,7 @@ using System;
 using System.Windows;
 using System.Windows.Input;
 using HDRGammaController.Core;
+using HDRGammaController.Services;
 using HDRGammaController.ViewModels;
 
 namespace HDRGammaController
@@ -20,11 +21,13 @@ namespace HDRGammaController
             MonitorManager monitorManager,
             SettingsManager settingsManager,
             NightModeService nightModeService,
+            UpdateService updateService,
             Action<MonitorInfo, GammaMode, CalibrationSettings?, int?> applyCallback)
         {
             InitializeComponent();
+            WindowBoundsPersistence.Attach(this, settingsManager, "Dashboard");
 
-            _viewModel = new DashboardViewModel(monitorManager, settingsManager, nightModeService, applyCallback);
+            _viewModel = new DashboardViewModel(monitorManager, settingsManager, nightModeService, updateService, applyCallback);
             _viewModel.ConfigureRequested += OnConfigureRequested;
             DataContext = _viewModel;
 
@@ -80,10 +83,5 @@ namespace HDRGammaController
             Close();
         }
 
-        private void NightModeToggle_RightClick(object sender, MouseButtonEventArgs e)
-        {
-            NightModeToggle.ContextMenu.IsOpen = true;
-            e.Handled = true;
-        }
     }
 }

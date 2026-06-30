@@ -148,10 +148,7 @@ namespace HDRGammaController.Core
 
             if (nightModeActive)
             {
-                double nightShift = (currentKelvin - 6500) / 70.0;
-                calibration.Temperature += nightShift;
-                calibration.Algorithm = _settingsManager.NightMode.Algorithm;
-                calibration.UseUltraWarmMode = _settingsManager.NightMode.UseUltraWarmMode;
+                ApplyNightModeToCalibration(calibration, currentKelvin, _settingsManager.NightMode);
             }
 
             // Extended range: 1900K..10000K. See CalibrationSettings.Temperature
@@ -174,6 +171,14 @@ namespace HDRGammaController.Core
             _coalescer.Submit(monitor.HMonitor, (monitor, mode, calibration, MonitorInfo.SanitizeSdrWhiteLevel(monitor.SdrWhiteLevel)));
         }
 
+        internal static void ApplyNightModeToCalibration(CalibrationSettings calibration, int currentKelvin, NightModeSettings nightModeSettings)
+        {
+            double nightShift = (currentKelvin - 6500) / 70.0;
+            calibration.Temperature += nightShift;
+            calibration.Algorithm = nightModeSettings.Algorithm;
+            calibration.UseUltraWarmMode = nightModeSettings.UseUltraWarmMode;
+        }
+
         public void ApplyAll(IEnumerable<MonitorInfo> monitors)
         {
             int currentKelvin = _nightModeService.CurrentNightKelvin;
@@ -184,8 +189,6 @@ namespace HDRGammaController.Core
             {
                 var profile = _settingsManager.GetMonitorProfile(monitor.MonitorDevicePath);
                 var mode = profile?.GammaMode ?? monitor.CurrentGamma;
-
-                if (mode == GammaMode.WindowsDefault && !nightModeActive) continue;
 
                 RequestApply(monitor, mode);
             }

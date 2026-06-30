@@ -10,94 +10,48 @@
         MinWidth="820" MinHeight="560"
         WindowStartupLocation="CenterScreen"
         Background="Transparent"
-        Foreground="#e0e0e0"
+        Foreground="{DynamicResource ThemeText}"
         FontFamily="{DynamicResource BodyFont}"
         WindowStyle="None"
         AllowsTransparency="True"
         ResizeMode="CanResizeWithGrip">
 
     <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="pack://application:,,,/Gloam;component/Themes/Brutalist.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+
         <BooleanToVisibilityConverter x:Key="BoolToVis"/>
 
-        <!-- Dark-fixed brutalist report: data-viz colors need a stable dark surround,
-             so colors are literal; accent is signal red. -->
+        <!-- Dark report surface with app-aligned chrome and accents. -->
         <Style x:Key="SectionHeader" TargetType="TextBlock">
             <Setter Property="FontFamily" Value="{DynamicResource DisplayFont}"/>
             <Setter Property="FontSize" Value="15"/>
             <Setter Property="FontWeight" Value="Bold"/>
-            <Setter Property="Foreground" Value="#FF3C2F"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeAccent}"/>
             <Setter Property="Margin" Value="0,0,0,10"/>
         </Style>
 
         <Style x:Key="MetricLabel" TargetType="TextBlock">
             <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Foreground" Value="#a0a0a0"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeTextDim}"/>
             <Setter Property="Margin" Value="0,2"/>
         </Style>
 
         <Style x:Key="MetricValue" TargetType="TextBlock">
             <Setter Property="FontSize" Value="14"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Foreground" Value="#e0e0e0"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeText}"/>
             <Setter Property="Margin" Value="0,2"/>
         </Style>
 
         <Style x:Key="CardBorder" TargetType="Border">
-            <Setter Property="Background" Value="#1a1a1a"/>
-            <Setter Property="BorderBrush" Value="#FFFFFF"/>
-            <Setter Property="BorderThickness" Value="2"/>
+            <Setter Property="Background" Value="{DynamicResource ThemeSurface}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource ThemeBorder}"/>
+            <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Padding" Value="16"/>
             <Setter Property="Margin" Value="0,0,0,12"/>
-        </Style>
-
-        <Style x:Key="ActionButton" TargetType="Button">
-            <Setter Property="Background" Value="#FF3C2F"/>
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Padding" Value="16,8"/>
-            <Setter Property="FontSize" Value="13"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}"
-                                CornerRadius="0"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#FF5B50"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-
-        <Style x:Key="SecondaryButton" TargetType="Button">
-            <Setter Property="Background" Value="#3d3d3d"/>
-            <Setter Property="Foreground" Value="#e0e0e0"/>
-            <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Padding" Value="16,8"/>
-            <Setter Property="FontSize" Value="13"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}"
-                                CornerRadius="0"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#4d4d4d"/>
-                </Trigger>
-            </Style.Triggers>
         </Style>
 
         <Style x:Key="GradeText" TargetType="TextBlock">
@@ -111,48 +65,11 @@
             <Setter Property="Margin" Value="0,-3,0,0"/>
         </Style>
 
-        <!-- Dark scrollbar matching the report theme (replaces the default light one). -->
-        <Style x:Key="DarkScrollThumb" TargetType="Thumb">
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Thumb">
-                        <Border Background="#4d4d4d" CornerRadius="0" Margin="2,0"/>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Foreground" Value="#5d5d5d"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-        <Style TargetType="ScrollBar">
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Width" Value="12"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="ScrollBar">
-                        <Grid Background="#1e1e1e">
-                            <Track x:Name="PART_Track" IsDirectionReversed="True">
-                                <Track.DecreaseRepeatButton>
-                                    <RepeatButton Command="ScrollBar.PageUpCommand" Opacity="0" Focusable="False"/>
-                                </Track.DecreaseRepeatButton>
-                                <Track.Thumb>
-                                    <Thumb Style="{StaticResource DarkScrollThumb}"/>
-                                </Track.Thumb>
-                                <Track.IncreaseRepeatButton>
-                                    <RepeatButton Command="ScrollBar.PageDownCommand" Opacity="0" Focusable="False"/>
-                                </Track.IncreaseRepeatButton>
-                            </Track>
-                        </Grid>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
+        </ResourceDictionary>
     </Window.Resources>
 
-    <!-- Custom brutalist chrome: white frame + draggable header (no OS title bar) -->
-    <Border Background="#141414" BorderBrush="#FFFFFF" BorderThickness="2">
+    <!-- Custom chrome: draggable header (no OS title bar) -->
+    <Border Background="{DynamicResource ThemeBg}" BorderBrush="{DynamicResource ThemeWindowFrame}" BorderThickness="1">
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -161,7 +78,7 @@
         </Grid.RowDefinitions>
 
         <!-- Header (drag bar) -->
-        <Border Grid.Row="0" Background="#1a1a1a" BorderBrush="#FFFFFF" BorderThickness="0,0,0,3" Padding="20,16"
+        <Border Grid.Row="0" Background="{DynamicResource ThemeSurface}" BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="0,0,0,1" Padding="20,16"
                 MouseLeftButtonDown="Header_MouseDown">
             <Grid>
                 <Grid.ColumnDefinitions>
@@ -171,12 +88,12 @@
 
                 <StackPanel Grid.Column="0">
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                        <local:BrandMark Width="20" Height="20" Margin="0,0,9,0" VerticalAlignment="Center" GapBrush="#1A1A1A"/>
-                        <TextBlock Text="CALIBRATION REPORT" FontFamily="{DynamicResource DisplayFont}"
-                                   FontWeight="ExtraBold" FontSize="20" Foreground="#FFFFFF" VerticalAlignment="Center"/>
+                        <local:BrandMark Width="20" Height="20" Margin="0,0,9,0" VerticalAlignment="Center" GapBrush="{DynamicResource ThemeSurface}"/>
+                        <TextBlock Text="Calibration report" FontFamily="{DynamicResource DisplayFont}"
+                                   FontWeight="ExtraBold" FontSize="20" Foreground="{DynamicResource ThemeText}" VerticalAlignment="Center"/>
                     </StackPanel>
-                    <TextBlock Text="{Binding MonitorNameText}" FontSize="13" Foreground="#a0a0a0" Margin="0,2,0,0"/>
-                    <TextBlock Text="{Binding CalibrationDateText}" FontSize="12" Foreground="#707070" Margin="0,2,0,0"/>
+                    <TextBlock Text="{Binding MonitorNameText}" FontSize="13" Foreground="{DynamicResource ThemeTextDim}" Margin="0,2,0,0"/>
+                    <TextBlock Text="{Binding CalibrationDateText}" FontSize="12" Foreground="{DynamicResource ThemeTextDim}" Opacity="0.75" Margin="0,2,0,0"/>
                 </StackPanel>
 
                 <!-- Grade Display (the letter in a colored disc is self-evidently a grade) -->
@@ -184,7 +101,7 @@
                     <Border Width="84" Height="84" CornerRadius="42" Background="{Binding GradeBackground}">
                         <TextBlock Text="{Binding GradeText}" Style="{StaticResource GradeText}" Foreground="{Binding GradeBrush}"/>
                     </Border>
-                    <TextBlock Text="{Binding GradeScopeText}" FontSize="10" Foreground="#808080"
+                    <TextBlock Text="{Binding GradeScopeText}" FontSize="10" Foreground="{DynamicResource ThemeTextDim}"
                                HorizontalAlignment="Center" Margin="0,4,0,0"/>
                 </StackPanel>
 
@@ -194,10 +111,10 @@
                            MouseLeftButtonDown="CloseGlyph_Click">
                     <TextBlock.Style>
                         <Style TargetType="TextBlock">
-                            <Setter Property="Foreground" Value="#888888"/>
+                            <Setter Property="Foreground" Value="{DynamicResource ThemeTextDim}"/>
                             <Style.Triggers>
                                 <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter Property="Foreground" Value="#FF3C2F"/>
+                                    <Setter Property="Foreground" Value="{DynamicResource ThemeAccent}"/>
                                 </Trigger>
                             </Style.Triggers>
                         </Style>
@@ -216,7 +133,7 @@
                     <StackPanel>
                         <TextBlock Text="Accuracy (ΔE2000)" Style="{StaticResource SectionHeader}"/>
                         <TextBlock Text="Native = the uncorrected panel, measured during calibration. After = re-measured automatically through the applied profile (gamma preference and night mode are suspended during the sweep)."
-                                   FontSize="12" Foreground="#909090" TextWrapping="Wrap" Margin="0,-4,0,12"/>
+                                   FontSize="12" Foreground="{DynamicResource ThemeTextDim}" TextWrapping="Wrap" Margin="0,-4,0,12"/>
 
                         <Grid>
                             <Grid.ColumnDefinitions>
@@ -570,7 +487,7 @@
                                     Padding="10"
                                     BorderBrush="{Binding MeasurementValidationBrush}"
                                     BorderThickness="1"
-                                    Background="#101010"
+                                    Background="{DynamicResource ThemeBg}"
                                     Visibility="{Binding IsMeasurementValidationVisible, Converter={StaticResource BoolToVis}}">
                                 <StackPanel>
                                     <TextBlock Text="Measurement Integrity" Style="{StaticResource MetricLabel}"/>
@@ -592,8 +509,8 @@
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
                                     <StackPanel Orientation="Horizontal" Margin="0,4">
-                                        <TextBlock Text="*" Foreground="#FF3C2F" FontWeight="Bold" Margin="0,0,8,0"/>
-                                        <TextBlock Text="{Binding}" TextWrapping="Wrap" Foreground="#a0a0a0"/>
+                                        <TextBlock Text="*" Foreground="{DynamicResource ThemeAccent}" FontWeight="Bold" Margin="0,0,8,0"/>
+                                        <TextBlock Text="{Binding}" TextWrapping="Wrap" Foreground="{DynamicResource ThemeTextDim}"/>
                                     </StackPanel>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
@@ -608,7 +525,7 @@
              column, with the gap between them absorbing the slack. Previously every control
              sat in its own Auto column with no flexible column, so at MinWidth the row had
              nowhere to give and the leftmost button was pushed off the left edge and clipped. -->
-        <Border Grid.Row="2" Background="#1a1a1a" BorderBrush="#FFFFFF" BorderThickness="0,3,0,0" Padding="20,16">
+        <Border Grid.Row="2" Background="{DynamicResource ThemeSurface}" BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="0,1,0,0" Padding="20,16">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
@@ -621,7 +538,7 @@
                           IsChecked="{Binding IsDetailedVerifyChecked}"
                           IsEnabled="{Binding IsVerifyEnabled}"
                           ToolTip="Extends the verify sweep to a 21-step grayscale, R/G/B saturation ramps and the ColorChecker memory colors (39 patches), adding a ΔE distribution, per-patch chart, worst/best patch lists and a category breakdown to the report. Takes several times longer than the standard verify."
-                          Foreground="#e0e0e0"
+                          Foreground="{DynamicResource ThemeText}"
                           VerticalAlignment="Center" HorizontalAlignment="Left"
                           Margin="0,0,16,0"/>
 
@@ -629,20 +546,20 @@
                     <Button x:Name="ExportReportButton"
                             Content="Export Report"
                             ToolTip="Print or save as PDF via Microsoft Print to PDF"
-                            Style="{StaticResource SecondaryButton}"
+                            Style="{StaticResource BrutBtnSecondary}"
                             Margin="0,0,10,0"
                             Click="ExportReportButton_Click"/>
 
                     <Button x:Name="ExportButton"
                             Content="Export LUT"
-                            Style="{StaticResource SecondaryButton}"
+                            Style="{StaticResource BrutBtnSecondary}"
                             Margin="0,0,10,0"
                             Click="ExportButton_Click"/>
 
                     <Button x:Name="ApplyButton"
                             Content="{Binding ApplyButtonContent}"
                             IsEnabled="{Binding IsApplyEnabled}"
-                            Style="{StaticResource ActionButton}"
+                            Style="{StaticResource BrutBtnPrimary}"
                             Margin="0,0,10,0"
                             Click="ApplyButton_Click"/>
 
@@ -650,7 +567,7 @@
                             Content="{Binding VerifyButtonContent}"
                             IsEnabled="{Binding IsVerifyEnabled}"
                             ToolTip="Re-measure a quick patch sweep through the applied profile to refresh the 'after' numbers. Place the probe on the display first."
-                            Style="{StaticResource SecondaryButton}"
+                            Style="{StaticResource BrutBtnSecondary}"
                             Margin="0,0,10,0"
                             Click="VerifyButton_Click"/>
 
@@ -658,13 +575,13 @@
                             Content="White Tools"
                             IsEnabled="{Binding IsWhiteToolsEnabled}"
                             ToolTip="Re-anchor white with a quick measurement (drift fix), or trim the target white by eye against a reference display."
-                            Style="{StaticResource SecondaryButton}"
+                            Style="{StaticResource BrutBtnSecondary}"
                             Margin="0,0,10,0"
                             Click="WhiteToolsButton_Click"/>
 
                     <Button Content="Close"
                             IsEnabled="{Binding IsCloseEnabled}"
-                            Style="{StaticResource SecondaryButton}"
+                            Style="{StaticResource BrutBtnSecondary}"
                             Click="CloseButton_Click"/>
                 </StackPanel>
             </Grid>

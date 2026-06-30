@@ -43,8 +43,8 @@ namespace HDRGammaController
             MinWidth = 720;
             MinHeight = 460;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
-            Background = new SolidColorBrush(Color.FromRgb(0x1e, 0x1e, 0x1e));
-            Foreground = new SolidColorBrush(Color.FromRgb(0xe0, 0xe0, 0xe0));
+            Background = new SolidColorBrush(Color.FromRgb(0x0E, 0x11, 0x16));
+            Foreground = new SolidColorBrush(Color.FromRgb(0xF4, 0xF7, 0xFA));
             Resources.MergedDictionaries.Add(new ResourceDictionary
             {
                 Source = new Uri("pack://application:,,,/Gloam;component/Themes/DarkControls.xaml", UriKind.Absolute),
@@ -53,10 +53,10 @@ namespace HDRGammaController
 
             _list = new ListView
             {
-                Background = new SolidColorBrush(Color.FromRgb(0x1a, 0x1a, 0x1a)),
-                Foreground = new SolidColorBrush(Color.FromRgb(0xe0, 0xe0, 0xe0)),
-                BorderBrush = Brushes.White,
-                BorderThickness = new Thickness(2),
+                Background = new SolidColorBrush(Color.FromRgb(0x17, 0x1C, 0x23)),
+                Foreground = new SolidColorBrush(Color.FromRgb(0xF4, 0xF7, 0xFA)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(0x46, 0x55, 0x67)),
+                BorderThickness = new Thickness(1),
                 Margin = new Thickness(0, 0, 0, 10),
                 SelectionMode = SelectionMode.Extended,
             };
@@ -75,9 +75,10 @@ namespace HDRGammaController
                     Content = label,
                     Padding = new Thickness(14, 6, 14, 6),
                     Margin = new Thickness(8, 0, 0, 0),
-                    Background = new SolidColorBrush(accent ? Color.FromRgb(0xFF, 0x3C, 0x2F) : Color.FromRgb(0x3d, 0x3d, 0x3d)),
-                    Foreground = Brushes.White,
-                    BorderThickness = new Thickness(0),
+                    Background = new SolidColorBrush(accent ? Color.FromRgb(0xE3, 0x5F, 0x52) : Color.FromRgb(0x17, 0x1C, 0x23)),
+                    Foreground = new SolidColorBrush(Color.FromRgb(0xF4, 0xF7, 0xFA)),
+                    BorderBrush = new SolidColorBrush(accent ? Color.FromRgb(0xE3, 0x5F, 0x52) : Color.FromRgb(0x46, 0x55, 0x67)),
+                    BorderThickness = new Thickness(1),
                 };
                 b.Click += onClick;
                 return b;
@@ -85,7 +86,7 @@ namespace HDRGammaController
 
             _status = new TextBlock
             {
-                Foreground = new SolidColorBrush(Color.FromRgb(0x90, 0x90, 0x90)),
+                Foreground = new SolidColorBrush(Color.FromRgb(0xA8, 0xB0, 0xBC)),
                 FontSize = 12,
                 VerticalAlignment = VerticalAlignment.Center,
                 TextWrapping = TextWrapping.Wrap,

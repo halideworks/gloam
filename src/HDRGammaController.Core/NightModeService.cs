@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Timers;
 
 namespace HDRGammaController.Core
@@ -19,6 +20,12 @@ namespace HDRGammaController.Core
         /// Whether night mode is enabled.
         /// </summary>
         public bool Enabled { get; set; } = false;
+
+        /// <summary>
+        /// When enabled, night mode ignores the schedule and applies TemperatureKelvin now.
+        /// Enabled=false still wins and forces daylight.
+        /// </summary>
+        public bool ManualOverrideEnabled { get; set; } = false;
 
         /// <summary>
         /// Use automatic sunrise/sunset calculation based on location.
@@ -54,7 +61,7 @@ namespace HDRGammaController.Core
         /// <summary>
         /// Algorithm to use for color temperature transformation.
         /// </summary>
-        public NightModeAlgorithm Algorithm { get; set; } = NightModeAlgorithm.Standard;
+        public NightModeAlgorithm Algorithm { get; set; } = NightModeAlgorithm.AccurateCIE1931;
 
         /// <summary>
         /// Enable enhanced warmth curve below 2800K for more dramatic visual changes.
@@ -157,6 +164,20 @@ namespace HDRGammaController.Core
             long ticks = time.Ticks % TimeSpan.TicksPerDay;
             if (ticks < 0) ticks += TimeSpan.TicksPerDay;
             return TimeSpan.FromTicks(ticks);
+        }
+
+        public int GetManualOverrideKelvin()
+        {
+            int scheduledWarmest = Schedule?
+                .Where(p => p != null)
+                .Select(p => ClampKelvin(p.TargetKelvin))
+                .Where(k => k < MaxKelvin)
+                .DefaultIfEmpty(0)
+                .Min() ?? 0;
+
+            return scheduledWarmest > 0
+                ? scheduledWarmest
+                : ClampKelvin(TemperatureKelvin);
         }
     }
 
@@ -308,7 +329,11 @@ namespace HDRGammaController.Core
         private void ScheduleNextTickLocked()
         {
             if (_disposed) return;
-            if (!_settings.Enabled) return;
+            if (!_settings.Enabled || _settings.ManualOverrideEnabled)
+            {
+                _timer.Stop();
+                return;
+            }
 
             _timer.Interval = _inFadeWindow
                 ? _fadeTickMs
@@ -325,6 +350,19 @@ namespace HDRGammaController.Core
             if (!_settings.Enabled)
             {
                 return ForceDayModeLocked();
+            }
+
+            if (_settings.ManualOverrideEnabled)
+            {
+                _inFadeWindow = false;
+                _msToNextTrigger = double.MaxValue;
+                int manualKelvin = _settings.GetManualOverrideKelvin();
+                if (manualKelvin != _currentNightKelvin)
+                {
+                    _currentNightKelvin = manualKelvin;
+                    return 1.0;
+                }
+                return null;
             }
 
             if (_pauseUntil.HasValue)
@@ -486,6 +524,7 @@ namespace HDRGammaController.Core
             var clone = new NightModeSettings
             {
                 Enabled = source.Enabled,
+                ManualOverrideEnabled = source.ManualOverrideEnabled,
                 UseAutoSchedule = source.UseAutoSchedule,
                 Latitude = NightModeSettings.ClampLatitude(source.Latitude),
                 Longitude = NightModeSettings.ClampLongitude(source.Longitude),

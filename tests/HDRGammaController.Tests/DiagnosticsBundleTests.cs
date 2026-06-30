@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Text.Json.Nodes;
 using HDRGammaController.Core;
@@ -157,6 +158,49 @@ namespace HDRGammaController.Tests
             Assert.Equal(9, mon["DisplayConfigSourceId"]!.GetValue<int>());
             Assert.NotEmpty(mon["MonitorDevicePathHash"]!.GetValue<string>());
             Assert.DoesNotContain(rawPath, manifest, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void Create_IncludesSanitizedUpdaterStateWhenPresent()
+        {
+            string originalData = AppPaths.DataDir;
+            string originalRoaming = AppPaths.RoamingDataDir;
+            string dir = CreateTempDirectory();
+            try
+            {
+                AppPaths.UseDataDirectoriesForCurrentProcess(dir, Path.Combine(dir, "roaming"));
+                Directory.CreateDirectory(AppPaths.DataDir);
+                string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                File.WriteAllText(Path.Combine(AppPaths.DataDir, "update-state.json"), """
+                {
+                  "IsInstalled": true,
+                  "InstalledVersion": "1.0.2",
+                  "LastResult": "download-failed",
+                  "LastError": "Failed under LOCAL_APP_DATA_PLACEHOLDER\\Gloam"
+                }
+                """.Replace("LOCAL_APP_DATA_PLACEHOLDER", JsonEscape(localAppData)));
+
+                var settings = new SettingsManager();
+                string zipPath = new DiagnosticsBundle().Create(
+                    Path.Combine(dir, "Diagnostics"),
+                    Array.Empty<MonitorInfo>(),
+                    settings);
+
+                using var zip = ZipFile.OpenRead(zipPath);
+                var entry = zip.GetEntry("update-state.sanitized.json");
+                Assert.NotNull(entry);
+                using var reader = new StreamReader(entry!.Open());
+                string text = reader.ReadToEnd();
+
+                Assert.Contains("\"InstalledVersion\": \"1.0.2\"", text);
+                Assert.Contains("%LOCALAPPDATA%", text);
+                Assert.DoesNotContain(localAppData, text, StringComparison.OrdinalIgnoreCase);
+            }
+            finally
+            {
+                AppPaths.UseDataDirectoriesForCurrentProcess(originalData, originalRoaming);
+                DeleteDirectory(dir);
+            }
         }
 
         [Fact]

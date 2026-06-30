@@ -40,7 +40,7 @@
             <!-- Header: accent-red kicker + title -->
             <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
                 <Border Width="4" Background="{DynamicResource ThemeAccent}" Margin="0,0,10,0"/>
-                <TextBlock Style="{StaticResource Kicker}" Text="ERROR" VerticalAlignment="Center"/>
+                <TextBlock Style="{StaticResource Kicker}" Text="Error" VerticalAlignment="Center"/>
             </StackPanel>
 
             <TextBlock Grid.Row="1" Style="{StaticResource OverlayTitle}"

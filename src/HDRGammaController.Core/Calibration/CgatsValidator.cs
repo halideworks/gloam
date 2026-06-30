@@ -278,13 +278,10 @@ namespace HDRGammaController.Core.Calibration
                         return false;
                     }
 
-                    // Spectral power samples in CCSS files are measured physical data. CCMX
-                    // XYZ fields are matrix coefficients, so negative values are valid there.
-                    if (field.StartsWith("SPEC_", StringComparison.OrdinalIgnoreCase) && value < -1e-9)
-                    {
-                        error = $"Data row {rowIndex + 1} field {field} contains a negative spectral sample.";
-                        return false;
-                    }
+                    // CCSS spectral samples and CCMX matrix coefficients are both numeric
+                    // calibration data. Real Argyll/DisplayCAL CCSS files may contain small
+                    // negative samples after instrument/reference correction; spotread accepts
+                    // those, so validation only rejects non-finite values here.
                 }
             }
 

@@ -76,6 +76,10 @@ The version comes from the tag. `UpdateService.RepoUrl` and the CI upload target
 - Running `Setup.exe` installs per-user to `%LocalAppData%\GloamApp` with no "Unknown Publisher" warning
   (SmartScreen reputation still warms up over the first weeks/installs - expected).
 - An installed older build detects the new version, downloads it, and applies on restart.
+  For a local end-to-end check against the official GitHub/Velopack feed, run:
+  ```powershell
+  .\scripts\Test-VelopackInstalledUpdate.ps1 -OlderSetupPath .\path\to\older\Gloam-Setup.exe -ExpectedVersion X.Y.Z -IUnderstandThisModifiesLocalInstall
+  ```
 
 > Note: app data (settings, logs, calibration reports) lives under `%LocalAppData%\Gloam`, separate
 > from the Velopack install root `%LocalAppData%\GloamApp`, so it survives updates and uninstalls.
