@@ -33,9 +33,9 @@ namespace HDRGammaController.Core.Calibration
         public ClosedLoopCorrector(CalibrationTarget target, double sdrWhiteLevel, bool isHdr, double damping = 0.5)
         {
             _target = target ?? throw new ArgumentNullException(nameof(target));
-            _sdrWhiteLevel = sdrWhiteLevel;
+            _sdrWhiteLevel = double.IsFinite(sdrWhiteLevel) && sdrWhiteLevel > 0.0 ? sdrWhiteLevel : 200.0;
             _isHdr = isHdr;
-            _damping = Math.Clamp(damping, 0.1, 1.0);
+            _damping = ClampFinite(damping, 0.1, 1.0, 0.5);
         }
 
         /// <summary>
@@ -67,13 +67,17 @@ namespace HDRGammaController.Core.Calibration
             var grey = ExtractGrayscale(achievedMeasurements);
             if (grey.Count < 3) return current; // nothing to learn from
 
-            double whiteY = grey.Max(p => p.Y);
-            double blackY = grey.Min(p => p.Y);
+            // Anchor the response range to the displayed black/white endpoints. A noisy
+            // mid/high gray can overshoot white during a closed-loop pass; letting that
+            // sample redefine white makes the next inverse LUT over-correct the range.
+            double whiteY = grey[^1].Y;
+            double blackY = grey[0].Y;
             double range = Math.Max(whiteY - blackY, 1e-6);
 
             // Achieved normalized-luminance response a(v): input signal -> [0,1].
             var inputs = grey.Select(p => p.V).ToArray();
-            var achieved = grey.Select(p => Math.Clamp((p.Y - blackY) / range, 0, 1)).ToArray();
+            var achieved = grey.Select(p => Clamp01((p.Y - blackY) / range)).ToArray();
+            EnforceMonotonic(achieved);
 
             // Per-channel white-balance gains: push the white point's channel ratios toward
             // the target white. Computed from the brightest neutral measurement.
@@ -86,7 +90,7 @@ namespace HDRGammaController.Core.Calibration
             for (int i = 0; i < LutSize; i++)
             {
                 double v = i / (double)(LutSize - 1);
-                double targetLin = Math.Clamp(_target.ApplyEotf(v), 0, 1);
+                double targetLin = Clamp01(_target.ApplyEotf(v));
 
                 // Find the input v'' whose achieved luminance equals our target, then send
                 // whatever signal the current correction sent for v'' — that's the signal
@@ -97,11 +101,14 @@ namespace HDRGammaController.Core.Calibration
                 double cR = Sample(current.R, idx);
                 double cG = Sample(current.G, idx);
                 double cB = Sample(current.B, idx);
+                double currentR = Sample(current.R, i);
+                double currentG = Sample(current.G, i);
+                double currentB = Sample(current.B, i);
 
                 // Damp toward the proposed correction for stability, then apply the white gain.
-                newR[i] = Math.Clamp(Lerp(current.R[i], cR, _damping) * gainR, 0, 1);
-                newG[i] = Math.Clamp(Lerp(current.G[i], cG, _damping) * gainG, 0, 1);
-                newB[i] = Math.Clamp(Lerp(current.B[i], cB, _damping) * gainB, 0, 1);
+                newR[i] = Clamp01(Lerp(currentR, cR, _damping) * gainR);
+                newG[i] = Clamp01(Lerp(currentG, cG, _damping) * gainG);
+                newB[i] = Clamp01(Lerp(currentB, cB, _damping) * gainB);
             }
 
             // The endpoints are anchored: 0→0, and white maps to the gained channel maxima.
@@ -129,7 +136,7 @@ namespace HDRGammaController.Core.Calibration
             int n = 0;
             foreach (var p in grey)
             {
-                double targetLin = Math.Clamp(_target.ApplyEotf(p.V), 0, 1);
+                double targetLin = Clamp01(_target.ApplyEotf(p.V));
                 // Target neutral XYZ at this level: targetLin * measured white.
                 var targetXyz = new CieXyz(refWhite.X * targetLin, refWhite.Y * targetLin, refWhite.Z * targetLin);
                 var measuredLab = ColorMath.XyzToLab(p.Xyz, refWhite);
@@ -152,6 +159,9 @@ namespace HDRGammaController.Core.Calibration
             return measurements
                 .Where(m => m.IsValid && m.Patch.Category == PatchCategory.Grayscale)
                 .Select(m => new GreyPoint(m.Patch.DisplayRgb.R, m.Xyz))
+                .Where(p => double.IsFinite(p.V) &&
+                            double.IsFinite(p.Xyz.X) && double.IsFinite(p.Xyz.Y) && double.IsFinite(p.Xyz.Z) &&
+                            p.Xyz.X >= -1e-6 && p.Xyz.Y >= -1e-6 && p.Xyz.Z >= -1e-6)
                 .OrderBy(p => p.V)
                 .ToList();
         }
@@ -165,10 +175,16 @@ namespace HDRGammaController.Core.Calibration
 
             double tMax = Math.Max(targetWhiteLin.R, Math.Max(targetWhiteLin.G, targetWhiteLin.B));
             double mMax = Math.Max(measuredLin.R, Math.Max(measuredLin.G, measuredLin.B));
-            if (tMax <= 0 || mMax <= 0) return (1, 1, 1);
+            if (!double.IsFinite(tMax) || !double.IsFinite(mMax) || tMax <= 0 || mMax <= 0)
+                return (1, 1, 1);
 
             double tr = targetWhiteLin.R / tMax, tg = targetWhiteLin.G / tMax, tb = targetWhiteLin.B / tMax;
             double mr = measuredLin.R / mMax, mg = measuredLin.G / mMax, mb = measuredLin.B / mMax;
+            if (!double.IsFinite(tr) || !double.IsFinite(tg) || !double.IsFinite(tb) ||
+                !double.IsFinite(mr) || !double.IsFinite(mg) || !double.IsFinite(mb))
+            {
+                return (1, 1, 1);
+            }
 
             // Gain needed to move measured ratios toward target ratios, damped and bounded so a
             // bad reading can't blow a channel out.
@@ -177,9 +193,9 @@ namespace HDRGammaController.Core.Calibration
             double gB = mb > 1e-4 ? tb / mb : 1.0;
             // Tight per-step bound: white balance moves at most a few percent per round, so a
             // single noisy white reading can't tint the whole screen red or green.
-            gR = Math.Clamp(Lerp(1.0, gR, _damping), 0.94, 1.06);
-            gG = Math.Clamp(Lerp(1.0, gG, _damping), 0.94, 1.06);
-            gB = Math.Clamp(Lerp(1.0, gB, _damping), 0.94, 1.06);
+            gR = ClampFinite(Lerp(1.0, gR, _damping), 0.94, 1.06, 1.0);
+            gG = ClampFinite(Lerp(1.0, gG, _damping), 0.94, 1.06, 1.0);
+            gB = ClampFinite(Lerp(1.0, gB, _damping), 0.94, 1.06, 1.0);
             return (gR, gG, gB);
         }
 
@@ -203,19 +219,33 @@ namespace HDRGammaController.Core.Calibration
 
         private static double Sample(double[] lut, double idx)
         {
+            if (lut == null || lut.Length == 0 || !double.IsFinite(idx))
+                return 0.0;
+
             int lo = (int)Math.Floor(idx);
             int hi = Math.Min(lo + 1, lut.Length - 1);
             lo = Math.Clamp(lo, 0, lut.Length - 1);
             double frac = idx - lo;
-            return lut[lo] + (lut[hi] - lut[lo]) * frac;
+            return Clamp01(lut[lo] + (lut[hi] - lut[lo]) * frac);
         }
 
         private static double Lerp(double a, double b, double t) => a + (b - a) * t;
 
         private static void EnforceMonotonic(double[] lut)
         {
+            if (lut.Length == 0) return;
+            lut[0] = Clamp01(lut[0]);
             for (int i = 1; i < lut.Length; i++)
+            {
+                lut[i] = Clamp01(lut[i]);
                 if (lut[i] < lut[i - 1]) lut[i] = lut[i - 1];
+            }
         }
+
+        private static double Clamp01(double value) =>
+            double.IsFinite(value) ? Math.Clamp(value, 0.0, 1.0) : 0.0;
+
+        private static double ClampFinite(double value, double min, double max, double fallback) =>
+            double.IsFinite(value) ? Math.Clamp(value, min, max) : fallback;
     }
 }

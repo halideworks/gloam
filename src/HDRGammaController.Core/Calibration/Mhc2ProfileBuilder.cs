@@ -57,6 +57,7 @@ namespace HDRGammaController.Core.Calibration
         {
             if (matrix3x3.GetLength(0) != 3 || matrix3x3.GetLength(1) != 3)
                 throw new ArgumentException("matrix must be 3x3", nameof(matrix3x3));
+            ValidateMatrix(matrix3x3, nameof(matrix3x3));
             ValidateLut(lutR, nameof(lutR));
             ValidateLut(lutG, nameof(lutG));
             ValidateLut(lutB, nameof(lutB));
@@ -85,11 +86,18 @@ namespace HDRGammaController.Core.Calibration
             WriteLut(data, lut2Off, lutB);
 
             if (minLuminanceNits is double minL)
-                WriteS15Fixed16(data, tagStart + 12, Math.Clamp(minL, 0, 32767));
+            {
+                ValidateLuminanceMetadata(minL, nameof(minLuminanceNits), "Minimum");
+                WriteS15Fixed16(data, tagStart + 12, minL);
+            }
             if (maxLuminanceNits is double maxL)
             {
-                WriteS15Fixed16(data, tagStart + 16, Math.Clamp(maxL, 0, 32767));
+                ValidateLuminanceMetadata(maxL, nameof(maxLuminanceNits), "Maximum");
+                if (minLuminanceNits is double minForRange && maxL <= minForRange)
+                    throw new ArgumentOutOfRangeException(nameof(maxLuminanceNits), maxL,
+                        "Maximum luminance must be greater than minimum luminance.");
                 PatchLumiTag(data, maxL);
+                WriteS15Fixed16(data, tagStart + 16, maxL);
             }
 
             if (!string.IsNullOrWhiteSpace(description))
@@ -146,6 +154,8 @@ namespace HDRGammaController.Core.Calibration
         /// <summary>Writes the display peak luminance into the 'lumi' tag's XYZ Y field.</summary>
         private static void PatchLumiTag(byte[] data, double maxNits)
         {
+            ValidateLuminanceMetadata(maxNits, nameof(maxNits), "Maximum");
+
             const int LumiSignature = 0x6C756D69; // 'lumi'
             int tagCount = ReadU32(data, IccHeaderSize);
             for (int i = 0; i < tagCount; i++)
@@ -155,7 +165,7 @@ namespace HDRGammaController.Core.Calibration
                 int off = ReadU32(data, e + 4);
                 // XYZType: sig(4) + reserved(4) + X(4) + Y(4) + Z(4) — luminance lives in Y.
                 if (off + 20 <= data.Length)
-                    WriteS15Fixed16(data, off + 12, Math.Clamp(maxNits, 0, 32767));
+                    WriteS15Fixed16(data, off + 12, maxNits);
                 return;
             }
         }
@@ -264,6 +274,33 @@ namespace HDRGammaController.Core.Calibration
         {
             if (lut == null || lut.Length != LutSamples)
                 throw new ArgumentException($"{name} must have exactly {LutSamples} entries.", name);
+
+            for (int i = 0; i < lut.Length; i++)
+            {
+                if (!double.IsFinite(lut[i]))
+                    throw new ArgumentException($"{name}[{i}] is not finite.", name);
+                if (lut[i] < -1e-6 || lut[i] > 1.0 + 1e-6)
+                    throw new ArgumentException($"{name}[{i}]={lut[i]:F6} is outside the normalized signal range [0,1].", name);
+                if (i > 0 && lut[i] + 1e-9 < lut[i - 1])
+                    throw new ArgumentException($"{name} must be monotonic non-decreasing; index {i - 1}->{i} is {lut[i - 1]:F6}->{lut[i]:F6}.", name);
+            }
+        }
+
+        private static void ValidateMatrix(double[,] matrix, string name)
+        {
+            for (int r = 0; r < 3; r++)
+                for (int c = 0; c < 3; c++)
+                    if (!double.IsFinite(matrix[r, c]))
+                        throw new ArgumentException($"{name}[{r},{c}] is not finite.", name);
+        }
+
+        private static void ValidateLuminanceMetadata(double value, string paramName, string label)
+        {
+            if (!double.IsFinite(value))
+                throw new ArgumentException($"{label} luminance must be finite.", paramName);
+            if (value < 0.0 || value > 32767.0)
+                throw new ArgumentOutOfRangeException(paramName, value,
+                    $"{label} luminance must be in the representable MHC2 s15Fixed16 range [0, 32767] nits.");
         }
 
         private static int ReadU32(byte[] b, int o) =>

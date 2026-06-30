@@ -68,10 +68,11 @@ namespace HDRGammaController.Tests
         [Fact]
         public void GamutCoverage_PartialOverlap_IsBetweenZeroAndOne()
         {
-            // sRGB triangle shifted toward red: overlaps, but no containment either way.
-            var r = new Chromaticity(SrgbR.X + 0.10, SrgbR.Y);
-            var g = new Chromaticity(SrgbG.X + 0.10, SrgbG.Y);
-            var b = new Chromaticity(SrgbB.X + 0.10, SrgbB.Y);
+            // A physically plausible triangle shifted toward red: overlaps, but no
+            // containment either way.
+            var r = new Chromaticity(0.72, 0.28);
+            var g = new Chromaticity(0.38, 0.55);
+            var b = new Chromaticity(0.23, 0.01);
 
             double coverage = ColorMath.GamutCoverage(r, g, b);
             Assert.InRange(coverage, 0.05, 0.95);

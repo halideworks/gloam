@@ -106,6 +106,9 @@ namespace HDRGammaController.Core.Calibration
             if (!HasBalancedBlock(content, "BEGIN_DATA", "END_DATA"))
                 return Result.Fail("Missing or unbalanced BEGIN_DATA/END_DATA block.");
 
+            if (!TryValidateDataPayload(content, sets, out string? payloadError))
+                return Result.Fail(payloadError);
+
             return Result.Ok();
         }
 
@@ -227,5 +230,97 @@ namespace HDRGammaController.Core.Calibration
 
             return int.TryParse(num, NumberStyles.Integer, CultureInfo.InvariantCulture, out value);
         }
+
+        private static bool TryValidateDataPayload(string content, int expectedSets, out string error)
+        {
+            error = "";
+
+            var fields = ExtractBlockLines(content, "BEGIN_DATA_FORMAT", "END_DATA_FORMAT");
+            if (fields.Count == 0)
+            {
+                error = "BEGIN_DATA_FORMAT block contains no fields.";
+                return false;
+            }
+
+            string[] fieldNames = fields[0].Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (fieldNames.Length == 0)
+            {
+                error = "BEGIN_DATA_FORMAT block contains no field names.";
+                return false;
+            }
+
+            var rows = ExtractBlockLines(content, "BEGIN_DATA", "END_DATA");
+            if (rows.Count != expectedSets)
+            {
+                error = $"NUMBER_OF_SETS declares {expectedSets} rows, but BEGIN_DATA contains {rows.Count}.";
+                return false;
+            }
+
+            for (int rowIndex = 0; rowIndex < rows.Count; rowIndex++)
+            {
+                string[] values = rows[rowIndex].Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+                if (values.Length < fieldNames.Length)
+                {
+                    error = $"Data row {rowIndex + 1} has {values.Length} value(s), expected at least {fieldNames.Length}.";
+                    return false;
+                }
+
+                for (int fieldIndex = 0; fieldIndex < fieldNames.Length; fieldIndex++)
+                {
+                    string field = fieldNames[fieldIndex];
+                    if (!IsColorNumericField(field))
+                        continue;
+
+                    if (!double.TryParse(values[fieldIndex], NumberStyles.Float, CultureInfo.InvariantCulture, out double value) ||
+                        !double.IsFinite(value))
+                    {
+                        error = $"Data row {rowIndex + 1} field {field} is not a finite number.";
+                        return false;
+                    }
+
+                    // Spectral power samples in CCSS files are measured physical data. CCMX
+                    // XYZ fields are matrix coefficients, so negative values are valid there.
+                    if (field.StartsWith("SPEC_", StringComparison.OrdinalIgnoreCase) && value < -1e-9)
+                    {
+                        error = $"Data row {rowIndex + 1} field {field} contains a negative spectral sample.";
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        private static System.Collections.Generic.List<string> ExtractBlockLines(
+            string content,
+            string begin,
+            string end)
+        {
+            var lines = new System.Collections.Generic.List<string>();
+            bool inBlock = false;
+            foreach (var raw in content.Split('\n'))
+            {
+                var trimmed = raw.AsSpan().Trim();
+                if (StartsWithToken(trimmed, begin))
+                {
+                    inBlock = true;
+                    continue;
+                }
+
+                if (StartsWithToken(trimmed, end))
+                    break;
+
+                if (!inBlock || trimmed.IsEmpty || trimmed[0] == '#')
+                    continue;
+
+                lines.Add(trimmed.ToString());
+            }
+
+            return lines;
+        }
+
+        private static bool IsColorNumericField(string field) =>
+            field.StartsWith("XYZ_", StringComparison.OrdinalIgnoreCase) ||
+            field.StartsWith("SPEC_", StringComparison.OrdinalIgnoreCase);
     }
 }

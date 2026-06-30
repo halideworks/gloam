@@ -106,6 +106,13 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public bool IsActive { get; set; }
 
+        /// <summary>
+        /// True when a loaded profile contained calibration-critical values that had to be
+        /// repaired. Such profiles are safe to display, but must not be used to drive LUTs.
+        /// </summary>
+        [JsonIgnore]
+        public bool WasRepairedOnLoad { get; private set; }
+
         #region Measured Display Characteristics
 
         /// <summary>
@@ -228,7 +235,7 @@ namespace HDRGammaController.Core.Calibration
             string modeName = mode == CalibrationMode.Reference ? "Reference" : "Adaptive";
             profile.Name = $"{colorSpaceName} {modeName} - {profile.CalibratedAt:yyyy-MM-dd}";
 
-            return profile;
+            return profile.CreatePersistableCopy();
         }
 
         /// <summary>
@@ -238,13 +245,13 @@ namespace HDRGammaController.Core.Calibration
         {
             var characterization = new DisplayCharacterization
             {
-                RedPrimary = new Chromaticity(RedPrimaryX, RedPrimaryY),
-                GreenPrimary = new Chromaticity(GreenPrimaryX, GreenPrimaryY),
-                BluePrimary = new Chromaticity(BluePrimaryX, BluePrimaryY),
-                WhitePoint = new Chromaticity(WhitePointX, WhitePointY),
-                BlackLevel = BlackLevel,
-                PeakLuminance = PeakLuminance,
-                MeasuredGamma = MeasuredGamma
+                RedPrimary = SafeChromaticity(RedPrimaryX, RedPrimaryY, Chromaticity.Rec709Red),
+                GreenPrimary = SafeChromaticity(GreenPrimaryX, GreenPrimaryY, Chromaticity.Rec709Green),
+                BluePrimary = SafeChromaticity(BluePrimaryX, BluePrimaryY, Chromaticity.Rec709Blue),
+                WhitePoint = SafeChromaticity(WhitePointX, WhitePointY, Chromaticity.D65),
+                BlackLevel = SafeNonNegative(BlackLevel, 0.0),
+                PeakLuminance = SafePositive(PeakLuminance, 100.0),
+                MeasuredGamma = SafeGamma(MeasuredGamma)
             };
 
             // Restore tone curves
@@ -264,6 +271,26 @@ namespace HDRGammaController.Core.Calibration
             return characterization;
         }
 
+        private static Chromaticity SafeChromaticity(double x, double y, Chromaticity fallback)
+        {
+            if (!double.IsFinite(x) || !double.IsFinite(y) ||
+                x <= 0.0 || y <= 0.0 || x >= 0.8 || y >= 0.9 || x + y > 1.000001)
+            {
+                return fallback;
+            }
+
+            return new Chromaticity(x, y);
+        }
+
+        private static double SafeNonNegative(double value, double fallback) =>
+            double.IsFinite(value) && value >= 0.0 ? value : fallback;
+
+        private static double SafePositive(double value, double fallback) =>
+            double.IsFinite(value) && value > 0.0 ? value : fallback;
+
+        private static double SafeGamma(double gamma) =>
+            double.IsFinite(gamma) && gamma is >= 1.0 and <= 4.0 ? gamma : 2.2;
+
         #endregion
 
         #region Serialization
@@ -279,7 +306,7 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public void SaveToFile(string path)
         {
-            var json = JsonSerializer.Serialize(this, JsonOptions);
+            var json = JsonSerializer.Serialize(CreatePersistableCopy(), JsonOptions);
             // Write-then-rename so a crash mid-write can't corrupt an existing profile.
             string tmp = path + ".tmp";
             File.WriteAllText(tmp, json);
@@ -295,7 +322,7 @@ namespace HDRGammaController.Core.Calibration
                 return null;
 
             var json = File.ReadAllText(path);
-            return JsonSerializer.Deserialize<DisplayCalibrationProfile>(json, JsonOptions);
+            return FromJson(json);
         }
 
         /// <summary>
@@ -303,7 +330,7 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public string ToJson()
         {
-            return JsonSerializer.Serialize(this, JsonOptions);
+            return JsonSerializer.Serialize(CreatePersistableCopy(), JsonOptions);
         }
 
         /// <summary>
@@ -311,7 +338,99 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public static DisplayCalibrationProfile? FromJson(string json)
         {
-            return JsonSerializer.Deserialize<DisplayCalibrationProfile>(json, JsonOptions);
+            var raw = JsonSerializer.Deserialize<DisplayCalibrationProfile>(json, JsonOptions);
+            if (raw == null)
+                return null;
+
+            var sanitized = raw.CreatePersistableCopy();
+            sanitized.WasRepairedOnLoad = raw.HasRuntimeCriticalInvalidValues();
+            return sanitized;
+        }
+
+        private DisplayCalibrationProfile CreatePersistableCopy()
+        {
+            return new DisplayCalibrationProfile
+            {
+                Version = Math.Max(1, Version),
+                Id = Id,
+                Name = Name,
+                MonitorDevicePath = MonitorDevicePath,
+                MonitorName = MonitorName,
+                CalibratedAt = CalibratedAt,
+                ColorimeterModel = ColorimeterModel,
+                Mode = SafeEnum(Mode, CalibrationMode.Adaptive),
+                TargetColorSpace = SafeEnum(TargetColorSpace, TargetColorSpace.SRgb),
+                TargetGamma = SafeGamma(TargetGamma),
+                IsActive = IsActive,
+                RedPrimaryX = SafeChromaticity(RedPrimaryX, RedPrimaryY, Chromaticity.Rec709Red).X,
+                RedPrimaryY = SafeChromaticity(RedPrimaryX, RedPrimaryY, Chromaticity.Rec709Red).Y,
+                GreenPrimaryX = SafeChromaticity(GreenPrimaryX, GreenPrimaryY, Chromaticity.Rec709Green).X,
+                GreenPrimaryY = SafeChromaticity(GreenPrimaryX, GreenPrimaryY, Chromaticity.Rec709Green).Y,
+                BluePrimaryX = SafeChromaticity(BluePrimaryX, BluePrimaryY, Chromaticity.Rec709Blue).X,
+                BluePrimaryY = SafeChromaticity(BluePrimaryX, BluePrimaryY, Chromaticity.Rec709Blue).Y,
+                WhitePointX = SafeChromaticity(WhitePointX, WhitePointY, Chromaticity.D65).X,
+                WhitePointY = SafeChromaticity(WhitePointX, WhitePointY, Chromaticity.D65).Y,
+                BlackLevel = SafeNonNegative(BlackLevel, 0.0),
+                PeakLuminance = SafePositive(PeakLuminance, 100.0),
+                MeasuredGamma = SafeGamma(MeasuredGamma),
+                RedToneCurve = SafeToneCurveForPersistence(RedToneCurve),
+                GreenToneCurve = SafeToneCurveForPersistence(GreenToneCurve),
+                BlueToneCurve = SafeToneCurveForPersistence(BlueToneCurve),
+                ReferenceLutBase64 = ReferenceLutBase64,
+                ReferenceLutSize = Math.Max(0, ReferenceLutSize)
+            };
+        }
+
+        private static double[]? SafeToneCurveForPersistence(double[]? values)
+        {
+            if (values == null) return null;
+            return ToneCurve.CreateFromArray(values, enforceMonotonic: true).ToArray();
+        }
+
+        private static TEnum SafeEnum<TEnum>(TEnum value, TEnum fallback)
+            where TEnum : struct, Enum =>
+            Enum.IsDefined(value) ? value : fallback;
+
+        private bool HasRuntimeCriticalInvalidValues()
+        {
+            if (!Enum.IsDefined(Mode) || !Enum.IsDefined(TargetColorSpace))
+                return true;
+            if (SafeGamma(TargetGamma) != TargetGamma)
+                return true;
+            if (SafeChromaticity(RedPrimaryX, RedPrimaryY, Chromaticity.Rec709Red) != new Chromaticity(RedPrimaryX, RedPrimaryY) ||
+                SafeChromaticity(GreenPrimaryX, GreenPrimaryY, Chromaticity.Rec709Green) != new Chromaticity(GreenPrimaryX, GreenPrimaryY) ||
+                SafeChromaticity(BluePrimaryX, BluePrimaryY, Chromaticity.Rec709Blue) != new Chromaticity(BluePrimaryX, BluePrimaryY) ||
+                SafeChromaticity(WhitePointX, WhitePointY, Chromaticity.D65) != new Chromaticity(WhitePointX, WhitePointY))
+                return true;
+            if (SafeNonNegative(BlackLevel, 0.0) != BlackLevel ||
+                SafePositive(PeakLuminance, 100.0) != PeakLuminance ||
+                SafeGamma(MeasuredGamma) != MeasuredGamma)
+                return true;
+
+            bool anyToneCurves = RedToneCurve != null || GreenToneCurve != null || BlueToneCurve != null;
+            if (!anyToneCurves)
+                return false;
+
+            return !IsRuntimeToneCurveValid(RedToneCurve) ||
+                   !IsRuntimeToneCurveValid(GreenToneCurve) ||
+                   !IsRuntimeToneCurveValid(BlueToneCurve);
+        }
+
+        private static bool IsRuntimeToneCurveValid(double[]? values) =>
+            values != null &&
+            values.Length >= 2 &&
+            values.All(v => double.IsFinite(v) && v is >= 0.0 and <= 1.0) &&
+            IsMonotonicNonDecreasing(values);
+
+        private static bool IsMonotonicNonDecreasing(double[] values)
+        {
+            for (int i = 1; i < values.Length; i++)
+            {
+                if (values[i] < values[i - 1] - 1e-10)
+                    return false;
+            }
+
+            return true;
         }
 
         #endregion

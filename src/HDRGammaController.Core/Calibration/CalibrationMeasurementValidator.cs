@@ -86,6 +86,12 @@ namespace HDRGammaController.Core.Calibration
             if (valid.Count < 10)
                 return Result.Fail(
                     $"Only {valid.Count} valid accuracy measurements were available - too few to build a trustworthy profile.");
+            var nonFinite = valid.FirstOrDefault(m => !IsFinite(m.Xyz));
+            if (nonFinite != null)
+                return Result.Fail($"{nonFinite.Patch.Name} produced non-finite XYZ measurement values.");
+            var nonPhysical = valid.FirstOrDefault(m => !IsNonNegativeXyz(m.Xyz));
+            if (nonPhysical != null)
+                return Result.Fail($"{nonPhysical.Patch.Name} produced non-physical negative XYZ measurement values.");
 
             double peak = valid.Max(m => m.Xyz.Y);
             double floor = valid.Min(m => m.Xyz.Y);
@@ -122,14 +128,33 @@ namespace HDRGammaController.Core.Calibration
                 // disappear and be treated as an intentional fallback.
                 if (hdrWireAttempts.Count > 0)
                 {
-                    if (hdrWire.Count < 5)
+                    var invalidRequestedNits = hdrWireAttempts.FirstOrDefault(m => !IsValidRequestedNits(m.Patch.Nits!.Value));
+                    if (invalidRequestedNits != null)
+                        return Result.Fail($"{invalidRequestedNits.Patch.Name} has invalid HDR wire-ladder requested luminance metadata.");
+
+                    var nonFiniteWire = hdrWire.FirstOrDefault(m => !IsFinite(m.Xyz));
+                    if (nonFiniteWire != null)
+                        return Result.Fail($"{nonFiniteWire.Patch.Name} produced non-finite HDR wire-ladder XYZ measurement values.");
+                    var nonPhysicalWire = hdrWire.FirstOrDefault(m => !IsNonNegativeXyz(m.Xyz));
+                    if (nonPhysicalWire != null)
+                        return Result.Fail($"{nonPhysicalWire.Patch.Name} produced non-physical negative HDR wire-ladder XYZ measurement values.");
+
+                    int distinctValidWirePatches = hdrWire
+                        .Select(m => m.Patch.Nits!.Value)
+                        .Distinct()
+                        .Count();
+                    if (distinctValidWirePatches < 5)
                         return Result.Fail(
-                            $"HDR wire-ladder captured only {hdrWire.Count} valid patches out of {hdrWireAttempts.Count}; at least five are needed to build a trustworthy PQ-domain LUT.");
+                            $"HDR wire-ladder captured only {distinctValidWirePatches} distinct valid patches ({hdrWire.Count} valid patches out of {hdrWireAttempts.Count}); at least five are needed to build a trustworthy PQ-domain LUT.");
 
                     double maxRequestedNits = hdrWire.Max(m => m.Patch.Nits!.Value);
+                    double maxAttemptedNits = hdrWireAttempts.Max(m => m.Patch.Nits!.Value);
                     if (maxRequestedNits < 100)
                         return Result.Fail(
                             $"HDR wire-ladder reached only {maxRequestedNits:F0} nits; highlight patches were not captured.");
+                    if (maxAttemptedNits >= 200 && maxRequestedNits < maxAttemptedNits * 0.80)
+                        return Result.Fail(
+                            $"HDR wire-ladder valid coverage reached only {maxRequestedNits:F0} nits out of {maxAttemptedNits:F0} nits requested; high-luminance PQ patches failed.");
 
                     double wirePeak = hdrWire.Max(m => m.Xyz.Y);
                     double wireFloor = hdrWire.Min(m => m.Xyz.Y);
@@ -212,5 +237,14 @@ namespace HDRGammaController.Core.Calibration
                 Math.Abs(m.Patch.DisplayRgb.R - r) < 0.02 &&
                 Math.Abs(m.Patch.DisplayRgb.G - g) < 0.02 &&
                 Math.Abs(m.Patch.DisplayRgb.B - b) < 0.02);
+
+        private static bool IsFinite(CieXyz xyz) =>
+            double.IsFinite(xyz.X) && double.IsFinite(xyz.Y) && double.IsFinite(xyz.Z);
+
+        private static bool IsNonNegativeXyz(CieXyz xyz) =>
+            xyz.X >= -1e-6 && xyz.Y >= -1e-6 && xyz.Z >= -1e-6;
+
+        private static bool IsValidRequestedNits(double nits) =>
+            double.IsFinite(nits) && nits >= 0.0;
     }
 }

@@ -1,5 +1,6 @@
 using Xunit;
 using HDRGammaController.Core;
+using HDRGammaController.Core.Calibration;
 using System;
 
 namespace HDRGammaController.Tests
@@ -22,6 +23,15 @@ namespace HDRGammaController.Tests
         {
             double result = ColorAdjustments.ApplyDimming(0.5, 0.0);
             Assert.Equal(0.0, result, 4);
+        }
+
+        [Fact]
+        public void ApplyDimming_NonFiniteInputs_ReturnsFiniteBoundedValue()
+        {
+            Assert.Equal(0.0, ColorAdjustments.ApplyDimming(double.NaN, 50.0), 10);
+            Assert.Equal(0.5, ColorAdjustments.ApplyDimming(0.5, double.NaN), 10);
+            Assert.Equal(0.0, ColorAdjustments.ApplyDimmingNits(double.NaN, 50.0, 200.0), 10);
+            Assert.Equal(100.0, ColorAdjustments.ApplyDimmingNits(100.0, double.NaN, 200.0), 10);
         }
 
         [Fact]
@@ -108,12 +118,41 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void GetStandardMultipliers_2700K_UsesLinearLightRatios()
+        {
+            var (r, g, b) = ColorAdjustments.GetStandardMultipliers(2700);
+
+            Assert.InRange(r, 0.99, 1.01);
+            Assert.InRange(g, 0.35, 0.45);
+            Assert.InRange(b, 0.07, 0.13);
+        }
+
+        [Fact]
         public void GetStandardMultipliers_10000K_IsCool()
         {
             // Cool temperature should have lower red, higher blue
             var (r, g, b) = ColorAdjustments.GetStandardMultipliers(10000);
 
             Assert.True(b >= r, "Blue should be >= Red at cool temperatures");
+        }
+
+        [Fact]
+        public void TemperatureAndTintMultipliers_NonFiniteInputs_ReturnNeutral()
+        {
+            Assert.Equal((1.0, 1.0, 1.0),
+                ColorAdjustments.GetTemperatureMultipliers(double.NaN, NightModeAlgorithm.Standard));
+            Assert.Equal((1.0, 1.0, 1.0), ColorAdjustments.GetTintMultipliers(double.PositiveInfinity));
+        }
+
+        [Fact]
+        public void DirectKelvinMultipliers_ExtremeInputs_ReturnFiniteBoundedValues()
+        {
+            foreach (int kelvin in new[] { int.MinValue, -10000, 0, 1000, 6500, 10000, int.MaxValue })
+            {
+                AssertFiniteBounded(ColorAdjustments.GetStandardMultipliers(kelvin));
+                AssertFiniteBounded(ColorAdjustments.GetAccurateMultipliers(kelvin));
+                AssertFiniteBounded(ColorAdjustments.GetBlueReductionMultipliers(kelvin));
+            }
         }
 
         #endregion
@@ -138,6 +177,37 @@ namespace HDRGammaController.Tests
             var (r, g, b) = ColorAdjustments.GetAccurateMultipliers(2700);
 
             Assert.True(r > b, "Red should be > Blue at warm temperatures");
+        }
+
+        [Fact]
+        public void GetAccurateMultipliers_2700K_UsesLinearLightRatios()
+        {
+            var (r, g, b) = ColorAdjustments.GetAccurateMultipliers(2700);
+
+            Assert.InRange(r, 0.99, 1.01);
+            Assert.InRange(g, 0.40, 0.49);
+            Assert.InRange(b, 0.07, 0.13);
+        }
+
+        [Fact]
+        public void GetAccurateMultipliers_10000K_IsCoolWithoutRedBoost()
+        {
+            var (r, g, b) = ColorAdjustments.GetAccurateMultipliers(10000);
+
+            Assert.InRange(r, 0.55, 0.65);
+            Assert.InRange(g, 0.70, 0.78);
+            Assert.InRange(b, 0.99, 1.05);
+        }
+
+        [Fact]
+        public void GetAccurateMultipliers_BelowApproximationRange_ClampsToSupportedWarmestPoint()
+        {
+            var belowRange = ColorAdjustments.GetAccurateMultipliers(1000);
+            var minSupported = ColorAdjustments.GetAccurateMultipliers(1667);
+
+            Assert.Equal(minSupported.R, belowRange.R, 12);
+            Assert.Equal(minSupported.G, belowRange.G, 12);
+            Assert.Equal(minSupported.B, belowRange.B, 12);
         }
 
         #endregion
@@ -223,6 +293,19 @@ namespace HDRGammaController.Tests
             Assert.True(r > b, "Very warm temperature should have more red than blue");
         }
 
+        [Fact]
+        public void GetTemperatureMultipliers_MinNightModeScaleResolvesTo1900K()
+        {
+            var fromScale = ColorAdjustments.GetTemperatureMultipliers(
+                CalibrationSettings.MinimumTemperatureScale,
+                NightModeAlgorithm.Standard);
+            var directKelvin = ColorAdjustments.GetStandardMultipliers(1900);
+
+            Assert.Equal(directKelvin.R, fromScale.R, 12);
+            Assert.Equal(directKelvin.G, fromScale.G, 12);
+            Assert.Equal(directKelvin.B, fromScale.B, 12);
+        }
+
         #endregion
 
         #region ApplyCalibration Integration Tests
@@ -259,6 +342,20 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void ApplyCalibration_UserAdjustmentsRunInLinearLight()
+        {
+            var settings = new CalibrationSettings { RedGain = 1.2 };
+
+            var (r, g, b) = ColorAdjustments.ApplyCalibration(0.5, 0.5, 0.5, settings);
+
+            double expectedR = ColorMath.SrgbOetf(ColorMath.SrgbEotf(0.5) * 1.2);
+            Assert.Equal(expectedR, r, 10);
+            Assert.Equal(0.5, g, 10);
+            Assert.Equal(0.5, b, 10);
+            Assert.NotEqual(0.5 * 1.2, r, 6);
+        }
+
+        [Fact]
         public void ApplyCalibration_ClampsBelowZero()
         {
             var settings = new CalibrationSettings { RedOffset = -1.0 };
@@ -276,6 +373,107 @@ namespace HDRGammaController.Tests
             Assert.Equal(1.0, r, 4);
         }
 
+        [Fact]
+        public void ApplyCalibration_AppliesMeasuredSignalDomainLutBeforeUserAdjustments()
+        {
+            var lut = new Lut3D(2);
+            for (int ri = 0; ri < 2; ri++)
+            for (int gi = 0; gi < 2; gi++)
+            for (int bi = 0; bi < 2; bi++)
+                lut.SetEntry(ri, gi, bi, 0.25f, 0.5f, 0.75f);
+
+            var settings = new CalibrationSettings { MeasuredCorrectionLut = lut };
+
+            var (r, g, b) = ColorAdjustments.ApplyCalibration(0.8, 0.8, 0.8, settings);
+
+            Assert.Equal(0.25, r, 4);
+            Assert.Equal(0.5, g, 4);
+            Assert.Equal(0.75, b, 4);
+        }
+
+        [Fact]
+        public void ApplyCalibration_NullSettingsAndNonFiniteInputs_ReturnFiniteBoundedValues()
+        {
+            var (r, g, b) = ColorAdjustments.ApplyCalibration(
+                double.NaN,
+                double.PositiveInfinity,
+                double.NegativeInfinity,
+                null!);
+
+            Assert.True(double.IsFinite(r));
+            Assert.True(double.IsFinite(g));
+            Assert.True(double.IsFinite(b));
+            Assert.InRange(r, 0.0, 1.0);
+            Assert.InRange(g, 0.0, 1.0);
+            Assert.InRange(b, 0.0, 1.0);
+        }
+
+        [Fact]
+        public void ApplyUserAdjustmentsLinear_DoesNotApplyMeasuredSignalDomainLut()
+        {
+            var lut = new Lut3D(2);
+            for (int ri = 0; ri < 2; ri++)
+            for (int gi = 0; gi < 2; gi++)
+            for (int bi = 0; bi < 2; bi++)
+                lut.SetEntry(ri, gi, bi, 0.0f, 0.0f, 0.0f);
+
+            var settings = new CalibrationSettings { MeasuredCorrectionLut = lut };
+
+            var (r, g, b) = ColorAdjustments.ApplyUserAdjustmentsLinear(0.25, 0.5, 0.75, settings);
+
+            Assert.Equal(0.25, r, 4);
+            Assert.Equal(0.5, g, 4);
+            Assert.Equal(0.75, b, 4);
+        }
+
+        [Fact]
+        public void ApplyUserAdjustmentsLinear_ComposesTemperatureOffset()
+        {
+            var temperatureOnly = new CalibrationSettings { Temperature = -20.0 };
+            var offsetOnly = new CalibrationSettings { TemperatureOffset = -20.0 };
+
+            var fromTemperature = ColorAdjustments.ApplyUserAdjustmentsLinear(1.0, 1.0, 1.0, temperatureOnly);
+            var fromOffset = ColorAdjustments.ApplyUserAdjustmentsLinear(1.0, 1.0, 1.0, offsetOnly);
+
+            Assert.Equal(fromTemperature.R, fromOffset.R, 12);
+            Assert.Equal(fromTemperature.G, fromOffset.G, 12);
+            Assert.Equal(fromTemperature.B, fromOffset.B, 12);
+            Assert.True(fromOffset.B < fromOffset.R);
+        }
+
+        [Fact]
+        public void ApplyUserAdjustmentsLinear_NonFiniteInputsAndSettings_ReturnsFiniteBoundedValues()
+        {
+            var settings = new CalibrationSettings
+            {
+                Brightness = double.NaN,
+                Temperature = double.PositiveInfinity,
+                Tint = double.NegativeInfinity,
+                RedGain = double.NaN,
+                BlueOffset = double.PositiveInfinity
+            };
+
+            var (r, g, b) = ColorAdjustments.ApplyUserAdjustmentsLinear(
+                double.NaN, double.PositiveInfinity, double.NegativeInfinity, settings);
+
+            Assert.True(double.IsFinite(r));
+            Assert.True(double.IsFinite(g));
+            Assert.True(double.IsFinite(b));
+            Assert.InRange(r, 0.0, 1.0);
+            Assert.InRange(g, 0.0, 1.0);
+            Assert.InRange(b, 0.0, 1.0);
+        }
+
         #endregion
+
+        private static void AssertFiniteBounded((double R, double G, double B) multipliers)
+        {
+            Assert.True(double.IsFinite(multipliers.R));
+            Assert.True(double.IsFinite(multipliers.G));
+            Assert.True(double.IsFinite(multipliers.B));
+            Assert.InRange(multipliers.R, 0.0, 1.5);
+            Assert.InRange(multipliers.G, 0.0, 1.5);
+            Assert.InRange(multipliers.B, 0.0, 1.5);
+        }
     }
 }

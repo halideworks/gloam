@@ -185,7 +185,7 @@ namespace HDRGammaController.Core.Calibration
         public static int[] HistogramCounts(IEnumerable<double> deltaEs)
         {
             var counts = new int[BucketUpperEdges.Length + 1];
-            foreach (double de in deltaEs)
+            foreach (double de in deltaEs.Where(double.IsFinite))
             {
                 int bucket = 0;
                 while (bucket < BucketUpperEdges.Length && de >= BucketUpperEdges[bucket])
@@ -199,14 +199,22 @@ namespace HDRGammaController.Core.Calibration
         public static IReadOnlyList<PatchDeltaE> WorstPatches(
             IEnumerable<PatchDeltaE> patches, int count = 10)
         {
-            return patches.OrderByDescending(p => p.DeltaE).Take(count).ToList();
+            return patches
+                .Where(p => double.IsFinite(p.DeltaE))
+                .OrderByDescending(p => p.DeltaE)
+                .Take(count)
+                .ToList();
         }
 
         /// <summary>The best patches by ΔE, lowest first, at most <paramref name="count"/>.</summary>
         public static IReadOnlyList<PatchDeltaE> BestPatches(
             IEnumerable<PatchDeltaE> patches, int count = 10)
         {
-            return patches.OrderBy(p => p.DeltaE).Take(count).ToList();
+            return patches
+                .Where(p => double.IsFinite(p.DeltaE))
+                .OrderBy(p => p.DeltaE)
+                .Take(count)
+                .ToList();
         }
 
         /// <summary>
@@ -219,7 +227,7 @@ namespace HDRGammaController.Core.Calibration
             var primary = new List<double>();
             var saturation = new List<double>();
             var memory = new List<double>();
-            foreach (var p in patches)
+            foreach (var p in patches.Where(p => double.IsFinite(p.DeltaE)))
             {
                 switch (p.Category)
                 {

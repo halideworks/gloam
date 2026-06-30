@@ -147,7 +147,6 @@ namespace HDRGammaController.ViewModels
                 new("DCI-P3 D65", StandardTargets.P3D65Gamma22, requiresHdr: false),
                 new("BT.2020 SDR (Gamma 2.4)", StandardTargets.Rec2020Gamma24, requiresHdr: false),
                 new("HDR Desktop PQ (sRGB gamut) - recommended for HDR", StandardTargets.Rec709Pq, requiresHdr: true),
-                new("BT.2020 PQ (HDR)", StandardTargets.Rec2020Pq, requiresHdr: true),
             };
             foreach (var target in Targets)
             {
@@ -564,6 +563,12 @@ namespace HDRGammaController.ViewModels
             if (correctionRecommended && string.IsNullOrEmpty(correction?.Path))
                 items.Add(("WARN", "Use a panel-matched CCSS/CCMX meter correction for OLED and wide-gamut displays."));
 
+            if (!string.IsNullOrEmpty(correction?.Path) &&
+                ValidateCorrectionChoice(correction.Path) is { } correctionError)
+            {
+                items.Add(("ERROR", correctionError));
+            }
+
             if (displayType == DisplayType.Oled && !whitePointOnly && monitor.IsHdrActive)
                 items.Add(("WARN", "OLED HDR measurements usually behave better with white-point-only correction unless you have verified full gamut correction on this panel."));
 
@@ -574,6 +579,28 @@ namespace HDRGammaController.ViewModels
                 items.Add(("INFO", $"Existing Gloam profile '{monitorProfile.Mhc2ProfileName}' will be bypassed while measuring native response."));
 
             return items;
+        }
+
+        private static string? ValidateCorrectionChoice(string path)
+        {
+            if (!File.Exists(path))
+                return $"The selected meter correction file no longer exists: {System.IO.Path.GetFileName(path)}.";
+
+            string ext = System.IO.Path.GetExtension(path).TrimStart('.').ToLowerInvariant();
+            if (ext is not ("ccss" or "ccmx"))
+                return "Meter correction files must be .ccss spectral samples or .ccmx correction matrices.";
+
+            try
+            {
+                var result = CgatsValidator.Validate(File.ReadAllText(path), ext);
+                return result.IsValid
+                    ? null
+                    : $"The selected meter correction file is not valid ({result.Error}).";
+            }
+            catch (Exception ex)
+            {
+                return $"The selected meter correction file could not be read ({ex.Message}).";
+            }
         }
 
         private static void AddHdrLuminanceWarnings(

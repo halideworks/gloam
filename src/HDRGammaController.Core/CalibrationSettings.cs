@@ -9,6 +9,9 @@ namespace HDRGammaController.Core
     /// </summary>
     public class CalibrationSettings
     {
+        public const double MinimumTemperatureScale = (1900.0 - 6500.0) / 70.0;
+        public const double MaximumTemperatureScale = 50.0;
+
         /// <summary>
         /// Optional 3D LUT from colorimeter calibration to use as the base correction.
         /// User adjustments (temp, tint, brightness) are applied on top of this.
@@ -97,16 +100,16 @@ namespace HDRGammaController.Core
         /// </summary>
         public bool HasAdjustments =>
             MeasuredCorrectionLut != null ||
-            Math.Abs(Brightness - 100.0) > 0.01 ||
-            Math.Abs(Temperature) > 0.01 ||
-            Math.Abs(TemperatureOffset) > 0.01 ||
-            Math.Abs(Tint) > 0.01 ||
-            Math.Abs(RedGain - 1.0) > 0.001 ||
-            Math.Abs(GreenGain - 1.0) > 0.001 ||
-            Math.Abs(BlueGain - 1.0) > 0.001 ||
-            Math.Abs(RedOffset) > 0.001 ||
-            Math.Abs(GreenOffset) > 0.001 ||
-            Math.Abs(BlueOffset) > 0.001;
+            IsAdjusted(Brightness, 100.0, 0.01) ||
+            IsAdjusted(Temperature, 0.0, 0.01) ||
+            IsAdjusted(TemperatureOffset, 0.0, 0.01) ||
+            IsAdjusted(Tint, 0.0, 0.01) ||
+            IsAdjusted(RedGain, 1.0, 0.001) ||
+            IsAdjusted(GreenGain, 1.0, 0.001) ||
+            IsAdjusted(BlueGain, 1.0, 0.001) ||
+            IsAdjusted(RedOffset, 0.0, 0.001) ||
+            IsAdjusted(GreenOffset, 0.0, 0.001) ||
+            IsAdjusted(BlueOffset, 0.0, 0.001);
 
         /// <summary>
         /// Returns true if a measured 3D LUT calibration is applied.
@@ -139,6 +142,36 @@ namespace HDRGammaController.Core
             Algorithm = this.Algorithm,
             UseUltraWarmMode = this.UseUltraWarmMode
         };
+
+        /// <summary>
+        /// Returns a copy clamped to the ranges the LUT pipeline can safely evaluate.
+        /// </summary>
+        public CalibrationSettings Sanitized() => new CalibrationSettings
+        {
+            MeasuredCorrectionLut = MeasuredCorrectionLut,
+            CalibrationProfileId = CalibrationProfileId,
+            Brightness = ClampFinite(Brightness, 0.0, 100.0, 100.0),
+            UseLinearBrightness = UseLinearBrightness,
+            Temperature = ClampFinite(Temperature, MinimumTemperatureScale, MaximumTemperatureScale, 0.0),
+            TemperatureOffset = ClampFinite(TemperatureOffset, -50.0, 50.0, 0.0),
+            Tint = ClampFinite(Tint, -50.0, 50.0, 0.0),
+            RedGain = ClampFinite(RedGain, 0.5, 1.5, 1.0),
+            GreenGain = ClampFinite(GreenGain, 0.5, 1.5, 1.0),
+            BlueGain = ClampFinite(BlueGain, 0.5, 1.5, 1.0),
+            RedOffset = ClampFinite(RedOffset, -0.5, 0.5, 0.0),
+            GreenOffset = ClampFinite(GreenOffset, -0.5, 0.5, 0.0),
+            BlueOffset = ClampFinite(BlueOffset, -0.5, 0.5, 0.0),
+            Algorithm = Enum.IsDefined(typeof(NightModeAlgorithm), Algorithm)
+                ? Algorithm
+                : NightModeAlgorithm.Standard,
+            UseUltraWarmMode = UseUltraWarmMode
+        };
+
+        private static bool IsAdjusted(double value, double neutral, double tolerance) =>
+            !double.IsFinite(value) || Math.Abs(value - neutral) > tolerance;
+
+        private static double ClampFinite(double value, double min, double max, double fallback) =>
+            double.IsFinite(value) ? Math.Clamp(value, min, max) : fallback;
 
         /// <summary>
         /// Returns a hash code suitable for use in dictionaries and caches.

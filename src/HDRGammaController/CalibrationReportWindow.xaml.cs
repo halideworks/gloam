@@ -449,29 +449,25 @@ namespace HDRGammaController
         {
             if (_characterization != null)
             {
-                Vm.PeakLuminanceText = $"{_characterization.PeakLuminance:F1} cd/m\u00B2";
-                Vm.BlackLevelText = $"{_characterization.BlackLevel:F4} cd/m\u00B2";
-                Vm.ContrastRatioText = _characterization.ContrastRatio > 100000
-                    ? "Infinite"
-                    : $"{_characterization.ContrastRatio:F0}:1";
-                Vm.MeasuredGammaText = $"{_characterization.MeasuredGamma:F2}";
+                Vm.PeakLuminanceText = FormatNits(_characterization.PeakLuminance, "F1");
+                Vm.BlackLevelText = FormatNits(_characterization.BlackLevel, "F4");
+                Vm.ContrastRatioText = FormatContrastRatio(_characterization.ContrastRatio);
+                Vm.MeasuredGammaText = FormatNumber(_characterization.MeasuredGamma, "F2");
 
                 double cct = ColorMath.ChromaticityToCct(_characterization.WhitePoint);
                 double duv = ColorMath.CalculateDuv(_characterization.WhitePoint);
-                Vm.WhitePointCctText = $"{cct:F0} K";
-                Vm.WhitePointDuvText = $"{duv:F4}";
+                Vm.WhitePointCctText = double.IsFinite(cct) ? $"{cct:F0} K" : "-- K";
+                Vm.WhitePointDuvText = FormatNumber(duv, "F4");
             }
             else if (_profile?.MeasuredCharacteristics != null)
             {
                 var mc = _profile.MeasuredCharacteristics;
-                Vm.PeakLuminanceText = $"{mc.PeakLuminance:F1} cd/m\u00B2";
-                Vm.BlackLevelText = $"{mc.BlackLevel:F4} cd/m\u00B2";
-                Vm.ContrastRatioText = mc.ContrastRatio > 100000
-                    ? "Infinite"
-                    : $"{mc.ContrastRatio:F0}:1";
-                Vm.MeasuredGammaText = $"{mc.MeasuredGamma:F2}";
-                Vm.WhitePointCctText = $"{mc.MeasuredCct:F0} K";
-                Vm.WhitePointDuvText = $"{mc.MeasuredDuv:F4}";
+                Vm.PeakLuminanceText = FormatNits(mc.PeakLuminance, "F1");
+                Vm.BlackLevelText = FormatNits(mc.BlackLevel, "F4");
+                Vm.ContrastRatioText = FormatContrastRatio(mc.ContrastRatio);
+                Vm.MeasuredGammaText = FormatNumber(mc.MeasuredGamma, "F2");
+                Vm.WhitePointCctText = double.IsFinite(mc.MeasuredCct) ? $"{mc.MeasuredCct:F0} K" : "-- K";
+                Vm.WhitePointDuvText = FormatNumber(mc.MeasuredDuv, "F4");
             }
 
             // sRGB coverage from the measured primaries (CIE xy): area of the measured
@@ -483,14 +479,14 @@ namespace HDRGammaController
                 : _profile?.MeasuredCharacteristics is { } chars
                     ? (chars.MeasuredRed, chars.MeasuredGreen, chars.MeasuredBlue)
                     : null;
-            Vm.SrgbCoverageText = primaries is { } p
+            Vm.SrgbCoverageText = primaries is { } p && double.IsFinite(ColorMath.GamutCoverage(p.R, p.G, p.B))
                 ? $"{ColorMath.GamutCoverage(p.R, p.G, p.B) * 100:F1}%"
                 : "--";
         }
 
         private void PopulatePrimariesComparison()
         {
-            var target = _profile?.Target;
+            var target = _applyContext != null ? EffectiveTarget(_applyContext) : _profile?.Target;
             if (target == null) return;
 
             // Target primaries
@@ -529,13 +525,27 @@ namespace HDRGammaController
 
         private static string FormatChromaticity(Chromaticity c)
         {
-            return $"({c.X:F3}, {c.Y:F3})";
+            return double.IsFinite(c.X) && double.IsFinite(c.Y)
+                ? $"({c.X:F3}, {c.Y:F3})"
+                : "(--, --)";
         }
 
         private static string FormatError(Chromaticity measured, Chromaticity target)
         {
             double error = measured.DistanceTo(target);
-            return $"{error:F4}";
+            return FormatNumber(error, "F4");
+        }
+
+        private static string FormatNumber(double value, string format) =>
+            double.IsFinite(value) ? value.ToString(format) : "--";
+
+        private static string FormatNits(double value, string format) =>
+            double.IsFinite(value) ? $"{value.ToString(format)} cd/m\u00B2" : $"-- cd/m\u00B2";
+
+        private static string FormatContrastRatio(double value)
+        {
+            if (double.IsPositiveInfinity(value) || value > 100000) return "Infinite";
+            return double.IsFinite(value) && value >= 0.0 ? $"{value:F0}:1" : "--:1";
         }
 
         private void PopulateRecommendations(CalibrationGrade grade, CalibrationMetrics? verified = null)
@@ -1079,7 +1089,7 @@ namespace HDRGammaController
         private string BuildCategoryBreakdownText(IReadOnlyList<PatchDeltaE> results)
         {
             string text = VerificationAnalysis.ComputeCategoryBreakdown(results).ToDisplayText();
-            var target = _applyContext?.Target ?? _profile?.Target;
+            var target = _applyContext != null ? EffectiveTarget(_applyContext) : _profile?.Target;
             if (target != null &&
                 VerificationAnalysis.CategoryCaveat(target.IsHdr, target.WhitePointOnly) is { } caveat)
             {
@@ -1447,7 +1457,7 @@ namespace HDRGammaController
         /// </summary>
         private async Task<PqTrackingSweepResult?> RunPqTrackingSweepAsync(
             PatchDisplayWindow patchWindow, ColorimeterService colorimeter,
-            ApplyContext ctx, System.Threading.CancellationToken token)
+            ApplyContext ctx, int sequenceOffset, System.Threading.CancellationToken token)
         {
             var wireCal = _measurements?
                 .Where(m => m.IsValid && m.Patch.Nits is not null && m.Patch.Nits > 0)
@@ -1480,6 +1490,7 @@ namespace HDRGammaController
                         DisplayRgb = new LinearRgb(0.5, 0.5, 0.5),
                         Nits = nits,
                         Category = PatchCategory.General,
+                        Index = sequenceOffset + i,
                     };
                     Vm.VerifyButtonContent = $"PQ tracking {i + 1}/{rungs.Count}…";
                     patchWindow.SetProgress(i + 1, rungs.Count, p.Name,
@@ -1487,7 +1498,7 @@ namespace HDRGammaController
                         phase: "HDR PQ tracking");
                     wire.PresentNits(nits, nits, nits);
                     await Task.Delay(i == 0 ? 1200 : 600, token);
-                    var m = await colorimeter.MeasureAsync(p, ctx.HdrMode, token);
+                    var m = WithSequenceIndex(await colorimeter.MeasureAsync(p, ctx.HdrMode, token), sequenceOffset + i);
                     if (ctx.CaptureSounds)
                         CalibrationSounds.PlayCapture();
                     if (m.IsValid)
@@ -1534,6 +1545,19 @@ namespace HDRGammaController
                              $"ΔE ITP avg {itpSum / readings.Count:F1}, max {itpMax:F1} vs D65 gray.";
             return new PqTrackingSweepResult(summary, readings.Select(r => r.M).ToList());
         }
+
+        private static MeasurementResult WithSequenceIndex(MeasurementResult source, int sequenceIndex) => new()
+        {
+            Id = source.Id,
+            Timestamp = source.Timestamp,
+            Patch = source.Patch,
+            Xyz = source.Xyz,
+            IntegrationTimeMs = source.IntegrationTimeMs,
+            IsValid = source.IsValid,
+            ErrorMessage = source.ErrorMessage,
+            RawOutput = source.RawOutput,
+            SequenceIndex = sequenceIndex,
+        };
 
         /// <summary>
         /// Drift fix for OLEDs and warm-up shifts: measure ONLY white (averaged 3x), replace
@@ -1794,8 +1818,9 @@ namespace HDRGammaController
                 // ramps, memory colors); everything downstream - progress, settle delays,
                 // metrics, the PQ ladder - is shared with the standard sweep.
                 bool detailedSweep = Vm.IsDetailedVerifyChecked;
+                var verificationTarget = EffectiveTarget(ctx);
                 var patches = detailedSweep
-                    ? VerificationPatchSets.Detailed(ctx.Target, ctx.HdrMode)
+                    ? VerificationPatchSets.Detailed(verificationTarget, ctx.HdrMode)
                     : CalibrationVerifier.BuildVerificationPatches();
                 var results = new List<MeasurementResult>();
                 await colorimeter.BeginMeasurementSessionAsync(hdrMode: ctx.HdrMode, verifyCts.Token);
@@ -1819,19 +1844,19 @@ namespace HDRGammaController
                 // reachable peak) are graded; above it the LUT intentionally passes the
                 // panel's own rolloff through.
                 var pqTracking = ctx.HdrMode
-                    ? await RunPqTrackingSweepAsync(patchWindow, colorimeter, ctx, verifyCts.Token)
+                    ? await RunPqTrackingSweepAsync(patchWindow, colorimeter, ctx, patches.Count, verifyCts.Token)
                     : null;
                 var persistedVerifyMeasurements = new List<MeasurementResult>(results);
                 if (pqTracking?.Readings.Count > 0)
                     persistedVerifyMeasurements.AddRange(pqTracking.Readings);
                 _verifyMeasurements = persistedVerifyMeasurements;
 
-                var after = CalibrationVerifier.ComputeMetrics(results, ctx.Target);
+                var after = CalibrationVerifier.ComputeMetrics(results, verificationTarget);
                 var activation = _measurements != null
                     ? VerificationAnalysis.AnalyzeProfileActivation(
-                        CalibrationVerifier.ComputeMetrics(_measurements, ctx.Target).PatchResults,
+                        CalibrationVerifier.ComputeMetrics(_measurements, verificationTarget).PatchResults,
                         after.PatchResults,
-                        ctx.Target.WhitePointOnly)
+                        verificationTarget.WhitePointOnly)
                     : null;
                 Vm.AfterAvgText = $"{after.AverageDeltaE:F2}";
                 Vm.AfterMaxText = $"{after.MaxDeltaE:F2}";

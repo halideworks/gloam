@@ -45,7 +45,9 @@ namespace HDRGammaController.ViewModels
         private static readonly Brush InitialGradeBackgroundBrush = Frozen(0x16, 0x4e, 0x63);
 
         /// <summary>The ΔE quality color coding used throughout the accuracy table.</summary>
-        public static Brush DeltaEBrush(double deltaE) => deltaE switch
+        public static Brush DeltaEBrush(double deltaE) => !double.IsFinite(deltaE)
+            ? DefaultValueBrush
+            : deltaE switch
         {
             < 1.0 => GreenBrush,   // excellent
             < 2.0 => CyanBrush,    // good
@@ -64,7 +66,9 @@ namespace HDRGammaController.ViewModels
         /// The same ΔE thresholds as <see cref="DeltaEBrush"/>, collapsed onto the print-safe
         /// palette for the exported (light) report: good below 2.0, medium below 5.0, bad above.
         /// </summary>
-        public static Brush DeltaEPrintBrush(double deltaE) => deltaE switch
+        public static Brush DeltaEPrintBrush(double deltaE) => !double.IsFinite(deltaE)
+            ? DefaultValueBrush
+            : deltaE switch
         {
             < 2.0 => PrintGoodBrush,   // excellent/good
             < 5.0 => PrintMediumBrush, // acceptable/marginal

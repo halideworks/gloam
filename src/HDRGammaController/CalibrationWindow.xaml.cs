@@ -768,10 +768,10 @@ namespace HDRGammaController
                 // Process results if successful
                 if (_calibrationResult.Success && _calibrationResult.Measurements != null)
                 {
-                    // Generate the 3D LUT from measurements
+                    // Generate the calibration artifact from measurements.
                     Dispatcher.Invoke(() =>
                     {
-                        Vm.PhaseText = "Generating LUT...";
+                        Vm.PhaseText = _measuredInHdr ? "Building HDR profile model..." : "Generating LUT...";
                     });
 
                     // 33³ is the standard "high quality" 3D-LUT grid (the size Resolve/most
@@ -784,16 +784,32 @@ namespace HDRGammaController
                         _calibrationResult.Measurements,
                         lutSize: 33);
 
-                    _generatedLut = generator.Generate(progress =>
+                    if (_measuredInHdr)
                     {
+                        // HDR install builds Windows Advanced Color MHC2 PQ LUTs from the
+                        // measured patches. Do not also emit a generic 33³ SDR-oriented LUT:
+                        // it is not what gets installed and can mislead reports/exports.
+                        _generatedLut = null;
+                        _displayCharacterization = generator.BuildCharacterizationOnly(hdrMode: true);
                         Dispatcher.Invoke(() =>
                         {
                             Vm.ProgressPercent = 100;
-                            Vm.SetProgressLabel("Generating...");
+                            Vm.SetProgressLabel("Model built");
                         });
-                    });
+                    }
+                    else
+                    {
+                        _generatedLut = generator.Generate(progress =>
+                        {
+                            Dispatcher.Invoke(() =>
+                            {
+                                Vm.ProgressPercent = 100;
+                                Vm.SetProgressLabel("Generating...");
+                            });
+                        });
 
-                    _displayCharacterization = generator.Characterization;
+                        _displayCharacterization = generator.Characterization;
+                    }
                     _calibrationMetrics = generator.CalculateMetrics();
 
                     Dispatcher.Invoke(() =>
@@ -1386,9 +1402,12 @@ namespace HDRGammaController
                 }
                 catch (Exception ex)
                 {
-                    // The measurement will read whatever is on screen (black) and the
-                    // builder will fall back to the SDR-mapped path - degraded, not fatal.
-                    Log.Info($"CalibrationWindow: HDR wire renderer failed ({ex.Message}); wire patch shows black.");
+                    DisposeHdrWireRenderer();
+                    Log.Error($"CalibrationWindow: HDR wire renderer failed ({ex.Message}).");
+                    throw new InvalidOperationException(
+                        "HDR wire-ladder patches require the FP16 scRGB renderer, but it failed to present the patch. " +
+                        "Keep Windows HDR enabled on the measured display and retry calibration. " +
+                        $"Renderer error: {ex.Message}", ex);
                 }
                 return;
             }

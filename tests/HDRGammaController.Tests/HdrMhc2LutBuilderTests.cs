@@ -134,6 +134,52 @@ namespace HDRGammaController.Tests
                 HdrMhc2LutBuilder.Build(measurements, SdrWhite));
         }
 
+        [Theory]
+        [InlineData(double.NaN)]
+        [InlineData(double.PositiveInfinity)]
+        [InlineData(0.0)]
+        [InlineData(5000.0)]
+        public void InvalidSdrWhite_Throws(double sdrWhite)
+        {
+            var measurements = SimulatePanel(p => Math.Max(TransferFunctions.PqEotf(p), 0.05));
+
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                HdrMhc2LutBuilder.Build(measurements, sdrWhite));
+        }
+
+        [Fact]
+        public void NonFiniteMeasurementRows_AreIgnored()
+        {
+            var measurements = SimulatePanel(p => Math.Max(TransferFunctions.PqEotf(p), 0.05));
+            measurements.Add(new MeasurementResult
+            {
+                Patch = new ColorPatch
+                {
+                    Name = "Bad grayscale",
+                    DisplayRgb = new LinearRgb(double.NaN, double.NaN, double.NaN),
+                    Category = PatchCategory.Grayscale
+                },
+                Xyz = new CieXyz(0, double.NaN, 0)
+            });
+            measurements.Add(new MeasurementResult
+            {
+                Patch = new ColorPatch
+                {
+                    Name = "Bad wire",
+                    DisplayRgb = new LinearRgb(0.5, 0.5, 0.5),
+                    Nits = double.PositiveInfinity,
+                    Category = PatchCategory.General
+                },
+                Xyz = new CieXyz(0, double.PositiveInfinity, 0)
+            });
+
+            var result = HdrMhc2LutBuilder.Build(measurements, SdrWhite);
+
+            Assert.False(result.WireExact);
+            Assert.All(result.LutR, value => Assert.True(double.IsFinite(value)));
+            Assert.True(result.MeasuredPeakNits > 100);
+        }
+
         // ---- HDR wire-ladder (FP16 exact wire positions) ------------------------------
 
         private static readonly double[] Ladder = { 0, 2, 4, 8, 16, 32, 64, 100, 150, 220, 320, 450, 650, 1000 };
@@ -217,6 +263,82 @@ namespace HDRGammaController.Tests
             int idx = (int)Math.Round(TransferFunctions.PqInverseEotf(100.0) * 1023);
             Assert.True(result.LutR[idx] > TransferFunctions.PqInverseEotf(100.0) + 0.005,
                 "LUT should boost (wire ladder data), not stay identity (grayscale data)");
+        }
+
+        [Fact]
+        public void SparseLowWireRows_DoNotOverrideSdrMappedGrayscaleFallback()
+        {
+            // Five low wire rows are enough to satisfy a naive count check, but they do not
+            // characterize HDR highlights. The builder must ignore them as a wire-exact
+            // source and fall back to the complete SDR-mapped grayscale data.
+            var measurements = SimulatePanel(p => Math.Max(TransferFunctions.PqEotf(p), 0.05));
+            foreach (double nits in new[] { 0.0, 2.0, 4.0, 8.0, 16.0 })
+            {
+                measurements.Add(new MeasurementResult
+                {
+                    Patch = new ColorPatch
+                    {
+                        Name = $"HDR wire {nits:F0} nits",
+                        DisplayRgb = new LinearRgb(0.5, 0.5, 0.5),
+                        Nits = nits,
+                        Category = PatchCategory.General,
+                    },
+                    Xyz = new CieXyz(nits * 0.95, Math.Max(nits * 0.5, 0.02), nits * 1.08),
+                });
+            }
+
+            var result = HdrMhc2LutBuilder.Build(measurements, SdrWhite);
+
+            Assert.False(result.WireExact);
+            Assert.True(result.MeasuredPeakNits > 150);
+        }
+
+        [Fact]
+        public void SparseLowWireRowsWithoutGrayscale_DoNotBuildWireExactLut()
+        {
+            var measurements = new List<MeasurementResult>();
+            foreach (double nits in new[] { 0.0, 2.0, 4.0, 8.0, 16.0 })
+            {
+                measurements.Add(new MeasurementResult
+                {
+                    Patch = new ColorPatch
+                    {
+                        Name = $"HDR wire {nits:F0} nits",
+                        DisplayRgb = new LinearRgb(0.5, 0.5, 0.5),
+                        Nits = nits,
+                        Category = PatchCategory.General,
+                    },
+                    Xyz = new CieXyz(nits * 0.95, Math.Max(nits * 0.5, 0.02), nits * 1.08),
+                });
+            }
+
+            var ex = Assert.Throws<InvalidOperationException>(() =>
+                HdrMhc2LutBuilder.Build(measurements, SdrWhite));
+            Assert.Contains("grayscale", ex.Message, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void DuplicateWireRows_DoNotCountAsDistinctHdrCoverage()
+        {
+            var measurements = new List<MeasurementResult>();
+            foreach (double nits in new[] { 0.0, 100.0, 100.0, 100.0, 100.0 })
+            {
+                measurements.Add(new MeasurementResult
+                {
+                    Patch = new ColorPatch
+                    {
+                        Name = $"HDR wire {nits:F0} nits",
+                        DisplayRgb = new LinearRgb(0.5, 0.5, 0.5),
+                        Nits = nits,
+                        Category = PatchCategory.General,
+                    },
+                    Xyz = new CieXyz(nits * 0.95, Math.Max(nits * 0.9, 0.02), nits * 1.08),
+                });
+            }
+
+            var ex = Assert.Throws<InvalidOperationException>(() =>
+                HdrMhc2LutBuilder.Build(measurements, SdrWhite));
+            Assert.Contains("grayscale", ex.Message, StringComparison.OrdinalIgnoreCase);
         }
 
         [Fact]

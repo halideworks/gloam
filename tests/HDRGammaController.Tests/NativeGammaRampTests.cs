@@ -57,6 +57,18 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void BuildRampChannel_NonFiniteValuesClampToBlack()
+        {
+            var lut = new[] { 0.0, double.NaN, double.PositiveInfinity, 1.0 };
+            var ramp = NativeGammaRamp.BuildRampChannel(lut);
+
+            Assert.Equal(0, ramp[0]);
+            Assert.Equal(0, ramp[85]);
+            Assert.Equal(0, ramp[170]);
+            Assert.Equal(65535, ramp[255]);
+        }
+
+        [Fact]
         public void BuildRampChannel_MatchesLutValuesAtSamplePoints()
         {
             // With a 256-entry LUT, ramp index i maps exactly onto LUT index i.

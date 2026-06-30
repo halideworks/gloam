@@ -1,3 +1,4 @@
+using System;
 using HDRGammaController.Core;
 using Xunit;
 
@@ -27,6 +28,40 @@ namespace HDRGammaController.Tests
         public void FadeCadence_NoEffectiveFade_UsesLowFrequencyBound(int start, int end, double minutes)
         {
             Assert.Equal(500, NightModeService.CalculateFadeTickMilliseconds(start, end, minutes));
+        }
+
+        [Fact]
+        public void LegacyTemperatureSetter_ClampsNonFiniteAndOutOfRangeValues()
+        {
+            var settings = new NightModeSettings();
+
+            settings.Temperature = double.NaN;
+            Assert.Equal(NightModeSettings.DefaultNightKelvin, settings.TemperatureKelvin);
+
+            settings.Temperature = -200;
+            Assert.Equal(NightModeSettings.MinKelvin, settings.TemperatureKelvin);
+
+            settings.Temperature = 200;
+            Assert.Equal(NightModeSettings.MaxKelvin, settings.TemperatureKelvin);
+        }
+
+        [Fact]
+        public void SchedulePoint_SanitizesTimeLocationAndOffset()
+        {
+            var point = new NightModeSchedulePoint
+            {
+                TriggerType = ScheduleTriggerType.FixedTime,
+                Time = TimeSpan.FromHours(-1)
+            };
+
+            Assert.Equal(TimeSpan.FromHours(23), point.GetTimeOfDay(null, null));
+
+            point.TriggerType = ScheduleTriggerType.Sunset;
+            point.OffsetMinutes = double.PositiveInfinity;
+
+            var time = point.GetTimeOfDay(double.NaN, double.NegativeInfinity);
+
+            Assert.Equal(TimeSpan.FromHours(19), time);
         }
     }
 }

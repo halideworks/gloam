@@ -4,6 +4,10 @@ namespace HDRGammaController.Core
 {
     public class MonitorInfo
     {
+        public const double DefaultSdrWhiteLevel = 200.0;
+        public const double MinSdrWhiteLevel = 40.0;
+        public const double MaxSdrWhiteLevel = 1000.0;
+
         /// <summary>
         /// GDI Device Name (e.g. \\.\DISPLAY1).
         /// </summary>
@@ -63,6 +67,14 @@ namespace HDRGammaController.Core
         /// colorimeter still measures the true gamut during calibration).
         /// </summary>
         public EdidColorInfo? EdidColor { get; set; }
+
+        public static double SanitizeSdrWhiteLevel(double value) =>
+            double.IsFinite(value)
+                ? Math.Clamp(value, MinSdrWhiteLevel, MaxSdrWhiteLevel)
+                : DefaultSdrWhiteLevel;
+
+        public static double SanitizeNonNegativeNits(double value) =>
+            double.IsFinite(value) && value > 0.0 ? value : 0.0;
     }
 
     /// <summary>

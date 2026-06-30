@@ -104,5 +104,141 @@ namespace HDRGammaController.Tests
                 for (int i = 1; i < lut.Length; i++)
                     Assert.True(lut[i] >= lut[i - 1] - 1e-9, $"correction LUT not monotonic at {i}");
         }
+
+        [Fact]
+        public void RefineCorrection_NonMonotonicMeasuredRamp_UsesMonotonicEnvelopeForInverse()
+        {
+            var target = new CalibrationTarget
+            {
+                Name = "Linear test",
+                RedPrimary = Chromaticity.Rec709Red,
+                GreenPrimary = Chromaticity.Rec709Green,
+                BluePrimary = Chromaticity.Rec709Blue,
+                WhitePoint = Chromaticity.D65,
+                TransferFunction = TransferFunctionType.Linear,
+            };
+            var corrector = new ClosedLoopCorrector(target, 100, isHdr: false, damping: 1.0);
+            var identity = IdentityCorrection();
+            var achieved = new List<MeasurementResult>
+            {
+                Gray(0.00, 0.00),
+                Gray(0.25, 0.50),
+                Gray(0.50, 0.30), // noisy inversion; must not pull inverse lookup forward
+                Gray(0.75, 0.75),
+                Gray(1.00, 1.00),
+            };
+
+            var refined = corrector.RefineCorrection(achieved, identity);
+            double corrected55 = SampleLut(refined.R, 0.55);
+
+            Assert.InRange(corrected55, 0.53, 0.57);
+        }
+
+        [Fact]
+        public void RefineCorrection_NormalizesResponseAgainstEndpointBlackAndWhite()
+        {
+            var target = new CalibrationTarget
+            {
+                Name = "Linear test",
+                RedPrimary = Chromaticity.Rec709Red,
+                GreenPrimary = Chromaticity.Rec709Green,
+                BluePrimary = Chromaticity.Rec709Blue,
+                WhitePoint = Chromaticity.D65,
+                TransferFunction = TransferFunctionType.Linear,
+            };
+            var corrector = new ClosedLoopCorrector(target, 100, isHdr: false, damping: 1.0);
+            var identity = IdentityCorrection();
+            var achieved = new List<MeasurementResult>
+            {
+                Gray(0.00, 0.10), // measured black endpoint
+                Gray(0.25, 0.00), // stray lower reading must not redefine black
+                Gray(0.50, 0.50),
+                Gray(1.00, 1.00),
+            };
+
+            var refined = corrector.RefineCorrection(achieved, identity);
+            double corrected20 = SampleLut(refined.R, 0.20);
+
+            Assert.InRange(corrected20, 0.35, 0.38);
+        }
+
+        [Fact]
+        public void RefineCorrection_NonFiniteInputs_ReturnsFiniteMonotonicLuts()
+        {
+            var target = new CalibrationTarget
+            {
+                Name = "Linear test",
+                RedPrimary = Chromaticity.Rec709Red,
+                GreenPrimary = Chromaticity.Rec709Green,
+                BluePrimary = Chromaticity.Rec709Blue,
+                WhitePoint = Chromaticity.D65,
+                TransferFunction = TransferFunctionType.Linear,
+            };
+            var corrector = new ClosedLoopCorrector(target, double.NaN, isHdr: false, damping: double.NaN);
+            var achieved = new List<MeasurementResult>
+            {
+                Gray(0.00, 0.00),
+                Gray(0.50, 0.25),
+                Gray(1.00, 1.00),
+                new MeasurementResult
+                {
+                    Patch = new ColorPatch
+                    {
+                        Name = "corrupt gray",
+                        DisplayRgb = new LinearRgb(double.NaN, double.NaN, double.NaN),
+                        Category = PatchCategory.Grayscale
+                    },
+                    Xyz = new CieXyz(double.NaN, double.PositiveInfinity, -1.0),
+                    IsValid = true
+                }
+            };
+            var current = (
+                R: new[] { 0.0, double.NaN, 1.0 },
+                G: Array.Empty<double>(),
+                B: new[] { double.PositiveInfinity });
+
+            var refined = corrector.RefineCorrection(achieved, current);
+
+            AssertFiniteMonotonic(refined.R);
+            AssertFiniteMonotonic(refined.G);
+            AssertFiniteMonotonic(refined.B);
+        }
+
+        private static MeasurementResult Gray(double signal, double y)
+        {
+            return new MeasurementResult
+            {
+                Patch = new ColorPatch
+                {
+                    Name = $"gray {signal:F2}",
+                    DisplayRgb = new LinearRgb(signal, signal, signal),
+                    Category = PatchCategory.Grayscale
+                },
+                Xyz = new CieXyz(0.95047 * y, y, 1.08883 * y),
+                IsValid = true
+            };
+        }
+
+        private static (double[] R, double[] G, double[] B) IdentityCorrection()
+        {
+            var r = new double[1024];
+            var g = new double[1024];
+            var b = new double[1024];
+            for (int i = 0; i < r.Length; i++)
+                r[i] = g[i] = b[i] = i / 1023.0;
+            return (r, g, b);
+        }
+
+        private static void AssertFiniteMonotonic(double[] lut)
+        {
+            Assert.Equal(1024, lut.Length);
+            for (int i = 0; i < lut.Length; i++)
+            {
+                Assert.True(double.IsFinite(lut[i]));
+                Assert.InRange(lut[i], 0.0, 1.0);
+                if (i > 0)
+                    Assert.True(lut[i] >= lut[i - 1] - 1e-12, $"LUT not monotonic at {i}");
+            }
+        }
     }
 }

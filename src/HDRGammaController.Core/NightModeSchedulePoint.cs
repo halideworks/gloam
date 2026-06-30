@@ -25,15 +25,19 @@ namespace HDRGammaController.Core
         public TimeSpan GetTimeOfDay(double? lat, double? lon)
         {
             if (TriggerType == ScheduleTriggerType.FixedTime)
-                return Time;
-                
+                return NightModeSettings.NormalizeTimeOfDay(Time);
+
+            lat = NightModeSettings.ClampLatitude(lat);
+            lon = NightModeSettings.ClampLongitude(lon);
+
             if (lat.HasValue && lon.HasValue)
             {
                 var result = SunCalculator.CalculateTodayDetailed(lat.Value, lon.Value);
                 if (result.HasValidTimes)
                 {
                     var baseTime = (TriggerType == ScheduleTriggerType.Sunrise) ? result.Sunrise : result.Sunset;
-                    return baseTime.Add(TimeSpan.FromMinutes(OffsetMinutes));
+                    return NightModeSettings.NormalizeTimeOfDay(
+                        baseTime.Add(TimeSpan.FromMinutes(NightModeSettings.ClampOffsetMinutes(OffsetMinutes))));
                 }
                 // Polar day/night: fall through to the 7am/7pm fallback rather than
                 // scheduling at the (0,0) or (0,24h) sentinels that confuse the fade logic.

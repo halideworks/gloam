@@ -83,6 +83,9 @@ namespace HDRGammaController.Core
             CalibrationSettings calibration,
             bool isHdr = true)
         {
+            ValidateSdrWhiteLevel(sdrWhiteLevel);
+            calibration = (calibration ?? CalibrationSettings.Default).Sanitized();
+
             // Display white is part of the actual transfer function. Coarse bucketing made
             // two monitors order-dependent: whichever generated a LUT first supplied its
             // curve to the other.
@@ -161,7 +164,7 @@ namespace HDRGammaController.Core
                     double linear = Math.Pow(input, targetGamma);
 
                     // 2. Apply calibration (temp/tint/dimming/gains) in linear space.
-                    var (r, g, b) = ColorAdjustments.ApplyCalibration(linear, linear, linear, calibration);
+                    var (r, g, b) = ColorAdjustments.ApplyUserAdjustmentsLinear(linear, linear, linear, calibration);
 
                     // 3. Re-encode for the display's native ~2.2 response.
                     lutR[i] = Math.Pow(r, 1.0 / 2.2);
@@ -219,11 +222,11 @@ namespace HDRGammaController.Core
                 if (calibration.HasAdjustments)
                 {
                     // Normalize to 0-1 range for calibration
-                    double normR = Math.Clamp(outputR / sdrWhiteLevel, 0, 1);
-                    double normG = Math.Clamp(outputG / sdrWhiteLevel, 0, 1);
-                    double normB = Math.Clamp(outputB / sdrWhiteLevel, 0, 1);
+                    double normR = Clamp01(outputR / sdrWhiteLevel);
+                    double normG = Clamp01(outputG / sdrWhiteLevel);
+                    double normB = Clamp01(outputB / sdrWhiteLevel);
 
-                    var (adjR, adjG, adjB) = ColorAdjustments.ApplyCalibration(normR, normG, normB, calibration);
+                    var (adjR, adjG, adjB) = ColorAdjustments.ApplyUserAdjustmentsLinear(normR, normG, normB, calibration);
 
                     // Scale back to nits
                     outputR = adjR * sdrWhiteLevel;
@@ -257,7 +260,7 @@ namespace HDRGammaController.Core
                     // for C¹ continuity at the SDR/HDR boundary, eliminating the visible
                     // slope-kink the old linear blend produced in smooth gradients.
                     double t = (normalized - pqSdrWhite) / Math.Max(1.0 - pqSdrWhite, 1e-9);
-                    t = Math.Clamp(t, 0.0, 1.0);
+                    t = Clamp01(t);
                     double blendFactor = t * t * (3.0 - 2.0 * t);
 
                     lutR[i] = pqR + (headroomSignal - pqR) * blendFactor;
@@ -325,10 +328,19 @@ namespace HDRGammaController.Core
             double sdrWhiteLevel,
             bool isHdr = true)
         {
+            ValidateTargetGamma(targetGamma);
+            ValidateSdrWhiteLevel(sdrWhiteLevel);
+            if (characterization == null)
+                throw new ArgumentNullException(nameof(characterization));
+
+            calibration = (calibration ?? CalibrationSettings.Default).Sanitized();
+
             double[] lutR = new double[1024];
             double[] lutG = new double[1024];
             double[] lutB = new double[1024];
             double[] lutGrey = new double[1024];
+            double safePeakLuminance = SafePeakLuminance(characterization.PeakLuminance, sdrWhiteLevel);
+            double safeBlackLevel = SafeBlackLevel(characterization.BlackLevel, safePeakLuminance);
 
             // Get the measured tone curves (what the display actually does)
             var measuredR = characterization.RedToneCurve ?? ToneCurve.CreateGamma(characterization.MeasuredGamma);
@@ -345,9 +357,7 @@ namespace HDRGammaController.Core
                 // so the InverseLookup domain must be normalized the same way. Here the target
                 // (adjR/G/B) is a fraction of absolute white (0 = zero light, 1 = white), so map
                 // it into the black-subtracted fit domain via the black fraction of white.
-                double sdrBlackFrac = characterization.PeakLuminance > 0
-                    ? Math.Clamp(characterization.BlackLevel / characterization.PeakLuminance, 0, 1)
-                    : 0.0;
+                double sdrBlackFrac = Clamp01(safeBlackLevel / safePeakLuminance);
                 double sdrNormRange = Math.Max(1.0 - sdrBlackFrac, 1e-6);
 
                 for (int i = 0; i < 1024; i++)
@@ -359,14 +369,14 @@ namespace HDRGammaController.Core
                     double targetLinear = Math.Pow(input, targetGamma);
 
                     // Apply calibration adjustments to the target
-                    var (adjR, adjG, adjB) = ColorAdjustments.ApplyCalibration(
+                    var (adjR, adjG, adjB) = ColorAdjustments.ApplyUserAdjustmentsLinear(
                         targetLinear, targetLinear, targetLinear, calibration);
 
                     // What signal must we send to the display to get this output?
                     // Use the INVERSE of the measured response, in the black-subtracted fit domain.
-                    double fitR = Math.Clamp((adjR - sdrBlackFrac) / sdrNormRange, 0, 1);
-                    double fitG = Math.Clamp((adjG - sdrBlackFrac) / sdrNormRange, 0, 1);
-                    double fitB = Math.Clamp((adjB - sdrBlackFrac) / sdrNormRange, 0, 1);
+                    double fitR = Clamp01((adjR - sdrBlackFrac) / sdrNormRange);
+                    double fitG = Clamp01((adjG - sdrBlackFrac) / sdrNormRange);
+                    double fitB = Clamp01((adjB - sdrBlackFrac) / sdrNormRange);
                     lutR[i] = measuredR.InverseLookup(fitR);
                     lutG[i] = measuredG.InverseLookup(fitG);
                     lutB[i] = measuredB.InverseLookup(fitB);
@@ -376,7 +386,7 @@ namespace HDRGammaController.Core
             }
 
             // HDR Mode with calibration-aware compensation
-            double blackLevel = characterization.BlackLevel;
+            double blackLevel = safeBlackLevel;
             double pqSdrWhite = TransferFunctions.PqInverseEotf(sdrWhiteLevel);
 
             for (int i = 0; i < 1024; i++)
@@ -405,11 +415,11 @@ namespace HDRGammaController.Core
                 // 3. Apply calibration adjustments
                 if (calibration.HasAdjustments)
                 {
-                    double normR = Math.Clamp(outputR / sdrWhiteLevel, 0, 1);
-                    double normG = Math.Clamp(outputG / sdrWhiteLevel, 0, 1);
-                    double normB = Math.Clamp(outputB / sdrWhiteLevel, 0, 1);
+                    double normR = Clamp01(outputR / sdrWhiteLevel);
+                    double normG = Clamp01(outputG / sdrWhiteLevel);
+                    double normB = Clamp01(outputB / sdrWhiteLevel);
 
-                    var (adjR, adjG, adjB) = ColorAdjustments.ApplyCalibration(normR, normG, normB, calibration);
+                    var (adjR, adjG, adjB) = ColorAdjustments.ApplyUserAdjustmentsLinear(normR, normG, normB, calibration);
 
                     outputR = adjR * sdrWhiteLevel;
                     outputG = adjG * sdrWhiteLevel;
@@ -424,9 +434,9 @@ namespace HDRGammaController.Core
                 // lookup disagrees with the fit (error largest in shadows). Match the fit:
                 // (output - blackLevel)/(sdrWhiteLevel - blackLevel), clamped.
                 double normRange = Math.Max(sdrWhiteLevel - blackLevel, 1e-6);
-                double targetNormR = Math.Clamp((outputR - blackLevel) / normRange, 0, 1);
-                double targetNormG = Math.Clamp((outputG - blackLevel) / normRange, 0, 1);
-                double targetNormB = Math.Clamp((outputB - blackLevel) / normRange, 0, 1);
+                double targetNormR = Clamp01((outputR - blackLevel) / normRange);
+                double targetNormG = Clamp01((outputG - blackLevel) / normRange);
+                double targetNormB = Clamp01((outputB - blackLevel) / normRange);
 
                 double compensatedR = measuredR.InverseLookup(targetNormR) * sdrWhiteLevel;
                 double compensatedG = measuredG.InverseLookup(targetNormG) * sdrWhiteLevel;
@@ -451,8 +461,7 @@ namespace HDRGammaController.Core
                     // with a smoothstep. See GenerateLutInternal for rationale.
                     double headroomSignal = ComputeHeadroomTarget(linear, calibration, sdrWhiteLevel);
 
-                    double t = (normalized - pqSdrWhite) / Math.Max(1.0 - pqSdrWhite, 1e-9);
-                    t = Math.Clamp(t, 0.0, 1.0);
+                    double t = Clamp01((normalized - pqSdrWhite) / Math.Max(1.0 - pqSdrWhite, 1e-9));
                     double blendFactor = t * t * (3.0 - 2.0 * t);
 
                     lutR[i] = pqR + (headroomSignal - pqR) * blendFactor;
@@ -465,6 +474,36 @@ namespace HDRGammaController.Core
             return (lutR, lutG, lutB, lutGrey);
         }
 
+        private static void ValidateSdrWhiteLevel(double sdrWhiteLevel)
+        {
+            if (!double.IsFinite(sdrWhiteLevel) || sdrWhiteLevel <= 0.0)
+                throw new ArgumentOutOfRangeException(nameof(sdrWhiteLevel), sdrWhiteLevel,
+                    "SDR white level must be a positive finite luminance in nits.");
+        }
+
+        private static void ValidateTargetGamma(double targetGamma)
+        {
+            if (!double.IsFinite(targetGamma) || targetGamma < 1.0 || targetGamma > 4.0)
+                throw new ArgumentOutOfRangeException(nameof(targetGamma), targetGamma,
+                    "Target gamma must be finite and in the supported 1.0-4.0 range.");
+        }
+
+        private static double SafePeakLuminance(double peakLuminance, double fallback) =>
+            double.IsFinite(peakLuminance) && peakLuminance > 0.0
+                ? peakLuminance
+                : fallback;
+
+        private static double SafeBlackLevel(double blackLevel, double peakLuminance)
+        {
+            if (!double.IsFinite(blackLevel) || blackLevel < 0.0)
+                return 0.0;
+
+            return Math.Min(blackLevel, Math.Max(peakLuminance - 1e-6, 0.0));
+        }
+
+        private static double Clamp01(double value) =>
+            double.IsFinite(value) ? Math.Clamp(value, 0.0, 1.0) : 0.0;
+
         /// <summary>
         /// Checks if a calibration profile is available and valid for the given gamma mode.
         /// </summary>
@@ -472,14 +511,48 @@ namespace HDRGammaController.Core
         {
             if (profile == null)
                 return false;
+            if (profile.WasRepairedOnLoad)
+                return false;
+            if (!double.IsFinite(profile.MeasuredGamma) || profile.MeasuredGamma <= 0)
+                return false;
+            if (!double.IsFinite(profile.PeakLuminance) || profile.PeakLuminance <= 0)
+                return false;
+            if (!double.IsFinite(profile.BlackLevel) || profile.BlackLevel < 0)
+                return false;
+            if (!IsPlausibleChromaticity(profile.RedPrimaryX, profile.RedPrimaryY) ||
+                !IsPlausibleChromaticity(profile.GreenPrimaryX, profile.GreenPrimaryY) ||
+                !IsPlausibleChromaticity(profile.BluePrimaryX, profile.BluePrimaryY) ||
+                !IsPlausibleChromaticity(profile.WhitePointX, profile.WhitePointY))
+                return false;
 
-            // Check if the profile has valid tone curve data
-            bool hasToneCurves = profile.RedToneCurve != null &&
-                                 profile.GreenToneCurve != null &&
-                                 profile.BlueToneCurve != null &&
-                                 profile.RedToneCurve.Length > 0;
+            bool anyToneCurves = profile.RedToneCurve != null ||
+                                 profile.GreenToneCurve != null ||
+                                 profile.BlueToneCurve != null;
+            if (!anyToneCurves)
+                return profile.MeasuredGamma > 0;
 
-            return hasToneCurves || profile.MeasuredGamma > 0;
+            return IsValidToneCurve(profile.RedToneCurve) &&
+                   IsValidToneCurve(profile.GreenToneCurve) &&
+                   IsValidToneCurve(profile.BlueToneCurve);
+        }
+
+        private static bool IsPlausibleChromaticity(double x, double y) =>
+            double.IsFinite(x) && double.IsFinite(y) &&
+            x > 0.0 && y > 0.0 && x < 0.8 && y < 0.9 && x + y <= 1.000001;
+
+        private static bool IsValidToneCurve(double[]? curve)
+        {
+            if (curve == null || curve.Length < 2)
+                return false;
+            for (int i = 0; i < curve.Length; i++)
+            {
+                if (!double.IsFinite(curve[i]) || curve[i] < 0.0 || curve[i] > 1.0)
+                    return false;
+                if (i > 0 && curve[i] < curve[i - 1] - 1e-10)
+                    return false;
+            }
+
+            return true;
         }
 
         #endregion

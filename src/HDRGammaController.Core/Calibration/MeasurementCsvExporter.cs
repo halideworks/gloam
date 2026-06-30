@@ -51,7 +51,7 @@ namespace HDRGammaController.Core.Calibration
             foreach (var measurement in measurements.OrderBy(m => m.SequenceIndex).ThenBy(m => m.Patch.Index))
             {
                 var patch = measurement.Patch;
-                var xy = measurement.Chromaticity;
+                var derived = TryDeriveChromaticity(measurement);
                 AppendRow(sb,
                     reportId,
                     phase,
@@ -71,10 +71,10 @@ namespace HDRGammaController.Core.Calibration
                     measurement.Xyz.X,
                     measurement.Xyz.Y,
                     measurement.Xyz.Z,
-                    xy.X,
-                    xy.Y,
-                    measurement.Cct,
-                    measurement.Duv,
+                    derived?.X,
+                    derived?.Y,
+                    derived?.Cct,
+                    derived?.Duv,
                     measurement.IntegrationTimeMs,
                     measurement.IsValid,
                     measurement.ErrorMessage);
@@ -86,6 +86,31 @@ namespace HDRGammaController.Core.Calibration
         private static void AppendRow(StringBuilder sb, params object?[] values)
             => sb.AppendLine(string.Join(",", values.Select(CsvValue)));
 
+        private static (double X, double Y, double Cct, double Duv)? TryDeriveChromaticity(MeasurementResult measurement)
+        {
+            if (!measurement.IsValid)
+                return null;
+
+            var xyz = measurement.Xyz;
+            if (!double.IsFinite(xyz.X) || !double.IsFinite(xyz.Y) || !double.IsFinite(xyz.Z) ||
+                xyz.X < -1e-6 || xyz.Y < -1e-6 || xyz.Z < -1e-6)
+            {
+                return null;
+            }
+
+            double sum = xyz.X + xyz.Y + xyz.Z;
+            if (!double.IsFinite(sum) || sum <= 1e-12)
+                return null;
+
+            double x = xyz.X / sum;
+            double y = xyz.Y / sum;
+            if (!double.IsFinite(x) || !double.IsFinite(y) || x <= 0.0 || y <= 0.0 || x + y > 1.000001)
+                return null;
+
+            var xy = new Chromaticity(x, y);
+            return (x, y, ColorMath.ChromaticityToCct(xy), ColorMath.CalculateDuv(xy));
+        }
+
         private static string CsvValue(object? value)
         {
             string text = value switch
@@ -94,7 +119,9 @@ namespace HDRGammaController.Core.Calibration
                 DateTime dt => dt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
                 DateTimeOffset dto => dto.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
                 double d when double.IsFinite(d) => d.ToString("G17", CultureInfo.InvariantCulture),
+                double => string.Empty,
                 float f when float.IsFinite(f) => f.ToString("G9", CultureInfo.InvariantCulture),
+                float => string.Empty,
                 IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
                 _ => value.ToString() ?? string.Empty
             };

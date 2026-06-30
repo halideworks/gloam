@@ -267,15 +267,15 @@ namespace HDRGammaController.Core.Calibration
                 IsActive = IsActive,
                 Notes = Notes,
                 TargetName = Target.Name,
-                LutSize = LutSize,
+                LutSize = Math.Max(2, LutSize),
                 CorrectionLutData = CorrectionLutData,
-                MeasuredCharacteristics = MeasuredCharacteristics,
-                PreCalibrationDeltaE = PreCalibrationDeltaE,
-                PostCalibrationDeltaE = PostCalibrationDeltaE,
-                QualityGrade = QualityGrade,
-                ReportSummary = ReportSummary,
-                PatchCount = PatchCount,
-                MeasurementTime = MeasurementTime,
+                MeasuredCharacteristics = SanitizeMeasuredCharacteristics(MeasuredCharacteristics),
+                PreCalibrationDeltaE = FiniteOrNull(PreCalibrationDeltaE),
+                PostCalibrationDeltaE = FiniteOrNull(PostCalibrationDeltaE),
+                QualityGrade = SanitizeGrade(QualityGrade),
+                ReportSummary = SanitizeReportSummary(ReportSummary),
+                PatchCount = Math.Max(0, PatchCount),
+                MeasurementTime = MeasurementTime is { Ticks: >= 0 } ? MeasurementTime : null,
                 ColorimeterModel = ColorimeterModel,
                 SoftwareVersion = SoftwareVersion
             };
@@ -314,21 +314,109 @@ namespace HDRGammaController.Core.Calibration
                 IsActive = data.IsActive,
                 Notes = data.Notes,
                 Target = target,
-                LutSize = data.LutSize,
+                LutSize = Math.Max(2, data.LutSize),
                 CorrectionLutData = data.CorrectionLutData,
-                MeasuredCharacteristics = data.MeasuredCharacteristics,
-                PreCalibrationDeltaE = data.PreCalibrationDeltaE,
-                PostCalibrationDeltaE = data.PostCalibrationDeltaE,
-                QualityGrade = data.QualityGrade,
-                ReportSummary = data.ReportSummary,
-                PatchCount = data.PatchCount,
-                MeasurementTime = data.MeasurementTime,
+                MeasuredCharacteristics = SanitizeMeasuredCharacteristics(data.MeasuredCharacteristics),
+                PreCalibrationDeltaE = FiniteOrNull(data.PreCalibrationDeltaE),
+                PostCalibrationDeltaE = FiniteOrNull(data.PostCalibrationDeltaE),
+                QualityGrade = SanitizeGrade(data.QualityGrade),
+                ReportSummary = SanitizeReportSummary(data.ReportSummary),
+                PatchCount = Math.Max(0, data.PatchCount),
+                MeasurementTime = data.MeasurementTime is { Ticks: >= 0 } ? data.MeasurementTime : null,
                 ColorimeterModel = data.ColorimeterModel,
                 SoftwareVersion = data.SoftwareVersion
             };
 
             return profile;
         }
+
+        private static double? FiniteOrNull(double? value) =>
+            value.HasValue && double.IsFinite(value.Value) ? value : null;
+
+        private static CalibrationGrade? SanitizeGrade(CalibrationGrade? grade) =>
+            grade.HasValue && Enum.IsDefined(grade.Value) ? grade : null;
+
+        private static DisplayCharacteristics? SanitizeMeasuredCharacteristics(DisplayCharacteristics? characteristics)
+        {
+            if (characteristics == null) return null;
+
+            return new DisplayCharacteristics
+            {
+                MeasuredRed = SafeChromaticity(characteristics.MeasuredRed, Chromaticity.Rec709Red),
+                MeasuredGreen = SafeChromaticity(characteristics.MeasuredGreen, Chromaticity.Rec709Green),
+                MeasuredBlue = SafeChromaticity(characteristics.MeasuredBlue, Chromaticity.Rec709Blue),
+                MeasuredWhite = SafeChromaticity(characteristics.MeasuredWhite, Chromaticity.D65),
+                MeasuredGamma = SafeGamma(characteristics.MeasuredGamma),
+                PeakLuminance = SafePositive(characteristics.PeakLuminance, 100.0),
+                BlackLevel = SafeNonNegative(characteristics.BlackLevel, 0.0)
+            };
+        }
+
+        private static CalibrationReportSummary? SanitizeReportSummary(CalibrationReportSummary? summary)
+        {
+            if (summary == null) return null;
+
+            return new CalibrationReportSummary
+            {
+                AvgDeltaE = FiniteOrNull(summary.AvgDeltaE),
+                MaxDeltaE = FiniteOrNull(summary.MaxDeltaE),
+                GrayscaleDeltaE = FiniteOrNull(summary.GrayscaleDeltaE),
+                PrimaryDeltaE = FiniteOrNull(summary.PrimaryDeltaE),
+                AfterAvgDeltaE = FiniteOrNull(summary.AfterAvgDeltaE),
+                AfterMaxDeltaE = FiniteOrNull(summary.AfterMaxDeltaE),
+                AfterGrayscaleDeltaE = FiniteOrNull(summary.AfterGrayscaleDeltaE),
+                AfterPrimaryDeltaE = FiniteOrNull(summary.AfterPrimaryDeltaE),
+                GradeScopeLabel = summary.GradeScopeLabel,
+                SummaryText = summary.SummaryText,
+                DetailedPatches = SanitizeDetailedPatches(summary.DetailedPatches),
+                DetailedHistogram = SanitizeHistogram(summary.DetailedHistogram),
+                DetailedGrayscaleDeltaE = FiniteOrNull(summary.DetailedGrayscaleDeltaE),
+                DetailedPrimariesDeltaE = FiniteOrNull(summary.DetailedPrimariesDeltaE),
+                DetailedSaturationDeltaE = FiniteOrNull(summary.DetailedSaturationDeltaE),
+                DetailedMemoryColorsDeltaE = FiniteOrNull(summary.DetailedMemoryColorsDeltaE)
+            };
+        }
+
+        private static List<VerifiedPatchResult>? SanitizeDetailedPatches(List<VerifiedPatchResult>? patches)
+        {
+            if (patches == null) return null;
+
+            var sanitized = new List<VerifiedPatchResult>();
+            foreach (var patch in patches)
+            {
+                if (patch == null || !double.IsFinite(patch.DeltaE)) continue;
+                sanitized.Add(new VerifiedPatchResult
+                {
+                    Name = patch.Name ?? "",
+                    Category = patch.Category,
+                    DeltaE = Math.Max(0.0, patch.DeltaE)
+                });
+            }
+
+            return sanitized;
+        }
+
+        private static int[]? SanitizeHistogram(int[]? histogram) =>
+            histogram?.Select(count => Math.Max(0, count)).ToArray();
+
+        private static Chromaticity SafeChromaticity(Chromaticity value, Chromaticity fallback)
+        {
+            double x = value.X;
+            double y = value.Y;
+            return double.IsFinite(x) && double.IsFinite(y) &&
+                   x > 0.0 && y > 0.0 && x < 0.8 && y < 0.9 && x + y <= 1.000001
+                ? value
+                : fallback;
+        }
+
+        private static double SafeNonNegative(double value, double fallback) =>
+            double.IsFinite(value) && value >= 0.0 ? value : fallback;
+
+        private static double SafePositive(double value, double fallback) =>
+            double.IsFinite(value) && value > 0.0 ? value : fallback;
+
+        private static double SafeGamma(double gamma) =>
+            double.IsFinite(gamma) && gamma is >= 1.0 and <= 4.0 ? gamma : 2.2;
 
         /// <summary>
         /// Gets the directory where calibration report snapshots are saved

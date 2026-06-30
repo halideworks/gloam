@@ -129,6 +129,7 @@ namespace HDRGammaController.Services
             canvas.Children.Clear();
             double w = canvas.ActualWidth, h = canvas.ActualHeight;
             if (w < 40 || h < 40) return;
+            if (!IsFiniteRange(xMin, xMax) || !IsFiniteRange(yMin, yMax) || gridLines <= 0) return;
 
             double padL = p.LinePads.Left, padR = p.LinePads.Right, padT = p.LinePads.Top, padB = p.LinePads.Bottom;
             double plotW = w - padL - padR, plotH = h - padT - padB;
@@ -158,10 +159,11 @@ namespace HDRGammaController.Services
             // Series
             foreach (var s in series)
             {
+                var points = s.Points.Where(pt => IsFinitePoint(pt.X, pt.Y)).ToList();
                 if (s.Scatter)
                 {
                     var fill = new SolidColorBrush(s.Color);
-                    foreach (var (x, y) in s.Points)
+                    foreach (var (x, y) in points)
                     {
                         var dot = new Ellipse { Width = 6, Height = 6, Fill = fill, Opacity = 0.9 };
                         Canvas.SetLeft(dot, X(x) - 3);
@@ -173,8 +175,8 @@ namespace HDRGammaController.Services
 
                 var pl = new Polyline { Stroke = new SolidColorBrush(s.Color), StrokeThickness = 2, StrokeLineJoin = PenLineJoin.Round };
                 if (s.Dashed) pl.StrokeDashArray = new DoubleCollection { 4, 3 };
-                var pts = new PointCollection(s.Points.Count);
-                foreach (var (x, y) in s.Points) pts.Add(new Point(X(x), Y(Math.Clamp(y, yMin, yMax))));
+                var pts = new PointCollection(points.Count);
+                foreach (var (x, y) in points) pts.Add(new Point(X(x), Y(Math.Clamp(y, yMin, yMax))));
                 pl.Points = pts;
                 canvas.Children.Add(pl);
             }
@@ -239,6 +241,8 @@ namespace HDRGammaController.Services
 
             void Triangle((double x, double y) r, (double x, double y) g, (double x, double y) b, Color c, bool dashed)
             {
+                if (!IsPhysicalChromaticity(r) || !IsPhysicalChromaticity(g) || !IsPhysicalChromaticity(b))
+                    return;
                 var poly = new Polygon { Stroke = new SolidColorBrush(c), StrokeThickness = 2, Fill = Brushes.Transparent };
                 if (dashed) poly.StrokeDashArray = new DoubleCollection { 4, 3 };
                 poly.Points = new PointCollection { new(X(r.x), Y(r.y)), new(X(g.x), Y(g.y)), new(X(b.x), Y(b.y)) };
@@ -246,6 +250,7 @@ namespace HDRGammaController.Services
             }
             void Dot((double x, double y) p, Color c)
             {
+                if (!IsPhysicalChromaticity(p)) return;
                 var e = new Ellipse { Width = 7, Height = 7, Fill = new SolidColorBrush(c), Stroke = Brushes.White, StrokeThickness = 1 };
                 Canvas.SetLeft(e, X(p.x) - 3.5); Canvas.SetTop(e, Y(p.y) - 3.5);
                 canvas.Children.Add(e);
@@ -281,10 +286,11 @@ namespace HDRGammaController.Services
             canvas.Children.Clear();
             double w = canvas.ActualWidth, h = canvas.ActualHeight;
             if (w < 40 || h < 40 || counts.Count == 0) return;
+            var safeCounts = counts.Select(c => Math.Max(0, c)).ToList();
 
             double padL = p.LinePads.Left, padR = p.LinePads.Right, padT = p.LinePads.Top, padB = p.LinePads.Bottom;
             double plotW = w - padL - padR, plotH = h - padT - padB;
-            int maxCount = Math.Max(counts.Max(), 1);
+            int maxCount = Math.Max(safeCounts.Max(), 1);
 
             if (p.Background is { } bg)
                 canvas.Children.Add(new Rectangle { Width = w, Height = h, Fill = bg });
@@ -307,21 +313,22 @@ namespace HDRGammaController.Services
 
             // Representative ΔE per bucket for the quality color (midpoint-ish values).
             double[] bucketColorKeys = { 0.25, 0.75, 1.5, 2.5, 4.0, 6.0 };
-            double slot = plotW / counts.Count;
-            for (int i = 0; i < counts.Count; i++)
+            double slot = plotW / safeCounts.Count;
+            for (int i = 0; i < safeCounts.Count; i++)
             {
+                int count = safeCounts[i];
                 double barW = slot * 0.66;
                 double x = padL + slot * i + (slot - barW) / 2;
-                double barH = counts[i] / (double)maxCount * plotH;
+                double barH = count / (double)maxCount * plotH;
                 double key = i < bucketColorKeys.Length ? bucketColorKeys[i] : 6.0;
                 var fill = new SolidColorBrush(DeltaEColor(p, key));
-                var bar = new Rectangle { Width = barW, Height = Math.Max(barH, counts[i] > 0 ? 2 : 0), Fill = fill, Opacity = 0.9 };
+                var bar = new Rectangle { Width = barW, Height = Math.Max(barH, count > 0 ? 2 : 0), Fill = fill, Opacity = 0.9 };
                 Canvas.SetLeft(bar, x);
                 Canvas.SetTop(bar, padT + plotH - bar.Height);
                 canvas.Children.Add(bar);
 
                 // Count above the bar, bucket range below the axis.
-                canvas.Children.Add(Label(p, counts[i].ToString(),
+                canvas.Children.Add(Label(p, count.ToString(),
                     padL + slot * i, Math.Max(padT + plotH - bar.Height - 16, padT), slot, TextAlignment.Center));
                 // Bucket ΔE range under the axis (these double as the x-axis caption).
                 if (i < bucketLabels.Count)
@@ -342,11 +349,15 @@ namespace HDRGammaController.Services
             canvas.Children.Clear();
             double w = canvas.ActualWidth, h = canvas.ActualHeight;
             if (w < 40 || h < 40 || patches.Count == 0) return;
+            var drawablePatches = patches
+                .Where(patch => double.IsFinite(patch.DeltaE) && patch.DeltaE >= 0)
+                .ToList();
+            if (drawablePatches.Count == 0) return;
 
             double padL = p.LinePads.Left, padR = p.LinePads.Right, padT = p.LinePads.Top, padB = p.LinePads.Bottom;
             double plotW = w - padL - padR, plotH = h - padT - padB;
             // Headroom above the worst patch, never below the 5.0 threshold line.
-            double yMax = Math.Max(5.5, patches.Max(d => d.DeltaE) * 1.1);
+            double yMax = Math.Max(5.5, drawablePatches.Max(d => d.DeltaE) * 1.1);
             double Y(double de) => padT + (1 - Math.Clamp(de, 0, yMax) / yMax) * plotH;
 
             if (p.Background is { } bg)
@@ -370,11 +381,11 @@ namespace HDRGammaController.Services
                 canvas.Children.Add(YAxisTitle(p, "ΔE2000", padT, plotH));
 
             // Bars (tooltips carry the patch names; the x axis has no room for 39 labels).
-            double slot = plotW / patches.Count;
+            double slot = plotW / drawablePatches.Count;
             double barW = Math.Max(slot * 0.6, 1.5);
-            for (int i = 0; i < patches.Count; i++)
+            for (int i = 0; i < drawablePatches.Count; i++)
             {
-                var (name, de) = patches[i];
+                var (name, de) = drawablePatches[i];
                 var bar = new Rectangle
                 {
                     Width = barW,
@@ -404,6 +415,15 @@ namespace HDRGammaController.Services
                 canvas.Children.Add(Label(p, $"{threshold:0.0}", padL + plotW - 36, py - 14, 34, TextAlignment.Right));
             }
         }
+
+        private static bool IsFiniteRange(double min, double max)
+            => double.IsFinite(min) && double.IsFinite(max) && max > min;
+
+        private static bool IsFinitePoint(double x, double y)
+            => double.IsFinite(x) && double.IsFinite(y);
+
+        private static bool IsPhysicalChromaticity((double x, double y) point)
+            => IsFinitePoint(point.x, point.y) && point.x >= 0 && point.y >= 0;
 
         private static TextBlock Label(ChartPalette p, string text, double left, double top, double width, TextAlignment align)
         {

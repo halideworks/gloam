@@ -389,6 +389,17 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void CalibrationSettings_Sanitized_PreservesExactNightModeTemperatureFloor()
+        {
+            var settings = new CalibrationSettings { Temperature = -100.0 };
+
+            var sanitized = settings.Sanitized();
+
+            Assert.Equal(CalibrationSettings.MinimumTemperatureScale, sanitized.Temperature, 12);
+            Assert.Equal(1900.0, 6500.0 + sanitized.Temperature * 70.0, 9);
+        }
+
+        [Fact]
         public void CalibrationSettings_WithGain_HasAdjustments()
         {
             var settings = new CalibrationSettings { RedGain = 1.05 };
@@ -459,6 +470,67 @@ namespace HDRGammaController.Tests
             Assert.Equal(GammaMode.Gamma24, sm.GetProfileForMonitor(device));
         }
 
+        [Fact]
+        public void SettingsManager_ActiveCalibrationProfileRejectsUnusableMeasurements()
+        {
+            string originalData = AppPaths.DataDir;
+            string originalRoaming = AppPaths.RoamingDataDir;
+            string tempDir = CreateTempDirectory();
+            string device = @"\\?\DISPLAY#CORRUPT#1";
+
+            try
+            {
+                AppPaths.UseDataDirectoriesForCurrentProcess(tempDir, Path.Combine(tempDir, "roaming"));
+
+                var sm = new SettingsManager();
+                var corrupt = ValidCalibrationProfile(device);
+                sm.SaveCalibrationProfile(corrupt);
+                string corruptJson = corrupt.ToJson()
+                    .Replace("\"peakLuminance\": 120", "\"peakLuminance\": -100")
+                    .Replace("\"measuredGamma\": 2.25", "\"measuredGamma\": 0");
+                File.WriteAllText(Path.Combine(tempDir, "CalibrationProfiles", $"{corrupt.Id}.json"), corruptJson);
+                sm.SetActiveCalibrationProfile(device, corrupt.Id);
+
+                Assert.NotNull(sm.LoadCalibrationProfile(corrupt.Id));
+                Assert.Null(sm.LoadUsableCalibrationProfile(corrupt.Id));
+                Assert.Null(sm.GetActiveCalibrationProfile(device));
+            }
+            finally
+            {
+                AppPaths.UseDataDirectoriesForCurrentProcess(originalData, originalRoaming);
+                DeleteDirectory(tempDir);
+            }
+        }
+
+        [Fact]
+        public void SettingsManager_ActiveCalibrationProfileReturnsValidMeasurements()
+        {
+            string originalData = AppPaths.DataDir;
+            string originalRoaming = AppPaths.RoamingDataDir;
+            string tempDir = CreateTempDirectory();
+            string device = @"\\?\DISPLAY#VALID#1";
+
+            try
+            {
+                AppPaths.UseDataDirectoriesForCurrentProcess(tempDir, Path.Combine(tempDir, "roaming"));
+
+                var sm = new SettingsManager();
+                var profile = ValidCalibrationProfile(device);
+                sm.SaveCalibrationProfile(profile);
+                sm.SetActiveCalibrationProfile(device, profile.Id);
+
+                var active = sm.GetActiveCalibrationProfile(device);
+
+                Assert.NotNull(active);
+                Assert.Equal(profile.Id, active.Id);
+            }
+            finally
+            {
+                AppPaths.UseDataDirectoriesForCurrentProcess(originalData, originalRoaming);
+                DeleteDirectory(tempDir);
+            }
+        }
+
         #endregion
 
         #region AppExclusionRule Tests
@@ -486,5 +558,44 @@ namespace HDRGammaController.Tests
         }
 
         #endregion
+
+        private static DisplayCalibrationProfile ValidCalibrationProfile(string monitorDevicePath) => new()
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Name = "Valid measured profile",
+            MonitorDevicePath = monitorDevicePath,
+            MonitorName = "Test Monitor",
+            RedPrimaryX = Chromaticity.Rec709Red.X,
+            RedPrimaryY = Chromaticity.Rec709Red.Y,
+            GreenPrimaryX = Chromaticity.Rec709Green.X,
+            GreenPrimaryY = Chromaticity.Rec709Green.Y,
+            BluePrimaryX = Chromaticity.Rec709Blue.X,
+            BluePrimaryY = Chromaticity.Rec709Blue.Y,
+            WhitePointX = Chromaticity.D65.X,
+            WhitePointY = Chromaticity.D65.Y,
+            BlackLevel = 0.05,
+            PeakLuminance = 120.0,
+            MeasuredGamma = 2.25
+        };
+
+        private static string CreateTempDirectory()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "GloamSettingsValidationTests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            return dir;
+        }
+
+        private static void DeleteDirectory(string dir)
+        {
+            try
+            {
+                if (Directory.Exists(dir))
+                    Directory.Delete(dir, recursive: true);
+            }
+            catch
+            {
+                // Best-effort cleanup for test temp files.
+            }
+        }
     }
 }

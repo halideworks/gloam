@@ -183,6 +183,87 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void Build_RejectsNonFiniteLuminanceMetadata()
+        {
+            string? template = FindTemplate();
+            if (template == null) return; // template not present in this checkout; skip silently
+
+            var identity = new double[,] { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } };
+            var lut = IdentityLut();
+            string outPath = Path.Combine(Path.GetTempPath(), $"mhc2_bad_lumi_{Guid.NewGuid():N}.icm");
+
+            try
+            {
+                Assert.Throws<ArgumentException>(() =>
+                    Mhc2ProfileBuilder.Build(template, outPath, identity, lut, lut, lut,
+                        minLuminanceNits: double.NaN, maxLuminanceNits: 500));
+                Assert.Throws<ArgumentException>(() =>
+                    Mhc2ProfileBuilder.Build(template, outPath, identity, lut, lut, lut,
+                        minLuminanceNits: 0.01, maxLuminanceNits: double.PositiveInfinity));
+                Assert.Throws<ArgumentOutOfRangeException>(() =>
+                    Mhc2ProfileBuilder.Build(template, outPath, identity, lut, lut, lut,
+                        minLuminanceNits: -0.01, maxLuminanceNits: 500));
+                Assert.Throws<ArgumentOutOfRangeException>(() =>
+                    Mhc2ProfileBuilder.Build(template, outPath, identity, lut, lut, lut,
+                        minLuminanceNits: 500, maxLuminanceNits: 100));
+                Assert.Throws<ArgumentOutOfRangeException>(() =>
+                    Mhc2ProfileBuilder.Build(template, outPath, identity, lut, lut, lut,
+                        minLuminanceNits: 0.01, maxLuminanceNits: 40000));
+                Assert.False(File.Exists(outPath));
+            }
+            finally
+            {
+                try { File.Delete(outPath); } catch { }
+            }
+        }
+
+        [Fact]
+        public void Build_RejectsNonFiniteMatrix()
+        {
+            string? template = FindTemplate();
+            if (template == null) return; // template not present in this checkout; skip silently
+
+            var matrix = new double[,] { { 1, 0, 0 }, { 0, double.NaN, 0 }, { 0, 0, 1 } };
+            var lut = IdentityLut();
+            string outPath = Path.Combine(Path.GetTempPath(), $"mhc2_bad_matrix_{Guid.NewGuid():N}.icm");
+
+            try
+            {
+                Assert.Throws<ArgumentException>(() =>
+                    Mhc2ProfileBuilder.Build(template, outPath, matrix, lut, lut, lut));
+                Assert.False(File.Exists(outPath));
+            }
+            finally
+            {
+                try { File.Delete(outPath); } catch { }
+            }
+        }
+
+        [Fact]
+        public void Build_RejectsInvalidToneLut()
+        {
+            string? template = FindTemplate();
+            if (template == null) return; // template not present in this checkout; skip silently
+
+            var identity = new double[,] { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } };
+            var good = IdentityLut();
+            var bad = IdentityLut();
+            bad[500] = bad[499] - 0.01;
+            string outPath = Path.Combine(Path.GetTempPath(), $"mhc2_bad_lut_{Guid.NewGuid():N}.icm");
+
+            try
+            {
+                Assert.Throws<ArgumentException>(() =>
+                    Mhc2ProfileBuilder.Build(template, outPath, identity, bad, good, good));
+                Assert.False(File.Exists(outPath));
+            }
+            finally
+            {
+                try { File.Delete(outPath); } catch { }
+            }
+        }
+
+        [Fact]
         public void BuildGamutMatrix_IdentityWhenDisplayMatchesTarget()
         {
             // If the display's measured matrix equals the target's, the gamut correction is identity.
@@ -246,6 +327,13 @@ namespace HDRGammaController.Tests
                 Chromaticity.Rec709Red, Chromaticity.Rec709Green, Chromaticity.Rec709Blue, Chromaticity.D65);
             return ColorMath.MultiplyMatrices(ColorMath.Invert3x3(srgbToXyz),
                 ColorMath.MultiplyMatrices(tagMatrix, srgbToXyz));
+        }
+
+        private static double[] IdentityLut()
+        {
+            var lut = new double[1024];
+            for (int i = 0; i < lut.Length; i++) lut[i] = i / 1023.0;
+            return lut;
         }
 
         [Fact]
@@ -340,6 +428,38 @@ namespace HDRGammaController.Tests
 
             Assert.True(GamutReachability.TargetFitsEdidGamut(StandardTargets.P3D65Gamma22, edid));
             Assert.False(GamutReachability.TargetFitsEdidGamut(StandardTargets.Rec2020Gamma24, edid));
+        }
+
+        [Fact]
+        public void GamutReachability_ModestNegativeCrossTermsDoNotBlockReachableNarrowing()
+        {
+            var reachable = new double[,]
+            {
+                { 0.82742244, 0.16682524, -0.00132744 },
+                { 0.04595092, 0.95192185,  0.00407374 },
+                { 0.01244350, 0.05019300,  0.93941203 },
+            };
+
+            double drive = GamutReachability.MaxPrimaryDrive(reachable);
+
+            Assert.InRange(drive, 0.95, 0.96);
+            Assert.True(GamutReachability.IsReachable(drive));
+        }
+
+        [Fact]
+        public void GamutReachability_NonFinitePrimaryDriveIsUnreachable()
+        {
+            var invalid = new double[,]
+            {
+                { 1.0, 0.0, 0.0 },
+                { 0.0, double.NaN, 0.0 },
+                { 0.0, 0.0, 1.0 },
+            };
+
+            double drive = GamutReachability.MaxPrimaryDrive(invalid);
+
+            Assert.Equal(double.PositiveInfinity, drive);
+            Assert.False(GamutReachability.IsReachable(drive));
         }
 
         private static double MaxPrimaryDrive(double[,] displayRgbToXyz, CalibrationTarget target)

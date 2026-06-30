@@ -362,6 +362,13 @@ namespace HDRGammaController.Core.Calibration
                 double.TryParse(xyzMatch.Groups[2].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double y) &&
                 double.TryParse(xyzMatch.Groups[3].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double z))
             {
+                if (!TryAcceptMeasuredXyz(new CieXyz(x, y, z), out string? error))
+                {
+                    var ex = new InvalidOperationException(error);
+                    lock (_stateLock) _pendingMeasurement?.TrySetException(ex);
+                    return;
+                }
+
                 TaskCompletionSource<CieXyz>? pending;
                 lock (_stateLock) pending = _pendingMeasurement;
                 pending?.TrySetResult(new CieXyz(x, y, z));
@@ -552,6 +559,25 @@ namespace HDRGammaController.Core.Calibration
         private string SnapshotRecentLog()
         {
             lock (_stateLock) return _recentLog.ToString();
+        }
+
+        internal static bool TryAcceptMeasuredXyz(CieXyz xyz, out string? error)
+        {
+            if (!double.IsFinite(xyz.X) || !double.IsFinite(xyz.Y) || !double.IsFinite(xyz.Z))
+            {
+                error = $"spotread produced non-finite XYZ values ({xyz.X}, {xyz.Y}, {xyz.Z}).";
+                return false;
+            }
+
+            const double tolerance = -1e-6;
+            if (xyz.X < tolerance || xyz.Y < tolerance || xyz.Z < tolerance)
+            {
+                error = $"spotread produced non-physical negative XYZ values ({xyz.X}, {xyz.Y}, {xyz.Z}).";
+                return false;
+            }
+
+            error = null;
+            return true;
         }
 
         public async ValueTask DisposeAsync()

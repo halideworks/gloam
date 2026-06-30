@@ -30,6 +30,7 @@ namespace HDRGammaController.Core
                 int hi = Math.Min(lo + 1, lut.Length - 1);
                 double frac = pos - lo;
                 double value = lut[lo] + (lut[hi] - lut[lo]) * frac;
+                value = double.IsFinite(value) ? Math.Clamp(value, 0.0, 1.0) : 0.0;
                 ramp[i] = (ushort)Math.Clamp(Math.Round(value * 65535.0), 0, 65535);
             }
             return ramp;

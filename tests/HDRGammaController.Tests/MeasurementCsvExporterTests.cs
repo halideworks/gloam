@@ -61,6 +61,40 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void BuildCsv_BlanksNonFiniteNumericValues()
+        {
+            var measurement = Measurement(0, "Corrupt", PatchCategory.Grayscale,
+                double.NaN, 1.0, double.PositiveInfinity,
+                new CieXyz(double.NaN, double.PositiveInfinity, double.NegativeInfinity),
+                nits: double.NaN,
+                integrationMs: double.PositiveInfinity);
+
+            string csv = MeasurementCsvExporter.BuildCsv("report-corrupt", "native", new[] { measurement });
+
+            Assert.DoesNotContain("NaN", csv);
+            Assert.DoesNotContain("Infinity", csv);
+            Assert.Contains("report-corrupt,native", csv);
+            Assert.DoesNotContain("0.31272", csv);
+            Assert.DoesNotContain("6500", csv);
+        }
+
+        [Fact]
+        public void BuildCsv_BlanksDerivedChromaticityForInvalidMeasurements()
+        {
+            var measurement = Measurement(0, "Invalid retry", PatchCategory.Grayscale,
+                1.0, 1.0, 1.0,
+                new CieXyz(95, 100, 108),
+                isValid: false,
+                error: "retry");
+
+            string csv = MeasurementCsvExporter.BuildCsv("report-invalid", "native", new[] { measurement });
+            string row = csv.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)[1];
+
+            Assert.Contains("95,100,108,,,,", row);
+            Assert.Contains("False,retry", row);
+        }
+
+        [Fact]
         public void Save_CreatesParentDirectoryAndUtf8Csv()
         {
             string dir = Path.Combine(Path.GetTempPath(), $"gloam-csv-test-{Guid.NewGuid():N}");

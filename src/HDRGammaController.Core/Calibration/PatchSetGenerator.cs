@@ -371,9 +371,13 @@ namespace HDRGammaController.Core.Calibration
             // To compute the target XYZ (what the color SHOULD look like), we must:
             // 1. Apply the target's EOTF to decode signal to linear light
             // 2. Convert linear RGB to XYZ using the target's color matrix
-            double linearR = target.ApplyEotf(signalRgb.R);
-            double linearG = target.ApplyEotf(signalRgb.G);
-            double linearB = target.ApplyEotf(signalRgb.B);
+            // In Windows HDR desktop mode these calibration patches are SDR UI content
+            // riding the OS SDR-to-HDR path. They must be graded as sRGB content, not as
+            // direct PQ code values; absolute PQ stimuli are represented separately by
+            // ColorPatch.Nits via HdrWirePatchSet.
+            double linearR = LinearizeSignalForUiPatch(target, signalRgb.R);
+            double linearG = LinearizeSignalForUiPatch(target, signalRgb.G);
+            double linearB = LinearizeSignalForUiPatch(target, signalRgb.B);
             var linearRgb = new LinearRgb(linearR, linearG, linearB);
             var targetXyz = target.LinearRgbToXyz(linearRgb);
 
@@ -388,6 +392,11 @@ namespace HDRGammaController.Core.Calibration
                 TargetLab = ColorMath.XyzToLab(targetXyz)
             };
         }
+
+        private static double LinearizeSignalForUiPatch(CalibrationTarget target, double signal) =>
+            target.TransferFunction == TransferFunctionType.Pq
+                ? ColorMath.SrgbEotf(signal)
+                : target.ApplyEotf(signal);
 
         /// <summary>
         /// Optimizes patch order to minimize display settling time.

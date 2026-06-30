@@ -146,8 +146,6 @@ namespace HDRGammaController.Core
                 calibration = profile.ToCalibrationSettings();
             }
 
-            calibration.Temperature += calibration.TemperatureOffset;
-
             if (nightModeActive)
             {
                 double nightShift = (currentKelvin - 6500) / 70.0;
@@ -156,9 +154,12 @@ namespace HDRGammaController.Core
                 calibration.UseUltraWarmMode = _settingsManager.NightMode.UseUltraWarmMode;
             }
 
-            // Extended range: -65.7 → 1900K, +50 → 10000K. See CalibrationSettings.Temperature
+            // Extended range: 1900K..10000K. See CalibrationSettings.Temperature
             // for why this goes past the slider's nominal -50..+50.
-            calibration.Temperature = Math.Clamp(calibration.Temperature, -65.7, 50.0);
+            calibration.Temperature = Math.Clamp(
+                calibration.Temperature,
+                CalibrationSettings.MinimumTemperatureScale,
+                CalibrationSettings.MaximumTemperatureScale);
 
             // Update persistent state only for real (non-preview) applies.
             if (manualCalibration == null)
@@ -170,7 +171,7 @@ namespace HDRGammaController.Core
                 }
             }
 
-            _coalescer.Submit(monitor.HMonitor, (monitor, mode, calibration, monitor.SdrWhiteLevel));
+            _coalescer.Submit(monitor.HMonitor, (monitor, mode, calibration, MonitorInfo.SanitizeSdrWhiteLevel(monitor.SdrWhiteLevel)));
         }
 
         public void ApplyAll(IEnumerable<MonitorInfo> monitors)

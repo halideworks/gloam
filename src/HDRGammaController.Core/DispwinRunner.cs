@@ -291,6 +291,12 @@ namespace HDRGammaController.Core
                 return;
             }
 
+            if (calibrationProfile != null && !LutGenerator.CanUseCalibratedLut(calibrationProfile))
+            {
+                Log.Info($"DispwinRunner.ApplyGamma: Ignoring unusable calibration profile '{calibrationProfile.Name}' ({calibrationProfile.Id})");
+                calibrationProfile = null;
+            }
+
             bool hasProfile = calibrationProfile != null;
             Log.Info($"DispwinRunner.ApplyGamma: monitor={monitor.DeviceName}, mode={mode}, whiteLevel={whiteLevel}, hasCalibration={calibration.HasAdjustments}, hasProfile={hasProfile}");
 

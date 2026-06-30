@@ -75,6 +75,40 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void ReportCsvExports_BlankNonFiniteMetrics()
+        {
+            var report = BuildReport(@"DISPLAY\CORRUPT", "Corrupt Metrics");
+            report.MeasuredCharacteristics = new DisplayCharacteristics
+            {
+                MeasuredRed = new Chromaticity(0.64, 0.33),
+                MeasuredGreen = new Chromaticity(0.30, 0.60),
+                MeasuredBlue = new Chromaticity(0.15, 0.06),
+                MeasuredWhite = new Chromaticity(0.3127, 0.3290),
+                PeakLuminance = double.PositiveInfinity,
+                BlackLevel = double.NaN,
+                MeasuredGamma = double.NegativeInfinity
+            };
+            report.ReportSummary!.AvgDeltaE = double.NaN;
+            report.ReportSummary.MaxDeltaE = double.PositiveInfinity;
+            report.ReportSummary.DetailedPatches =
+            [
+                new VerifiedPatchResult { Name = "Corrupt", Category = "Primary", DeltaE = double.NaN },
+                new VerifiedPatchResult { Name = "Valid", Category = "Primary", DeltaE = 1.25 }
+            ];
+
+            string summaryCsv = DiagnosticsBundle.BuildCalibrationReportSummaryCsv(new[] { report });
+            string detailedCsv = DiagnosticsBundle.BuildDetailedVerificationCsv(new[] { report });
+            string summaryData = string.Join('\n', summaryCsv.Split(["\r\n", "\n"], StringSplitOptions.None).Skip(1));
+            string detailedData = string.Join('\n', detailedCsv.Split(["\r\n", "\n"], StringSplitOptions.None).Skip(1));
+
+            Assert.DoesNotContain("NaN", summaryData, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("Infinity", summaryData, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("NaN", detailedData, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("Infinity", detailedData, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("Valid,Primary,1.25", detailedCsv);
+        }
+
+        [Fact]
         public void BuildDetailedVerificationCsv_ReturnsEmptyWhenNoDetailedPatchesExist()
         {
             var report = BuildReport(@"DISPLAY\NO-DETAILED", "No Detailed");

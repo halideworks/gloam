@@ -9,6 +9,12 @@ namespace HDRGammaController.Core
     /// </summary>
     public class NightModeSettings
     {
+        public const int MinKelvin = 1900;
+        public const int MaxKelvin = 6500;
+        public const int DefaultNightKelvin = 2700;
+        public const int MaxFadeMinutes = 120;
+        public const double MaxSunOffsetMinutes = 120.0;
+
         /// <summary>
         /// Whether night mode is enabled.
         /// </summary>
@@ -62,7 +68,9 @@ namespace HDRGammaController.Core
         public double Temperature
         {
             get => (TemperatureKelvin - 6500) / 70.0;
-            set => TemperatureKelvin = (int)(6500 + value * 70);
+            set => TemperatureKelvin = double.IsFinite(value)
+                ? ClampKelvin((int)Math.Round(6500 + value * 70))
+                : DefaultNightKelvin;
         }
 
         /// <summary>
@@ -74,6 +82,9 @@ namespace HDRGammaController.Core
 
         public void EnsureSchedule(double? lat, double? lon)
         {
+            TemperatureKelvin = ClampKelvin(TemperatureKelvin);
+            FadeMinutes = ClampFadeMinutes(FadeMinutes);
+
             if (Schedule != null && Schedule.Count > 0) return;
 
             // Migrate legacy settings to schedule
@@ -95,7 +106,7 @@ namespace HDRGammaController.Core
                 TriggerType = UseAutoSchedule ? ScheduleTriggerType.Sunset : ScheduleTriggerType.FixedTime,
                 Time = StartTime,
                 OffsetMinutes = 0,
-                TargetKelvin = TemperatureKelvin,
+                TargetKelvin = ClampKelvin(TemperatureKelvin),
                 FadeMinutes = FadeMinutes
             };
 
@@ -122,6 +133,30 @@ namespace HDRGammaController.Core
                 // collapsing the schedule to (0,0) or (0,24h).
             }
             return (StartTime, EndTime);
+        }
+
+        internal static int ClampKelvin(int kelvin) => Math.Clamp(kelvin, MinKelvin, MaxKelvin);
+
+        internal static int ClampFadeMinutes(int minutes) => Math.Clamp(minutes, 0, MaxFadeMinutes);
+
+        internal static double ClampOffsetMinutes(double minutes) =>
+            double.IsFinite(minutes) ? Math.Clamp(minutes, -MaxSunOffsetMinutes, MaxSunOffsetMinutes) : 0.0;
+
+        internal static double? ClampLatitude(double? latitude) =>
+            latitude.HasValue && double.IsFinite(latitude.Value)
+                ? Math.Clamp(latitude.Value, -90.0, 90.0)
+                : null;
+
+        internal static double? ClampLongitude(double? longitude) =>
+            longitude.HasValue && double.IsFinite(longitude.Value)
+                ? Math.Clamp(longitude.Value, -180.0, 180.0)
+                : null;
+
+        internal static TimeSpan NormalizeTimeOfDay(TimeSpan time)
+        {
+            long ticks = time.Ticks % TimeSpan.TicksPerDay;
+            if (ticks < 0) ticks += TimeSpan.TicksPerDay;
+            return TimeSpan.FromTicks(ticks);
         }
     }
 
@@ -452,14 +487,14 @@ namespace HDRGammaController.Core
             {
                 Enabled = source.Enabled,
                 UseAutoSchedule = source.UseAutoSchedule,
-                Latitude = source.Latitude,
-                Longitude = source.Longitude,
-                StartTime = source.StartTime,
-                EndTime = source.EndTime,
-                TemperatureKelvin = source.TemperatureKelvin,
+                Latitude = NightModeSettings.ClampLatitude(source.Latitude),
+                Longitude = NightModeSettings.ClampLongitude(source.Longitude),
+                StartTime = NightModeSettings.NormalizeTimeOfDay(source.StartTime),
+                EndTime = NightModeSettings.NormalizeTimeOfDay(source.EndTime),
+                TemperatureKelvin = NightModeSettings.ClampKelvin(source.TemperatureKelvin),
                 Algorithm = source.Algorithm,
                 UseUltraWarmMode = source.UseUltraWarmMode,
-                FadeMinutes = source.FadeMinutes,
+                FadeMinutes = NightModeSettings.ClampFadeMinutes(source.FadeMinutes),
                 Schedule = new List<NightModeSchedulePoint>()
             };
 
@@ -470,10 +505,10 @@ namespace HDRGammaController.Core
                     clone.Schedule.Add(new NightModeSchedulePoint
                     {
                         TriggerType = p.TriggerType,
-                        Time = p.Time,
-                        OffsetMinutes = p.OffsetMinutes,
-                        TargetKelvin = p.TargetKelvin,
-                        FadeMinutes = p.FadeMinutes
+                        Time = NightModeSettings.NormalizeTimeOfDay(p.Time),
+                        OffsetMinutes = NightModeSettings.ClampOffsetMinutes(p.OffsetMinutes),
+                        TargetKelvin = NightModeSettings.ClampKelvin(p.TargetKelvin),
+                        FadeMinutes = NightModeSettings.ClampFadeMinutes(p.FadeMinutes)
                     });
                 }
             }

@@ -169,6 +169,21 @@ namespace HDRGammaController.Tests
             Assert.True(la.sunset > la.sunrise);
         }
 
+        [Fact]
+        public void Calculate_NonFiniteInputs_FallsBackToFiniteTimes()
+        {
+            var result = SunCalculator.Calculate(
+                double.NaN,
+                double.PositiveInfinity,
+                new DateTime(2024, 6, 21),
+                double.NegativeInfinity);
+
+            Assert.True(result.sunrise >= TimeSpan.Zero);
+            Assert.True(result.sunrise < TimeSpan.FromHours(24));
+            Assert.True(result.sunset >= TimeSpan.Zero);
+            Assert.True(result.sunset < TimeSpan.FromHours(24));
+        }
+
         #endregion
 
         #region Known Values (approximate)

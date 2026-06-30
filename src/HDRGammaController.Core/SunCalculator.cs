@@ -56,6 +56,10 @@ namespace HDRGammaController.Core
         public static SunResult CalculateDetailed(
             double latitude, double longitude, DateTime date, double utcOffset)
         {
+            latitude = ClampFinite(latitude, -90.0, 90.0, 0.0);
+            longitude = ClampFinite(longitude, -180.0, 180.0, 0.0);
+            utcOffset = ClampFinite(utcOffset, -14.0, 14.0, 0.0);
+
             // Julian day
             int year = date.Year;
             int month = date.Month;
@@ -175,14 +179,19 @@ namespace HDRGammaController.Core
         
         private static double Mod360(double x)
         {
+            if (!double.IsFinite(x)) return 0.0;
             return x - 360 * Math.Floor(x / 360);
         }
         
         private static double Mod1440(double x)
         {
+            if (!double.IsFinite(x)) return 0.0;
             while (x < 0) x += 1440;
             while (x >= 1440) x -= 1440;
             return x;
         }
+
+        private static double ClampFinite(double value, double min, double max, double fallback) =>
+            double.IsFinite(value) ? Math.Clamp(value, min, max) : fallback;
     }
 }

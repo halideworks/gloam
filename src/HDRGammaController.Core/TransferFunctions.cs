@@ -10,6 +10,7 @@ namespace HDRGammaController.Core
     /// References:
     /// - SMPTE ST 2084:2014 - High Dynamic Range Electro-Optical Transfer Function (PQ)
     /// - IEC 61966-2-1:1999 - sRGB colour space
+    /// - ITU-R BT.1886 - Reference electro-optical transfer function for flat panel displays
     /// - ITU-R BT.2100-2 - HDR television
     /// </remarks>
     public static class TransferFunctions
@@ -50,7 +51,7 @@ namespace HDRGammaController.Core
         public static double PqEotf(double signal)
         {
             // Clamp input
-            signal = Math.Clamp(signal, 0.0, 1.0);
+            signal = ClampFinite(signal, 0.0, 1.0, 0.0);
 
             // N = signal ^ (1/m2)
             double N = Math.Pow(signal, 1.0 / M2);
@@ -83,7 +84,8 @@ namespace HDRGammaController.Core
         public static double PqInverseEotf(double nits)
         {
             // Clamp input
-            nits = Math.Clamp(nits, 0.0, 10000.0);
+            nits = ClampFinite(nits, 0.0, 10000.0, 0.0);
+            if (nits <= 0.0) return 0.0;
             
             double L = nits / 10000.0;
 
@@ -117,6 +119,10 @@ namespace HDRGammaController.Core
         /// <returns>Normalized sRGB signal value [0.0 - 1.0]</returns>
         public static double SrgbInverseEotf(double linearNits, double whiteLevel, double blackLevel = 0.0)
         {
+            linearNits = double.IsFinite(linearNits) ? linearNits : 0.0;
+            whiteLevel = double.IsFinite(whiteLevel) ? Math.Max(whiteLevel, 0.0) : 0.0;
+            blackLevel = ClampFinite(blackLevel, 0.0, Math.Max(whiteLevel - 1e-12, 0.0), 0.0);
+
             if (whiteLevel <= blackLevel) return 0.0;
 
             // Normalize linear light to [0, 1]
@@ -129,7 +135,7 @@ namespace HDRGammaController.Core
         /// </summary>
         public static double SrgbOetf(double linear)
         {
-            linear = Math.Clamp(linear, 0.0, 1.0);
+            linear = ClampFinite(linear, 0.0, 1.0, 0.0);
             if (linear <= 0.0031308)
             {
                 return 12.92 * linear;
@@ -143,12 +149,79 @@ namespace HDRGammaController.Core
         /// </summary>
         public static double SrgbEotf(double signal)
         {
-            signal = Math.Clamp(signal, 0.0, 1.0);
+            signal = ClampFinite(signal, 0.0, 1.0, 0.0);
             if (signal <= 0.04045)
             {
                 return signal / 12.92;
             }
             return Math.Pow((signal + 0.055) / 1.055, 2.4);
+        }
+
+        /// <summary>
+        /// ITU-R BT.1886 EOTF. Converts normalized video signal [0,1] to absolute
+        /// luminance using the display/reference white and black levels.
+        /// </summary>
+        public static double Bt1886Eotf(double signal, double whiteLevel, double blackLevel = 0.0)
+        {
+            const double gamma = 2.4;
+
+            signal = ClampFinite(signal, 0.0, 1.0, 0.0);
+            whiteLevel = double.IsFinite(whiteLevel) ? Math.Max(whiteLevel, 0.0) : 0.0;
+            blackLevel = ClampFinite(blackLevel, 0.0, Math.Max(whiteLevel - 1e-12, 0.0), 0.0);
+
+            if (whiteLevel <= 0)
+                return 0.0;
+            if (blackLevel <= 0)
+                return whiteLevel * Math.Pow(signal, gamma);
+
+            double whiteRoot = Math.Pow(whiteLevel, 1.0 / gamma);
+            double blackRoot = Math.Pow(blackLevel, 1.0 / gamma);
+            double denominator = whiteRoot - blackRoot;
+            if (denominator <= 1e-12)
+                return whiteLevel * Math.Pow(signal, gamma);
+
+            double a = Math.Pow(denominator, gamma);
+            double b = blackRoot / denominator;
+            return a * Math.Pow(signal + b, gamma);
+        }
+
+        /// <summary>
+        /// Inverse ITU-R BT.1886 EOTF. Converts absolute luminance to normalized
+        /// video signal [0,1] for the specified white and black levels.
+        /// </summary>
+        public static double Bt1886InverseEotf(double luminance, double whiteLevel, double blackLevel = 0.0)
+        {
+            const double gamma = 2.4;
+
+            whiteLevel = double.IsFinite(whiteLevel) ? Math.Max(whiteLevel, 0.0) : 0.0;
+            blackLevel = ClampFinite(blackLevel, 0.0, Math.Max(whiteLevel - 1e-12, 0.0), 0.0);
+            luminance = ClampFinite(luminance, blackLevel, whiteLevel, blackLevel);
+
+            if (whiteLevel <= 0)
+                return 0.0;
+            if (blackLevel <= 0)
+                return Math.Pow(luminance / whiteLevel, 1.0 / gamma);
+
+            double whiteRoot = Math.Pow(whiteLevel, 1.0 / gamma);
+            double blackRoot = Math.Pow(blackLevel, 1.0 / gamma);
+            double denominator = whiteRoot - blackRoot;
+            if (denominator <= 1e-12)
+                return Math.Pow(luminance / whiteLevel, 1.0 / gamma);
+
+            double a = Math.Pow(denominator, gamma);
+            double b = blackRoot / denominator;
+            return ClampFinite(Math.Pow(luminance / a, 1.0 / gamma) - b, 0.0, 1.0, 0.0);
+        }
+
+        private static double ClampFinite(double value, double min, double max, double fallback)
+        {
+            if (!double.IsFinite(value))
+                return fallback;
+
+            if (max < min)
+                return fallback;
+
+            return Math.Clamp(value, min, max);
         }
     }
 }

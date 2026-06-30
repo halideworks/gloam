@@ -39,7 +39,7 @@ namespace HDRGammaController.Core.Calibration
             IEnumerable<MeasurementResult> measurements,
             double sdrWhiteNits)
         {
-            if (sdrWhiteNits < 40 || sdrWhiteNits > 1000)
+            if (!double.IsFinite(sdrWhiteNits) || sdrWhiteNits < 40 || sdrWhiteNits > 1000)
                 throw new ArgumentOutOfRangeException(nameof(sdrWhiteNits),
                     $"SDR white level {sdrWhiteNits:F0} nits is implausible.");
 
@@ -49,21 +49,22 @@ namespace HDRGammaController.Core.Calibration
             // correct with measured data across the whole desktop+HDR range. (Validated on
             // the MAG 271QPX: probe confirmed FP16 wire positions are exact while the OS
             // SDR-white value was ~7% off.)
-            var points = measurements
-                .Where(m => m.IsValid && m.Patch.Nits is not null)
+            var wirePoints = measurements
+                .Where(IsFiniteWireMeasurement)
                 .Select(m => (
-                    P: TransferFunctions.PqInverseEotf(Math.Max(m.Patch.Nits!.Value, 0)),
+                    P: TransferFunctions.PqInverseEotf(m.Patch.Nits!.Value),
                     Nits: m.Xyz.Y))
                 .OrderBy(t => t.P)
                 .ToList();
-            bool wireExact = points.Count >= 5;
+            var points = wirePoints;
+            bool wireExact = IsUsableWireLadder(wirePoints);
 
             // FALLBACK: SDR-window grayscale patches. Windows maps SDR content onto the wire
             // as PQ(sdrWhiteNits · srgbEotf(v)) - an ASSUMPTION (the OS-reported white level
             // can be off), and coverage stops at SDR white.
             if (!wireExact)
                 points = measurements
-                    .Where(m => m.IsValid && m.Patch.Category == PatchCategory.Grayscale)
+                    .Where(IsFiniteGrayscaleMeasurement)
                     .Select(m => (
                         P: TransferFunctions.PqInverseEotf(sdrWhiteNits * TransferFunctions.SrgbEotf(m.Patch.DisplayRgb.R)),
                         Nits: m.Xyz.Y))
@@ -149,6 +150,35 @@ namespace HDRGammaController.Core.Calibration
                 if (lut[i] < lut[i - 1]) lut[i] = lut[i - 1];
 
             return new Result(lut, (double[])lut.Clone(), (double[])lut.Clone(), blackNits, peakNits, wireExact);
+        }
+
+        private static bool IsFiniteWireMeasurement(MeasurementResult m) =>
+            m.IsValid &&
+            m.Patch.Nits is double nits &&
+            double.IsFinite(nits) &&
+            nits >= 0.0 &&
+            double.IsFinite(m.Xyz.Y) &&
+            m.Xyz.Y >= 0.0;
+
+        private static bool IsFiniteGrayscaleMeasurement(MeasurementResult m) =>
+            m.IsValid &&
+            m.Patch.Category == PatchCategory.Grayscale &&
+            double.IsFinite(m.Patch.DisplayRgb.R) &&
+            m.Patch.DisplayRgb.R is >= 0.0 and <= 1.0 &&
+            double.IsFinite(m.Xyz.Y) &&
+            m.Xyz.Y >= 0.0;
+
+        private static bool IsUsableWireLadder(IReadOnlyList<(double P, double Nits)> points)
+        {
+            int distinctWirePositions = points
+                .Select(p => Math.Round(p.P, 12))
+                .Distinct()
+                .Count();
+            if (distinctWirePositions < 5)
+                return false;
+
+            double maxWireNits = TransferFunctions.PqEotf(points[^1].P);
+            return maxWireNits >= 100.0;
         }
 
         /// <summary>The wire PQ signal that produced <paramref name="nits"/> on the measured panel.</summary>

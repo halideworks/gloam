@@ -71,6 +71,13 @@ END_DATA
         }
 
         [Fact]
+        public void Ccmx_AllowsNegativeMatrixCoefficients()
+        {
+            var result = CgatsValidator.Validate(ValidCcmx, "ccmx");
+            Assert.True(result.IsValid, result.Error ?? "expected negative matrix coefficients to be valid");
+        }
+
+        [Fact]
         public void ValidCcss_Passes()
         {
             var result = CgatsValidator.Validate(ValidCcss, "ccss");
@@ -180,6 +187,33 @@ END_DATA
             var result = CgatsValidator.Validate(ValidCcmx, "ccss");
             Assert.False(result.IsValid);
             Assert.Contains("ccss", result.Error ?? "");
+        }
+
+        [Fact]
+        public void NonFiniteNumericPayload_Rejected()
+        {
+            var broken = ValidCcmx.Replace("1.0244", "NaN");
+            var result = CgatsValidator.Validate(broken, "ccmx");
+            Assert.False(result.IsValid);
+            Assert.Contains("finite", result.Error ?? "");
+        }
+
+        [Fact]
+        public void DataRowCountMismatch_Rejected()
+        {
+            var broken = ValidCcss.Replace("NUMBER_OF_SETS 2", "NUMBER_OF_SETS 3");
+            var result = CgatsValidator.Validate(broken, "ccss");
+            Assert.False(result.IsValid);
+            Assert.Contains("NUMBER_OF_SETS", result.Error ?? "");
+        }
+
+        [Fact]
+        public void NegativeCcssSpectralSample_Rejected()
+        {
+            var broken = ValidCcss.Replace("0.7 0.2", "-0.7 0.2");
+            var result = CgatsValidator.Validate(broken, "ccss");
+            Assert.False(result.IsValid);
+            Assert.Contains("negative spectral", result.Error ?? "");
         }
     }
 }

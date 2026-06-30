@@ -162,9 +162,9 @@ namespace HDRGammaController.Core
                                 DxgiColorSpace = desc1.ColorSpace,
                                 BitsPerColor = desc1.BitsPerColor,
                                 MonitorBounds = desc1.DesktopCoordinates,
-                                HdrPeakNits = desc1.MaxLuminance,
-                                HdrMinNits = desc1.MinLuminance,
-                                HdrMaxFullFrameNits = desc1.MaxFullFrameLuminance,
+                                HdrPeakNits = MonitorInfo.SanitizeNonNegativeNits(desc1.MaxLuminance),
+                                HdrMinNits = MonitorInfo.SanitizeNonNegativeNits(desc1.MinLuminance),
+                                HdrMaxFullFrameNits = MonitorInfo.SanitizeNonNegativeNits(desc1.MaxFullFrameLuminance),
                             };
 
                             EnrichWithGdiData(monitorInfo);
@@ -222,7 +222,7 @@ namespace HDRGammaController.Core
                 if (monitor.IsHdrActive &&
                     DisplayConfig.TryGetSdrWhiteLevelNits(monitor.DeviceName) is double sdrNits)
                 {
-                    monitor.SdrWhiteLevel = sdrNits;
+                    monitor.SdrWhiteLevel = MonitorInfo.SanitizeSdrWhiteLevel(sdrNits);
                     Log.Info($"MonitorManager: {monitor.DeviceName} SDR white level {sdrNits:F0} nits, " +
                              $"panel HDR range {monitor.HdrMinNits:F3}–{monitor.HdrPeakNits:F0} nits.");
                 }

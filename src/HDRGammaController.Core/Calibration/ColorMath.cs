@@ -36,6 +36,9 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         private const double LabOffset = 16.0 / 116.0;
 
+        private const double MinimumCctApproximationKelvin = 1667.0;
+        private const double MaximumCctApproximationKelvin = 25000.0;
+
         #endregion
 
         #region XYZ Reference White Points
@@ -76,9 +79,11 @@ namespace HDRGammaController.Core.Calibration
         /// </remarks>
         public static CieLab XyzToLab(CieXyz xyz, CieXyz refWhite)
         {
-            double fx = LabFunction(xyz.X / refWhite.X);
-            double fy = LabFunction(xyz.Y / refWhite.Y);
-            double fz = LabFunction(xyz.Z / refWhite.Z);
+            refWhite = SafeReferenceWhite(refWhite);
+
+            double fx = LabFunction(SafeFinite(xyz.X) / refWhite.X);
+            double fy = LabFunction(SafeFinite(xyz.Y) / refWhite.Y);
+            double fz = LabFunction(SafeFinite(xyz.Z) / refWhite.Z);
 
             double l = 116.0 * fy - 16.0;
             double a = 500.0 * (fx - fy);
@@ -97,6 +102,10 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public static CieXyz LabToXyz(CieLab lab, CieXyz refWhite)
         {
+            refWhite = SafeReferenceWhite(refWhite);
+            if (!double.IsFinite(lab.L) || !double.IsFinite(lab.A) || !double.IsFinite(lab.B))
+                return new CieXyz(0.0, 0.0, 0.0);
+
             double fy = (lab.L + 16.0) / 116.0;
             double fx = lab.A / 500.0 + fy;
             double fz = fy - lab.B / 200.0;
@@ -113,6 +122,7 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         private static double LabFunction(double t)
         {
+            if (!double.IsFinite(t)) t = 0.0;
             return t > LabEpsilon
                 ? Math.Pow(t, 1.0 / 3.0)
                 : (LabKappa * t + 16.0) / 116.0;
@@ -123,6 +133,7 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         private static double LabFunctionInverse(double t)
         {
+            if (!double.IsFinite(t)) return 0.0;
             double t3 = t * t * t;
             return t3 > LabEpsilon
                 ? t3
@@ -144,6 +155,10 @@ namespace HDRGammaController.Core.Calibration
         /// </remarks>
         public static CieXyz ChromaticAdaptation(CieXyz xyz, CieXyz sourceWhite, CieXyz destWhite)
         {
+            xyz = SafeXyz(xyz);
+            sourceWhite = SafeReferenceWhite(sourceWhite);
+            destWhite = SafeReferenceWhite(destWhite);
+
             // Bradford cone response matrix
             // Transforms XYZ to "sharpened" cone responses (LMS-like)
             double[,] mBradford = {
@@ -164,9 +179,14 @@ namespace HDRGammaController.Core.Calibration
             double[] dstCone = MatrixMultiply(mBradford, new[] { destWhite.X, destWhite.Y, destWhite.Z });
 
             // Scaling factors
+            if (!IsUsableCone(srcCone) || !IsUsableCone(dstCone))
+                return xyz;
+
             double scaleL = dstCone[0] / srcCone[0];
             double scaleM = dstCone[1] / srcCone[1];
             double scaleS = dstCone[2] / srcCone[2];
+            if (!double.IsFinite(scaleL) || !double.IsFinite(scaleM) || !double.IsFinite(scaleS))
+                return xyz;
 
             // Transform input XYZ to cone response
             double[] inputCone = MatrixMultiply(mBradford, new[] { xyz.X, xyz.Y, xyz.Z });
@@ -181,7 +201,7 @@ namespace HDRGammaController.Core.Calibration
             // Transform back to XYZ
             double[] result = MatrixMultiply(mBradfordInv, adaptedCone);
 
-            return new CieXyz(result[0], result[1], result[2]);
+            return SafeXyz(new CieXyz(result[0], result[1], result[2]));
         }
 
         /// <summary>
@@ -257,6 +277,7 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public static CieXyz LinearSrgbToXyz(LinearRgb rgb)
         {
+            rgb = SafeLinearRgb(rgb);
             double[] result = MatrixMultiply(SrgbToXyzMatrix, new[] { rgb.R, rgb.G, rgb.B });
             return new CieXyz(result[0], result[1], result[2]);
         }
@@ -266,6 +287,7 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public static LinearRgb XyzToLinearSrgb(CieXyz xyz)
         {
+            xyz = SafeXyz(xyz);
             double[] result = MatrixMultiply(XyzToSrgbMatrix, new[] { xyz.X, xyz.Y, xyz.Z });
             return new LinearRgb(result[0], result[1], result[2]);
         }
@@ -275,6 +297,7 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public static CieXyz LinearRec2020ToXyz(LinearRgb rgb)
         {
+            rgb = SafeLinearRgb(rgb);
             double[] result = MatrixMultiply(Rec2020ToXyzMatrix, new[] { rgb.R, rgb.G, rgb.B });
             return new CieXyz(result[0], result[1], result[2]);
         }
@@ -284,6 +307,7 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public static LinearRgb XyzToLinearRec2020(CieXyz xyz)
         {
+            xyz = SafeXyz(xyz);
             double[] result = MatrixMultiply(XyzToRec2020Matrix, new[] { xyz.X, xyz.Y, xyz.Z });
             return new LinearRgb(result[0], result[1], result[2]);
         }
@@ -293,6 +317,7 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public static CieXyz LinearP3D65ToXyz(LinearRgb rgb)
         {
+            rgb = SafeLinearRgb(rgb);
             double[] result = MatrixMultiply(P3D65ToXyzMatrix, new[] { rgb.R, rgb.G, rgb.B });
             return new CieXyz(result[0], result[1], result[2]);
         }
@@ -302,6 +327,7 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public static LinearRgb XyzToLinearP3D65(CieXyz xyz)
         {
+            xyz = SafeXyz(xyz);
             double[] result = MatrixMultiply(XyzToP3D65Matrix, new[] { xyz.X, xyz.Y, xyz.Z });
             return new LinearRgb(result[0], result[1], result[2]);
         }
@@ -316,7 +342,7 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public static double SrgbOetf(double linear)
         {
-            linear = Math.Clamp(linear, 0, 1);
+            linear = Clamp01(linear);
             return linear <= 0.0031308
                 ? 12.92 * linear
                 : 1.055 * Math.Pow(linear, 1.0 / 2.4) - 0.055;
@@ -327,7 +353,7 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public static double SrgbEotf(double signal)
         {
-            signal = Math.Clamp(signal, 0, 1);
+            signal = Clamp01(signal);
             return signal <= 0.04045
                 ? signal / 12.92
                 : Math.Pow((signal + 0.055) / 1.055, 2.4);
@@ -338,7 +364,8 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public static double GammaEncode(double linear, double gamma)
         {
-            linear = Math.Clamp(linear, 0, 1);
+            linear = Clamp01(linear);
+            gamma = SafeGamma(gamma);
             return Math.Pow(linear, 1.0 / gamma);
         }
 
@@ -347,7 +374,8 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public static double GammaDecode(double signal, double gamma)
         {
-            signal = Math.Clamp(signal, 0, 1);
+            signal = Clamp01(signal);
+            gamma = SafeGamma(gamma);
             return Math.Pow(signal, gamma);
         }
 
@@ -359,7 +387,7 @@ namespace HDRGammaController.Core.Calibration
             const double alpha = 1.09929682680944;
             const double beta = 0.018053968510807;
 
-            linear = Math.Clamp(linear, 0, 1);
+            linear = Clamp01(linear);
             return linear < beta
                 ? 4.5 * linear
                 : alpha * Math.Pow(linear, 0.45) - (alpha - 1);
@@ -373,7 +401,7 @@ namespace HDRGammaController.Core.Calibration
             const double alpha = 1.09929682680944;
             const double beta = 0.018053968510807;
 
-            signal = Math.Clamp(signal, 0, 1);
+            signal = Clamp01(signal);
             double threshold = 4.5 * beta;
             return signal < threshold
                 ? signal / 4.5
@@ -385,20 +413,54 @@ namespace HDRGammaController.Core.Calibration
         #region Correlated Color Temperature
 
         /// <summary>
-        /// Calculates correlated color temperature (CCT) from chromaticity using McCamy's approximation.
+        /// Calculates correlated color temperature (CCT) from chromaticity by finding the
+        /// closest point on the app's CCT locus in CIE 1960 UCS.
         /// </summary>
         /// <remarks>
-        /// Valid for CCT range ~3000K to ~50000K.
-        /// Accuracy: ±2K for most of the range.
-        /// Reference: McCamy, C. S. (1992). Correlated color temperature as an explicit function of
-        /// chromaticity coordinates. Color Research &amp; Application, 17(2), 142-144.
+        /// This is slower than McCamy's cubic approximation but much more appropriate for
+        /// calibration reports: the returned CCT and Duv are mutually consistent because both
+        /// are computed in CIE 1960 UCS against the same locus.
         /// </remarks>
         public static double ChromaticityToCct(Chromaticity xy)
         {
-            // McCamy's approximation
-            double n = (xy.X - 0.3320) / (0.1858 - xy.Y);
-            double cct = 449.0 * n * n * n + 3525.0 * n * n + 6823.3 * n + 5520.33;
-            return cct;
+            if (!IsPlausibleChromaticity(xy))
+                return 6500.0;
+
+            var targetUv = ToUcs1960(xy);
+            if (!double.IsFinite(targetUv.U) || !double.IsFinite(targetUv.V))
+                return 6500.0;
+
+            // Golden-section search over the practical display-white range. The distance to
+            // the Planckian/daylight locus is unimodal for normal near-white chromaticities.
+            double lo = MinimumCctApproximationKelvin;
+            double hi = MaximumCctApproximationKelvin;
+            double gr = (Math.Sqrt(5.0) - 1.0) / 2.0;
+            double c = hi - gr * (hi - lo);
+            double d = lo + gr * (hi - lo);
+            double fc = UcsDistanceSquared(targetUv, CctToChromaticity(c));
+            double fd = UcsDistanceSquared(targetUv, CctToChromaticity(d));
+
+            for (int i = 0; i < 60; i++)
+            {
+                if (fc < fd)
+                {
+                    hi = d;
+                    d = c;
+                    fd = fc;
+                    c = hi - gr * (hi - lo);
+                    fc = UcsDistanceSquared(targetUv, CctToChromaticity(c));
+                }
+                else
+                {
+                    lo = c;
+                    c = d;
+                    fc = fd;
+                    d = lo + gr * (hi - lo);
+                    fd = UcsDistanceSquared(targetUv, CctToChromaticity(d));
+                }
+            }
+
+            return (lo + hi) * 0.5;
         }
 
         /// <summary>
@@ -407,23 +469,52 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public static double CalculateDuv(Chromaticity xy)
         {
-            // Convert to CIE 1960 UCS (u, v) coordinates
-            double u = 4 * xy.X / (-2 * xy.X + 12 * xy.Y + 3);
-            double v = 6 * xy.Y / (-2 * xy.X + 12 * xy.Y + 3);
+            if (!IsPlausibleChromaticity(xy))
+                return 0.0;
 
-            // Get CCT and corresponding Planckian locus point
             double cct = ChromaticityToCct(xy);
             var planckian = CctToChromaticity(cct);
 
-            // Planckian locus in UCS
-            double up = 4 * planckian.X / (-2 * planckian.X + 12 * planckian.Y + 3);
-            double vp = 6 * planckian.Y / (-2 * planckian.X + 12 * planckian.Y + 3);
+            var uv = ToUcs1960(xy);
+            var planckianUv = ToUcs1960(planckian);
+            if (!double.IsFinite(uv.U) || !double.IsFinite(uv.V) ||
+                !double.IsFinite(planckianUv.U) || !double.IsFinite(planckianUv.V))
+            {
+                return 0.0;
+            }
 
-            // Distance (signed based on which side of locus)
-            double duv = Math.Sqrt((u - up) * (u - up) + (v - vp) * (v - vp));
+            double offsetU = uv.U - planckianUv.U;
+            double offsetV = uv.V - planckianUv.V;
+            double duv = Math.Sqrt(offsetU * offsetU + offsetV * offsetV);
 
-            // Sign: positive if above locus (more green), negative if below (more magenta)
-            return v > vp ? duv : -duv;
+            double step = Math.Max(1.0, cct * 0.001);
+            var lowerUv = ToUcs1960(CctToChromaticity(cct - step));
+            var upperUv = ToUcs1960(CctToChromaticity(cct + step));
+            double tangentU = upperUv.U - lowerUv.U;
+            double tangentV = upperUv.V - lowerUv.V;
+            double cross = tangentU * offsetV - tangentV * offsetU;
+
+            // Positive Duv is conventionally above/green of the Planckian locus.
+            return cross <= 0.0 ? duv : -duv;
+        }
+
+        private static (double U, double V) ToUcs1960(Chromaticity xy)
+        {
+            if (!IsPlausibleChromaticity(xy))
+                return (double.NaN, double.NaN);
+
+            double denom = -2.0 * xy.X + 12.0 * xy.Y + 3.0;
+            if (Math.Abs(denom) < 1e-12)
+                return (double.NaN, double.NaN);
+            return (4.0 * xy.X / denom, 6.0 * xy.Y / denom);
+        }
+
+        private static double UcsDistanceSquared((double U, double V) targetUv, Chromaticity locusXy)
+        {
+            var locusUv = ToUcs1960(locusXy);
+            double du = targetUv.U - locusUv.U;
+            double dv = targetUv.V - locusUv.V;
+            return du * du + dv * dv;
         }
 
         /// <summary>
@@ -432,7 +523,9 @@ namespace HDRGammaController.Core.Calibration
         public static Chromaticity CctToChromaticity(double cct)
         {
             double x, y;
-            double T = cct;
+            double T = double.IsFinite(cct)
+                ? Math.Clamp(cct, MinimumCctApproximationKelvin, MaximumCctApproximationKelvin)
+                : 6500.0;
 
             if (T <= 4000)
             {
@@ -483,7 +576,7 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public static CieLab LerpLab(CieLab a, CieLab b, double t)
         {
-            t = Math.Clamp(t, 0, 1);
+            t = Clamp01(t);
             return new CieLab(
                 a.L + (b.L - a.L) * t,
                 a.A + (b.A - a.A) * t,
@@ -496,7 +589,7 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public static CieXyz LerpXyz(CieXyz a, CieXyz b, double t)
         {
-            t = Math.Clamp(t, 0, 1);
+            t = Clamp01(t);
             return new CieXyz(
                 a.X + (b.X - a.X) * t,
                 a.Y + (b.Y - a.Y) * t,
@@ -526,6 +619,11 @@ namespace HDRGammaController.Core.Calibration
         public static double[,] CalculateRgbToXyzMatrix(
             Chromaticity red, Chromaticity green, Chromaticity blue, Chromaticity white)
         {
+            ValidateChromaticity(red, nameof(red));
+            ValidateChromaticity(green, nameof(green));
+            ValidateChromaticity(blue, nameof(blue));
+            ValidateChromaticity(white, nameof(white));
+
             // Convert primaries to XYZ (Y=1)
             var xyzR = red.ToXyz(1);
             var xyzG = green.ToXyz(1);
@@ -556,11 +654,13 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public static double[,] Invert3x3(double[,] m)
         {
+            Validate3x3Finite(m, nameof(m));
+
             double det = m[0, 0] * (m[1, 1] * m[2, 2] - m[1, 2] * m[2, 1])
                        - m[0, 1] * (m[1, 0] * m[2, 2] - m[1, 2] * m[2, 0])
                        + m[0, 2] * (m[1, 0] * m[2, 1] - m[1, 1] * m[2, 0]);
 
-            if (Math.Abs(det) < 1e-10)
+            if (!double.IsFinite(det) || Math.Abs(det) < 1e-10)
                 throw new InvalidOperationException("Matrix is singular and cannot be inverted.");
 
             double invDet = 1.0 / det;
@@ -589,6 +689,9 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public static double[,] MultiplyMatrices(double[,] a, double[,] b)
         {
+            Validate3x3Finite(a, nameof(a));
+            Validate3x3Finite(b, nameof(b));
+
             var result = new double[3, 3];
             for (int i = 0; i < 3; i++)
             {
@@ -632,6 +735,13 @@ namespace HDRGammaController.Core.Calibration
             Chromaticity red, Chromaticity green, Chromaticity blue,
             Chromaticity refRed, Chromaticity refGreen, Chromaticity refBlue)
         {
+            if (!IsPlausibleChromaticity(red) || !IsPlausibleChromaticity(green) ||
+                !IsPlausibleChromaticity(blue) || !IsPlausibleChromaticity(refRed) ||
+                !IsPlausibleChromaticity(refGreen) || !IsPlausibleChromaticity(refBlue))
+            {
+                return 0.0;
+            }
+
             var subject = NormalizeWinding(new List<(double X, double Y)>
             {
                 (red.X, red.Y), (green.X, green.Y), (blue.X, blue.Y)
@@ -649,7 +759,64 @@ namespace HDRGammaController.Core.Calibration
             if (intersection.Count < 3)
                 return 0;
 
-            return Math.Clamp(Math.Abs(SignedArea(intersection)) / refArea, 0.0, 1.0);
+            double coverage = Math.Abs(SignedArea(intersection)) / refArea;
+            return double.IsFinite(coverage) ? Math.Clamp(coverage, 0.0, 1.0) : 0.0;
+        }
+
+        private static double Clamp01(double value) =>
+            double.IsFinite(value) ? Math.Clamp(value, 0.0, 1.0) : 0.0;
+
+        private static double SafeGamma(double gamma) =>
+            double.IsFinite(gamma) && gamma is >= 1.0 and <= 4.0 ? gamma : 2.2;
+
+        private static double SafeFinite(double value) => double.IsFinite(value) ? value : 0.0;
+
+        private static CieXyz SafeXyz(CieXyz xyz) => new(
+            SafeFinite(xyz.X),
+            SafeFinite(xyz.Y),
+            SafeFinite(xyz.Z));
+
+        private static LinearRgb SafeLinearRgb(LinearRgb rgb) => new(
+            SafeFinite(rgb.R),
+            SafeFinite(rgb.G),
+            SafeFinite(rgb.B));
+
+        private static CieXyz SafeReferenceWhite(CieXyz white) =>
+            double.IsFinite(white.X) && double.IsFinite(white.Y) && double.IsFinite(white.Z) &&
+            white.X > 0.0 && white.Y > 0.0 && white.Z > 0.0
+                ? white
+                : D65White;
+
+        private static bool IsUsableCone(double[] cone) =>
+            cone.Length == 3 &&
+            double.IsFinite(cone[0]) && double.IsFinite(cone[1]) && double.IsFinite(cone[2]) &&
+            Math.Abs(cone[0]) > 1e-12 && Math.Abs(cone[1]) > 1e-12 && Math.Abs(cone[2]) > 1e-12;
+
+        private static bool IsPlausibleChromaticity(Chromaticity xy) =>
+            double.IsFinite(xy.X) && double.IsFinite(xy.Y) &&
+            xy.X > 0.0 && xy.Y > 0.0 && xy.X + xy.Y <= 1.000001;
+
+        private static void ValidateChromaticity(Chromaticity xy, string name)
+        {
+            if (!IsPlausibleChromaticity(xy))
+            {
+                throw new ArgumentException(
+                    $"{name} chromaticity must be finite, positive and inside the CIE xy chromaticity plane.",
+                    name);
+            }
+        }
+
+        private static void Validate3x3Finite(double[,] matrix, string name)
+        {
+            if (matrix == null || matrix.GetLength(0) != 3 || matrix.GetLength(1) != 3)
+                throw new ArgumentException($"{name} must be a 3x3 matrix.", name);
+
+            for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 3; c++)
+            {
+                if (!double.IsFinite(matrix[r, c]))
+                    throw new InvalidOperationException("Matrix contains non-finite values and cannot be used.");
+            }
         }
 
         /// <summary>Shoelace signed area (positive for counter-clockwise winding).</summary>

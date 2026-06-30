@@ -37,6 +37,12 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public double DistanceTo(Chromaticity other)
         {
+            if (!double.IsFinite(X) || !double.IsFinite(Y) ||
+                !double.IsFinite(other.X) || !double.IsFinite(other.Y))
+            {
+                return double.PositiveInfinity;
+            }
+
             double dx = X - other.X;
             double dy = Y - other.Y;
             return Math.Sqrt(dx * dx + dy * dy);
@@ -48,14 +54,20 @@ namespace HDRGammaController.Core.Calibration
         /// <param name="luminance">The Y (luminance) value in cd/m² or normalized</param>
         public CieXyz ToXyz(double luminance)
         {
-            if (Y <= 0) return new CieXyz(0, 0, 0);
+            luminance = double.IsFinite(luminance) ? Math.Max(luminance, 0.0) : 0.0;
+            Chromaticity xy = IsPlausible() ? this : D65;
+            if (luminance == 0.0) return new CieXyz(0, 0, 0);
 
-            double bigX = (X * luminance) / Y;
+            double bigX = (xy.X * luminance) / xy.Y;
             double bigY = luminance;
-            double bigZ = (Z * luminance) / Y;
+            double bigZ = (xy.Z * luminance) / xy.Y;
 
             return new CieXyz(bigX, bigY, bigZ);
         }
+
+        private bool IsPlausible() =>
+            double.IsFinite(X) && double.IsFinite(Y) &&
+            X > 0.0 && Y > 0.0 && X + Y <= 1.000001;
 
         // Standard illuminants and color space primaries
 
@@ -138,15 +150,32 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public Chromaticity ToChromaticity()
         {
+            if (!double.IsFinite(X) || !double.IsFinite(Y) || !double.IsFinite(Z))
+                return Chromaticity.D65;
+
             double sum = X + Y + Z;
-            if (sum <= 0) return new Chromaticity(0.31272, 0.32903); // D65 default
-            return new Chromaticity(X / sum, Y / sum);
+            if (!double.IsFinite(sum) || sum <= 1e-12)
+                return Chromaticity.D65;
+
+            double x = X / sum;
+            double y = Y / sum;
+            if (!double.IsFinite(x) || !double.IsFinite(y) || x < 0.0 || y < 0.0 || x + y > 1.000001)
+                return Chromaticity.D65;
+
+            return new Chromaticity(x, y);
         }
 
         /// <summary>
         /// Scales the XYZ values by a factor (for luminance adjustment).
         /// </summary>
-        public CieXyz Scale(double factor) => new(X * factor, Y * factor, Z * factor);
+        public CieXyz Scale(double factor)
+        {
+            factor = double.IsFinite(factor) ? factor : 0.0;
+            return new CieXyz(
+                double.IsFinite(X) ? X * factor : 0.0,
+                double.IsFinite(Y) ? Y * factor : 0.0,
+                double.IsFinite(Z) ? Z * factor : 0.0);
+        }
 
         /// <summary>
         /// Returns the Euclidean distance between two XYZ values.
@@ -154,6 +183,12 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public double DistanceTo(CieXyz other)
         {
+            if (!double.IsFinite(X) || !double.IsFinite(Y) || !double.IsFinite(Z) ||
+                !double.IsFinite(other.X) || !double.IsFinite(other.Y) || !double.IsFinite(other.Z))
+            {
+                return double.PositiveInfinity;
+            }
+
             double dx = X - other.X;
             double dy = Y - other.Y;
             double dz = Z - other.Z;
@@ -236,10 +271,13 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public double DeltaE76(CieLab other)
         {
+            if (!IsUsableForDeltaE() || !other.IsUsableForDeltaE())
+                return double.PositiveInfinity;
+
             double dL = L - other.L;
             double dA = A - other.A;
             double dB = B - other.B;
-            return Math.Sqrt(dL * dL + dA * dA + dB * dB);
+            return SafeDeltaE(Math.Sqrt(dL * dL + dA * dA + dB * dB));
         }
 
         /// <summary>
@@ -249,6 +287,9 @@ namespace HDRGammaController.Core.Calibration
         /// <param name="textiles">If true, uses textile weighting factors; otherwise graphic arts</param>
         public double DeltaE94(CieLab other, bool textiles = false)
         {
+            if (!IsUsableForDeltaE() || !other.IsUsableForDeltaE())
+                return double.PositiveInfinity;
+
             double kL = textiles ? 2.0 : 1.0;
             double k1 = textiles ? 0.048 : 0.045;
             double k2 = textiles ? 0.014 : 0.015;
@@ -271,7 +312,7 @@ namespace HDRGammaController.Core.Calibration
             double termC = dC / sC;
             double termH = dH / sH;
 
-            return Math.Sqrt(termL * termL + termC * termC + termH * termH);
+            return SafeDeltaE(Math.Sqrt(termL * termL + termC * termC + termH * termH));
         }
 
         /// <summary>
@@ -283,6 +324,9 @@ namespace HDRGammaController.Core.Calibration
         /// </remarks>
         public double DeltaE2000(CieLab other)
         {
+            if (!IsUsableForDeltaE() || !other.IsUsableForDeltaE())
+                return double.PositiveInfinity;
+
             // Parametric weighting factors (standard values)
             const double kL = 1.0;
             const double kC = 1.0;
@@ -296,7 +340,8 @@ namespace HDRGammaController.Core.Calibration
             double cBar = (c1 + c2) / 2.0;
 
             double cBar7 = Math.Pow(cBar, 7);
-            double g = 0.5 * (1.0 - Math.Sqrt(cBar7 / (cBar7 + Math.Pow(25, 7))));
+            double cBar7Ratio = SafeChromaPowerRatio(cBar7);
+            double g = 0.5 * (1.0 - Math.Sqrt(cBar7Ratio));
 
             double a1Prime = a1 * (1.0 + g);
             double a2Prime = a2 * (1.0 + g);
@@ -347,7 +392,7 @@ namespace HDRGammaController.Core.Calibration
             double sH = 1.0 + 0.015 * cBarPrime * t;
 
             double cBarPrime7 = Math.Pow(cBarPrime, 7);
-            double rC = 2.0 * Math.Sqrt(cBarPrime7 / (cBarPrime7 + Math.Pow(25, 7)));
+            double rC = 2.0 * Math.Sqrt(SafeChromaPowerRatio(cBarPrime7));
             double dTheta = 30 * Math.Exp(-Math.Pow((hBarPrime - 275) / 25, 2));
             double rT = -Math.Sin(2 * dTheta * Math.PI / 180.0) * rC;
 
@@ -355,7 +400,7 @@ namespace HDRGammaController.Core.Calibration
             double termC = dCPrime / (kC * sC);
             double termH = dHPrime / (kH * sH);
 
-            return Math.Sqrt(termL * termL + termC * termC + termH * termH + rT * termC * termH);
+            return SafeDeltaE(Math.Sqrt(termL * termL + termC * termC + termH * termH + rT * termC * termH));
         }
 
         private static double Atan2Degrees(double y, double x)
@@ -363,6 +408,29 @@ namespace HDRGammaController.Core.Calibration
             double h = Math.Atan2(y, x) * (180.0 / Math.PI);
             return h < 0 ? h + 360.0 : h;
         }
+
+        private bool IsUsableForDeltaE() =>
+            double.IsFinite(L) && double.IsFinite(A) && double.IsFinite(B) &&
+            Math.Abs(L) <= 1_000_000.0 &&
+            Math.Abs(A) <= 1_000_000.0 &&
+            Math.Abs(B) <= 1_000_000.0;
+
+        private static double SafeChromaPowerRatio(double chromaPower)
+        {
+            if (double.IsPositiveInfinity(chromaPower))
+                return 1.0;
+            if (!double.IsFinite(chromaPower) || chromaPower <= 0.0)
+                return 0.0;
+
+            const double twentyFivePowerSeven = 6103515625.0;
+            double denominator = chromaPower + twentyFivePowerSeven;
+            return double.IsFinite(denominator) && denominator > 0.0
+                ? Math.Clamp(chromaPower / denominator, 0.0, 1.0)
+                : 1.0;
+        }
+
+        private static double SafeDeltaE(double value) =>
+            double.IsNaN(value) || value < 0.0 ? double.PositiveInfinity : value;
 
         public bool Equals(CieLab other) =>
             Math.Abs(L - other.L) < 1e-10 &&
@@ -397,30 +465,41 @@ namespace HDRGammaController.Core.Calibration
         /// <summary>
         /// Returns true if all components are within the valid gamut [0, 1].
         /// </summary>
-        public bool IsInGamut => R >= 0 && R <= 1 && G >= 0 && G <= 1 && B >= 0 && B <= 1;
+        public bool IsInGamut =>
+            double.IsFinite(R) && double.IsFinite(G) && double.IsFinite(B) &&
+            R >= 0 && R <= 1 && G >= 0 && G <= 1 && B >= 0 && B <= 1;
 
         /// <summary>
         /// Clamps all components to [0, 1].
         /// </summary>
         public LinearRgb Clamp() => new(
-            Math.Clamp(R, 0, 1),
-            Math.Clamp(G, 0, 1),
-            Math.Clamp(B, 0, 1));
+            Clamp01(R),
+            Clamp01(G),
+            Clamp01(B));
 
         /// <summary>
         /// Scales all components by a factor.
         /// </summary>
-        public LinearRgb Scale(double factor) => new(R * factor, G * factor, B * factor);
+        public LinearRgb Scale(double factor)
+        {
+            factor = double.IsFinite(factor) ? factor : 0.0;
+            return new LinearRgb(SafeFinite(R) * factor, SafeFinite(G) * factor, SafeFinite(B) * factor);
+        }
 
         /// <summary>
         /// Returns the maximum component value.
         /// </summary>
-        public double Max => Math.Max(R, Math.Max(G, B));
+        public double Max => Math.Max(SafeFinite(R), Math.Max(SafeFinite(G), SafeFinite(B)));
 
         /// <summary>
         /// Returns the minimum component value.
         /// </summary>
-        public double Min => Math.Min(R, Math.Min(G, B));
+        public double Min => Math.Min(SafeFinite(R), Math.Min(SafeFinite(G), SafeFinite(B)));
+
+        private static double Clamp01(double value) =>
+            double.IsFinite(value) ? Math.Clamp(value, 0.0, 1.0) : 0.0;
+
+        private static double SafeFinite(double value) => double.IsFinite(value) ? value : 0.0;
 
         public static LinearRgb operator +(LinearRgb a, LinearRgb b) => new(a.R + b.R, a.G + b.G, a.B + b.B);
         public static LinearRgb operator -(LinearRgb a, LinearRgb b) => new(a.R - b.R, a.G - b.G, a.B - b.B);

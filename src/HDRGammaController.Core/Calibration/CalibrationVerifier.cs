@@ -62,7 +62,7 @@ namespace HDRGammaController.Core.Calibration
             // builder; they are not accuracy patches. Including them would both add garbage
             // ΔEs (DisplayRgb is a placeholder) and blow up peakY normalization (the ladder
             // reaches far above SDR white), wrecking every number in the report.
-            var valid = measurements.Where(m => m.IsValid && m.Patch.Nits is null).ToList();
+            var valid = measurements.Where(IsAccuracyMeasurement).ToList();
             var whiteMeasurement = valid
                 .Where(m => m.Patch.Category == PatchCategory.Grayscale &&
                             m.Patch.DisplayRgb.R >= 0.99 &&
@@ -73,7 +73,7 @@ namespace HDRGammaController.Core.Calibration
             double peakY = whiteMeasurement != null
                 ? whiteMeasurement.Xyz.Y
                 : valid.Count > 0 ? valid.Max(m => m.Xyz.Y) : 1.0;
-            if (peakY <= 0) peakY = 1.0;
+            if (!double.IsFinite(peakY) || peakY <= 0) peakY = 1.0;
 
             // Tone reference for the patches. For PQ (HDR) targets the patches are still SDR
             // content — Windows renders them with the sRGB curve scaled to the SDR white
@@ -94,6 +94,9 @@ namespace HDRGammaController.Core.Calibration
                 var measuredLab = ColorMath.XyzToLab(normalized);
 
                 double deltaE = measuredLab.DeltaE2000(targetLab);
+                if (!double.IsFinite(deltaE))
+                    continue;
+
                 deltaEs.Add(deltaE);
                 metrics.PatchResults.Add(new PatchDeltaE(
                     measurement.Patch.Name, measurement.Patch.Category, deltaE));
@@ -121,7 +124,9 @@ namespace HDRGammaController.Core.Calibration
                 // relative target by the measured peak. Reported alongside ΔE2000 — ITP values
                 // run roughly 3× larger for equivalent perceptual error (1 JND ≈ 1 ΔE ITP).
                 var targetAbs = new CieXyz(targetXyz.X * peakY, targetXyz.Y * peakY, targetXyz.Z * peakY);
-                metrics.ItpDeltaEs.Add(DeltaEItp(measurement.Xyz, targetAbs));
+                double deltaEItp = DeltaEItp(measurement.Xyz, targetAbs);
+                if (double.IsFinite(deltaEItp))
+                    metrics.ItpDeltaEs.Add(deltaEItp);
             }
 
             if (deltaEs.Count > 0)
@@ -151,11 +156,23 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public static double DeltaEItp(CieXyz a, CieXyz b)
         {
+            if (!IsPhysicalXyz(a) || !IsPhysicalXyz(b))
+                return 0.0;
+
             var (i1, t1, p1) = ToItp(a);
             var (i2, t2, p2) = ToItp(b);
             double di = i1 - i2, dt = t1 - t2, dp = p1 - p2;
             return 720.0 * Math.Sqrt(di * di + dt * dt + dp * dp);
         }
+
+        private static bool IsAccuracyMeasurement(MeasurementResult measurement) =>
+            measurement.IsValid &&
+            measurement.Patch.Nits is null &&
+            IsPhysicalXyz(measurement.Xyz);
+
+        private static bool IsPhysicalXyz(CieXyz xyz) =>
+            double.IsFinite(xyz.X) && double.IsFinite(xyz.Y) && double.IsFinite(xyz.Z) &&
+            xyz.X >= -1e-6 && xyz.Y >= -1e-6 && xyz.Z >= -1e-6;
 
         private static (double I, double T, double P) ToItp(CieXyz xyz)
         {

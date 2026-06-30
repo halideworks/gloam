@@ -45,6 +45,16 @@ namespace HDRGammaController.Tests
             Assert.Equal(100, VerificationAnalysis.HistogramCounts(deltaEs).Sum());
         }
 
+        [Fact]
+        public void HistogramCounts_IgnoresNonFiniteValues()
+        {
+            int[] counts = VerificationAnalysis.HistogramCounts(new[] { 0.25, double.NaN, 1.5, double.PositiveInfinity });
+
+            Assert.Equal(2, counts.Sum());
+            Assert.Equal(1, counts[0]);
+            Assert.Equal(1, counts[2]);
+        }
+
         // ------------------------------------------------------------------ worst patches
 
         [Fact]
@@ -76,6 +86,21 @@ namespace HDRGammaController.Tests
 
             Assert.Equal(2, worst.Count);
             Assert.Equal("B", worst[0].Name);
+        }
+
+        [Fact]
+        public void BestAndWorstPatches_IgnoreNonFiniteValues()
+        {
+            var patches = new[]
+            {
+                new PatchDeltaE("A", PatchCategory.Grayscale, 1.0),
+                new PatchDeltaE("NaN", PatchCategory.Grayscale, double.NaN),
+                new PatchDeltaE("B", PatchCategory.Primary, 3.0),
+                new PatchDeltaE("Inf", PatchCategory.Primary, double.PositiveInfinity),
+            };
+
+            Assert.Equal(new[] { "B", "A" }, VerificationAnalysis.WorstPatches(patches).Select(p => p.Name));
+            Assert.Equal(new[] { "A", "B" }, VerificationAnalysis.BestPatches(patches).Select(p => p.Name));
         }
 
         // ------------------------------------------------------------------ best patches
@@ -176,6 +201,22 @@ namespace HDRGammaController.Tests
             var breakdown = VerificationAnalysis.ComputeCategoryBreakdown(patches);
 
             Assert.Equal(3.0, breakdown.MemoryColorsDeltaE!.Value, 9);
+        }
+
+        [Fact]
+        public void CategoryBreakdown_IgnoresNonFiniteValues()
+        {
+            var patches = new[]
+            {
+                new PatchDeltaE("Gray 50%", PatchCategory.Grayscale, 1.0),
+                new PatchDeltaE("Gray corrupt", PatchCategory.Grayscale, double.NaN),
+                new PatchDeltaE("Red corrupt", PatchCategory.Primary, double.PositiveInfinity),
+            };
+
+            var breakdown = VerificationAnalysis.ComputeCategoryBreakdown(patches);
+
+            Assert.Equal(1.0, breakdown.GrayscaleDeltaE!.Value, 9);
+            Assert.Null(breakdown.PrimariesDeltaE);
         }
 
         [Fact]

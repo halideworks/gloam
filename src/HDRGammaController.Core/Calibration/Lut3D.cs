@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.IO;
 using System.Text;
 
@@ -80,6 +81,9 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public void SetEntry(int rIndex, int gIndex, int bIndex, float r, float g, float b)
         {
+            if (!float.IsFinite(r) || !float.IsFinite(g) || !float.IsFinite(b))
+                throw new ArgumentOutOfRangeException(nameof(r), "LUT entries must be finite.");
+
             _r[rIndex, gIndex, bIndex] = r;
             _g[rIndex, gIndex, bIndex] = g;
             _b[rIndex, gIndex, bIndex] = b;
@@ -98,10 +102,11 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public (float R, float G, float B) LookupTrilinear(float r, float g, float b)
         {
-            // Clamp inputs to valid range
-            r = Math.Clamp(r, DomainMin, DomainMax);
-            g = Math.Clamp(g, DomainMin, DomainMax);
-            b = Math.Clamp(b, DomainMin, DomainMax);
+            ValidateDomain();
+
+            r = NormalizeInput(r);
+            g = NormalizeInput(g);
+            b = NormalizeInput(b);
 
             // Normalize to [0, size-1]
             float range = DomainMax - DomainMin;
@@ -178,10 +183,11 @@ namespace HDRGammaController.Core.Calibration
         /// </remarks>
         public (float R, float G, float B) LookupTetrahedral(float r, float g, float b)
         {
-            // Clamp inputs to valid range
-            r = Math.Clamp(r, DomainMin, DomainMax);
-            g = Math.Clamp(g, DomainMin, DomainMax);
-            b = Math.Clamp(b, DomainMin, DomainMax);
+            ValidateDomain();
+
+            r = NormalizeInput(r);
+            g = NormalizeInput(g);
+            b = NormalizeInput(b);
 
             // Normalize to [0, size-1]
             float range = DomainMax - DomainMin;
@@ -300,8 +306,10 @@ namespace HDRGammaController.Core.Calibration
                 writer.WriteLine($"TITLE \"{title}\"");
 
             writer.WriteLine($"LUT_3D_SIZE {Size}");
-            writer.WriteLine($"DOMAIN_MIN {DomainMin:F6} {DomainMin:F6} {DomainMin:F6}");
-            writer.WriteLine($"DOMAIN_MAX {DomainMax:F6} {DomainMax:F6} {DomainMax:F6}");
+            writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                "DOMAIN_MIN {0:F6} {0:F6} {0:F6}", DomainMin));
+            writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                "DOMAIN_MAX {0:F6} {0:F6} {0:F6}", DomainMax));
             writer.WriteLine();
 
             // Cube format: B changes fastest, then G, then R
@@ -311,7 +319,9 @@ namespace HDRGammaController.Core.Calibration
                 {
                     for (int bi = 0; bi < Size; bi++)
                     {
-                        writer.WriteLine($"{_r[ri, gi, bi]:F6} {_g[ri, gi, bi]:F6} {_b[ri, gi, bi]:F6}");
+                        writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                            "{0:F6} {1:F6} {2:F6}",
+                            _r[ri, gi, bi], _g[ri, gi, bi], _b[ri, gi, bi]));
                     }
                 }
             }
@@ -328,43 +338,66 @@ namespace HDRGammaController.Core.Calibration
             var values = new System.Collections.Generic.List<(float r, float g, float b)>();
 
             string? line;
+            int lineNumber = 0;
             while ((line = reader.ReadLine()) != null)
             {
+                lineNumber++;
+                int commentStart = line.IndexOf('#');
+                if (commentStart >= 0)
+                    line = line[..commentStart];
+
                 line = line.Trim();
-                if (string.IsNullOrEmpty(line) || line.StartsWith("#") || line.StartsWith("TITLE"))
+                if (string.IsNullOrEmpty(line))
                     continue;
 
-                if (line.StartsWith("LUT_3D_SIZE"))
+                var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                string keyword = parts[0];
+
+                if (keyword.Equals("TITLE", StringComparison.OrdinalIgnoreCase))
                 {
-                    size = int.Parse(line.Split(' ', StringSplitOptions.RemoveEmptyEntries)[1]);
+                    continue;
                 }
-                else if (line.StartsWith("DOMAIN_MIN"))
+                else if (keyword.Equals("LUT_3D_SIZE", StringComparison.OrdinalIgnoreCase))
                 {
-                    var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                    domainMin = float.Parse(parts[1]);
+                    if (parts.Length != 2 ||
+                        !int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out size))
+                        throw new InvalidDataException($"Invalid LUT_3D_SIZE at line {lineNumber}.");
                 }
-                else if (line.StartsWith("DOMAIN_MAX"))
+                else if (keyword.Equals("DOMAIN_MIN", StringComparison.OrdinalIgnoreCase))
                 {
-                    var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                    domainMax = float.Parse(parts[1]);
+                    domainMin = ParseScalarDomain(parts, lineNumber);
+                }
+                else if (keyword.Equals("DOMAIN_MAX", StringComparison.OrdinalIgnoreCase))
+                {
+                    domainMax = ParseScalarDomain(parts, lineNumber);
                 }
                 else
                 {
-                    // Data line
-                    var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                    if (parts.Length >= 3)
+                    if (parts.Length != 3 ||
+                        !float.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out float r) ||
+                        !float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float g) ||
+                        !float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float b))
                     {
-                        values.Add((
-                            float.Parse(parts[0]),
-                            float.Parse(parts[1]),
-                            float.Parse(parts[2])
-                        ));
+                        throw new InvalidDataException($"Invalid or unsupported cube line {lineNumber}: '{line}'.");
                     }
+
+                    if (!float.IsFinite(r) || !float.IsFinite(g) || !float.IsFinite(b))
+                        throw new InvalidDataException($"Cube LUT entry at line {lineNumber} contains a non-finite value.");
+
+                    values.Add((r, g, b));
                 }
             }
 
             if (size == 0)
                 throw new InvalidDataException("LUT_3D_SIZE not found in cube file");
+
+            int expectedEntries = checked(size * size * size);
+            if (values.Count != expectedEntries)
+                throw new InvalidDataException(
+                    $"Cube file contains {values.Count} LUT entries, expected {expectedEntries} for LUT_3D_SIZE {size}.");
+
+            if (!float.IsFinite(domainMin) || !float.IsFinite(domainMax) || !(domainMax > domainMin))
+                throw new InvalidDataException("DOMAIN_MAX must be greater than DOMAIN_MIN in cube file.");
 
             var lut = new Lut3D(size) { DomainMin = domainMin, DomainMax = domainMax };
 
@@ -385,6 +418,25 @@ namespace HDRGammaController.Core.Calibration
             }
 
             return lut;
+        }
+
+        private static float ParseScalarDomain(string[] parts, int lineNumber)
+        {
+            if (parts.Length != 4 ||
+                !float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float first) ||
+                !float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float second) ||
+                !float.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out float third))
+            {
+                throw new InvalidDataException($"Invalid cube domain declaration at line {lineNumber}.");
+            }
+
+            if (Math.Abs(first - second) > 1e-6f || Math.Abs(first - third) > 1e-6f)
+                throw new InvalidDataException("Per-channel DOMAIN_MIN/DOMAIN_MAX cube files are not supported.");
+
+            if (!float.IsFinite(first))
+                throw new InvalidDataException("Cube domain declarations must be finite.");
+
+            return first;
         }
 
         /// <summary>
@@ -443,6 +495,9 @@ namespace HDRGammaController.Core.Calibration
             float domainMin = reader.ReadSingle();
             float domainMax = reader.ReadSingle();
 
+            if (!float.IsFinite(domainMin) || !float.IsFinite(domainMax) || !(domainMax > domainMin))
+                throw new InvalidDataException("Invalid LUT3D domain.");
+
             var lut = new Lut3D(size) { DomainMin = domainMin, DomainMax = domainMax };
 
             for (int ri = 0; ri < size; ri++)
@@ -454,6 +509,8 @@ namespace HDRGammaController.Core.Calibration
                         float r = reader.ReadSingle();
                         float g = reader.ReadSingle();
                         float b = reader.ReadSingle();
+                        if (!float.IsFinite(r) || !float.IsFinite(g) || !float.IsFinite(b))
+                            throw new InvalidDataException("LUT3D data contains a non-finite entry.");
                         lut.SetEntry(ri, gi, bi, r, g, b);
                     }
                 }
@@ -468,5 +525,14 @@ namespace HDRGammaController.Core.Calibration
         /// Creates an identity LUT (no correction).
         /// </summary>
         public static Lut3D CreateIdentity(int size = 17) => new(size);
+
+        private void ValidateDomain()
+        {
+            if (!float.IsFinite(DomainMin) || !float.IsFinite(DomainMax) || !(DomainMax > DomainMin))
+                throw new InvalidOperationException("LUT domain must be finite and increasing.");
+        }
+
+        private float NormalizeInput(float value) =>
+            float.IsFinite(value) ? Math.Clamp(value, DomainMin, DomainMax) : DomainMin;
     }
 }

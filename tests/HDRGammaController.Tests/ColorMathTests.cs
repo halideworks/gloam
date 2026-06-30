@@ -75,6 +75,26 @@ namespace HDRGammaController.Tests
             Assert.True(!double.IsNaN(lab.B));
         }
 
+        [Fact]
+        public void XyzLabConversions_NonFiniteInputs_ReturnFiniteSafeValues()
+        {
+            var lab = ColorMath.XyzToLab(
+                new CieXyz(double.NaN, double.PositiveInfinity, double.NegativeInfinity),
+                new CieXyz(double.NaN, 0, double.PositiveInfinity));
+
+            Assert.True(double.IsFinite(lab.L));
+            Assert.True(double.IsFinite(lab.A));
+            Assert.True(double.IsFinite(lab.B));
+
+            var xyz = ColorMath.LabToXyz(
+                new CieLab(double.NaN, double.PositiveInfinity, double.NegativeInfinity),
+                new CieXyz(0, double.NaN, 0));
+
+            Assert.Equal(0.0, xyz.X, 10);
+            Assert.Equal(0.0, xyz.Y, 10);
+            Assert.Equal(0.0, xyz.Z, 10);
+        }
+
         #endregion
 
         #region Delta E 2000 Tests
@@ -152,6 +172,75 @@ namespace HDRGammaController.Tests
             Assert.InRange(deltaE, 1.9, 2.2);
         }
 
+        public static TheoryData<CieLab, CieLab, double> DeltaE2000ReferencePairs => new()
+        {
+            { new CieLab(50.0000,  2.6772, -79.7751), new CieLab(50.0000,   0.0000, -82.7485),  2.0425 },
+            { new CieLab(50.0000,  3.1571, -77.2803), new CieLab(50.0000,   0.0000, -82.7485),  2.8615 },
+            { new CieLab(50.0000,  2.8361, -74.0200), new CieLab(50.0000,   0.0000, -82.7485),  3.4412 },
+            { new CieLab(50.0000, -1.3802, -84.2814), new CieLab(50.0000,   0.0000, -82.7485),  1.0000 },
+            { new CieLab(50.0000, -1.1848, -84.8006), new CieLab(50.0000,   0.0000, -82.7485),  1.0000 },
+            { new CieLab(50.0000, -0.9009, -85.5211), new CieLab(50.0000,   0.0000, -82.7485),  1.0000 },
+            { new CieLab(50.0000,  0.0000,   0.0000), new CieLab(50.0000,  -1.0000,   2.0000),  2.3669 },
+            { new CieLab(50.0000, -1.0000,   2.0000), new CieLab(50.0000,   0.0000,   0.0000),  2.3669 },
+            { new CieLab(50.0000,  2.4900,  -0.0010), new CieLab(50.0000,  -2.4900,   0.0009),  7.1792 },
+            { new CieLab(50.0000,  2.4900,  -0.0010), new CieLab(50.0000,  -2.4900,   0.0010),  7.1792 },
+            { new CieLab(50.0000,  2.4900,  -0.0010), new CieLab(50.0000,  -2.4900,   0.0011),  7.2195 },
+            { new CieLab(50.0000,  2.4900,  -0.0010), new CieLab(50.0000,  -2.4900,   0.0012),  7.2195 },
+            { new CieLab(50.0000, -0.0010,   2.4900), new CieLab(50.0000,   0.0009,  -2.4900),  4.8045 },
+            { new CieLab(50.0000, -0.0010,   2.4900), new CieLab(50.0000,   0.0010,  -2.4900),  4.8045 },
+            { new CieLab(50.0000, -0.0010,   2.4900), new CieLab(50.0000,   0.0011,  -2.4900),  4.7461 },
+            { new CieLab(50.0000,  2.5000,   0.0000), new CieLab(50.0000,   0.0000,  -2.5000),  4.3065 },
+            { new CieLab(50.0000,  2.5000,   0.0000), new CieLab(73.0000,  25.0000, -18.0000), 27.1492 },
+            { new CieLab(50.0000,  2.5000,   0.0000), new CieLab(61.0000,  -5.0000,  29.0000), 22.8977 },
+            { new CieLab(50.0000,  2.5000,   0.0000), new CieLab(56.0000, -27.0000,  -3.0000), 31.9030 },
+            { new CieLab(50.0000,  2.5000,   0.0000), new CieLab(58.0000,  24.0000,  15.0000), 19.4535 },
+            { new CieLab(50.0000,  2.5000,   0.0000), new CieLab(50.0000,   3.1736,   0.5854),  1.0000 },
+            { new CieLab(50.0000,  2.5000,   0.0000), new CieLab(50.0000,   3.2972,   0.0000),  1.0000 },
+            { new CieLab(50.0000,  2.5000,   0.0000), new CieLab(50.0000,   1.8634,   0.5757),  1.0000 },
+            { new CieLab(50.0000,  2.5000,   0.0000), new CieLab(50.0000,   3.2592,   0.3350),  1.0000 },
+            { new CieLab(60.2574, -34.0099,  36.2677), new CieLab(60.4626, -34.1751,  39.4387),  1.2644 },
+            { new CieLab(63.0109, -31.0961,  -5.8663), new CieLab(62.8187, -29.7946,  -4.0864),  1.2630 },
+            { new CieLab(61.2901,   3.7196,  -5.3901), new CieLab(61.4292,   2.2480,  -4.9620),  1.8731 },
+            { new CieLab(35.0831, -44.1164,   3.7933), new CieLab(35.0232, -40.0716,   1.5901),  1.8645 },
+            { new CieLab(22.7233,  20.0904, -46.6940), new CieLab(23.0331,  14.9730, -42.5619),  2.0373 },
+            { new CieLab(36.4612,  47.8580,  18.3852), new CieLab(36.2715,  50.5065,  21.2231),  1.4146 },
+            { new CieLab(90.8027,  -2.0831,   1.4410), new CieLab(91.1528,  -1.6435,   0.0447),  1.4441 },
+            { new CieLab(90.9257,  -0.5406,  -0.9208), new CieLab(88.6381,  -0.8985,  -0.7239),  1.5381 },
+            { new CieLab( 6.7747,  -0.2908,  -2.4247), new CieLab( 5.8714,  -0.0985,  -2.2286),  0.6377 },
+            { new CieLab( 2.0776,   0.0795,  -1.1350), new CieLab( 0.9033,  -0.0636,  -0.5514),  0.9082 },
+        };
+
+        [Theory]
+        [MemberData(nameof(DeltaE2000ReferencePairs))]
+        public void DeltaE2000_ReferencePairs_MatchExpected(CieLab lab1, CieLab lab2, double expected)
+        {
+            Assert.Equal(expected, lab1.DeltaE2000(lab2), 4);
+        }
+
+        [Theory]
+        [InlineData(double.NaN, 0, 0)]
+        [InlineData(50, double.PositiveInfinity, 0)]
+        [InlineData(50, 0, double.NegativeInfinity)]
+        [InlineData(50, 1.0e9, 0)]
+        public void DeltaE_InvalidOrOverflowClassInputs_ReturnUndefinedSentinel(double l, double a, double b)
+        {
+            var corrupt = new CieLab(l, a, b);
+            var reference = new CieLab(50, 0, 0);
+
+            Assert.Equal(double.PositiveInfinity, corrupt.DeltaE76(reference));
+            Assert.Equal(double.PositiveInfinity, corrupt.DeltaE94(reference));
+            Assert.Equal(double.PositiveInfinity, corrupt.DeltaE2000(reference));
+        }
+
+        [Fact]
+        public void DeltaE2000_LargeButUsableValues_DoesNotReturnNaN()
+        {
+            var lab1 = new CieLab(50, 100_000, -100_000);
+            var lab2 = new CieLab(55, 99_000, -99_500);
+
+            Assert.False(double.IsNaN(lab1.DeltaE2000(lab2)));
+        }
+
         #endregion
 
         #region Chromatic Adaptation Tests
@@ -201,6 +290,19 @@ namespace HDRGammaController.Tests
             Assert.InRange(result.Z, 0.80, 0.86);
         }
 
+        [Fact]
+        public void ChromaticAdaptation_NonFiniteInputs_ReturnsFiniteSafeValues()
+        {
+            var result = ColorMath.ChromaticAdaptation(
+                new CieXyz(double.NaN, 0.4, double.PositiveInfinity),
+                new CieXyz(0, double.NaN, 0),
+                new CieXyz(double.PositiveInfinity, 0, 0));
+
+            Assert.True(double.IsFinite(result.X));
+            Assert.True(double.IsFinite(result.Y));
+            Assert.True(double.IsFinite(result.Z));
+        }
+
         #endregion
 
         #region RGB ↔ XYZ Conversion Tests
@@ -248,6 +350,20 @@ namespace HDRGammaController.Tests
 
             // Should be approximately D65 white point
             Assert.InRange(xyz.Y, 0.99, 1.01);
+        }
+
+        [Fact]
+        public void RgbXyzConversions_NonFiniteInputs_ReturnFiniteValues()
+        {
+            var corruptRgb = new LinearRgb(double.NaN, double.PositiveInfinity, double.NegativeInfinity);
+            var corruptXyz = new CieXyz(double.NaN, double.PositiveInfinity, double.NegativeInfinity);
+
+            AssertFinite(ColorMath.LinearSrgbToXyz(corruptRgb));
+            AssertFinite(ColorMath.XyzToLinearSrgb(corruptXyz));
+            AssertFinite(ColorMath.LinearRec2020ToXyz(corruptRgb));
+            AssertFinite(ColorMath.XyzToLinearRec2020(corruptXyz));
+            AssertFinite(ColorMath.LinearP3D65ToXyz(corruptRgb));
+            AssertFinite(ColorMath.XyzToLinearP3D65(corruptXyz));
         }
 
         #endregion
@@ -319,6 +435,18 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void TransferFunctions_NonFiniteInputs_ReturnFiniteBoundedValues()
+        {
+            Assert.Equal(0.0, ColorMath.SrgbOetf(double.NaN), 10);
+            Assert.Equal(0.0, ColorMath.SrgbEotf(double.PositiveInfinity), 10);
+            Assert.Equal(0.0, ColorMath.GammaEncode(double.NaN, 2.2), 10);
+            Assert.Equal(Math.Pow(0.5, 1.0 / 2.2), ColorMath.GammaEncode(0.5, double.NaN), 10);
+            Assert.Equal(Math.Pow(0.5, 2.2), ColorMath.GammaDecode(0.5, double.PositiveInfinity), 10);
+            Assert.Equal(0.0, ColorMath.Rec2020Oetf(double.NaN), 10);
+            Assert.Equal(0.0, ColorMath.Rec2020Eotf(double.NegativeInfinity), 10);
+        }
+
+        [Fact]
         public void Rec2020Oetf_RoundTrip_PreservesValues()
         {
             double original = 0.5;
@@ -352,6 +480,45 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void CctToChromaticity_ClampsToApproximationRange()
+        {
+            var belowRange = ColorMath.CctToChromaticity(1000);
+            var minSupported = ColorMath.CctToChromaticity(1667);
+            var aboveRange = ColorMath.CctToChromaticity(50000);
+            var maxSupported = ColorMath.CctToChromaticity(25000);
+
+            Assert.Equal(minSupported.X, belowRange.X, 12);
+            Assert.Equal(minSupported.Y, belowRange.Y, 12);
+            Assert.Equal(maxSupported.X, aboveRange.X, 12);
+            Assert.Equal(maxSupported.Y, aboveRange.Y, 12);
+        }
+
+        [Fact]
+        public void CctToChromaticity_NonFiniteInput_FallsBackToD65Range()
+        {
+            var chromaticity = ColorMath.CctToChromaticity(double.NaN);
+
+            Assert.True(double.IsFinite(chromaticity.X));
+            Assert.True(double.IsFinite(chromaticity.Y));
+            Assert.InRange(chromaticity.X, 0.31, 0.32);
+            Assert.InRange(chromaticity.Y, 0.32, 0.34);
+        }
+
+        [Theory]
+        [InlineData(double.NaN, 0.3)]
+        [InlineData(0.3, double.PositiveInfinity)]
+        [InlineData(-0.1, 0.3)]
+        [InlineData(0.3, 0.0)]
+        [InlineData(0.8, 0.4)]
+        public void ChromaticityDiagnostics_InvalidChromaticity_ReturnNeutral(double x, double y)
+        {
+            var xy = new Chromaticity(x, y);
+
+            Assert.Equal(6500.0, ColorMath.ChromaticityToCct(xy), 10);
+            Assert.Equal(0.0, ColorMath.CalculateDuv(xy), 10);
+        }
+
+        [Fact]
         public void CctToChromaticity_RoundTrip_ApproximatelyPreserves()
         {
             double originalCct = 5500;
@@ -362,6 +529,19 @@ namespace HDRGammaController.Tests
             Assert.InRange(roundTripCct, originalCct - 50, originalCct + 50);
         }
 
+        [Theory]
+        [InlineData(2700)]
+        [InlineData(4000)]
+        [InlineData(6500)]
+        [InlineData(10000)]
+        public void ChromaticityToCct_NearestLocusSearch_RoundTripsDisplayWhiteRange(double cct)
+        {
+            var chromaticity = ColorMath.CctToChromaticity(cct);
+            double roundTrip = ColorMath.ChromaticityToCct(chromaticity);
+
+            Assert.InRange(roundTrip, cct - 2.0, cct + 2.0);
+        }
+
         [Fact]
         public void CalculateDuv_D65_ReturnsNearZero()
         {
@@ -369,6 +549,17 @@ namespace HDRGammaController.Tests
 
             // D65 is on the Planckian locus, so Duv should be very small
             Assert.InRange(Math.Abs(duv), 0, 0.005);
+        }
+
+        [Fact]
+        public void CalculateDuv_ReportsGreenPositiveAndMagentaNegative()
+        {
+            var neutral = ColorMath.CctToChromaticity(6500);
+            var greenish = new Chromaticity(neutral.X, neutral.Y + 0.01);
+            var magenta = new Chromaticity(neutral.X, neutral.Y - 0.01);
+
+            Assert.True(ColorMath.CalculateDuv(greenish) > 0);
+            Assert.True(ColorMath.CalculateDuv(magenta) < 0);
         }
 
         #endregion
@@ -418,6 +609,19 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void MatrixOperations_NonFiniteInput_Throw()
+        {
+            double[,] corrupt = {
+                { 1, 0, 0 },
+                { 0, double.NaN, 0 },
+                { 0, 0, 1 }
+            };
+
+            Assert.Throws<InvalidOperationException>(() => ColorMath.Invert3x3(corrupt));
+            Assert.Throws<InvalidOperationException>(() => ColorMath.MultiplyMatrices(ColorMath.SrgbToXyzMatrix, corrupt));
+        }
+
+        [Fact]
         public void CalculateRgbToXyzMatrix_Rec709Primaries_MatchesSrgbMatrix()
         {
             var matrix = ColorMath.CalculateRgbToXyzMatrix(
@@ -432,6 +636,46 @@ namespace HDRGammaController.Tests
             Assert.InRange(matrix[2, 0], 0.01, 0.03); // Zr
         }
 
+        [Theory]
+        [InlineData(double.NaN, 0.33, "red")]
+        [InlineData(0.64, double.PositiveInfinity, "red")]
+        [InlineData(-0.1, 0.60, "green")]
+        [InlineData(0.15, 0.0, "blue")]
+        [InlineData(0.8, 0.4, "white")]
+        public void CalculateRgbToXyzMatrix_InvalidChromaticity_ThrowsArgumentException(
+            double x, double y, string invalidField)
+        {
+            var red = invalidField == "red" ? new Chromaticity(x, y) : Chromaticity.Rec709Red;
+            var green = invalidField == "green" ? new Chromaticity(x, y) : Chromaticity.Rec709Green;
+            var blue = invalidField == "blue" ? new Chromaticity(x, y) : Chromaticity.Rec709Blue;
+            var white = invalidField == "white" ? new Chromaticity(x, y) : Chromaticity.D65;
+
+            Assert.Throws<ArgumentException>(() =>
+                ColorMath.CalculateRgbToXyzMatrix(red, green, blue, white));
+        }
+
+        [Fact]
+        public void GamutCoverage_NonFinitePrimaries_ReturnsZero()
+        {
+            double coverage = ColorMath.GamutCoverage(
+                new Chromaticity(double.NaN, 0.33),
+                Chromaticity.Rec709Green,
+                Chromaticity.Rec709Blue);
+
+            Assert.Equal(0.0, coverage, 10);
+        }
+
+        [Fact]
+        public void GamutCoverage_ImpossiblePrimaries_ReturnsZero()
+        {
+            double coverage = ColorMath.GamutCoverage(
+                new Chromaticity(0.8, 0.4),
+                Chromaticity.Rec709Green,
+                Chromaticity.Rec709Blue);
+
+            Assert.Equal(0.0, coverage, 10);
+        }
+
         #endregion
 
         #region Color Type Tests
@@ -441,9 +685,27 @@ namespace HDRGammaController.Tests
         {
             var inGamut = new LinearRgb(0.5, 0.5, 0.5);
             var outOfGamut = new LinearRgb(1.5, -0.1, 0.5);
+            var corrupt = new LinearRgb(double.NaN, 0.5, 0.5);
 
             Assert.True(inGamut.IsInGamut);
             Assert.False(outOfGamut.IsInGamut);
+            Assert.False(corrupt.IsInGamut);
+        }
+
+        [Fact]
+        public void LinearRgb_ClampAndScale_ReturnFiniteValues()
+        {
+            var corrupt = new LinearRgb(double.NaN, double.PositiveInfinity, -0.5);
+
+            var clamped = corrupt.Clamp();
+            Assert.Equal(0.0, clamped.R, 10);
+            Assert.Equal(0.0, clamped.G, 10);
+            Assert.Equal(0.0, clamped.B, 10);
+
+            var scaled = corrupt.Scale(double.PositiveInfinity);
+            Assert.Equal(0.0, scaled.R, 10);
+            Assert.Equal(0.0, scaled.G, 10);
+            Assert.Equal(0.0, scaled.B, 10);
         }
 
         [Fact]
@@ -457,6 +719,21 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void Chromaticity_ToXyz_InvalidInput_UsesFiniteFallback()
+        {
+            var xyz = new Chromaticity(double.NaN, 0.3).ToXyz(50.0);
+
+            Assert.True(double.IsFinite(xyz.X));
+            Assert.Equal(50.0, xyz.Y, 10);
+            Assert.True(double.IsFinite(xyz.Z));
+
+            var black = Chromaticity.D65.ToXyz(double.PositiveInfinity);
+            Assert.Equal(0.0, black.X, 10);
+            Assert.Equal(0.0, black.Y, 10);
+            Assert.Equal(0.0, black.Z, 10);
+        }
+
+        [Fact]
         public void CieXyz_ToChromaticity_Correct()
         {
             var xyz = new CieXyz(0.3, 0.3, 0.4);
@@ -466,6 +743,19 @@ namespace HDRGammaController.Tests
             double sum = 0.3 + 0.3 + 0.4;
             Assert.Equal(0.3 / sum, xy.X, 6);
             Assert.Equal(0.3 / sum, xy.Y, 6);
+        }
+
+        [Theory]
+        [InlineData(double.NaN, 0.3, 0.4)]
+        [InlineData(double.PositiveInfinity, 0.3, 0.4)]
+        [InlineData(0.3, 0.3, double.NegativeInfinity)]
+        [InlineData(-1.0, 0.5, 0.5)]
+        public void CieXyz_ToChromaticity_InvalidInput_ReturnsD65(double x, double y, double z)
+        {
+            var xy = new CieXyz(x, y, z).ToChromaticity();
+
+            Assert.Equal(Chromaticity.D65.X, xy.X, 6);
+            Assert.Equal(Chromaticity.D65.Y, xy.Y, 6);
         }
 
         [Fact]
@@ -481,5 +771,19 @@ namespace HDRGammaController.Tests
         }
 
         #endregion
+
+        private static void AssertFinite(CieXyz xyz)
+        {
+            Assert.True(double.IsFinite(xyz.X));
+            Assert.True(double.IsFinite(xyz.Y));
+            Assert.True(double.IsFinite(xyz.Z));
+        }
+
+        private static void AssertFinite(LinearRgb rgb)
+        {
+            Assert.True(double.IsFinite(rgb.R));
+            Assert.True(double.IsFinite(rgb.G));
+            Assert.True(double.IsFinite(rgb.B));
+        }
     }
 }

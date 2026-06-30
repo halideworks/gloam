@@ -157,31 +157,56 @@ namespace HDRGammaController.Core
         {
             Enabled = Enabled,
             UseAutoSchedule = UseAutoSchedule,
-            Latitude = Latitude,
-            Longitude = Longitude,
-            StartTime = TimeSpan.TryParse(StartTime, out var start) ? start : new TimeSpan(21, 0, 0),
-            EndTime = TimeSpan.TryParse(EndTime, out var end) ? end : new TimeSpan(7, 0, 0),
-            TemperatureKelvin = TemperatureKelvin,
-            FadeMinutes = FadeMinutes,
+            Latitude = NightModeSettings.ClampLatitude(Latitude),
+            Longitude = NightModeSettings.ClampLongitude(Longitude),
+            StartTime = TimeSpan.TryParse(StartTime, out var start)
+                ? NightModeSettings.NormalizeTimeOfDay(start)
+                : new TimeSpan(21, 0, 0),
+            EndTime = TimeSpan.TryParse(EndTime, out var end)
+                ? NightModeSettings.NormalizeTimeOfDay(end)
+                : new TimeSpan(7, 0, 0),
+            TemperatureKelvin = NightModeSettings.ClampKelvin(TemperatureKelvin),
+            FadeMinutes = NightModeSettings.ClampFadeMinutes(FadeMinutes),
             Algorithm = Algorithm,
             UseUltraWarmMode = UseUltraWarmMode,
-            Schedule = Schedule ?? new List<NightModeSchedulePoint>()
+            Schedule = CloneSchedule(Schedule)
         };
 
         public static NightModeSettingsData FromNightModeSettings(NightModeSettings settings) => new NightModeSettingsData
         {
             Enabled = settings.Enabled,
             UseAutoSchedule = settings.UseAutoSchedule,
-            Latitude = settings.Latitude,
-            Longitude = settings.Longitude,
-            StartTime = settings.StartTime.ToString(@"hh\:mm"),
-            EndTime = settings.EndTime.ToString(@"hh\:mm"),
-            TemperatureKelvin = settings.TemperatureKelvin,
-            FadeMinutes = settings.FadeMinutes,
+            Latitude = NightModeSettings.ClampLatitude(settings.Latitude),
+            Longitude = NightModeSettings.ClampLongitude(settings.Longitude),
+            StartTime = NightModeSettings.NormalizeTimeOfDay(settings.StartTime).ToString(@"hh\:mm"),
+            EndTime = NightModeSettings.NormalizeTimeOfDay(settings.EndTime).ToString(@"hh\:mm"),
+            TemperatureKelvin = NightModeSettings.ClampKelvin(settings.TemperatureKelvin),
+            FadeMinutes = NightModeSettings.ClampFadeMinutes(settings.FadeMinutes),
             Algorithm = settings.Algorithm,
             UseUltraWarmMode = settings.UseUltraWarmMode,
-            Schedule = settings.Schedule ?? new List<NightModeSchedulePoint>()
+            Schedule = CloneSchedule(settings.Schedule)
         };
+
+        private static List<NightModeSchedulePoint> CloneSchedule(IEnumerable<NightModeSchedulePoint>? schedule)
+        {
+            var cloned = new List<NightModeSchedulePoint>();
+            if (schedule == null) return cloned;
+
+            foreach (var point in schedule)
+            {
+                if (point == null) continue;
+                cloned.Add(new NightModeSchedulePoint
+                {
+                    TriggerType = point.TriggerType,
+                    Time = NightModeSettings.NormalizeTimeOfDay(point.Time),
+                    OffsetMinutes = NightModeSettings.ClampOffsetMinutes(point.OffsetMinutes),
+                    TargetKelvin = NightModeSettings.ClampKelvin(point.TargetKelvin),
+                    FadeMinutes = NightModeSettings.ClampFadeMinutes(point.FadeMinutes)
+                });
+            }
+
+            return cloned;
+        }
     }
     
     public class SettingsManager
@@ -568,6 +593,24 @@ namespace HDRGammaController.Core
         }
 
         /// <summary>
+        /// Loads a calibration profile only if it is usable for runtime calibrated LUT generation.
+        /// </summary>
+        public DisplayCalibrationProfile? LoadUsableCalibrationProfile(string profileId)
+        {
+            var profile = LoadCalibrationProfile(profileId);
+            if (profile == null)
+                return null;
+
+            if (!LutGenerator.CanUseCalibratedLut(profile))
+            {
+                Log.Info($"SettingsManager: Ignoring unusable calibration profile '{profile.Name}' ({profile.Id})");
+                return null;
+            }
+
+            return profile;
+        }
+
+        /// <summary>
         /// Lists all available calibration profiles.
         /// </summary>
         public List<DisplayCalibrationProfile> ListCalibrationProfiles()
@@ -637,7 +680,7 @@ namespace HDRGammaController.Core
             if (monitorProfile?.CalibrationProfileId == null)
                 return null;
 
-            return LoadCalibrationProfile(monitorProfile.CalibrationProfileId);
+            return LoadUsableCalibrationProfile(monitorProfile.CalibrationProfileId);
         }
 
         /// <summary>
@@ -671,24 +714,24 @@ namespace HDRGammaController.Core
                 if (profile == null) continue;
 
                 // Brightness: 10-100%
-                profile.Brightness = Math.Clamp(profile.Brightness, 10.0, 100.0);
+                profile.Brightness = ClampFinite(profile.Brightness, 10.0, 100.0, 100.0);
 
                 // Temperature offset: -50 to +50
-                profile.Temperature = Math.Clamp(profile.Temperature, -50.0, 50.0);
-                profile.TemperatureOffset = Math.Clamp(profile.TemperatureOffset, -50.0, 50.0);
+                profile.Temperature = ClampFinite(profile.Temperature, -50.0, 50.0, 0.0);
+                profile.TemperatureOffset = ClampFinite(profile.TemperatureOffset, -50.0, 50.0, 0.0);
 
                 // Tint: -50 to +50
-                profile.Tint = Math.Clamp(profile.Tint, -50.0, 50.0);
+                profile.Tint = ClampFinite(profile.Tint, -50.0, 50.0, 0.0);
 
                 // RGB Gains: 0.5 to 1.5
-                profile.RedGain = Math.Clamp(profile.RedGain, 0.5, 1.5);
-                profile.GreenGain = Math.Clamp(profile.GreenGain, 0.5, 1.5);
-                profile.BlueGain = Math.Clamp(profile.BlueGain, 0.5, 1.5);
+                profile.RedGain = ClampFinite(profile.RedGain, 0.5, 1.5, 1.0);
+                profile.GreenGain = ClampFinite(profile.GreenGain, 0.5, 1.5, 1.0);
+                profile.BlueGain = ClampFinite(profile.BlueGain, 0.5, 1.5, 1.0);
 
                 // RGB Offsets: -0.5 to +0.5
-                profile.RedOffset = Math.Clamp(profile.RedOffset, -0.5, 0.5);
-                profile.GreenOffset = Math.Clamp(profile.GreenOffset, -0.5, 0.5);
-                profile.BlueOffset = Math.Clamp(profile.BlueOffset, -0.5, 0.5);
+                profile.RedOffset = ClampFinite(profile.RedOffset, -0.5, 0.5, 0.0);
+                profile.GreenOffset = ClampFinite(profile.GreenOffset, -0.5, 0.5, 0.0);
+                profile.BlueOffset = ClampFinite(profile.BlueOffset, -0.5, 0.5, 0.0);
             }
 
             // Validate night mode settings
@@ -697,11 +740,11 @@ namespace HDRGammaController.Core
             {
                 // Latitude: -90 to +90
                 if (nm.Latitude.HasValue)
-                    nm.Latitude = Math.Clamp(nm.Latitude.Value, -90.0, 90.0);
+                    nm.Latitude = ClampFinite(nm.Latitude.Value, -90.0, 90.0, 0.0);
 
                 // Longitude: -180 to +180
                 if (nm.Longitude.HasValue)
-                    nm.Longitude = Math.Clamp(nm.Longitude.Value, -180.0, 180.0);
+                    nm.Longitude = ClampFinite(nm.Longitude.Value, -180.0, 180.0, 0.0);
 
                 // Temperature: 1900K to 6500K (valid color temperature range)
                 nm.TemperatureKelvin = Math.Clamp(nm.TemperatureKelvin, 1900, 6500);
@@ -720,11 +763,14 @@ namespace HDRGammaController.Core
                         // Clamp FadeMinutes to valid range
                         point.FadeMinutes = Math.Clamp(point.FadeMinutes, 0, 120);
                         // Clamp OffsetMinutes to reasonable range (-120 to +120)
-                        point.OffsetMinutes = Math.Clamp(point.OffsetMinutes, -120.0, 120.0);
+                        point.OffsetMinutes = ClampFinite(point.OffsetMinutes, -120.0, 120.0, 0.0);
                     }
                 }
             }
         }
+
+        private static double ClampFinite(double value, double min, double max, double fallback) =>
+            double.IsFinite(value) ? Math.Clamp(value, min, max) : fallback;
 
         private class SettingsData
         {

@@ -1,5 +1,7 @@
 using Xunit;
 using HDRGammaController.Core;
+using HDRGammaController.Core.Calibration;
+using System;
 using System.Linq;
 
 namespace HDRGammaController.Tests
@@ -21,6 +23,23 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void GenerateLut_TemperatureOffset_ComposesLikeTemperature()
+        {
+            LutGenerator.ClearCache();
+
+            var temperature = LutGenerator.GenerateLut(GammaMode.Gamma22, 200.0,
+                new CalibrationSettings { Temperature = -20.0 }, isHdr: false);
+            var offset = LutGenerator.GenerateLut(GammaMode.Gamma22, 200.0,
+                new CalibrationSettings { TemperatureOffset = -20.0 }, isHdr: false);
+
+            Assert.NotSame(temperature.R, offset.R);
+            Assert.Equal(temperature.R[768], offset.R[768], 12);
+            Assert.Equal(temperature.G[768], offset.G[768], 12);
+            Assert.Equal(temperature.B[768], offset.B[768], 12);
+            Assert.True(offset.B[768] < offset.R[768]);
+        }
+
+        [Fact]
         public void GenerateLut_NearbyMonitorWhiteLevels_DoNotAliasInCache()
         {
             LutGenerator.ClearCache();
@@ -36,6 +55,73 @@ namespace HDRGammaController.Tests
             var firstSecond = LutGenerator.GenerateLut(GammaMode.Gamma22, 196, isHdr: true);
             Assert.Equal(second[512], secondFirst[512]);
             Assert.Equal(first[512], firstSecond[512]);
+        }
+
+        [Theory]
+        [InlineData(0.0)]
+        [InlineData(-1.0)]
+        [InlineData(double.NaN)]
+        public void GenerateLut_InvalidSdrWhiteLevel_Throws(double sdrWhiteLevel)
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                LutGenerator.GenerateLut(GammaMode.Gamma22, sdrWhiteLevel, CalibrationSettings.Default, isHdr: true));
+        }
+
+        [Theory]
+        [InlineData(0.0)]
+        [InlineData(4.1)]
+        [InlineData(double.NaN)]
+        public void GenerateCalibratedLut_InvalidTargetGamma_Throws(double targetGamma)
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                LutGenerator.GenerateCalibratedLut(
+                    targetGamma,
+                    ValidCharacterization(),
+                    CalibrationSettings.Default,
+                    200.0,
+                    isHdr: false));
+        }
+
+        [Fact]
+        public void GenerateLut_NonFiniteCalibrationSettings_ProducesFiniteBoundedLut()
+        {
+            var corrupt = new CalibrationSettings
+            {
+                Brightness = double.NaN,
+                Temperature = double.PositiveInfinity,
+                Tint = double.NegativeInfinity,
+                RedGain = double.NaN,
+                GreenOffset = double.PositiveInfinity
+            };
+
+            var (r, g, b, grey) = LutGenerator.GenerateLut(
+                GammaMode.Gamma22, 200.0, corrupt, isHdr: false);
+
+            foreach (double value in r.Concat(g).Concat(b).Concat(grey))
+            {
+                Assert.True(double.IsFinite(value));
+                Assert.InRange(value, 0.0, 1.0);
+            }
+        }
+
+        [Fact]
+        public void GenerateCalibratedLut_CorruptCharacterization_ProducesFiniteBoundedLuts()
+        {
+            var corrupt = ValidCharacterization();
+            corrupt.BlackLevel = double.NaN;
+            corrupt.PeakLuminance = double.PositiveInfinity;
+            corrupt.MeasuredGamma = double.NaN;
+            corrupt.RedToneCurve = ToneCurve.CreateFromArray(new[] { 0.0, double.NaN, 1.0 });
+            corrupt.GreenToneCurve = null!;
+            corrupt.BlueToneCurve = null!;
+
+            var sdr = LutGenerator.GenerateCalibratedLut(
+                2.2, corrupt, CalibrationSettings.Default, 200.0, isHdr: false);
+            var hdr = LutGenerator.GenerateCalibratedLut(
+                2.2, corrupt, new CalibrationSettings { Brightness = double.NaN }, 200.0, isHdr: true);
+
+            AssertFiniteBounded(sdr);
+            AssertFiniteBounded(hdr);
         }
 
         [Fact]
@@ -208,6 +294,118 @@ namespace HDRGammaController.Tests
             {
                 Assert.True(g24[i] <= g22[i] + 1e-9,
                     $"Gamma24 ({g24[i]:F4}) should be <= Gamma22 ({g22[i]:F4}) at index {i}");
+            }
+        }
+
+        [Fact]
+        public void Sdr_GenerateLut_DoesNotApplySignalDomainMeasuredLutAsLinearAdjustment()
+        {
+            // MeasuredCorrectionLut is a 3D signal-domain correction. Live 1D ramp generation
+            // operates after decoding to linear light, so it must not look up that LUT as if
+            // it were a linear-light adjustment. A destructive LUT makes accidental use obvious.
+            var destructive = new Lut3D(2);
+            for (int ri = 0; ri < 2; ri++)
+            for (int gi = 0; gi < 2; gi++)
+            for (int bi = 0; bi < 2; bi++)
+                destructive.SetEntry(ri, gi, bi, 0.0f, 0.0f, 0.0f);
+
+            var settings = new CalibrationSettings { MeasuredCorrectionLut = destructive };
+            var (r, g, b, _) = LutGenerator.GenerateLut(
+                GammaMode.Gamma22, 200.0, settings, isHdr: false);
+
+            Assert.Equal(0.0, r[0], 4);
+            Assert.Equal(1.0, r[1023], 4);
+            Assert.Equal(1.0, g[1023], 4);
+            Assert.Equal(1.0, b[1023], 4);
+
+            int idx = (int)System.Math.Round(0.5 * 1023);
+            Assert.InRange(r[idx], 0.49, 0.51);
+            Assert.InRange(g[idx], 0.49, 0.51);
+            Assert.InRange(b[idx], 0.49, 0.51);
+        }
+
+        [Fact]
+        public void CanUseCalibratedLut_RejectsCorruptPersistedProfile()
+        {
+            var profile = ValidPersistedProfile();
+            profile.WhitePointX = double.NaN;
+
+            Assert.False(LutGenerator.CanUseCalibratedLut(profile));
+        }
+
+        [Fact]
+        public void CanUseCalibratedLut_RejectsChromaticityOutsidePhysicalPlane()
+        {
+            var profile = ValidPersistedProfile();
+            profile.WhitePointX = 0.70;
+            profile.WhitePointY = 0.35;
+
+            Assert.False(LutGenerator.CanUseCalibratedLut(profile));
+        }
+
+        [Fact]
+        public void CanUseCalibratedLut_RejectsNonFiniteToneCurve()
+        {
+            var profile = ValidPersistedProfile();
+            profile.RedToneCurve = new[] { 0.0, double.NaN, 1.0 };
+
+            Assert.False(LutGenerator.CanUseCalibratedLut(profile));
+        }
+
+        [Fact]
+        public void CanUseCalibratedLut_RejectsNonMonotonicOrOutOfRangeToneCurve()
+        {
+            var nonMonotonic = ValidPersistedProfile();
+            nonMonotonic.RedToneCurve = new[] { 0.0, 0.8, 0.4, 1.0 };
+
+            var outOfRange = ValidPersistedProfile();
+            outOfRange.BlueToneCurve = new[] { 0.0, 1.2, 1.0 };
+
+            Assert.False(LutGenerator.CanUseCalibratedLut(nonMonotonic));
+            Assert.False(LutGenerator.CanUseCalibratedLut(outOfRange));
+        }
+
+        [Fact]
+        public void CanUseCalibratedLut_AcceptsFiniteMeasuredProfile()
+        {
+            Assert.True(LutGenerator.CanUseCalibratedLut(ValidPersistedProfile()));
+        }
+
+        private static DisplayCalibrationProfile ValidPersistedProfile() => new()
+        {
+            RedPrimaryX = Chromaticity.Rec709Red.X,
+            RedPrimaryY = Chromaticity.Rec709Red.Y,
+            GreenPrimaryX = Chromaticity.Rec709Green.X,
+            GreenPrimaryY = Chromaticity.Rec709Green.Y,
+            BluePrimaryX = Chromaticity.Rec709Blue.X,
+            BluePrimaryY = Chromaticity.Rec709Blue.Y,
+            WhitePointX = Chromaticity.D65.X,
+            WhitePointY = Chromaticity.D65.Y,
+            BlackLevel = 0.05,
+            PeakLuminance = 120,
+            MeasuredGamma = 2.2,
+            RedToneCurve = new[] { 0.0, 0.5, 1.0 },
+            GreenToneCurve = new[] { 0.0, 0.5, 1.0 },
+            BlueToneCurve = new[] { 0.0, 0.5, 1.0 },
+        };
+
+        private static DisplayCharacterization ValidCharacterization() => new()
+        {
+            RedPrimary = Chromaticity.Rec709Red,
+            GreenPrimary = Chromaticity.Rec709Green,
+            BluePrimary = Chromaticity.Rec709Blue,
+            WhitePoint = Chromaticity.D65,
+            BlackLevel = 0.05,
+            PeakLuminance = 120.0,
+            MeasuredGamma = 2.2
+        };
+
+        private static void AssertFiniteBounded((double[] R, double[] G, double[] B, double[] Grey) lut)
+        {
+            foreach (double value in lut.R.Concat(lut.G).Concat(lut.B).Concat(lut.Grey))
+            {
+                Assert.True(double.IsFinite(value));
+                Assert.InRange(value, 0.0, 1.0);
             }
         }
     }

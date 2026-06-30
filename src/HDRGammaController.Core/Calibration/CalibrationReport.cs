@@ -141,16 +141,16 @@ namespace HDRGammaController.Core.Calibration
         /// Delta E improvement from pre to post calibration.
         /// </summary>
         public double? DeltaEImprovement =>
-            PreCalibrationDeltaE != null && PostCalibrationDeltaE != null
-                ? PreCalibrationDeltaE.Average - PostCalibrationDeltaE.Average
+            TryGetComparableDeltaEStats(out var pre, out var post)
+                ? pre.Average - post.Average
                 : null;
 
         /// <summary>
         /// Percentage improvement in Delta E.
         /// </summary>
         public double? DeltaEImprovementPercent =>
-            PreCalibrationDeltaE != null && PostCalibrationDeltaE != null && PreCalibrationDeltaE.Average > 0
-                ? (PreCalibrationDeltaE.Average - PostCalibrationDeltaE.Average) / PreCalibrationDeltaE.Average * 100
+            TryGetComparableDeltaEStats(out var pre, out var post) && pre.Average > 0
+                ? (pre.Average - post.Average) / pre.Average * 100
                 : null;
 
         #endregion
@@ -212,7 +212,10 @@ namespace HDRGammaController.Core.Calibration
 
         private DeltaEStatistics CalculateDeltaEStats(IReadOnlyList<MeasurementResult> measurements)
         {
-            if (measurements.Count == 0)
+            var valid = measurements
+                .Where(IsAccuracyMeasurement)
+                .ToList();
+            if (valid.Count == 0)
                 return new DeltaEStatistics();
 
             // The colorimeter returns ABSOLUTE luminance (white Y can be ~100–120 cd/m²), but
@@ -220,18 +223,21 @@ namespace HDRGammaController.Core.Calibration
             // pushes L* far past 100 and makes Δ E meaningless. Normalize measured XYZ so the
             // measured white maps to Y = 1, matching the target scale — the white-point error
             // then shows up correctly as an a*/b* deviation rather than a luminance blowout.
-            double peakY = measurements.Max(m => m.Xyz.Y);
-            if (peakY <= 0) peakY = 1;
+            var whiteMeasurement = FindMeasuredWhite(valid);
+            double peakY = whiteMeasurement != null
+                ? whiteMeasurement.Xyz.Y
+                : valid.Max(m => m.Xyz.Y);
+            if (!double.IsFinite(peakY) || peakY <= 0) peakY = 1;
 
             var deltaEs = new List<double>();
-            foreach (var m in measurements)
+            foreach (var m in valid)
             {
                 var normalized = new CieXyz(m.Xyz.X / peakY, m.Xyz.Y / peakY, m.Xyz.Z / peakY);
                 var measuredLab = ColorMath.XyzToLab(normalized);
-                if (m.Patch.TargetXyz != null)
-                    deltaEs.Add(measuredLab.DeltaE2000(ColorMath.XyzToLab(m.Patch.TargetXyz.Value)));
-                else if (m.Patch.TargetLab != null)
-                    deltaEs.Add(measuredLab.DeltaE2000(m.Patch.TargetLab.Value));
+                double deltaE = measuredLab.DeltaE2000(TargetLabForPatch(m.Patch));
+
+                if (double.IsFinite(deltaE))
+                    deltaEs.Add(deltaE);
             }
 
             if (deltaEs.Count == 0)
@@ -248,23 +254,69 @@ namespace HDRGammaController.Core.Calibration
                 Minimum = deltaEs[0],
                 Maximum = deltaEs[^1],
                 Average = avg,
-                Median = deltaEs[deltaEs.Count / 2],
-                Percentile95 = deltaEs[(int)(deltaEs.Count * 0.95)],
+                Median = deltaEs.Count % 2 == 0
+                    ? (deltaEs[deltaEs.Count / 2 - 1] + deltaEs[deltaEs.Count / 2]) / 2.0
+                    : deltaEs[deltaEs.Count / 2],
+                Percentile95 = deltaEs[DeltaEStatistics.NearestRankPercentileIndex(deltaEs.Count, 0.95)],
                 StandardDeviation = Math.Sqrt(variance)
             };
         }
 
+        private bool TryGetComparableDeltaEStats(
+            out DeltaEStatistics preCalibration,
+            out DeltaEStatistics postCalibration)
+        {
+            preCalibration = PreCalibrationDeltaE ?? new DeltaEStatistics();
+            postCalibration = PostCalibrationDeltaE ?? new DeltaEStatistics();
+
+            return preCalibration.Count > 0 &&
+                   postCalibration.Count > 0 &&
+                   double.IsFinite(preCalibration.Average) &&
+                   double.IsFinite(postCalibration.Average);
+        }
+
+        private double LinearizeForReport(double signal) => Target.TransferFunction == TransferFunctionType.Pq
+            ? ColorMath.SrgbEotf(signal)
+            : Target.ApplyEotf(signal);
+
+        private CieXyz TargetXyzForPatch(ColorPatch patch) =>
+            Target.TransferFunction == TransferFunctionType.Pq
+                ? TargetXyzForPatchWithoutAttachedMetadata(patch)
+                : patch.TargetXyz ?? TargetXyzForPatchWithoutAttachedMetadata(patch);
+
+        private CieLab TargetLabForPatch(ColorPatch patch)
+        {
+            if (Target.TransferFunction == TransferFunctionType.Pq)
+                return ColorMath.XyzToLab(TargetXyzForPatchWithoutAttachedMetadata(patch));
+
+            return patch.TargetLab
+                ?? ColorMath.XyzToLab(TargetXyzForPatch(patch));
+        }
+
+        private CieXyz TargetXyzForPatchWithoutAttachedMetadata(ColorPatch patch) => Target.LinearRgbToXyz(new LinearRgb(
+            LinearizeForReport(patch.DisplayRgb.R),
+            LinearizeForReport(patch.DisplayRgb.G),
+            LinearizeForReport(patch.DisplayRgb.B)));
+
+        private List<MeasurementResult> AccuracyMeasurements() => Measurements
+            .Where(IsAccuracyMeasurement)
+            .ToList();
+
+        private List<MeasurementResult> GrayscaleAccuracyMeasurements() => AccuracyMeasurements()
+            .Where(m => m.Patch.Category == PatchCategory.Grayscale)
+            .OrderBy(m => m.Patch.DisplayRgb.R)
+            .ToList();
+
         private IReadOnlyList<GrayscaleTrackingPoint> ExtractGrayscaleTracking()
         {
             var points = new List<GrayscaleTrackingPoint>();
-            var grayscaleMeasurements = Measurements
-                .Where(m => m.Patch.Category == PatchCategory.Grayscale)
-                .OrderBy(m => m.Patch.DisplayRgb.R);
+            var grayscaleMeasurements = GrayscaleAccuracyMeasurements();
 
             foreach (var m in grayscaleMeasurements)
             {
                 double inputLevel = m.Patch.DisplayRgb.R; // Assumes R=G=B for grayscale
-                double targetLuminance = m.Patch.TargetXyz?.Y ?? (inputLevel * MeasuredCharacteristics.PeakLuminance);
+                double targetRelativeY = TargetXyzForPatch(m.Patch).Y;
+                double targetLuminance = targetRelativeY * SafeReportPeakLuminance();
 
                 points.Add(new GrayscaleTrackingPoint
                 {
@@ -283,42 +335,99 @@ namespace HDRGammaController.Core.Calibration
         private IReadOnlyList<GammaResponsePoint> ExtractGammaResponse()
         {
             var points = new List<GammaResponsePoint>();
-            var grayscaleMeasurements = Measurements
-                .Where(m => m.Patch.Category == PatchCategory.Grayscale && m.Patch.DisplayRgb.R > 0.01)
-                .OrderBy(m => m.Patch.DisplayRgb.R);
+            var allGrayscaleMeasurements = GrayscaleAccuracyMeasurements();
+            var grayscaleMeasurements = allGrayscaleMeasurements
+                .Where(m => m.Patch.DisplayRgb.R > 0.01 && m.Patch.DisplayRgb.R < 0.99)
+                .OrderBy(m => m.Patch.DisplayRgb.R)
+                .ToList();
 
-            double maxLuminance = Measurements
-                .Where(m => m.Patch.Category == PatchCategory.Grayscale)
-                .Max(m => m.Luminance);
+            double whiteLuminance = FindMeasuredWhite(allGrayscaleMeasurements)?.Luminance ?? 0.0;
+            if (!double.IsFinite(whiteLuminance) || whiteLuminance <= 0)
+            {
+                whiteLuminance = allGrayscaleMeasurements.Count > 0
+                    ? allGrayscaleMeasurements.Max(m => m.Luminance)
+                    : 0.0;
+            }
+
+            double blackLuminance = allGrayscaleMeasurements
+                .Where(m => m.Patch.DisplayRgb.R <= 0.01 &&
+                            m.Patch.DisplayRgb.G <= 0.01 &&
+                            m.Patch.DisplayRgb.B <= 0.01)
+                .OrderBy(m => m.Luminance)
+                .Select(m => m.Luminance)
+                .FirstOrDefault();
+            if (!double.IsFinite(blackLuminance) || blackLuminance < 0)
+            {
+                blackLuminance = allGrayscaleMeasurements.Count > 0
+                    ? allGrayscaleMeasurements.Min(m => m.Luminance)
+                    : 0.0;
+            }
+
+            double luminanceRange = whiteLuminance > blackLuminance
+                ? whiteLuminance - blackLuminance
+                : 0.0;
 
             foreach (var m in grayscaleMeasurements)
             {
                 double inputLevel = m.Patch.DisplayRgb.R;
-                double normalizedOutput = maxLuminance > 0 ? m.Luminance / maxLuminance : 0;
+                double normalizedOutput = luminanceRange > 1e-9
+                    ? Math.Clamp((m.Luminance - blackLuminance) / luminanceRange, 0.0, 1.0)
+                    : 0.0;
+                double targetGamma = TargetEffectiveGamma(inputLevel);
 
                 // Calculate effective gamma at this point: gamma = log(output) / log(input)
                 double effectiveGamma = inputLevel > 0.01 && normalizedOutput > 0.001
                     ? Math.Log(normalizedOutput) / Math.Log(inputLevel)
-                    : Target.Gamma ?? 2.2;
+                    : targetGamma;
 
                 points.Add(new GammaResponsePoint
                 {
                     InputLevel = inputLevel,
                     NormalizedOutput = normalizedOutput,
                     EffectiveGamma = effectiveGamma,
-                    TargetGamma = Target.Gamma ?? 2.2
+                    TargetGamma = targetGamma
                 });
             }
 
             return points;
         }
 
+        private double SafeReportPeakLuminance()
+        {
+            double peak = MeasuredCharacteristics.PeakLuminance;
+            if (double.IsFinite(peak) && peak > 0.0)
+                return peak;
+
+            var white = FindMeasuredWhite(AccuracyMeasurements());
+            if (white != null && double.IsFinite(white.Xyz.Y) && white.Xyz.Y > 0.0)
+                return white.Xyz.Y;
+
+            var valid = AccuracyMeasurements();
+            if (valid.Count > 0)
+            {
+                double maxY = valid.Max(m => m.Xyz.Y);
+                if (double.IsFinite(maxY) && maxY > 0.0)
+                    return maxY;
+            }
+
+            return 100.0;
+        }
+
+        private double TargetEffectiveGamma(double signal)
+        {
+            if (signal is <= 0.01 or >= 0.99)
+                return Target.Gamma ?? 2.2;
+
+            double targetOutput = LinearizeForReport(signal);
+            return targetOutput > 0.001
+                ? Math.Log(targetOutput) / Math.Log(signal)
+                : Target.Gamma ?? 2.2;
+        }
+
         private IReadOnlyList<RgbBalancePoint> ExtractRgbBalance()
         {
             var points = new List<RgbBalancePoint>();
-            var grayscaleMeasurements = Measurements
-                .Where(m => m.Patch.Category == PatchCategory.Grayscale)
-                .OrderBy(m => m.Patch.DisplayRgb.R);
+            var grayscaleMeasurements = GrayscaleAccuracyMeasurements();
 
             // We need to estimate RGB from XYZ - this requires the display's color matrix
             var displayMatrix = MeasuredCharacteristics.XyzToRgbMatrix;
@@ -350,21 +459,20 @@ namespace HDRGammaController.Core.Calibration
 
         private IReadOnlyList<ChromaticityPoint> ExtractChromaticityPoints()
         {
-            return Measurements.Select(m => new ChromaticityPoint
+            return AccuracyMeasurements()
+                .Select(m => new ChromaticityPoint
             {
                 Name = m.Patch.Name,
                 Category = m.Patch.Category,
                 Measured = m.Chromaticity,
-                Target = m.Patch.TargetXyz?.ToChromaticity()
+                Target = TargetXyzForPatch(m.Patch).ToChromaticity()
             }).ToList();
         }
 
         private IReadOnlyList<ColorTemperaturePoint> ExtractColorTemperatureTracking()
         {
             var points = new List<ColorTemperaturePoint>();
-            var grayscaleMeasurements = Measurements
-                .Where(m => m.Patch.Category == PatchCategory.Grayscale)
-                .OrderBy(m => m.Patch.DisplayRgb.R);
+            var grayscaleMeasurements = GrayscaleAccuracyMeasurements();
 
             double targetCct = ColorMath.ChromaticityToCct(Target.WhitePoint);
 
@@ -385,6 +493,8 @@ namespace HDRGammaController.Core.Calibration
         private CalibrationGrade CalculateQualityGrade()
         {
             var stats = OverallDeltaE;
+            if (stats.Count == 0)
+                return CalibrationGrade.F;
 
             // Grade based on average Delta E 2000
             // Professional reference: <1 is excellent, <2 is very good, <3 is good
@@ -413,30 +523,33 @@ namespace HDRGammaController.Core.Calibration
 
             // Calculate gamma tracking quality
             var gammaPoints = GammaResponse;
-            double gammaVariance = 0;
+            double gammaRmsError = 0;
+            bool hasGammaEvidence = gammaPoints.Count > 0;
             if (gammaPoints.Count > 0)
             {
-                double avgGamma = gammaPoints.Average(p => p.EffectiveGamma);
-                gammaVariance = gammaPoints.Sum(p => (p.EffectiveGamma - avgGamma) * (p.EffectiveGamma - avgGamma)) / gammaPoints.Count;
+                gammaRmsError = Math.Sqrt(gammaPoints
+                    .Sum(p => (p.EffectiveGamma - p.TargetGamma) * (p.EffectiveGamma - p.TargetGamma)) / gammaPoints.Count);
             }
 
             // Calculate white point accuracy
-            var whiteMeasurement = Measurements.FirstOrDefault(m =>
-                m.Patch.Category == PatchCategory.Grayscale && m.Patch.DisplayRgb.R > 0.99);
+            var whiteMeasurement = FindMeasuredWhite(AccuracyMeasurements());
             double whitePointError = whiteMeasurement != null
                 ? whiteMeasurement.Chromaticity.DistanceTo(Target.WhitePoint) * 1000 // Convert to practical units
                 : 0;
 
             return new QualityAssessment
             {
-                OverallScore = Math.Max(0, 100 - overall.Average * 10),
-                GrayscaleScore = Math.Max(0, 100 - grayscale.Average * 15),
-                ColorAccuracyScore = Math.Max(0, 100 - saturated.Average * 8),
-                GammaTrackingScore = Math.Max(0, 100 - Math.Sqrt(gammaVariance) * 50),
-                WhitePointScore = Math.Max(0, 100 - whitePointError * 5),
+                OverallScore = ScoreFromDeltaE(overall, 10),
+                GrayscaleScore = ScoreFromDeltaE(grayscale, 15),
+                ColorAccuracyScore = ScoreFromDeltaE(saturated.Count > 0 ? saturated : primary, 8),
+                GammaTrackingScore = hasGammaEvidence ? Math.Max(0, 100 - gammaRmsError * 50) : 0,
+                WhitePointScore = whiteMeasurement != null ? Math.Max(0, 100 - whitePointError * 5) : 0,
                 ContrastRatio = MeasuredCharacteristics.ContrastRatio
             };
         }
+
+        private static double ScoreFromDeltaE(DeltaEStatistics stats, double penaltyPerDeltaE) =>
+            stats.Count > 0 ? Math.Max(0, 100 - stats.Average * penaltyPerDeltaE) : 0.0;
 
         private IReadOnlyList<CalibrationIssue> DetectIssues()
         {
@@ -445,33 +558,39 @@ namespace HDRGammaController.Core.Calibration
             // Normalize measured XYZ to white Y = 1 before Lab/ΔE (targets are normalized);
             // comparing absolute measured Lab (white L* ≈ 559) to normalized targets otherwise
             // flags every critical patch as a huge false-positive ΔE. Mirrors CalculateDeltaEStats.
-            double peakY = Measurements.Count > 0 ? Measurements.Max(m => m.Xyz.Y) : 1.0;
-            if (peakY <= 0) peakY = 1.0;
+            var valid = Measurements
+                .Where(IsAccuracyMeasurement)
+                .ToList();
+            var issueWhiteMeasurement = FindMeasuredWhite(valid);
+            double peakY = issueWhiteMeasurement != null
+                ? issueWhiteMeasurement.Xyz.Y
+                : valid.Count > 0 ? valid.Max(m => m.Xyz.Y) : 1.0;
+            if (!double.IsFinite(peakY) || peakY <= 0) peakY = 1.0;
 
             // Check for high Delta E in critical patches
-            foreach (var m in Measurements.Where(m => m.Patch.IsCritical))
+            foreach (var m in valid.Where(m => m.Patch.IsCritical))
             {
-                if (m.Patch.TargetXyz != null)
+                var targetXyz = TargetXyzForPatch(m.Patch);
+                var normalized = new CieXyz(m.Xyz.X / peakY, m.Xyz.Y / peakY, m.Xyz.Z / peakY);
+                var measuredLab = ColorMath.XyzToLab(normalized);
+                double deltaE = measuredLab.DeltaE2000(ColorMath.XyzToLab(targetXyz));
+                if (!double.IsFinite(deltaE))
+                    continue;
+
+                if (deltaE > 3.0)
                 {
-                    var normalized = new CieXyz(m.Xyz.X / peakY, m.Xyz.Y / peakY, m.Xyz.Z / peakY);
-                    var measuredLab = ColorMath.XyzToLab(normalized);
-                    double deltaE = measuredLab.DeltaE2000(ColorMath.XyzToLab(m.Patch.TargetXyz.Value));
-                    if (deltaE > 3.0)
+                    issues.Add(new CalibrationIssue
                     {
-                        issues.Add(new CalibrationIssue
-                        {
-                            Severity = deltaE > 5.0 ? IssueSeverity.Error : IssueSeverity.Warning,
-                            Category = IssueCategory.ColorAccuracy,
-                            Message = $"High Delta E ({deltaE:F1}) on critical patch: {m.Patch.Name}",
-                            Details = $"Measured: {measuredLab}, Target: {ColorMath.XyzToLab(m.Patch.TargetXyz.Value)}"
-                        });
-                    }
+                        Severity = deltaE > 5.0 ? IssueSeverity.Error : IssueSeverity.Warning,
+                        Category = IssueCategory.ColorAccuracy,
+                        Message = $"High Delta E ({deltaE:F1}) on critical patch: {m.Patch.Name}",
+                        Details = $"Measured: {measuredLab}, Target: {ColorMath.XyzToLab(targetXyz)}"
+                    });
                 }
             }
 
             // Check white point accuracy
-            var whiteMeasurement = Measurements.FirstOrDefault(m =>
-                m.Patch.Category == PatchCategory.Grayscale && m.Patch.DisplayRgb.R > 0.99);
+            var whiteMeasurement = FindMeasuredWhite(valid);
             if (whiteMeasurement != null)
             {
                 double cctError = Math.Abs(whiteMeasurement.Cct - ColorMath.ChromaticityToCct(Target.WhitePoint));
@@ -502,16 +621,18 @@ namespace HDRGammaController.Core.Calibration
             var gammaPoints = GammaResponse;
             if (gammaPoints.Count > 5)
             {
-                double avgGamma = gammaPoints.Skip(1).Average(p => p.EffectiveGamma); // Skip near-black
-                double maxDeviation = gammaPoints.Skip(1).Max(p => Math.Abs(p.EffectiveGamma - avgGamma));
-                if (maxDeviation > 0.3)
+                var gammaEvidence = gammaPoints.Skip(1).ToList(); // Skip near-black.
+                double avgGamma = gammaEvidence.Average(p => p.EffectiveGamma);
+                double avgTargetGamma = gammaEvidence.Average(p => p.TargetGamma);
+                double maxTargetDeviation = gammaEvidence.Max(p => Math.Abs(p.EffectiveGamma - p.TargetGamma));
+                if (maxTargetDeviation > 0.3)
                 {
                     issues.Add(new CalibrationIssue
                     {
-                        Severity = maxDeviation > 0.5 ? IssueSeverity.Error : IssueSeverity.Warning,
+                        Severity = maxTargetDeviation > 0.5 ? IssueSeverity.Error : IssueSeverity.Warning,
                         Category = IssueCategory.GammaTracking,
-                        Message = $"Inconsistent gamma tracking (deviation: {maxDeviation:F2})",
-                        Details = $"Average gamma: {avgGamma:F2}, max deviation: {maxDeviation:F2}"
+                        Message = $"Gamma tracking misses target (deviation: {maxTargetDeviation:F2})",
+                        Details = $"Average measured gamma: {avgGamma:F2}, target: {avgTargetGamma:F2}, max target deviation: {maxTargetDeviation:F2}"
                     });
                 }
             }
@@ -531,6 +652,25 @@ namespace HDRGammaController.Core.Calibration
             return issues;
         }
 
+        private static bool IsAccuracyMeasurement(MeasurementResult measurement) =>
+            measurement.IsValid &&
+            measurement.Patch.Nits is null &&
+            double.IsFinite(measurement.Xyz.X) &&
+            double.IsFinite(measurement.Xyz.Y) &&
+            double.IsFinite(measurement.Xyz.Z) &&
+            measurement.Xyz.X >= -1e-6 &&
+            measurement.Xyz.Y >= -1e-6 &&
+            measurement.Xyz.Z >= -1e-6;
+
+        private static MeasurementResult? FindMeasuredWhite(IEnumerable<MeasurementResult> measurements) =>
+            measurements
+                .Where(m => m.Patch.Category == PatchCategory.Grayscale &&
+                            m.Patch.DisplayRgb.R >= 0.99 &&
+                            m.Patch.DisplayRgb.G >= 0.99 &&
+                            m.Patch.DisplayRgb.B >= 0.99)
+                .OrderByDescending(m => m.Xyz.Y)
+                .FirstOrDefault();
+
         #endregion
     }
 
@@ -549,6 +689,15 @@ namespace HDRGammaController.Core.Calibration
         public double Percentile95 { get; init; }
         public double StandardDeviation { get; init; }
 
+        internal static int NearestRankPercentileIndex(int count, double percentile)
+        {
+            if (count <= 0)
+                return 0;
+
+            percentile = double.IsFinite(percentile) ? Math.Clamp(percentile, 0.0, 1.0) : 0.0;
+            return Math.Clamp((int)Math.Ceiling(percentile * count) - 1, 0, count - 1);
+        }
+
         public override string ToString() =>
             $"ΔE2000: avg={Average:F2}, min={Minimum:F2}, max={Maximum:F2}, 95%={Percentile95:F2}";
     }
@@ -565,9 +714,22 @@ namespace HDRGammaController.Core.Calibration
         public double MeasuredGamma { get; init; }
         public double PeakLuminance { get; init; }
         public double BlackLevel { get; init; }
-        public double ContrastRatio => BlackLevel > 0 ? PeakLuminance / BlackLevel : double.PositiveInfinity;
-        public double MeasuredCct => ColorMath.ChromaticityToCct(MeasuredWhite);
-        public double MeasuredDuv => ColorMath.CalculateDuv(MeasuredWhite);
+        [System.Text.Json.Serialization.JsonIgnore]
+        public double ContrastRatio
+        {
+            get
+            {
+                double peak = SafePositive(PeakLuminance, 0.0);
+                double black = SafeNonNegative(BlackLevel, 0.0);
+                if (peak <= 0.0)
+                    return 0.0;
+                return black > 0.0 ? peak / black : double.PositiveInfinity;
+            }
+        }
+        [System.Text.Json.Serialization.JsonIgnore]
+        public double MeasuredCct => ColorMath.ChromaticityToCct(SafeChromaticity(MeasuredWhite, Chromaticity.D65));
+        [System.Text.Json.Serialization.JsonIgnore]
+        public double MeasuredDuv => ColorMath.CalculateDuv(SafeChromaticity(MeasuredWhite, Chromaticity.D65));
 
         /// <summary>
         /// Gets the RGB to XYZ matrix based on measured primaries.
@@ -576,13 +738,33 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         [System.Text.Json.Serialization.JsonIgnore]
         public double[,] RgbToXyzMatrix =>
-            ColorMath.CalculateRgbToXyzMatrix(MeasuredRed, MeasuredGreen, MeasuredBlue, MeasuredWhite);
+            ColorMath.CalculateRgbToXyzMatrix(
+                SafeChromaticity(MeasuredRed, Chromaticity.Rec709Red),
+                SafeChromaticity(MeasuredGreen, Chromaticity.Rec709Green),
+                SafeChromaticity(MeasuredBlue, Chromaticity.Rec709Blue),
+                SafeChromaticity(MeasuredWhite, Chromaticity.D65));
 
         /// <summary>
         /// Gets the XYZ to RGB matrix based on measured primaries.
         /// </summary>
         [System.Text.Json.Serialization.JsonIgnore]
         public double[,] XyzToRgbMatrix => ColorMath.Invert3x3(RgbToXyzMatrix);
+
+        private static Chromaticity SafeChromaticity(Chromaticity value, Chromaticity fallback)
+        {
+            double x = value.X;
+            double y = value.Y;
+            return double.IsFinite(x) && double.IsFinite(y) &&
+                   x > 0.0 && y > 0.0 && x < 0.8 && y < 0.9 && x + y <= 1.000001
+                ? value
+                : fallback;
+        }
+
+        private static double SafeNonNegative(double value, double fallback) =>
+            double.IsFinite(value) && value >= 0.0 ? value : fallback;
+
+        private static double SafePositive(double value, double fallback) =>
+            double.IsFinite(value) && value > 0.0 ? value : fallback;
     }
 
     /// <summary>

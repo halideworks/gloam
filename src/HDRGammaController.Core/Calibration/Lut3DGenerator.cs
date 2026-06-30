@@ -65,13 +65,8 @@ namespace HDRGammaController.Core.Calibration
             // from them. Without this, a probe that connected but never actually read the
             // screen (ambient light, a sharing-violation returning stale/zero data) yields
             // a garbage LUT that the app would report as a successful calibration.
-            var validation = CalibrationMeasurementValidator.ValidateForProfile(_measurements, _target, hdrMode: false);
-            if (!validation.IsValid)
-                throw new InvalidOperationException(validation.Error);
-
-            // Step 1: Build display characterization from measurements
             progress?.Invoke(5);
-            _characterization = BuildCharacterization();
+            BuildCharacterizationOnly(hdrMode: false);
 
             // Step 2: Create the correction LUT
             progress?.Invoke(10);
@@ -112,6 +107,22 @@ namespace HDRGammaController.Core.Calibration
 
             progress?.Invoke(100);
             return lut;
+        }
+
+        /// <summary>
+        /// Validates measurements and builds the display characterization without emitting a
+        /// generic 3D LUT. HDR calibration uses this path because the installed correction is
+        /// synthesized later as a Windows Advanced Color MHC2 profile from the measured PQ wire
+        /// ladder, not from the SDR-oriented .cube correction model.
+        /// </summary>
+        public DisplayCharacterization BuildCharacterizationOnly(bool hdrMode = false)
+        {
+            var validation = CalibrationMeasurementValidator.ValidateForProfile(_measurements, _target, hdrMode);
+            if (!validation.IsValid)
+                throw new InvalidOperationException(validation.Error);
+
+            _characterization = BuildCharacterization();
+            return _characterization;
         }
 
         /// <summary>
@@ -179,19 +190,23 @@ namespace HDRGammaController.Core.Calibration
             // Build lookup table from measurements
             var points = new List<(double input, double output)>();
 
-            // Find white luminance for normalization
-            double whiteLuminance = grayscaleMeasurements.Max(m => m.Xyz.Y);
+            // Anchor normalization to the measured black/white patches. Near-white
+            // samples can legitimately land a percent or two above white from meter
+            // noise, ABL/local-dimming behavior or settling; treating that sample as
+            // reference white compresses the entire fitted curve.
+            double whiteLuminance = FindMeasurementByRgb(1, 1, 1)?.Xyz.Y
+                                    ?? grayscaleMeasurements.Max(m => m.Xyz.Y);
             if (whiteLuminance <= 0) whiteLuminance = 1;
 
-            // Use black level to normalize raised blacks (avoid skewing gamma)
-            double blackLuminance = grayscaleMeasurements.Min(m => m.Xyz.Y);
+            double blackLuminance = FindMeasurementByRgb(0, 0, 0)?.Xyz.Y
+                                    ?? grayscaleMeasurements.Min(m => m.Xyz.Y);
             double luminanceRange = Math.Max(whiteLuminance - blackLuminance, 1e-6);
 
             foreach (var m in grayscaleMeasurements)
             {
                 double inputLevel = getChannelValue(m);
                 double normalizedLuminance = (m.Xyz.Y - blackLuminance) / luminanceRange;
-                normalizedLuminance = Math.Clamp(normalizedLuminance, 0, 1);
+                normalizedLuminance = Clamp01(normalizedLuminance);
                 points.Add((inputLevel, normalizedLuminance));
             }
 
@@ -251,7 +266,7 @@ namespace HDRGammaController.Core.Calibration
             foreach (var m in grayscale)
             {
                 double input = m.Patch.DisplayRgb.R;
-                double output = Math.Clamp((m.Xyz.Y - blackLuminance) / luminanceRange, 0, 1);
+                double output = Clamp01((m.Xyz.Y - blackLuminance) / luminanceRange);
 
                 if (output > 0 && input > 0)
                 {
@@ -355,7 +370,7 @@ namespace HDRGammaController.Core.Calibration
             if (rgb.IsInGamut)
                 return rgb;
 
-            double gray = Math.Clamp(0.2126 * rgb.R + 0.7152 * rgb.G + 0.0722 * rgb.B, 0, 1);
+            double gray = Clamp01(0.2126 * rgb.R + 0.7152 * rgb.G + 0.0722 * rgb.B);
             var neutral = new LinearRgb(gray, gray, gray);
             double lo = 0;
             double hi = 1;
@@ -373,6 +388,9 @@ namespace HDRGammaController.Core.Calibration
             var compressed = neutral + (rgb - neutral) * lo;
             return compressed.Clamp();
         }
+
+        private static double Clamp01(double value) =>
+            double.IsFinite(value) ? Math.Clamp(value, 0.0, 1.0) : 0.0;
 
         /// <summary>
         /// Finds a measurement matching the specified RGB values.
@@ -485,7 +503,7 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public static ToneCurve CreateGamma(double gamma)
         {
-            return new ToneCurve(Math.Clamp(gamma, 1.0, 4.0));
+            return new ToneCurve(SafeGamma(gamma));
         }
 
         /// <summary>
@@ -495,7 +513,11 @@ namespace HDRGammaController.Core.Calibration
         /// <param name="enforceMonotonic">If true, corrects non-monotonic segments</param>
         public static ToneCurve CreateFromPoints(IEnumerable<(double input, double output)> points, bool enforceMonotonic = true)
         {
-            var sortedPoints = points.OrderBy(p => p.input).ToList();
+            var sortedPoints = points
+                .Where(p => double.IsFinite(p.input) && double.IsFinite(p.output))
+                .Select(p => (input: Clamp01(p.input), output: Clamp01(p.output)))
+                .OrderBy(p => p.input)
+                .ToList();
 
             if (sortedPoints.Count < 2)
                 return CreateGamma(2.2);
@@ -600,7 +622,7 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public double Lookup(double input)
         {
-            input = Math.Clamp(input, 0, 1);
+            input = Clamp01(input);
 
             if (!_useLut || _lookupTable == null)
                 return Math.Pow(input, _gamma);
@@ -619,7 +641,7 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public double InverseLookup(double output)
         {
-            output = Math.Clamp(output, 0, 1);
+            output = Clamp01(output);
 
             if (!_useLut || _lookupTable == null)
                 return Math.Pow(output, 1.0 / _gamma);
@@ -712,12 +734,14 @@ namespace HDRGammaController.Core.Calibration
         {
             if (data == null || data.Length < 2)
                 return CreateGamma(2.2);
+            if (data.Any(v => !double.IsFinite(v)))
+                return CreateGamma(2.2);
 
             // Resample if needed to match LutSize
             double[] lut;
             if (data.Length == LutSize)
             {
-                lut = (double[])data.Clone();
+                lut = data.Select(Clamp01).ToArray();
             }
             else
             {
@@ -728,7 +752,7 @@ namespace HDRGammaController.Core.Calibration
                     int i0 = (int)srcIndex;
                     int i1 = Math.Min(i0 + 1, data.Length - 1);
                     double frac = srcIndex - i0;
-                    lut[i] = data[i0] + frac * (data[i1] - data[i0]);
+                    lut[i] = Clamp01(data[i0] + frac * (data[i1] - data[i0]));
                 }
             }
 
@@ -742,6 +766,12 @@ namespace HDRGammaController.Core.Calibration
 
             return new ToneCurve(lut, isMonotonic);
         }
+
+        private static double Clamp01(double value) =>
+            double.IsFinite(value) ? Math.Clamp(value, 0.0, 1.0) : 0.0;
+
+        private static double SafeGamma(double gamma) =>
+            double.IsFinite(gamma) ? Math.Clamp(gamma, 1.0, 4.0) : 2.2;
 
         #endregion
     }

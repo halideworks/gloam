@@ -2,6 +2,8 @@ using Xunit;
 using HDRGammaController.Core.Calibration;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Threading;
 
 namespace HDRGammaController.Tests
 {
@@ -114,6 +116,52 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void MeasurementValidator_NonFiniteAccuracyMeasurement_Fails()
+        {
+            var list = GoodRamp();
+            list[5] = new MeasurementResult
+            {
+                Patch = new ColorPatch
+                {
+                    Name = "NaN gray",
+                    DisplayRgb = new LinearRgb(5 / 11.0, 5 / 11.0, 5 / 11.0),
+                    Category = PatchCategory.Grayscale
+                },
+                Xyz = new CieXyz(double.NaN, 50, 50),
+                IsValid = true
+            };
+
+            var result = CalibrationMeasurementValidator.ValidateForProfile(
+                list, StandardTargets.SrgbGamma22, hdrMode: false);
+
+            Assert.False(result.IsValid);
+            Assert.Contains("non-finite", result.Error, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void MeasurementValidator_NegativeAccuracyMeasurement_Fails()
+        {
+            var list = GoodRamp();
+            list[5] = new MeasurementResult
+            {
+                Patch = new ColorPatch
+                {
+                    Name = "Negative XYZ gray",
+                    DisplayRgb = new LinearRgb(5 / 11.0, 5 / 11.0, 5 / 11.0),
+                    Category = PatchCategory.Grayscale
+                },
+                Xyz = new CieXyz(-0.01, 50, 50),
+                IsValid = true
+            };
+
+            var result = CalibrationMeasurementValidator.ValidateForProfile(
+                list, StandardTargets.SrgbGamma22, hdrMode: false);
+
+            Assert.False(result.IsValid);
+            Assert.Contains("non-physical", result.Error, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
         public void MeasurementValidator_RecoveryText_ForValidSet_ReportsPassedChecks()
         {
             var result = CalibrationMeasurementValidator.ValidateForProfile(
@@ -178,6 +226,23 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void MeasurementValidator_HdrWireLadderWithFailedHighRungs_Fails()
+        {
+            var list = GoodRamp();
+            foreach (double nits in new[] { 0, 2, 16, 64, 100 })
+                list.Add(WireMeas(nits, Math.Max(nits * 0.9, 0.02)));
+            foreach (double nits in new[] { 220, 450 })
+                list.Add(WireMeas(nits, 0.0, isValid: false));
+
+            var result = CalibrationMeasurementValidator.ValidateForProfile(
+                list, StandardTargets.Rec709Pq, hdrMode: true);
+
+            Assert.False(result.IsValid);
+            Assert.Contains("coverage", result.Error, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("high-luminance", result.Error, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
         public void MeasurementValidator_HdrInvalidWireLadderAttempts_Fails()
         {
             var list = GoodRamp();
@@ -208,6 +273,108 @@ namespace HDRGammaController.Tests
             Assert.Contains("near black", result.Error, StringComparison.OrdinalIgnoreCase);
         }
 
+        [Fact]
+        public void MeasurementValidator_HdrNonFiniteWireLadder_Fails()
+        {
+            var list = GoodRamp();
+            foreach (double nits in new[] { 0, 2, 16, 100, 220, 450 })
+                list.Add(WireMeas(nits, Math.Max(nits * 0.9, 0.02)));
+            list.Add(new MeasurementResult
+            {
+                Patch = new ColorPatch
+                {
+                    Name = "HDR wire invalid",
+                    DisplayRgb = new LinearRgb(0.5, 0.5, 0.5),
+                    Category = PatchCategory.General,
+                    Nits = 650
+                },
+                Xyz = new CieXyz(1, double.PositiveInfinity, 1),
+                IsValid = true
+            });
+
+            var result = CalibrationMeasurementValidator.ValidateForProfile(
+                list, StandardTargets.Rec709Pq, hdrMode: true);
+
+            Assert.False(result.IsValid);
+            Assert.Contains("non-finite", result.Error, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("wire-ladder", result.Error, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void MeasurementValidator_HdrNegativeWireLadder_Fails()
+        {
+            var list = GoodRamp();
+            foreach (double nits in new[] { 0, 2, 16, 100, 220, 450 })
+                list.Add(WireMeas(nits, Math.Max(nits * 0.9, 0.02)));
+            list.Add(new MeasurementResult
+            {
+                Patch = new ColorPatch
+                {
+                    Name = "HDR wire negative",
+                    DisplayRgb = new LinearRgb(0.5, 0.5, 0.5),
+                    Category = PatchCategory.General,
+                    Nits = 650
+                },
+                Xyz = new CieXyz(1, 650, -0.01),
+                IsValid = true
+            });
+
+            var result = CalibrationMeasurementValidator.ValidateForProfile(
+                list, StandardTargets.Rec709Pq, hdrMode: true);
+
+            Assert.False(result.IsValid);
+            Assert.Contains("non-physical", result.Error, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("wire-ladder", result.Error, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Theory]
+        [InlineData(double.NaN)]
+        [InlineData(double.PositiveInfinity)]
+        [InlineData(-10.0)]
+        public void MeasurementValidator_HdrInvalidRequestedWireNits_Fails(double requestedNits)
+        {
+            var list = GoodRamp();
+            foreach (double nits in new[] { 0, 2, 16, 100, 220, 450 })
+                list.Add(WireMeas(nits, Math.Max(nits * 0.9, 0.02)));
+            list.Add(WireMeas(requestedNits, 500.0));
+
+            var result = CalibrationMeasurementValidator.ValidateForProfile(
+                list, StandardTargets.Rec709Pq, hdrMode: true);
+
+            Assert.False(result.IsValid);
+            Assert.Contains("requested luminance", result.Error, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("wire-ladder", result.Error, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void BuildCharacterizationOnly_HdrMode_ValidatesWireLadder()
+        {
+            var list = GoodRamp();
+            foreach (double nits in new[] { 0, 2, 16, 100, 220, 450 })
+                list.Add(WireMeas(nits, 0.02));
+
+            var gen = new Lut3DGenerator(StandardTargets.Rec709Pq, list);
+
+            var ex = Assert.Throws<InvalidOperationException>(() => gen.BuildCharacterizationOnly(hdrMode: true));
+            Assert.Contains("HDR wire-ladder", ex.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("near black", ex.Message, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void BuildCharacterizationOnly_HdrMode_BuildsCharacterizationWithoutLut()
+        {
+            var list = GoodRamp();
+            foreach (double nits in new[] { 0, 2, 16, 100, 220, 450 })
+                list.Add(WireMeas(nits, Math.Max(nits * 0.9, 0.02)));
+
+            var gen = new Lut3DGenerator(StandardTargets.Rec709Pq, list);
+
+            var characterization = gen.BuildCharacterizationOnly(hdrMode: true);
+
+            Assert.Same(characterization, gen.Characterization);
+            Assert.True(characterization.PeakLuminance > 100);
+        }
+
         [Theory]
         [InlineData(2.2)]
         [InlineData(2.4)]
@@ -230,6 +397,27 @@ namespace HDRGammaController.Tests
             // Least-squares should recover the true gamma to within ~0.05.
             Assert.True(Math.Abs(gen.Characterization!.MeasuredGamma - trueGamma) < 0.05,
                 $"Expected gamma ~{trueGamma}, got {gen.Characterization.MeasuredGamma:F3}");
+        }
+
+        [Fact]
+        public void BuildCharacterization_ToneCurveNormalizesAgainstMeasuredWhitePatch()
+        {
+            var list = new List<MeasurementResult>();
+            for (int i = 0; i <= 16; i++)
+            {
+                double s = i / 16.0;
+                double Y = 0.1 + 120.0 * Math.Pow(s, 2.2);
+                if (i == 15)
+                    Y = 122.0; // plausible near-white overshoot inside validator tolerance
+                list.Add(Meas(s, s, s, Y));
+            }
+
+            var gen = new Lut3DGenerator(StandardTargets.SrgbGamma22, list);
+
+            var characterization = gen.BuildCharacterizationOnly();
+
+            Assert.InRange(characterization.RedToneCurve.Lookup(1.0), 0.999, 1.0);
+            Assert.InRange(characterization.RedToneCurve.InverseLookup(1.0), 0.999, 1.0);
         }
 
         #endregion
@@ -357,6 +545,27 @@ namespace HDRGammaController.Tests
             // Should be clamped to valid range
             Assert.InRange(result.R, 0.99f, 1.01f); // Clamped to 1
             Assert.InRange(result.G, -0.01f, 0.01f); // Clamped to 0
+        }
+
+        [Fact]
+        public void Lut3D_Lookup_NonFiniteInputClampsToDomainMinimum()
+        {
+            var lut = Lut3D.CreateIdentity(9);
+
+            var result = lut.Lookup(float.NaN, float.PositiveInfinity, float.NegativeInfinity);
+
+            Assert.Equal(0.0f, result.R, 6);
+            Assert.Equal(0.0f, result.G, 6);
+            Assert.Equal(0.0f, result.B, 6);
+        }
+
+        [Fact]
+        public void Lut3D_SetEntry_RejectsNonFiniteValues()
+        {
+            var lut = Lut3D.CreateIdentity(2);
+
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                lut.SetEntry(0, 0, 0, float.NaN, 0.0f, 0.0f));
         }
 
         #endregion
@@ -489,6 +698,54 @@ namespace HDRGammaController.Tests
             Assert.True(curve.IsMonotonic);
         }
 
+        [Fact]
+        public void ToneCurve_NonFiniteGammaAndLookupInputs_ReturnFiniteSafeValues()
+        {
+            var curve = ToneCurve.CreateGamma(double.NaN);
+
+            Assert.True(curve.IsMonotonic);
+            Assert.Equal(Math.Pow(0.5, 2.2), curve.Lookup(0.5), 10);
+            Assert.Equal(0.0, curve.Lookup(double.NaN), 10);
+            Assert.Equal(0.0, curve.InverseLookup(double.PositiveInfinity), 10);
+        }
+
+        [Fact]
+        public void ToneCurve_CreateFromArray_NonFiniteDataFallsBackToSafeGamma()
+        {
+            var curve = ToneCurve.CreateFromArray(new[] { 0.0, double.NaN, 1.0 }, enforceMonotonic: true);
+
+            Assert.True(curve.IsMonotonic);
+            Assert.Equal(Math.Pow(0.5, 2.2), curve.Lookup(0.5), 6);
+            Assert.True(double.IsFinite(curve.InverseLookup(0.5)));
+        }
+
+        [Fact]
+        public void ToneCurve_CreateFromArray_ClampsOutOfRangeData()
+        {
+            var curve = ToneCurve.CreateFromArray(new[] { -0.5, 0.5, 1.5 }, enforceMonotonic: true);
+
+            Assert.Equal(0.0, curve.Lookup(0.0), 6);
+            Assert.Equal(1.0, curve.Lookup(1.0), 6);
+            Assert.True(curve.IsMonotonic);
+        }
+
+        [Fact]
+        public void ToneCurve_CreateFromPoints_IgnoresInvalidPointsAndClampsOutput()
+        {
+            var points = new List<(double input, double output)>
+            {
+                (0.0, -1.0),
+                (0.5, double.NaN),
+                (1.0, 2.0)
+            };
+
+            var curve = ToneCurve.CreateFromPoints(points);
+
+            Assert.Equal(0.0, curve.Lookup(0.0), 6);
+            Assert.Equal(1.0, curve.Lookup(1.0), 6);
+            Assert.True(curve.IsMonotonic);
+        }
+
         #endregion
 
         #region DisplayCharacterization Tests
@@ -581,6 +838,157 @@ namespace HDRGammaController.Tests
             }
         }
 
+        [Fact]
+        public void Lut3D_CubeRoundTrip_UsesInvariantCulture()
+        {
+            var originalCulture = CultureInfo.CurrentCulture;
+            var originalUiCulture = CultureInfo.CurrentUICulture;
+            string tempPath = System.IO.Path.GetTempFileName() + ".cube";
+
+            try
+            {
+                var commaCulture = CultureInfo.GetCultureInfo("fr-FR");
+                Thread.CurrentThread.CurrentCulture = commaCulture;
+                Thread.CurrentThread.CurrentUICulture = commaCulture;
+
+                var lut = Lut3D.CreateIdentity(3);
+                lut.SetEntry(1, 1, 1, 0.125f, 0.5f, 0.875f);
+                lut.SaveAsCube(tempPath, "Culture Test");
+
+                string text = System.IO.File.ReadAllText(tempPath);
+                Assert.Contains("0.125000 0.500000 0.875000", text);
+                Assert.DoesNotContain("0,125000", text);
+
+                var loaded = Lut3D.LoadFromCube(tempPath);
+                var entry = loaded.GetEntry(1, 1, 1);
+                Assert.Equal(0.125, entry.R, 6);
+                Assert.Equal(0.5, entry.G, 6);
+                Assert.Equal(0.875, entry.B, 6);
+            }
+            finally
+            {
+                Thread.CurrentThread.CurrentCulture = originalCulture;
+                Thread.CurrentThread.CurrentUICulture = originalUiCulture;
+                if (System.IO.File.Exists(tempPath))
+                    System.IO.File.Delete(tempPath);
+            }
+        }
+
+        [Fact]
+        public void Lut3D_LoadFromCube_RejectsUnsupportedDirectiveInsteadOfTreatingAsSample()
+        {
+            string tempPath = System.IO.Path.GetTempFileName() + ".cube";
+            string[] cube =
+            {
+                "TITLE \"Bad metadata\"",
+                "LUT_3D_SIZE 2",
+                "DOMAIN_MIN 0.0 0.0 0.0",
+                "DOMAIN_MAX 1.0 1.0 1.0",
+                "LUT_1D_INPUT_RANGE 0.0 1.0",
+                "0.0 0.0 0.0",
+                "0.0 0.0 1.0",
+                "0.0 1.0 0.0",
+                "0.0 1.0 1.0",
+                "1.0 0.0 0.0",
+                "1.0 0.0 1.0",
+                "1.0 1.0 0.0",
+                "1.0 1.0 1.0"
+            };
+
+            try
+            {
+                System.IO.File.WriteAllLines(tempPath, cube);
+
+                var ex = Assert.Throws<System.IO.InvalidDataException>(() => Lut3D.LoadFromCube(tempPath));
+                Assert.Contains("unsupported", ex.Message, StringComparison.OrdinalIgnoreCase);
+            }
+            finally
+            {
+                if (System.IO.File.Exists(tempPath))
+                    System.IO.File.Delete(tempPath);
+            }
+        }
+
+        [Fact]
+        public void Lut3D_LoadFromCube_RejectsMissingEntries()
+        {
+            string tempPath = System.IO.Path.GetTempFileName() + ".cube";
+            string[] cube =
+            {
+                "LUT_3D_SIZE 2",
+                "DOMAIN_MIN 0.0 0.0 0.0",
+                "DOMAIN_MAX 1.0 1.0 1.0",
+                "0.0 0.0 0.0",
+                "0.0 0.0 1.0",
+                "0.0 1.0 0.0",
+                "0.0 1.0 1.0",
+                "1.0 0.0 0.0",
+                "1.0 0.0 1.0",
+                "1.0 1.0 0.0"
+            };
+
+            try
+            {
+                System.IO.File.WriteAllLines(tempPath, cube);
+
+                var ex = Assert.Throws<System.IO.InvalidDataException>(() => Lut3D.LoadFromCube(tempPath));
+                Assert.Contains("expected 8", ex.Message, StringComparison.OrdinalIgnoreCase);
+            }
+            finally
+            {
+                if (System.IO.File.Exists(tempPath))
+                    System.IO.File.Delete(tempPath);
+            }
+        }
+
+        [Fact]
+        public void Lut3D_LoadFromCube_RejectsNonFiniteEntries()
+        {
+            string tempPath = System.IO.Path.GetTempFileName() + ".cube";
+            string[] cube =
+            {
+                "LUT_3D_SIZE 2",
+                "DOMAIN_MIN 0.0 0.0 0.0",
+                "DOMAIN_MAX 1.0 1.0 1.0",
+                "NaN 0.0 0.0",
+                "0.0 0.0 1.0",
+                "0.0 1.0 0.0",
+                "0.0 1.0 1.0",
+                "1.0 0.0 0.0",
+                "1.0 0.0 1.0",
+                "1.0 1.0 0.0",
+                "1.0 1.0 1.0"
+            };
+
+            try
+            {
+                System.IO.File.WriteAllLines(tempPath, cube);
+
+                var ex = Assert.Throws<System.IO.InvalidDataException>(() => Lut3D.LoadFromCube(tempPath));
+                Assert.Contains("non-finite", ex.Message, StringComparison.OrdinalIgnoreCase);
+            }
+            finally
+            {
+                if (System.IO.File.Exists(tempPath))
+                    System.IO.File.Delete(tempPath);
+            }
+        }
+
+        [Fact]
+        public void Lut3D_FromBytes_RejectsNonFiniteDomainAndEntries()
+        {
+            var bytes = Lut3D.CreateIdentity(2).ToBytes();
+            var badDomain = (byte[])bytes.Clone();
+            Array.Copy(BitConverter.GetBytes(float.NaN), 0, badDomain, 9, sizeof(float));
+
+            Assert.Throws<System.IO.InvalidDataException>(() => Lut3D.FromBytes(badDomain));
+
+            var badEntry = (byte[])bytes.Clone();
+            Array.Copy(BitConverter.GetBytes(float.NaN), 0, badEntry, 17, sizeof(float));
+
+            Assert.Throws<System.IO.InvalidDataException>(() => Lut3D.FromBytes(badEntry));
+        }
+
         #endregion
 
         #region Gamut Mapping Tests
@@ -591,6 +999,18 @@ namespace HDRGammaController.Tests
             var compressed = Lut3DGenerator.CompressToGamut(new LinearRgb(1.3, 0.4, -0.2));
 
             Assert.True(compressed.IsInGamut);
+        }
+
+        [Fact]
+        public void CompressToGamut_NonFiniteInput_ReturnsFiniteGamutValue()
+        {
+            var compressed = Lut3DGenerator.CompressToGamut(
+                new LinearRgb(double.NaN, double.PositiveInfinity, double.NegativeInfinity));
+
+            Assert.True(compressed.IsInGamut);
+            Assert.True(double.IsFinite(compressed.R));
+            Assert.True(double.IsFinite(compressed.G));
+            Assert.True(double.IsFinite(compressed.B));
         }
 
         [Fact]

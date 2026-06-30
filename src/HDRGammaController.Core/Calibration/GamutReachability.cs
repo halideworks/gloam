@@ -16,9 +16,10 @@ namespace HDRGammaController.Core.Calibration
         /// physically wider than the display and the MHC2 matrix would clip/cast.
         /// </summary>
         public const double MaxReachablePrimaryDrive = 1.3;
-
         public static bool IsReachable(double maxPrimaryDrive)
-            => double.IsFinite(maxPrimaryDrive) && maxPrimaryDrive <= MaxReachablePrimaryDrive;
+            => double.IsFinite(maxPrimaryDrive) &&
+               maxPrimaryDrive >= 0.0 &&
+               maxPrimaryDrive <= MaxReachablePrimaryDrive;
 
         /// <summary>
         /// Largest display drive value the matrix demands for target primaries only. White is
@@ -34,9 +35,14 @@ namespace HDRGammaController.Core.Calibration
             (double, double, double)[] primaries = { (1, 0, 0), (0, 1, 0), (0, 0, 1) };
             foreach (var (a, b, c) in primaries)
                 for (int r = 0; r < 3; r++)
-                    max = Math.Max(max, contentToDisplayMatrix[r, 0] * a +
-                                        contentToDisplayMatrix[r, 1] * b +
-                                        contentToDisplayMatrix[r, 2] * c);
+                {
+                    double drive = contentToDisplayMatrix[r, 0] * a +
+                                   contentToDisplayMatrix[r, 1] * b +
+                                   contentToDisplayMatrix[r, 2] * c;
+                    if (!double.IsFinite(drive))
+                        return double.PositiveInfinity;
+                    max = Math.Max(max, Math.Max(0.0, drive));
+                }
             return max;
         }
 

@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Linq;
 using HDRGammaController.Core;
 using HDRGammaController.Core.Calibration;
@@ -72,6 +73,95 @@ namespace HDRGammaController.Tests
                 monitorProfile: null);
 
             Assert.Contains(messages, m => m.Severity == "WARN" && m.Message.Contains("CCSS/CCMX", StringComparison.OrdinalIgnoreCase));
+        }
+
+        [Fact]
+        public void Preflight_MissingCorrectionFile_BlocksStart()
+        {
+            string missingPath = Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.ccss");
+
+            var messages = CalibrationSetupViewModel.BuildPreflightMessages(
+                Monitor(hdrActive: false),
+                StandardTargets.SrgbGamma22,
+                selectedOption: null,
+                DisplayType.Oled,
+                detectedDisplayType: DisplayType.Oled,
+                correction: new CorrectionChoice("missing.ccss", missingPath),
+                whitePointOnly: true,
+                monitorProfile: null);
+
+            Assert.Contains(messages, m =>
+                m.Severity == "ERROR" &&
+                m.Message.Contains("no longer exists", StringComparison.OrdinalIgnoreCase));
+        }
+
+        [Fact]
+        public void Preflight_InvalidCorrectionFile_BlocksStart()
+        {
+            string path = Path.Combine(Path.GetTempPath(), $"invalid-{Guid.NewGuid():N}.ccss");
+            try
+            {
+                File.WriteAllText(path, "not a cgats correction");
+
+                var messages = CalibrationSetupViewModel.BuildPreflightMessages(
+                    Monitor(hdrActive: false),
+                    StandardTargets.SrgbGamma22,
+                    selectedOption: null,
+                    DisplayType.Oled,
+                    detectedDisplayType: DisplayType.Oled,
+                    correction: new CorrectionChoice("invalid.ccss", path),
+                    whitePointOnly: true,
+                    monitorProfile: null);
+
+                Assert.Contains(messages, m =>
+                    m.Severity == "ERROR" &&
+                    m.Message.Contains("not valid", StringComparison.OrdinalIgnoreCase));
+            }
+            finally
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+        }
+
+        [Fact]
+        public void Preflight_ValidCorrectionFile_AllowsCorrectionSelection()
+        {
+            string path = Path.Combine(Path.GetTempPath(), $"valid-{Guid.NewGuid():N}.ccmx");
+            try
+            {
+                File.WriteAllText(path, @"CCMX
+DESCRIPTOR ""Test correction""
+NUMBER_OF_FIELDS 3
+BEGIN_DATA_FORMAT
+XYZ_X XYZ_Y XYZ_Z
+END_DATA_FORMAT
+NUMBER_OF_SETS 3
+BEGIN_DATA
+1 0 0
+0 1 0
+0 0 1
+END_DATA
+");
+
+                var messages = CalibrationSetupViewModel.BuildPreflightMessages(
+                    Monitor(hdrActive: false),
+                    StandardTargets.SrgbGamma22,
+                    selectedOption: null,
+                    DisplayType.Oled,
+                    detectedDisplayType: DisplayType.Oled,
+                    correction: new CorrectionChoice("valid.ccmx", path),
+                    whitePointOnly: true,
+                    monitorProfile: null);
+
+                Assert.DoesNotContain(messages, m => m.Severity == "ERROR");
+                Assert.DoesNotContain(messages, m => m.Message.Contains("CCSS/CCMX", StringComparison.OrdinalIgnoreCase));
+            }
+            finally
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
         }
 
         [Fact]

@@ -8,6 +8,9 @@ namespace HDRGammaController.Core
     /// </summary>
     public static class ColorAdjustments
     {
+        private const int MinimumNightModeKelvin = 1000;
+        private const int MaximumNightModeKelvin = 10000;
+
         /// <summary>
         /// Applies dimming to value. Can use either linear scaling or perceptual (gamma-compressed) scaling.
         /// </summary>
@@ -17,11 +20,14 @@ namespace HDRGammaController.Core
         /// <returns>Dimmed value</returns>
         public static double ApplyDimming(double value, double brightnessPercent, bool linear = false)
         {
+            value = ClampFinite(value, 0.0, 1.0, 0.0);
+            brightnessPercent = ClampFinite(brightnessPercent, 0.0, 100.0, 100.0);
+
             if (brightnessPercent >= 100.0) return value;
             if (brightnessPercent <= 0) return 0;
 
             // Clamp to valid range (0-100)
-            double brightness = Math.Clamp(brightnessPercent, 0.0, 100.0) / 100.0;
+            double brightness = brightnessPercent / 100.0;
 
             if (linear)
             {
@@ -52,18 +58,22 @@ namespace HDRGammaController.Core
         /// </remarks>
         public static double ApplyDimmingNits(double nits, double brightnessPercent, double sdrWhiteLevel, bool linear = false)
         {
+            nits = double.IsFinite(nits) ? Math.Max(nits, 0.0) : 0.0;
+            brightnessPercent = ClampFinite(brightnessPercent, 0.0, 100.0, 100.0);
+            sdrWhiteLevel = double.IsFinite(sdrWhiteLevel) ? Math.Max(sdrWhiteLevel, 1.0) : 1.0;
+
             if (brightnessPercent >= 100.0) return nits;
             if (brightnessPercent <= 0) return 0;
 
-            double brightness = Math.Clamp(brightnessPercent, 0.0, 100.0) / 100.0;
+            double brightness = brightnessPercent / 100.0;
 
             if (linear)
             {
                 return nits * brightness;
             }
 
-            double white = Math.Max(sdrWhiteLevel, 1.0);
-            double ratio = Math.Max(nits, 0.0) / white;
+            double white = sdrWhiteLevel;
+            double ratio = nits / white;
             double gammaBoost = 1.0 + (1.0 - brightness) * 0.3;
             return Math.Pow(ratio, 1.0 / gammaBoost) * brightness * white;
         }
@@ -73,9 +83,15 @@ namespace HDRGammaController.Core
         /// </summary>
         public static (double R, double G, double B) GetTemperatureMultipliers(double temperature, NightModeAlgorithm algorithm, bool useUltraWarmMode = false)
         {
+            temperature = ClampFinite(
+                temperature,
+                CalibrationSettings.MinimumTemperatureScale,
+                CalibrationSettings.MaximumTemperatureScale,
+                0.0);
+
             // Convert -50 to +50 scale to Kelvin: -50 = 2700K, 0 = 6500K, +50 = 10000K
-            int kelvin = (int)(6500 + temperature * 70);
-            kelvin = Math.Clamp(kelvin, 1000, 10000);
+            int kelvin = (int)Math.Round(6500 + temperature * 70);
+            kelvin = ClampNightModeKelvin(kelvin);
 
             return algorithm switch
             {
@@ -89,28 +105,32 @@ namespace HDRGammaController.Core
         /// Standard approximation (Tanner Helland's algorithm).
         /// Fast, pleasant, and widely used in photo editing.
         /// When useUltraWarmMode is true, applies enhanced curve below 2800K for more dramatic effect.
+        /// Returns linear-light multipliers because the LUT applies temperature after
+        /// decoding to linear light.
         /// </summary>
         public static (double R, double G, double B) GetStandardMultipliers(int kelvin, bool useUltraWarmMode = false)
         {
+            kelvin = ClampNightModeKelvin(kelvin);
+
             // Reference point: 6500K should return (1, 1, 1)
             var ref6500 = GetRawKelvinRGB_Helland(6500);
-            double refMax = Math.Max(ref6500.r, Math.Max(ref6500.g, ref6500.b));
+            if (!IsUsableRgb(ref6500)) return (1.0, 1.0, 1.0);
+            double refMax = MaxChannel(ref6500);
 
             var target = GetRawKelvinRGB_Helland(kelvin);
+            if (!IsUsableRgb(target)) return (1.0, 1.0, 1.0);
 
-            // Normalize target
-            double maxVal = Math.Max(target.r, Math.Max(target.g, target.b));
-            if (maxVal > 0)
-            {
-                target.r /= maxVal;
-                target.g /= maxVal;
-                target.b /= maxVal;
-            }
+            // Helland's approximation returns gamma-encoded RGB-like code values. Normalize
+            // target/reference in that code domain, then convert both to linear light before
+            // forming ratios; applying code-space ratios inside the linear LUT pipeline
+            // under-corrects warm/cool shifts.
+            double maxVal = MaxChannel(target);
+            if (maxVal <= 0 || !double.IsFinite(maxVal) || refMax <= 0 || !double.IsFinite(refMax))
+                return (1.0, 1.0, 1.0);
 
-            // Scale by reference
-            double r = refMax > 0 ? target.r / (ref6500.r / refMax) : target.r;
-            double g = refMax > 0 ? target.g / (ref6500.g / refMax) : target.g;
-            double b = refMax > 0 ? target.b / (ref6500.b / refMax) : target.b;
+            double r = LinearCodeRatio(target.r / maxVal, ref6500.r / refMax);
+            double g = LinearCodeRatio(target.g / maxVal, ref6500.g / refMax);
+            double b = LinearCodeRatio(target.b / maxVal, ref6500.b / refMax);
 
             // Enhanced curve below 2800K for more dramatic night mode effect (optional)
             // The Helland algorithm plateaus at very warm temps, so we accelerate the reduction
@@ -131,11 +151,20 @@ namespace HDRGammaController.Core
                 b *= (1.0 - accel * 0.5);
             }
 
-            return (Math.Clamp(r, 0, 1.5), Math.Clamp(g, 0, 1.5), Math.Clamp(b, 0, 1.5));
+            return ClampMultipliers(r, g, b);
+        }
+
+        private static double LinearCodeRatio(double targetCode, double referenceCode)
+        {
+            double targetLinear = ColorMath.SrgbEotf(ClampSignal(targetCode));
+            double referenceLinear = ColorMath.SrgbEotf(ClampSignal(referenceCode));
+            return referenceLinear > 1e-9 ? targetLinear / referenceLinear : 1.0;
         }
 
         private static (double r, double g, double b) GetRawKelvinRGB_Helland(int kelvin)
         {
+            kelvin = ClampNightModeKelvin(kelvin);
+
             double temp = kelvin / 100.0;
             double r, g, b;
             
@@ -158,74 +187,47 @@ namespace HDRGammaController.Core
         /// Normalized against a 6500K reference computed through the same path so that, like
         /// <see cref="GetStandardMultipliers"/>, 6500K returns exactly (1, 1, 1) — and the
         /// neutral point doesn't shift when the user switches temperature algorithm.
+        /// Returns LINEAR-light multipliers because the LUT applies temperature after decoding
+        /// to linear light. Returning gamma-encoded sRGB ratios here under-corrects warm/cool
+        /// shifts and mixes transfer-function math into chromatic adaptation.
         /// </summary>
         public static (double R, double G, double B) GetAccurateMultipliers(int kelvin)
         {
-            var target = GetRawKelvinRGB_Accurate(kelvin);
-            var ref6500 = GetRawKelvinRGB_Accurate(6500);
+            kelvin = ClampNightModeKelvin(kelvin);
+
+            var target = GetRawKelvinLinearRgb_Accurate(kelvin);
+            var ref6500 = GetRawKelvinLinearRgb_Accurate(6500);
+            if (!IsUsableRgb(target) || !IsUsableRgb(ref6500)) return (1.0, 1.0, 1.0);
 
             // Normalize each to its own max (so the brightest channel = 1), then express the
             // target as a ratio against the reference. At 6500K the ratio is exactly (1,1,1).
-            double targetMax = Math.Max(target.r, Math.Max(target.g, target.b));
-            double refMax = Math.Max(ref6500.r, Math.Max(ref6500.g, ref6500.b));
+            double targetMax = MaxChannel(target);
+            double refMax = MaxChannel(ref6500);
             if (targetMax <= 0 || refMax <= 0) return (1.0, 1.0, 1.0);
 
             double r = (target.r / targetMax) / (ref6500.r / refMax);
             double g = (target.g / targetMax) / (ref6500.g / refMax);
             double b = (target.b / targetMax) / (ref6500.b / refMax);
 
-            return (r, g, b);
+            return ClampMultipliers(r, g, b);
         }
 
         /// <summary>
-        /// Raw (clamped) sRGB values for a Kelvin temperature via the Kang/XYZ path, before
+        /// Raw linear RGB values for a Kelvin temperature via the Kang/XYZ path, before
         /// any neutral-point normalization. Factored out so <see cref="GetAccurateMultipliers"/>
         /// can compute a 6500K reference through the identical pipeline.
         /// </summary>
-        private static (double r, double g, double b) GetRawKelvinRGB_Accurate(int kelvin)
+        private static (double r, double g, double b) GetRawKelvinLinearRgb_Accurate(int kelvin)
         {
-            double T = kelvin;
-            double x, y;
+            kelvin = ClampNightModeKelvin(kelvin);
 
-            // Calculate x
-            if (T <= 4000)
-                x = -0.2661239 * Math.Pow(10, 9) / Math.Pow(T, 3)
-                    - 0.2343580 * Math.Pow(10, 6) / Math.Pow(T, 2)
-                    + 0.8776956 * Math.Pow(10, 3) / T + 0.179910;
-            else
-                x = -3.0258469 * Math.Pow(10, 9) / Math.Pow(T, 3)
-                    + 2.1070379 * Math.Pow(10, 6) / Math.Pow(T, 2)
-                    + 0.2226347 * Math.Pow(10, 3) / T + 0.240390;
+            var xy = ColorMath.CctToChromaticity(kelvin);
+            var rgb = ColorMath.XyzToLinearSrgb(xy.ToXyz(1.0));
 
-            // Calculate y
-            if (T <= 2222)
-                y = -1.1063814 * Math.Pow(x, 3) - 1.34811020 * Math.Pow(x, 2) + 2.18555032 * x - 0.20219683;
-            else if (T <= 4000)
-                y = -0.9549476 * Math.Pow(x, 3) - 1.37418593 * Math.Pow(x, 2) + 2.09137015 * x - 0.16748867;
-            else
-                y = 3.0817580 * Math.Pow(x, 3) - 5.87338670 * Math.Pow(x, 2) + 3.75112997 * x - 0.37001483;
-
-            // xyY to XYZ (Y=1 for max luminance)
-            double Y = 1.0;
-            double X = (y == 0) ? 0 : (x * Y) / y;
-            double Z = (y == 0) ? 0 : ((1 - x - y) * Y) / y;
-
-            // XYZ to Linear RGB (sRGB D65 Matrix)
-            double rL = 3.2406 * X - 1.5372 * Y - 0.4986 * Z;
-            double gL = -0.9689 * X + 1.8758 * Y + 0.0415 * Z;
-            double bL = 0.0557 * X - 0.2040 * Y + 1.0570 * Z;
-
-            // Clip Linear RGB
-            rL = Math.Clamp(rL, 0, 1);
-            gL = Math.Clamp(gL, 0, 1);
-            bL = Math.Clamp(bL, 0, 1);
-
-            // Gamma Correct (Linear -> sRGB)
-            double r = TransferFunctions.SrgbOetf(rL);
-            double g = TransferFunctions.SrgbOetf(gL);
-            double b = TransferFunctions.SrgbOetf(bL);
-
-            return (r, g, b);
+            // Clip only negative out-of-gamut values. High channels are normalized by
+            // GetAccurateMultipliers; clipping them here would change chromaticity before
+            // the white-balance ratio is formed.
+            return (PositiveFiniteOrZero(rgb.R), PositiveFiniteOrZero(rgb.G), PositiveFiniteOrZero(rgb.B));
         }
 
         /// <summary>
@@ -234,6 +236,8 @@ namespace HDRGammaController.Core
         /// </summary>
         public static (double R, double G, double B) GetBlueReductionMultipliers(int kelvin)
         {
+            kelvin = ClampNightModeKelvin(kelvin);
+
             // Map Kelvin 6500 -> 1900 to Factor 0.0 -> 1.0
             double factor = Math.Clamp((6500.0 - kelvin) / (6500.0 - 1900.0), 0.0, 1.0);
 
@@ -254,10 +258,11 @@ namespace HDRGammaController.Core
         /// </summary>
         public static (double R, double G, double B) GetTintMultipliers(double tint)
         {
+            tint = ClampFinite(tint, -50.0, 50.0, 0.0);
             if (Math.Abs(tint) < 0.01) return (1.0, 1.0, 1.0);
             
             // Normalize to -1 to +1 range
-            double t = Math.Clamp(tint, -50.0, 50.0) / 50.0;
+            double t = tint / 50.0;
             
             double r, g, b;
             
@@ -279,12 +284,25 @@ namespace HDRGammaController.Core
         
         /// <summary>
         /// Applies all calibration adjustments to an RGB triplet.
-        /// Order: Measured 3D LUT → Dimming → Temperature → Tint → RGB Gains → RGB Offsets
+        /// Order: measured signal-domain 3D LUT, decode to linear light, user adjustments,
+        /// encode back to signal RGB.
+        /// </summary>
+        /// <remarks>
+        /// The measured 3D LUT generated by calibration is a signal-domain correction LUT:
+        /// its grid input/output values are display RGB code values. User-facing controls
+        /// are linear-light operations, so this helper bridges the domains explicitly. Do
+        /// not use it after a LUT pipeline has already decoded to linear light; use
+        /// <see cref="ApplyUserAdjustmentsLinear"/> for that path.
         /// </summary>
         public static (double R, double G, double B) ApplyCalibration(
             double r, double g, double b,
             CalibrationSettings settings)
         {
+            settings = (settings ?? CalibrationSettings.Default).Sanitized();
+            r = ClampSignal(r);
+            g = ClampSignal(g);
+            b = ClampSignal(b);
+
             // 0. Apply measured 3D LUT correction (if present)
             // This is the colorimeter-measured base correction
             if (settings.MeasuredCorrectionLut != null)
@@ -295,6 +313,31 @@ namespace HDRGammaController.Core
                 b = corrected.B;
             }
 
+            var (linearR, linearG, linearB) = ApplyUserAdjustmentsLinear(
+                ColorMath.SrgbEotf(r),
+                ColorMath.SrgbEotf(g),
+                ColorMath.SrgbEotf(b),
+                settings);
+
+            return (
+                ColorMath.SrgbOetf(linearR),
+                ColorMath.SrgbOetf(linearG),
+                ColorMath.SrgbOetf(linearB));
+        }
+
+        /// <summary>
+        /// Applies only user-facing adjustments to linear-light RGB.
+        /// Order: Dimming → Temperature → Tint → RGB Gains → RGB Offsets.
+        /// </summary>
+        public static (double R, double G, double B) ApplyUserAdjustmentsLinear(
+            double r, double g, double b,
+            CalibrationSettings settings)
+        {
+            settings = (settings ?? CalibrationSettings.Default).Sanitized();
+            r = double.IsFinite(r) ? Math.Clamp(r, 0.0, 1.0) : 0.0;
+            g = double.IsFinite(g) ? Math.Clamp(g, 0.0, 1.0) : 0.0;
+            b = double.IsFinite(b) ? Math.Clamp(b, 0.0, 1.0) : 0.0;
+
             // 1. Apply perceptual dimming
             if (settings.Brightness < 100.0)
             {
@@ -303,11 +346,13 @@ namespace HDRGammaController.Core
                 b = ApplyDimming(b, settings.Brightness, settings.UseLinearBrightness);
             }
             
-            // 2. Apply temperature. All algorithms return (1,1,1) at 6500K (temperature 0),
-            // so skipping when there's no shift is safe regardless of algorithm.
-            if (Math.Abs(settings.Temperature) > 0.01)
+            // 2. Apply temperature. Manual temperature, per-monitor white trim, and
+            // scheduled night-mode shifts all live on the same scale and must compose before
+            // converting to Kelvin; otherwise direct LUT-generation paths ignore the offset.
+            double effectiveTemperature = EffectiveTemperatureScale(settings);
+            if (Math.Abs(effectiveTemperature) > 0.01)
             {
-                var temp = GetTemperatureMultipliers(settings.Temperature, settings.Algorithm, settings.UseUltraWarmMode);
+                var temp = GetTemperatureMultipliers(effectiveTemperature, settings.Algorithm, settings.UseUltraWarmMode);
                 r *= temp.R;
                 g *= temp.G;
                 b *= temp.B;
@@ -339,5 +384,36 @@ namespace HDRGammaController.Core
             
             return (r, g, b);
         }
+
+        private static double ClampFinite(double value, double min, double max, double fallback) =>
+            double.IsFinite(value) ? Math.Clamp(value, min, max) : fallback;
+
+        private static double EffectiveTemperatureScale(CalibrationSettings settings) =>
+            ClampFinite(
+                settings.Temperature + settings.TemperatureOffset,
+                CalibrationSettings.MinimumTemperatureScale,
+                CalibrationSettings.MaximumTemperatureScale,
+                0.0);
+
+        private static int ClampNightModeKelvin(int kelvin) =>
+            Math.Clamp(kelvin, MinimumNightModeKelvin, MaximumNightModeKelvin);
+
+        private static double ClampSignal(double value) =>
+            double.IsFinite(value) ? Math.Clamp(value, 0.0, 1.0) : 0.0;
+
+        private static double PositiveFiniteOrZero(double value) =>
+            double.IsFinite(value) ? Math.Max(value, 0.0) : 0.0;
+
+        private static double MaxChannel((double r, double g, double b) rgb) =>
+            Math.Max(rgb.r, Math.Max(rgb.g, rgb.b));
+
+        private static bool IsUsableRgb((double r, double g, double b) rgb) =>
+            double.IsFinite(rgb.r) && double.IsFinite(rgb.g) && double.IsFinite(rgb.b) &&
+            rgb.r >= 0.0 && rgb.g >= 0.0 && rgb.b >= 0.0 && MaxChannel(rgb) > 0.0;
+
+        private static (double R, double G, double B) ClampMultipliers(double r, double g, double b) =>
+            (ClampFinite(r, 0.0, 1.5, 1.0),
+             ClampFinite(g, 0.0, 1.5, 1.0),
+             ClampFinite(b, 0.0, 1.5, 1.0));
     }
 }

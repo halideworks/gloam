@@ -174,16 +174,18 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public double ApplyOetf(double linear)
         {
+            double safeLinear = Clamp01(linear);
+
             return TransferFunction switch
             {
-                TransferFunctionType.Srgb => ColorMath.SrgbOetf(linear),
-                TransferFunctionType.Gamma => ColorMath.GammaEncode(linear, Gamma ?? 2.2),
-                TransferFunctionType.Bt1886 => ColorMath.GammaEncode(linear, 2.4),
-                TransferFunctionType.Rec2020 => ColorMath.Rec2020Oetf(linear),
-                TransferFunctionType.Pq => TransferFunctions.PqInverseEotf(linear * (PeakLuminance ?? 10000)),
-                TransferFunctionType.Hlg => ApplyHlgOetf(linear),
-                TransferFunctionType.Linear => Math.Clamp(linear, 0, 1),
-                _ => ColorMath.GammaEncode(linear, 2.2)
+                TransferFunctionType.Srgb => ColorMath.SrgbOetf(safeLinear),
+                TransferFunctionType.Gamma => ColorMath.GammaEncode(safeLinear, SafeGamma(Gamma)),
+                TransferFunctionType.Bt1886 => ApplyBt1886InverseEotf(safeLinear),
+                TransferFunctionType.Rec2020 => ColorMath.Rec2020Oetf(safeLinear),
+                TransferFunctionType.Pq => TransferFunctions.PqInverseEotf(safeLinear * SafePeakLuminance()),
+                TransferFunctionType.Hlg => ApplyHlgOetf(safeLinear),
+                TransferFunctionType.Linear => safeLinear,
+                _ => ColorMath.GammaEncode(safeLinear, 2.2)
             };
         }
 
@@ -192,16 +194,18 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public double ApplyEotf(double signal)
         {
+            double safeSignal = Clamp01(signal);
+
             return TransferFunction switch
             {
-                TransferFunctionType.Srgb => ColorMath.SrgbEotf(signal),
-                TransferFunctionType.Gamma => ColorMath.GammaDecode(signal, Gamma ?? 2.2),
-                TransferFunctionType.Bt1886 => ColorMath.GammaDecode(signal, 2.4),
-                TransferFunctionType.Rec2020 => ColorMath.Rec2020Eotf(signal),
-                TransferFunctionType.Pq => TransferFunctions.PqEotf(signal) / (PeakLuminance ?? 10000),
-                TransferFunctionType.Hlg => ApplyHlgEotf(signal),
-                TransferFunctionType.Linear => Math.Clamp(signal, 0, 1),
-                _ => ColorMath.GammaDecode(signal, 2.2)
+                TransferFunctionType.Srgb => ColorMath.SrgbEotf(safeSignal),
+                TransferFunctionType.Gamma => ColorMath.GammaDecode(safeSignal, SafeGamma(Gamma)),
+                TransferFunctionType.Bt1886 => ApplyBt1886Eotf(safeSignal),
+                TransferFunctionType.Rec2020 => ColorMath.Rec2020Eotf(safeSignal),
+                TransferFunctionType.Pq => TransferFunctions.PqEotf(safeSignal) / SafePeakLuminance(),
+                TransferFunctionType.Hlg => ApplyHlgEotf(safeSignal),
+                TransferFunctionType.Linear => safeSignal,
+                _ => ColorMath.GammaDecode(safeSignal, 2.2)
             };
         }
 
@@ -210,12 +214,35 @@ namespace HDRGammaController.Core.Calibration
         private const double HlgB = 0.28466892; // 1 - 4 * a
         private const double HlgC = 0.55991073; // 0.5 - a * ln(4a), pre-computed
 
+        private double Bt1886WhiteLevel => SafePositive(PeakLuminance ?? ReferenceWhite, 1.0);
+
+        private double ApplyBt1886Eotf(double signal)
+        {
+            double white = Bt1886WhiteLevel;
+            if (white <= 0 || BlackLevel <= 0)
+                return ColorMath.GammaDecode(signal, 2.4);
+
+            return TransferFunctions.Bt1886Eotf(signal, white, BlackLevel) / white;
+        }
+
+        private double ApplyBt1886InverseEotf(double linear)
+        {
+            double white = Bt1886WhiteLevel;
+            if (white <= 0 || BlackLevel <= 0)
+                return ColorMath.GammaEncode(linear, 2.4);
+
+            return TransferFunctions.Bt1886InverseEotf(
+                Clamp01(linear) * white,
+                white,
+                BlackLevel);
+        }
+
         /// <summary>
         /// HLG OETF (Hybrid Log-Gamma).
         /// </summary>
         private static double ApplyHlgOetf(double linear)
         {
-            linear = Math.Clamp(linear, 0, 1);
+            linear = Clamp01(linear);
             return linear <= 1.0 / 12.0
                 ? Math.Sqrt(3.0 * linear)
                 : HlgA * Math.Log(12.0 * linear - HlgB) + HlgC;
@@ -226,11 +253,24 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         private static double ApplyHlgEotf(double signal)
         {
-            signal = Math.Clamp(signal, 0, 1);
+            signal = Clamp01(signal);
             return signal <= 0.5
                 ? (signal * signal) / 3.0
                 : (Math.Exp((signal - HlgC) / HlgA) + HlgB) / 12.0;
         }
+
+        private double SafePeakLuminance() => SafePositive(PeakLuminance, 10000.0);
+
+        private static double SafePositive(double? value, double fallback) =>
+            value.HasValue && double.IsFinite(value.Value) && value.Value > 0.0 ? value.Value : fallback;
+
+        private static double SafeGamma(double? gamma) =>
+            gamma.HasValue && double.IsFinite(gamma.Value) && gamma.Value is >= 1.0 and <= 4.0
+                ? gamma.Value
+                : 2.2;
+
+        private static double Clamp01(double value) =>
+            double.IsFinite(value) ? Math.Clamp(value, 0.0, 1.0) : 0.0;
 
         public override string ToString() => Name;
     }
@@ -249,7 +289,7 @@ namespace HDRGammaController.Core.Calibration
         /// <summary>Pure power-law gamma (e.g., 2.2, 2.4).</summary>
         Gamma,
 
-        /// <summary>ITU-R BT.1886 (pure 2.4 gamma for broadcast).</summary>
+        /// <summary>ITU-R BT.1886 broadcast EOTF; pure 2.4 when target black is zero.</summary>
         Bt1886,
 
         /// <summary>ITU-R BT.2020 (Rec.2020 OETF).</summary>
@@ -443,9 +483,7 @@ namespace HDRGammaController.Core.Calibration
             P3D65Gamma22,
             P3D65Gamma26,
             Rec2020Gamma24,
-            Rec2020Pq,
-            Rec2020Hlg,
-            P3Pq
+            Rec709Pq
         };
 
         /// <summary>

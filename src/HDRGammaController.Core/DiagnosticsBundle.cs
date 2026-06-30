@@ -485,8 +485,8 @@ namespace HDRGammaController.Core
                 null => string.Empty,
                 DateTime dt => dt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
                 DateTimeOffset dto => dto.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
-                double d when double.IsFinite(d) => d.ToString("G17", CultureInfo.InvariantCulture),
-                float f when float.IsFinite(f) => f.ToString("G9", CultureInfo.InvariantCulture),
+                double d => double.IsFinite(d) ? d.ToString("G17", CultureInfo.InvariantCulture) : string.Empty,
+                float f => float.IsFinite(f) ? f.ToString("G9", CultureInfo.InvariantCulture) : string.Empty,
                 IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
                 _ => value.ToString() ?? string.Empty
             };
