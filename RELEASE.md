@@ -12,8 +12,8 @@ Release, and installed apps auto-update from it.
    - `package.ps1 -Version X.Y.Z -PublishOnly` (self-contained multi-file publish + bundled ArgyllCMS).
    - `azure/login` via OIDC (no stored secret), then `vpk pack --azureTrustedSignFile` signs the
      installer + all bundled exes, then `vpk upload github` publishes the release.
-3. `GloamApp-X.Y.Z-Setup.exe` (auto-updating, per-user install) and
-   `GloamApp-X.Y.Z-Portable.zip` are attached to the release. Installed clients pick up the update on
+3. `GloamApp-win-Setup.exe` (auto-updating, per-user install) and
+   `GloamApp-win-Portable.zip` are attached to the release. Installed clients pick up the update on
    next launch.
 
 The version comes from the tag. `UpdateService.RepoUrl` and the CI upload target are both

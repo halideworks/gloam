@@ -5,7 +5,9 @@ param(
 
     [string]$ExpectedPublisher = "David Torcivia",
 
-    [string]$ExpectedPackId = "GloamApp"
+    [string]$ExpectedPackId = "GloamApp",
+
+    [string]$ExpectedChannel = "win"
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,7 +26,9 @@ function Add-Failure([string]$message) {
 function Get-Artifact([string]$pattern, [string]$description) {
     $matches = @(Get-ChildItem -LiteralPath $releaseRoot -Filter $pattern -File)
     if ($matches.Count -eq 0) {
-        Add-Failure "Missing $description matching '$pattern'."
+        $available = @((Get-ChildItem -LiteralPath $releaseRoot -File).Name)
+        $availableText = if ($available.Count -eq 0) { "none" } else { $available -join ", " }
+        Add-Failure "Missing $description matching '$pattern'. Available artifacts: $availableText."
         return $null
     }
     if ($matches.Count -gt 1) {
@@ -55,8 +59,9 @@ function Test-Signature([string]$path, [string]$description) {
 }
 
 $versionPattern = if ([string]::IsNullOrWhiteSpace($Version)) { "*" } else { $Version }
-$setup = Get-Artifact "$ExpectedPackId-$versionPattern-Setup.exe" "signed installer"
-$portable = Get-Artifact "$ExpectedPackId-$versionPattern-Portable.zip" "portable package"
+$channelSuffix = if ([string]::IsNullOrWhiteSpace($ExpectedChannel)) { "" } else { "-$ExpectedChannel" }
+$setup = Get-Artifact "$ExpectedPackId$channelSuffix-Setup.exe" "signed installer"
+$portable = Get-Artifact "$ExpectedPackId$channelSuffix-Portable.zip" "portable package"
 $fullPackage = Get-Artifact "$ExpectedPackId-$versionPattern-full.nupkg" "Velopack full package"
 
 if ($setup -ne $null) {
