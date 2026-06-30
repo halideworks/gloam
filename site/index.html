@@ -43,8 +43,8 @@
         <div class="hero-body">
           <span class="kicker">SDR-in-HDR Gamma Override</span>
           <h1>Fix the gray that Windows HDR casts over <span>everything.</span></h1>
-          <p class="hero-tagline">Gloam is a free, open-source Windows app that restores proper gamma to SDR content in HDR, with a color considered night mode.</p>
-          <p class="hero-summary">A simple small tray app, designed by a colorist, that repairs the broken Windows HDR tone curve, per monitor, while you play, watch, or work.</p>
+          <p class="hero-tagline">Gloam is a free, open-source Windows app that restores proper gamma to SDR content in HDR, with a color-science-aware night mode.</p>
+          <p class="hero-summary">A small tray app, designed by a colorist, that repairs the broken Windows HDR tone curve per monitor while you play, watch, or work.</p>
           <div class="hero-actions">
             <a class="btn btn-primary" href="#download">Download Gloam</a>
             <a class="btn btn-secondary" href="guides.html">Read the quick-start guide</a>
@@ -238,7 +238,7 @@
         <div class="wrap" style="padding: 4rem 2rem 1rem;">
           <span class="kicker">03 / What it does</span>
           <h2 id="features-heading">One app. Three things Windows gets wrong.</h2>
-          <p class="section-lede">Gloam not only fixes HDR/SDR gamma, but also replaces Night Light with a color-science-aware night mode and provides a full HDR capable calibration path when you are ready to measure.</p>
+          <p class="section-lede">Gloam fixes HDR/SDR gamma, replaces Night Light with perceptual night mode, and provides a full HDR-capable calibration path when you are ready to measure.</p>
         </div>
 
         <div class="feature-grid">
@@ -259,7 +259,7 @@
               </span>
               Night mode, done right
             </h3>
-            <p>Temperature shifts are blended in linear light, where light physically mixes so night mode <i>looks better</i>. Sunset and sunrise are computed from the sun's position at your location, with programmable smooth fades and per-app exclusions.</p>
+            <p>Temperature shifts use the accurate CIE 1931 path by default and are blended in linear light, where light physically mixes. Use Off, Schedule, or Manual mode, with smooth fades and per-app exclusions.</p>
           </article>
 
           <article class="feature-card">
@@ -269,7 +269,7 @@
               </span>
               Colorimeter calibration
             </h3>
-            <p>Add a meter and Gloam installs a native Windows MHC2 profile, then verifies it by measuring through the applied correction. HDR verifications include a PQ tracking sweep in absolute nits.</p>
+            <p>Add a meter and Gloam installs a native Windows MHC2 profile, then verifies it by measuring through the applied correction. HDR verification includes a PQ tracking sweep in absolute nits.</p>
           </article>
 
           <article class="feature-card">
@@ -279,7 +279,7 @@
               </span>
               Per-monitor dashboard
             </h3>
-            <p>Real monitor names, HDR/SDR status, smart brightness levels, temp/tint and RGB adjustment, and live gamma mode readout for every connected display. Settings persist per monitor and restore on startup.</p>
+            <p>Real monitor names, HDR/SDR status, smart brightness levels, temp/tint and RGB adjustment, and live gamma mode readout for every connected display. Settings and window sizes persist per monitor and restore on startup.</p>
           </article>
 
           <article class="feature-card">
@@ -356,7 +356,7 @@
         <div class="wrap" style="padding: 2.5rem 2rem 1rem;">
           <span class="kicker">05 / Get it</span>
           <h2 id="download-heading">Download Packages</h2>
-          <p class="section-lede">One self-contained app, two ways to get it. Run the installer (recommended) or grab the portable zip, then enable "Start with Windows" from the tray menu if you want to correct your display on every boot.</p>
+          <p class="section-lede">Run the installer (recommended) or grab the portable zip, then enable "Start with Windows" from the tray menu if you want to correct your display on every boot.</p>
         </div>
 
         <div class="download-panel">
@@ -387,7 +387,7 @@
         </div>
 
         <div class="wrap" style="padding: 0 2rem 2.5rem;">
-          <p style="font-size: 0.95rem; opacity: 0.85; max-width: 70ch;"><strong>Seeing "Windows protected your PC"?</strong> That is Microsoft SmartScreen, not a problem with the download. Gloam is code-signed: click <strong>More info</strong> and you will see the verified publisher <strong>David Torcivia</strong>. SmartScreen separately weighs download reputation, which a brand-new release has not built up yet, so it warns until enough people have installed it. Click <strong>More info</strong>, then <strong>Run anyway</strong>. This is expected for a new publisher and stops as Gloam gains installs.</p>
+          <p style="font-size: 0.95rem; opacity: 0.85; max-width: 70ch;"><strong>Seeing "Windows protected your PC"?</strong> That is Microsoft SmartScreen, not a problem with the download. Gloam is code-signed: click <strong>More info</strong> and you will see the verified publisher <strong>David Torcivia</strong>. SmartScreen separately weighs download reputation, so new signed apps can show reputation warnings until enough people have installed them. Click <strong>More info</strong>, then <strong>Run anyway</strong>.</p>
         </div>
       </section>
 
@@ -423,9 +423,9 @@
               <span style="font-size: 1.25rem;">+</span>
             </summary>
             <div class="faq-body" style="padding-top: 1rem; opacity: 0.85; max-width: 800px;">
-              <p>Three differences. First, the math: Gloam blends temperature in linear light, where light physically mixes, and its accurate CIE 1931 mode keeps the white point on the Planckian locus. Night Light is a simple compositor filter that tints without discernment.</p>
+              <p>Three differences. First, the math: Gloam uses accurate CIE 1931 temperature conversion by default and blends in linear light, where light physically mixes. Night Light is a simple compositor filter that tints without discernment.</p>
               <p>Second, composition: Night Light fights other corrections for control of the pipeline. Gloam bakes the warm shift into the same high-precision LUTs as your gamma and calibration, so nothing bands or flickers.</p>
-              <p>Third, scheduling: sunset and sunrise are computed from the sun's actual position at your location, with configurable fades and levels (set different temps at different times), per-app exclusions, and per-monitor temperature offsets.</p>
+              <p>Third, control: Off disables schedule and manual warmth, Schedule follows your configured time or sun position, and Manual forces your chosen warmth now. You can also set fades, per-app exclusions, and per-monitor temperature offsets.</p>
             </div>
           </details>
 
@@ -456,7 +456,17 @@
               <span style="font-size: 1.25rem;">+</span>
             </summary>
             <div class="faq-body" style="padding-top: 1rem; opacity: 0.85; max-width: 800px;">
-              <p>The installer keeps itself current. Gloam checks GitHub on launch, downloads new versions in the background (just the changed parts, as a delta), and applies them silently the next time the app exits or restarts - no re-downloading, no reinstalling, no administrator prompt. Every release is code-signed. The portable build does not auto-update; to upgrade it, replace it with a newer zip.</p>
+              <p>The installer keeps itself current. Gloam checks GitHub on launch, downloads new versions in the background as deltas, and applies them silently the next time the app exits or restarts. No re-downloading, no reinstalling, no administrator prompt. Every release is code-signed. The portable build does not auto-update; to upgrade it, replace it with a newer zip.</p>
+            </div>
+          </details>
+
+          <details style="border-bottom: var(--border-thin) solid var(--border); padding: 1rem 0;">
+            <summary style="font-weight: 700; cursor: pointer; text-transform: uppercase; list-style: none; display: flex; justify-content: space-between; align-items: center;">
+              What should I pick for Night Mode?
+              <span style="font-size: 1.25rem;">+</span>
+            </summary>
+            <div class="faq-body" style="padding-top: 1rem; opacity: 0.85; max-width: 800px;">
+              <p>Use Off when you need exact daylight color. Use Schedule for normal evening use. Use Manual when you want warmth immediately regardless of schedule. Start around 2700K for a strong warm mode, then raise it if the screen feels too amber for your room.</p>
             </div>
           </details>
 
@@ -466,7 +476,7 @@
               <span style="font-size: 1.25rem;">+</span>
             </summary>
             <div class="faq-body" style="padding-top: 1rem; opacity: 0.85; max-width: 800px;">
-              <p>No. Gloam is code-signed; click <strong>More info</strong> and you will see the verified publisher. That dialog is Microsoft SmartScreen, which also weighs download reputation, and a brand-new release has not built any up yet, so it warns until enough people have installed it. Click <strong>More info</strong>, then <strong>Run anyway</strong>. It stops appearing as Gloam gains installs, and it is unrelated to whether the app is signed or safe.</p>
+              <p>No. Gloam is code-signed; click <strong>More info</strong> and you will see the verified publisher. That dialog is Microsoft SmartScreen, which also weighs download reputation. New signed apps can show reputation warnings until enough people have installed them. Click <strong>More info</strong>, then <strong>Run anyway</strong>. It stops appearing as Gloam gains installs, and it is unrelated to whether the app is signed or safe.</p>
             </div>
           </details>
 

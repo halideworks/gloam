@@ -54,7 +54,7 @@
             <h3>Install</h3>
             <p>Head to the <a href="https://github.com/halideworks/gloam/releases">releases page</a>. Run the self-contained installer, <strong>Gloam-&lt;version&gt;-Setup.exe</strong>: it installs per-user with no administrator prompt, bundles ArgyllCMS, and updates itself in the background. Prefer no install? Grab <strong>Gloam-&lt;version&gt;-Portable.zip</strong> instead, extract it anywhere, and run the executable (it does not auto-update). Either way, Gloam lives in the system tray.</p>
             <p>Right-click the tray icon and enable <strong>Start with Windows</strong> so your corrections restore automatically at every boot.</p>
-            <p style="font-size: 0.95rem; opacity: 0.85;"><strong>Seeing "Windows protected your PC"?</strong> That is Microsoft SmartScreen, not a problem with the download. Gloam is code-signed (click <strong>More info</strong> to see the verified publisher <strong>David Torcivia</strong>), but SmartScreen separately weighs download reputation, which a brand-new release has not built up yet. Click <strong>More info</strong>, then <strong>Run anyway</strong>. This is expected for a new publisher and stops as the app gains installs.</p>
+            <p style="font-size: 0.95rem; opacity: 0.85;"><strong>Seeing "Windows protected your PC"?</strong> That is Microsoft SmartScreen, not a problem with the download. Gloam is code-signed (click <strong>More info</strong> to see the verified publisher <strong>David Torcivia</strong>), but SmartScreen separately weighs download reputation. New signed apps can show reputation warnings until enough people have installed them. Click <strong>More info</strong>, then <strong>Run anyway</strong>.</p>
           </li>
 
           <li data-step="02">
@@ -90,8 +90,9 @@
 
           <li data-step="05">
             <h3>Live with it</h3>
-            <p>Your gamma preference and night mode compose on top of the installed calibration. Open Settings from the tray for night mode scheduling (sunset/sunrise at your location, fade duration, app exclusions) and per-monitor temperature offsets for visually matching displays to each other.</p>
-            <p>Settings are saved to <code>%LOCALAPPDATA%\HDRGammaController\settings.json</code> and diagnostic logs to <code>app.log</code> in the same folder; include the log when reporting issues.</p>
+            <p>Your gamma preference and night mode compose on top of the installed calibration. Open Settings from the tray for night mode scheduling, fade duration, app exclusions, and per-monitor temperature offsets for visually matching displays to each other.</p>
+            <p>The Night Mode button cycles between <strong>Off</strong>, <strong>Schedule</strong>, and <strong>Manual</strong>. Off disables warmth entirely, Schedule follows your configured schedule, and Manual forces your selected temperature immediately.</p>
+            <p>Settings, reports, corrections, diagnostics, and logs are saved under <code>%LOCALAPPDATA%\Gloam</code>. Use <strong>Export Diagnostics</strong> from the tray when reporting issues.</p>
           </li>
         </ol>
       </section>
@@ -126,10 +127,30 @@
         <p>Always read the detailed verification, not just the grade: the dE histograms and the worst-patch list tell you whether residual error is broadly distributed measurement noise or concentrated somewhere visible like the grayscale. On HDR displays, check the PQ tracking sweep to confirm absolute luminance tracking across the range.</p>
         <p>Finally, instruments and eyes weigh display spectra differently (observer metamerism): two displays can measure identical and still look different side by side. A small final Tint or Temperature trim against a reference display is normal, rides on top of the profile, and never affects the measurements.</p>
 
+        <h3>Use Back freely</h3>
+        <p>The calibration wizard is stateful. If you go back from Finalize Calibration, Gloam keeps the selected monitor, target, preset, correction file, display type, display mode, sound options, detailed verification choice, patch placement, and window size. This makes it safe to revise setup choices without losing the meter session.</p>
+
         <div style="border: 2px solid var(--border); padding: 1.5rem; margin: 3.5rem 0; background: rgba(226, 43, 31, 0.03);">
           <span style="font-family: var(--font-display); font-weight: 800; font-size: 0.8rem; text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 0.5rem;">Escape hatch</span>
           <p style="margin-bottom: 0;">If something ever looks wrong, <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>F4</kbd> (panic mode) clears all gamma tables immediately, and the calibration report's toggle button disables the installed profile for an instant A/B.</p>
         </div>
+      </section>
+
+      <section id="troubleshooting" style="padding-top: 3rem; border-bottom: none;">
+        <span class="kicker">Fix quickly</span>
+        <h2 style="margin-top: 0; margin-bottom: 2rem;">Troubleshooting</h2>
+
+        <h3>Night Mode is not changing the display</h3>
+        <p>Check the button state. Off disables all warmth, including the schedule. Schedule only warms during the configured time window or sun-position window. Manual applies the selected temperature immediately.</p>
+
+        <h3>Calibration will not start</h3>
+        <p>Confirm the meter is connected, click Refresh, and read the setup warning. HDR targets require Windows HDR to be active on the selected display. SDR targets require HDR to be off. For correction files, .ccss and .ccmx files may contain negative samples; that is valid and expected.</p>
+
+        <h3>The wrong monitor appears selected</h3>
+        <p>Use the Identify button. The monitor identity popup appears near the upper-left of the selected display and fades out after a few seconds.</p>
+
+        <h3>An update did not seem to install</h3>
+        <p>Installed builds download updates in the background and apply them when the app exits or restarts. Portable builds do not auto-update. After installing an update, fully quit Gloam and launch it again.</p>
       </section>
     </main>
 

@@ -42,7 +42,7 @@
       <section>
         <h1>Gloam: A Technical Whitepaper</h1>
         <p class="paper-meta">
-          HDR-native display calibration on Windows. Last updated June 10, 2026.
+          HDR-native display calibration on Windows. Last updated June 30, 2026.
         </p>
         <blockquote>The machine promises fidelity but delivers translation, and every translation is a betrayal.</blockquote>
 
@@ -64,6 +64,13 @@
           enable fine-grained control over the visual output, with particular attention to why specific
           mathematical choices were made, grounded always in the physics of light perception and the
           engineering constraints of the Windows HDR compositor.
+        </p>
+        <p>
+          The current implementation also documents the hardened update path, the CIE 1931 night
+          mode default, the three-state Night Mode control, and the calibration wizard's persisted
+          state model. Each of those details supports the same goal as the color pipeline itself:
+          keeping the correction trustworthy after reboot, app restart, display topology changes, and
+          repeated calibration runs.
         </p>
 
         <nav class="toc" aria-label="Table of contents">
@@ -97,12 +104,11 @@
           the first time in consumer technology, the dynamic range of human vision itself.
         </p>
         <p>
-          And yet the transition has been anything but smooth, for Windows 11, while making strides in
-          streamlining the HDR experience (finally allowing for workstations where HDR remains always
-          enabled throughout the desktop), has introduced along the way a subtle but pernicious problem
-          in how it handles the vast corpus of SDR content that must coexist with native HDR material,
-          a problem that reveals itself most clearly in the shadows and low mid-tones where the
-          discrepancy between what the system assumes and what the content actually requires becomes
+          The transition remains uneven. Windows 11 has made meaningful progress in streamlining HDR,
+          including workstation setups where HDR can remain enabled throughout the desktop. At the same
+          time, its handling of SDR content inside the HDR composition space introduces a subtle and
+          persistent error. The problem reveals itself most clearly in shadows and low mid-tones, where
+          the discrepancy between what the system assumes and what the content actually requires becomes
           impossible to ignore.
         </p>
         <p>
@@ -132,17 +138,16 @@
         </p>
         <div class="math"><var>L</var> = <var>V</var><sup>γ</sup></div>
         <p>
-          For a typical CRT, γ ≈ 2.5, a non-linearity that was never a design choice but rather a
-          physical characteristic of the phosphor excitation process that content producers quickly
-          adapted to by <em>pre-compensating</em> at the source, applying an inverse gamma encoding so
-          that the roundtrip from camera to display preserved perceptual linearity: a system built on
-          accidents and expedience that nonetheless became the foundation upon which all SDR imaging
-          would rest.<sup class="fn"><a href="#ref1">[1]</a></sup>
+          For a typical CRT, γ ≈ 2.5. The phosphor excitation process created this non-linearity as a
+          physical characteristic of the display. Content producers adapted by <em>pre-compensating</em>
+          at the source, applying an inverse gamma encoding so that the roundtrip from camera to
+          display preserved perceptual linearity. A chain of practical engineering constraints became
+          the foundation upon which all SDR imaging would rest.<sup class="fn"><a href="#ref1">[1]</a></sup>
         </p>
         <p>
-          Over decades, through a process of standardization not unlike natural selection,
-          <strong>gamma 2.2</strong> emerged as the de facto standard for computer monitors and general
-          content creation (though cinema is typically gamma 2.4), representing a reasonable
+          Over decades, practical standardization selected <strong>gamma 2.2</strong> as the de facto
+          standard for computer monitors and general content creation (though cinema is typically
+          gamma 2.4), representing a reasonable
           approximation for viewing in uncontrolled lighting conditions exceeding 50 lux as specified in
           various industry documents and adopted by virtually every computer monitor manufactured in the
           past three decades.<sup class="fn"><a href="#ref2">[2]</a></sup>
@@ -185,11 +190,11 @@
           mastered for gamma 2.2 reaches the eye.
         </p>
         <p>
-          The visual discrepancy is not subtle: consider the example cited in Dylan Raga's original
-          research, Diablo IV, a game celebrated for its dark, gritty aesthetic in SDR mode that appears
-          washed out in HDR mode, its rich blacks turning to dull grays, its atmosphere becoming hazy.
-          A ruination caused not by the game's HDR implementation but by Windows' SDR-in-HDR translation
-          layer.<sup class="fn"><a href="#ref4">[4]</a></sup>
+          The visual discrepancy is obvious in the example cited in Dylan Raga's original research:
+          Diablo IV, a game celebrated for its dark, gritty aesthetic in SDR mode, appears washed out
+          in HDR mode. Its rich blacks turn to dull grays, and its atmosphere becomes hazy. The source
+          of that damage is Windows' SDR-in-HDR translation layer rather than the game's HDR
+          implementation.<sup class="fn"><a href="#ref4">[4]</a></sup>
         </p>
 
         <h3 id="s2-4">2.4 Quantifying the Difference</h3>
@@ -416,7 +421,7 @@
           subtly wrong.
         </p>
         <p>
-          <strong>Blend in PQ-signal space, not linear-nit space.</strong> A blend parameterized by
+          <strong>Blend in PQ-signal space.</strong> A blend parameterized by
           linear nits spends almost all of its range in a region the eye barely perceives, between
           4,000 and 10,000 nits, while the region where content actually lives (200-2,000 nits) sees
           only a tiny fraction of the fade. The result is a curve that stays almost fully corrected
@@ -450,9 +455,8 @@
           of a dimmed UI with undimmed highlights punching through.
         </p>
         <p>
-          The fix is to define the headroom target not as the unchanged input signal, but as the input
-          signal after dimming only, preserving the HDR creative grade while still honoring the
-          brightness setting:
+          The headroom target is the input signal after dimming only. That preserves the HDR creative
+          grade while still honoring the brightness setting:
         </p>
         <div class="math">headroom_target(<var>L</var>) = PQ<sub>OETF</sub>(dim(<var>L</var>))</div>
         <p>
@@ -465,11 +469,11 @@
           The choice of anchor matters. At the SDR/HDR boundary (<var>L</var> = <var>W</var>) this
           expression evaluates to <var>b</var>·<var>W</var>, exactly the value the dimmed SDR portion
           of the curve reaches at white, so the headroom target meets the corrected curve continuously.
-          An earlier formulation normalized against the 10,000-nit PQ ceiling instead; because the
-          dimming exponent is applied to <var>L</var>/10000 rather than <var>L</var>/<var>W</var>, the
-          headroom target at the boundary came out ~1.7× brighter than the dimmed SDR white at 50%
-          brightness, leaving a brightness shelf just above SDR white that the smoothstep could soften
-          but not remove. When Brightness = 100%, the expression reduces exactly to
+          An earlier formulation normalized against the 10,000-nit PQ ceiling. Applying the dimming
+          exponent to <var>L</var>/10000 instead of <var>L</var>/<var>W</var> made the headroom target
+          at the boundary ~1.7× brighter than the dimmed SDR white at 50% brightness. That left a
+          brightness shelf just above SDR white that the smoothstep could soften but could not remove.
+          When Brightness = 100%, the expression reduces exactly to
           PQ<sub>OETF</sub>(<var>L</var>), the original identity passthrough, so the behavior is
           unchanged for users who never touch the dimming slider.
         </p>
@@ -562,6 +566,14 @@
           normalizing to a maximum of 1. This method ensures that the white point shifts precisely
           along the Planckian locus, preserving the exact chromaticity relationships defined by the
           laws of physics.
+        </p>
+        <p>
+          This CIE 1931 path is the default night-mode algorithm. The older Helland
+          approximation remains useful as a simple reference, but the shipped behavior prefers a
+          perceptual white-point path that follows the Planckian locus more closely. The dashboard
+          exposes night mode as three states: Off, Schedule, and Manual. Off disables both scheduled
+          and manual warmth; Schedule follows the configured schedule; Manual applies the selected
+          temperature immediately.
         </p>
 
         <h4>Temperature Offset for Night Mode</h4>
@@ -679,6 +691,13 @@
           and the deduplication described in <a href="#s7-2">Section 7.2</a> suppresses any redundant
           ones.
         </p>
+        <p>
+          The updater follows the same operational philosophy. Installed builds check the GitHub
+          release feed, reject non-newer or malformed candidates, download the update in the
+          background, and schedule it for the next normal app exit or restart. Users do not need to
+          click through a browser or manually replace an installer. Portable builds intentionally skip
+          this path because there is no managed Velopack install to update.
+        </p>
       </section>
 
       <!-- ================= Section 7 ================= -->
@@ -742,8 +761,8 @@
         <p>
           Each <code>dispwin</code> invocation rewrites the GPU gamma ramp in a single step, and on an
           HDR display that rewrite is <em>visible</em>: a momentary luminance discontinuity the user
-          perceives as flicker. The corollary is that the apply pipeline must treat ramp writes as a
-          scarce resource, not a free idempotent operation. Four mechanisms enforce this:
+          perceives as flicker. The apply pipeline therefore treats ramp writes as a scarce resource.
+          Four mechanisms enforce this:
         </p>
         <ul>
           <li><strong>Identical-LUT deduplication.</strong> Before spawning <code>dispwin</code>, the
@@ -862,10 +881,10 @@
       <section>
         <h2 id="s10">10. Colorimeter Calibration and the MHC2 Pipeline</h2>
         <p>
-          The per-channel ramp of Sections 4-7 corrects tone, but it is structurally incapable of
-          correcting color: a 1D LUT per channel cannot move a primary, cannot rotate a white point
-          without disturbing the channels independently, and (decisively) is not honored consistently
-          by the Advanced Color compositor. Measurement-based calibration therefore required a second
+          The per-channel ramp of Sections 4-7 corrects tone. Color correction needs a different
+          mechanism: moving primaries and rotating a white point require a cross-channel transform,
+          while independent 1D channel curves disturb those relationships and receive inconsistent
+          treatment from the Advanced Color compositor. Measurement-based calibration therefore required a second
           application mechanism, and Windows offers exactly one OS-native hook for it: an ICC profile
           carrying the <strong>MHC2 tag</strong>, from which the Desktop Window Manager extracts a 3×4
           matrix and three regamma LUTs and applies them at composition: persistently, system-wide, and
@@ -874,9 +893,10 @@
 
         <h3 id="s10-1">10.1 The Matrix Slot Is an XYZ Transform</h3>
         <p>
-          Windows does not apply the MHC2 matrix to RGB
-          values. The engine evaluates it <strong>sandwiched between fixed conversions to and from CIE
-          XYZ</strong>, using the wire primaries of the current mode: sRGB in SDR, BT.2020 in HDR:
+          Windows applies the MHC2 matrix in CIE XYZ, after converting from the current wire RGB
+          primaries and before converting back to those primaries. In other words, the matrix is
+          <strong>sandwiched between fixed conversions to and from CIE XYZ</strong>, using sRGB in SDR
+          and BT.2020 in HDR:
         </p>
 <pre><code>wire = LUT( XYZ-&gt;wire_fixed . M_tag . wire-&gt;XYZ_fixed . linear_content )</code></pre>
         <p>
@@ -948,11 +968,12 @@
 
         <h3 id="s10-4">10.4 Advanced Color Association</h3>
         <p>
-          HDR displays do not read the classic per-device profile association; they read the
-          <strong>Advanced Color list</strong> (registry <code>ICMProfileAC</code>), reachable only
-          through <code>ColorProfileAddDisplayAssociation(..., associateAsAdvancedColor: true)</code>
-          with the display's DisplayConfig adapter LUID and source id. The classic WCS association APIs
-          place profiles in a list Windows ignores while HDR is active: a silent failure mode. (A
+          HDR displays read the <strong>Advanced Color list</strong> (registry
+          <code>ICMProfileAC</code>) instead of the classic per-device profile association. That list
+          is reachable only through
+          <code>ColorProfileAddDisplayAssociation(..., associateAsAdvancedColor: true)</code> with the
+          display's DisplayConfig adapter LUID and source id. The classic WCS association APIs place
+          profiles in a list Windows ignores while HDR is active: a silent failure mode. (A
           practical interop warning recorded for posterity: <code>DISPLAYCONFIG_RATIONAL</code> must be
           declared as two 32-bit fields; declaring it as a 64-bit integer changes the struct's
           alignment, inflates <code>DISPLAYCONFIG_PATH_TARGET_INFO</code> from 48 to 56 bytes, and
@@ -996,8 +1017,8 @@
           replaced by the measured ones) or no correction at all. Second: measured accuracy and
           perceptual match are distinct targets. Observer metamerism guarantees that displays of
           different spectral character can measure identical and look different side by side; the final
-          small visual trim against a reference display is not a failure of calibration but its last
-          legitimate step, and the tool's report says so explicitly.
+          small visual trim against a reference display is a legitimate final calibration step, and the
+          tool's report says so explicitly.
         </p>
       </section>
 
@@ -1034,12 +1055,11 @@
           <li id="ref10">Kang, B., Moon, O., Hong, C., Lee, H., Cho, B., &amp; Kim, Y. (2002). Design of Advanced Color Temperature Control System for HDTV Applications. <em>Journal of the Korean Physical Society</em>, 41(6), 865-871.</li>
         </ol>
         <p class="paper-meta">
-          Last updated June 10, 2026: added Section 10 (Colorimeter Calibration and the MHC2 Pipeline),
-          documenting the MHC2 matrix XYZ-sandwich semantics, uniform-scale white handling, knee-safe
-          PQ LUTs, Advanced Color association, spectral corrections, and the verification methodology.
-          Later the same day: wire-exact HDR measurement via FP16 scRGB patches (probe-validated; the
-          OS SDR-white value measured ~7% off the wire), full-range PQ LUT inversion with identity
-          above the reachable peak, and the PQ tracking verification sweep.
+          Last updated June 30, 2026: documented the CIE 1931 night-mode default, three-state Night
+          Mode control, seamless Velopack update behavior, and calibration wizard state persistence.
+          Section 10 documents the MHC2 matrix XYZ-sandwich semantics, uniform-scale white handling,
+          knee-safe PQ LUTs, Advanced Color association, spectral corrections, wire-exact HDR
+          measurement via FP16 scRGB patches, and the PQ tracking verification sweep.
         </p>
       </section>
 
