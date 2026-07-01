@@ -286,6 +286,43 @@ namespace HDRGammaController.Tests
             Assert.Equal("1.0.2", service.StateSnapshot.LastUpdateReadyNotificationVersion);
         }
 
+        [Fact]
+        public void UpdateAvailableNotification_IsOncePerTargetVersion()
+        {
+            var service = new UpdateService(new FakeUpdateManager("1.0.1"));
+
+            Assert.True(service.ShouldNotifyUpdateAvailable("1.0.2"));
+            service.MarkUpdateAvailableNotified("1.0.2");
+
+            Assert.False(service.ShouldNotifyUpdateAvailable("1.0.2"));
+            Assert.True(service.ShouldNotifyUpdateAvailable("1.0.3"));
+            Assert.Equal("1.0.2", service.StateSnapshot.LastUpdateAvailableNotificationVersion);
+        }
+
+        [Fact]
+        public void UpdatedNotification_IsOncePerInstalledVersion()
+        {
+            Directory.CreateDirectory(AppPaths.DataDir);
+            File.WriteAllText(Path.Combine(AppPaths.DataDir, "update-state.json"), """
+                {
+                  "IsInstalled": true,
+                  "InstalledVersion": "1.0.1"
+                }
+                """);
+
+            var service = new UpdateService(new FakeUpdateManager("1.0.2"));
+
+            Assert.Equal("1.0.1", service.UpdatedFromVersion);
+            Assert.Equal("1.0.2", service.UpdatedToVersion);
+            Assert.True(service.ShouldNotifyUpdated("1.0.2"));
+
+            service.MarkUpdatedNotified("1.0.2");
+
+            Assert.False(service.ShouldNotifyUpdated("1.0.2"));
+            Assert.True(service.ShouldNotifyUpdated("1.0.3"));
+            Assert.Equal("1.0.2", service.StateSnapshot.LastUpdatedNotificationVersion);
+        }
+
         private static UpdateInfo CreateUpdate(
             string version,
             bool isDowngrade = false,

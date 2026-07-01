@@ -52,6 +52,8 @@ namespace HDRGammaController.ViewModels
         public ICommand DashboardCommand { get; }
         public ICommand CalibrateCommand { get; }
         public ICommand ExportDiagnosticsCommand { get; }
+        public string AppVersion => _updateService.DisplayVersion;
+        public string TrayToolTipText => $"Gloam {AppVersion}";
 
         public TrayViewModel(
             MonitorManager monitorManager,
@@ -118,6 +120,7 @@ namespace HDRGammaController.ViewModels
                 _hotkeyManager.HotkeyPressed += OnHotkeyPressed;
             }
 
+            NotifyIfUpdated();
             CheckForUpdates();
         }
         
@@ -149,6 +152,9 @@ namespace HDRGammaController.ViewModels
                     return; // up to date, throttled, or failed and logged
                 }
 
+                string version = UpdateService.VersionLabel(info);
+                NotifyUpdateAvailable(version);
+
                 // Download silently in the background - no prompt, no manual download step.
                 if (!await _updateService.DownloadUpdatesAsync(info))
                 {
@@ -157,7 +163,6 @@ namespace HDRGammaController.ViewModels
                 }
 
                 _pendingUpdate = info;
-                string version = UpdateService.VersionLabel(info);
                 _updateScheduled = _updateService.ApplyUpdatesOnExit(info);
                 Log.Info(_updateScheduled
                     ? $"TrayViewModel: update {version} downloaded and scheduled for the next app restart."
@@ -170,6 +175,30 @@ namespace HDRGammaController.ViewModels
             }
         }
 
+        private void NotifyIfUpdated()
+        {
+            string? toVersion = _updateService.UpdatedToVersion;
+            if (string.IsNullOrWhiteSpace(toVersion)) return;
+            if (!_updateService.ShouldNotifyUpdated(toVersion)) return;
+
+            string? fromVersion = _updateService.UpdatedFromVersion;
+            string message = string.IsNullOrWhiteSpace(fromVersion)
+                ? $"Gloam is now running version {toVersion}."
+                : $"Updated from version {fromVersion} to {toVersion}.";
+
+            if (ShowNotification("Gloam updated", message, ToastKind.Success))
+                _updateService.MarkUpdatedNotified(toVersion);
+        }
+
+        private void NotifyUpdateAvailable(string version)
+        {
+            if (string.IsNullOrWhiteSpace(version)) return;
+            if (!_updateService.ShouldNotifyUpdateAvailable(version)) return;
+
+            if (ShowNotification("Update available", $"Version {version} is available. Downloading in the background.", ToastKind.Info))
+                _updateService.MarkUpdateAvailableNotified(version);
+        }
+
         private void NotifyUpdateReady(string? version, UpdateInfo? info)
         {
             if (string.IsNullOrWhiteSpace(version)) return;
@@ -179,9 +208,10 @@ namespace HDRGammaController.ViewModels
                 ? $"Version {version} is downloaded and will install when Gloam restarts."
                 : $"Version {version} is downloaded. Gloam will retry install scheduling on exit.";
 
+            bool shown = false;
             if (info != null)
             {
-                _toastService?.Show("Update ready", message, ToastKind.Success, "Restart now", () =>
+                shown = ShowNotification("Update ready", message, ToastKind.Success, "Restart now", () =>
                 {
                     try
                     {
@@ -196,14 +226,15 @@ namespace HDRGammaController.ViewModels
             }
             else
             {
-                _toastService?.Show("Update ready", message, ToastKind.Success, "Exit now", () =>
+                shown = ShowNotification("Update ready", message, ToastKind.Success, "Exit now", () =>
                 {
                     try { Application.Current.Shutdown(); }
                     catch (Exception ex) { Log.Error($"TrayViewModel: update exit action failed: {ex.Message}"); }
                 });
             }
 
-            _updateService.MarkUpdateReadyNotified(version);
+            if (shown)
+                _updateService.MarkUpdateReadyNotified(version);
         }
 
         private void NotifyIfUpdateFailuresPersist()
@@ -215,6 +246,30 @@ namespace HDRGammaController.ViewModels
                 "Gloam could not check for updates. It will keep trying in the background.",
                 ToastKind.Info);
             _updateService.MarkFailureNotified();
+        }
+
+        private bool ShowNotification(string title, string message, ToastKind kind)
+        {
+            if (_toastService != null)
+            {
+                _toastService.Show(title, message, kind);
+                return true;
+            }
+
+            NotificationRequested?.Invoke(title, message);
+            return true;
+        }
+
+        private bool ShowNotification(string title, string message, ToastKind kind, string actionLabel, Action action)
+        {
+            if (_toastService != null)
+            {
+                _toastService.Show(title, message, kind, actionLabel, action);
+                return true;
+            }
+
+            NotificationRequested?.Invoke(title, message);
+            return true;
         }
 
         /// <summary>

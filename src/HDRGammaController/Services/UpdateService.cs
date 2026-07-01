@@ -54,6 +54,16 @@ namespace HDRGammaController.Services
             _manager = manager ?? throw new ArgumentNullException(nameof(manager));
             _clock = clock ?? throw new ArgumentNullException(nameof(clock));
             _state = LoadState();
+            var previousInstalledVersion = _state.InstalledVersion;
+            var currentInstalledVersion = InstalledVersion;
+            if (_manager.IsInstalled &&
+                !string.IsNullOrWhiteSpace(previousInstalledVersion) &&
+                !string.IsNullOrWhiteSpace(currentInstalledVersion) &&
+                !string.Equals(previousInstalledVersion, currentInstalledVersion, StringComparison.OrdinalIgnoreCase))
+            {
+                UpdatedFromVersion = previousInstalledVersion;
+                UpdatedToVersion = currentInstalledVersion;
+            }
             CaptureRuntimeState();
             SaveState();
         }
@@ -67,6 +77,10 @@ namespace HDRGammaController.Services
 
         /// <summary>The installed Velopack package version, or null for dev / portable runs.</summary>
         public string? InstalledVersion => _manager.CurrentVersion?.ToString();
+
+        public string? UpdatedFromVersion { get; }
+
+        public string? UpdatedToVersion { get; }
 
         /// <summary>
         /// User-facing version label. Prefer Velopack's package version so the UI matches the
@@ -246,6 +260,29 @@ namespace HDRGammaController.Services
             SaveState();
         }
 
+        public bool ShouldNotifyUpdateAvailable(string version)
+        {
+            if (string.IsNullOrWhiteSpace(version))
+                return false;
+
+            lock (_stateLock)
+            {
+                return !string.Equals(_state.LastUpdateAvailableNotificationVersion, version, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        public void MarkUpdateAvailableNotified(string version)
+        {
+            if (string.IsNullOrWhiteSpace(version))
+                return;
+
+            lock (_stateLock)
+            {
+                _state.LastUpdateAvailableNotificationVersion = version;
+            }
+            SaveState();
+        }
+
         public bool ShouldNotifyUpdateReady(string version)
         {
             if (string.IsNullOrWhiteSpace(version))
@@ -265,6 +302,29 @@ namespace HDRGammaController.Services
             lock (_stateLock)
             {
                 _state.LastUpdateReadyNotificationVersion = version;
+            }
+            SaveState();
+        }
+
+        public bool ShouldNotifyUpdated(string version)
+        {
+            if (string.IsNullOrWhiteSpace(version))
+                return false;
+
+            lock (_stateLock)
+            {
+                return !string.Equals(_state.LastUpdatedNotificationVersion, version, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        public void MarkUpdatedNotified(string version)
+        {
+            if (string.IsNullOrWhiteSpace(version))
+                return;
+
+            lock (_stateLock)
+            {
+                _state.LastUpdatedNotificationVersion = version;
             }
             SaveState();
         }
@@ -528,7 +588,9 @@ namespace HDRGammaController.Services
         public long? LastTargetSize { get; set; }
         public string? LastDownloadedVersion { get; set; }
         public string? LastScheduledVersion { get; set; }
+        public string? LastUpdateAvailableNotificationVersion { get; set; }
         public string? LastUpdateReadyNotificationVersion { get; set; }
+        public string? LastUpdatedNotificationVersion { get; set; }
         public int ConsecutiveFailures { get; set; }
         public DateTimeOffset? LastFailureNotificationUtc { get; set; }
 
@@ -549,7 +611,9 @@ namespace HDRGammaController.Services
             LastTargetSize = LastTargetSize,
             LastDownloadedVersion = LastDownloadedVersion,
             LastScheduledVersion = LastScheduledVersion,
+            LastUpdateAvailableNotificationVersion = LastUpdateAvailableNotificationVersion,
             LastUpdateReadyNotificationVersion = LastUpdateReadyNotificationVersion,
+            LastUpdatedNotificationVersion = LastUpdatedNotificationVersion,
             ConsecutiveFailures = ConsecutiveFailures,
             LastFailureNotificationUtc = LastFailureNotificationUtc
         };

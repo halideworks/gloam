@@ -11,9 +11,9 @@
     <Window.Resources>
         <!-- Brutalist tray menu: hard square border, red highlight, follows the app palette -->
         <Style x:Key="ThemedContextMenu" TargetType="ContextMenu">
-            <Setter Property="Background" Value="{DynamicResource ThemeBg}"/>
-            <Setter Property="Foreground" Value="{DynamicResource ThemeText}"/>
-            <Setter Property="BorderBrush" Value="{DynamicResource ThemeBorder}"/>
+            <Setter Property="Background" Value="{DynamicResource MenuBackground}"/>
+            <Setter Property="Foreground" Value="{DynamicResource MenuForeground}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource MenuBorder}"/>
             <Setter Property="FontFamily" Value="{DynamicResource BodyFont}"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Padding" Value="3"/>
@@ -60,13 +60,13 @@
                                       HorizontalAlignment="Left" VerticalAlignment="Center"/>
                     <Path Grid.Column="1" x:Name="Arrow"
                           Data="M0,0 L4,4 L0,8 Z"
-                          Fill="{DynamicResource ThemeText}"
+                          Fill="{DynamicResource MenuForeground}"
                           VerticalAlignment="Center" Margin="8,0,0,0" Visibility="Collapsed"/>
                     <Popup x:Name="PART_Popup"
                            IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}"
                            Placement="Right" AllowsTransparency="True" Focusable="False" PopupAnimation="None">
-                        <Border Background="{DynamicResource ThemeBg}"
-                                BorderBrush="{DynamicResource ThemeBorder}"
+                        <Border Background="{DynamicResource MenuBackground}"
+                                BorderBrush="{DynamicResource MenuBorder}"
                                 BorderThickness="0" Padding="3">
                             <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle"/>
                         </Border>
@@ -90,7 +90,7 @@
 
         <Style x:Key="ThemedMenuItem" TargetType="MenuItem">
             <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Foreground" Value="{DynamicResource ThemeText}"/>
+            <Setter Property="Foreground" Value="{DynamicResource MenuForeground}"/>
             <Setter Property="FontFamily" Value="{DynamicResource BodyFont}"/>
             <Setter Property="Header" Value="{Binding Header}" />
             <Setter Property="Command" Value="{Binding Command}" />
@@ -103,7 +103,7 @@
 
         <Style x:Key="ThemedSubMenuItem" TargetType="MenuItem">
             <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Foreground" Value="{DynamicResource ThemeText}"/>
+            <Setter Property="Foreground" Value="{DynamicResource MenuForeground}"/>
             <Setter Property="FontFamily" Value="{DynamicResource BodyFont}"/>
             <Setter Property="Header" Value="{Binding Header}" />
             <Setter Property="Command" Value="{Binding Command}" />
@@ -114,7 +114,7 @@
 
     <Grid>
         <tb:TaskbarIcon x:Name="MyNotifyIcon"
-                        ToolTipText="Gloam"
+                        ToolTipText="{Binding TrayToolTipText}"
                         IconSource="/app.ico"
                         MenuActivation="RightClick">
             <tb:TaskbarIcon.ContextMenu>
