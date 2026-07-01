@@ -16,6 +16,13 @@ using HDRGammaController.Services;
 
 namespace HDRGammaController.ViewModels
 {
+    public delegate void ApplyCalibrationRequest(
+        MonitorInfo monitor,
+        GammaMode mode,
+        CalibrationSettings? calibration,
+        int? nightKelvinOverride,
+        NightModeSettings? nightModeSettingsOverride = null);
+
     public class DashboardViewModel : ObservableObject, IDisposable
     {
         // Frozen brushes: WPF can short-circuit thread-affinity checks on frozen Freezables
@@ -34,7 +41,7 @@ namespace HDRGammaController.ViewModels
         private readonly MonitorManager _monitorManager;
         private readonly NightModeService _nightModeService;
         private readonly UpdateService _updateService;
-        private readonly Action<MonitorInfo, GammaMode, CalibrationSettings?, int?> _applyCallback;
+        private readonly ApplyCalibrationRequest _applyCallback;
         private readonly Action<double> _blendChangedHandler;
         private readonly AppExclusionItem _appExclusionItem;
         private NightModeSettings _editingNightMode;
@@ -103,7 +110,7 @@ namespace HDRGammaController.ViewModels
             SettingsManager settingsManager,
             NightModeService nightModeService,
             UpdateService updateService,
-            Action<MonitorInfo, GammaMode, CalibrationSettings?, int?> applyCallback)
+            ApplyCalibrationRequest applyCallback)
         {
             _monitorManager = monitorManager;
             SettingsManager = settingsManager;
@@ -274,7 +281,7 @@ namespace HDRGammaController.ViewModels
                 {
                     var profile = SettingsManager.GetMonitorProfile(m.MonitorDevicePath);
                     var cal = profile?.ToCalibrationSettings() ?? new CalibrationSettings();
-                    _applyCallback(m, profile?.GammaMode ?? m.CurrentGamma, cal, kelvin);
+                    _applyCallback(m, profile?.GammaMode ?? m.CurrentGamma, cal, kelvin, _editingNightMode);
                 }
             });
         }

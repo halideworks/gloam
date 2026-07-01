@@ -76,11 +76,15 @@ namespace HDRGammaController
                     Log.Info($"App.OnStartup: Extracted/updated {extracted} ICM profiles");
                 }
 
-                // Apply theme based on Windows settings; re-apply when the user flips
-                // between Light and Dark in Windows Settings without restarting the app.
-                ApplyTheme();
+                // Re-apply theme when the user flips between Light and Dark in Windows Settings.
+                // If Gloam has a saved theme override, that override remains authoritative.
                 SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
-                Exit += (_, _) => SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
+                BrutalistTheme.Changed += ApplyTrayMenuTheme;
+                Exit += (_, _) =>
+                {
+                    SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
+                    BrutalistTheme.Changed -= ApplyTrayMenuTheme;
+                };
 
                 Log.Info("App.OnStartup: Building service provider...");
                 _serviceProvider = ConfigureServices();
@@ -91,6 +95,10 @@ namespace HDRGammaController
                 var themeSettings = _serviceProvider.GetRequiredService<SettingsManager>();
                 BrutalistTheme.Persist = dark => themeSettings.SetDarkTheme(dark);
                 BrutalistTheme.Initialize(themeSettings.DarkTheme ?? ThemeDetector.IsDarkMode());
+                ApplyTrayMenuTheme();
+
+                var updateService = _serviceProvider.GetRequiredService<UpdateService>();
+                StartupManager.EnableByDefaultForFreshInstall(themeSettings, updateService.IsInstalled);
 
                 Log.Info("App.OnStartup: Creating MainWindow...");
                 var mainWindow = new MainWindow();
@@ -120,29 +128,25 @@ namespace HDRGammaController
             if (e.Category == UserPreferenceCategory.General ||
                 e.Category == UserPreferenceCategory.Color)
             {
-                Dispatcher.Invoke(ApplyTheme);
+                Dispatcher.Invoke(() =>
+                {
+                    var settings = _serviceProvider?.GetService<SettingsManager>();
+                    if (settings?.DarkTheme == null)
+                        BrutalistTheme.Initialize(ThemeDetector.IsDarkMode());
+                    else
+                        ApplyTrayMenuTheme();
+                });
             }
         }
 
-        private void ApplyTheme()
+        private void ApplyTrayMenuTheme()
         {
-            bool isDark = ThemeDetector.IsDarkMode();
-            Log.Info($"App.ApplyTheme: Dark mode = {isDark}");
-            
-            if (isDark)
-            {
-                Resources["MenuBackground"] = Resources["DarkMenuBackground"];
-                Resources["MenuForeground"] = Resources["DarkMenuForeground"];
-                Resources["MenuBorder"] = Resources["DarkMenuBorder"];
-                Resources["MenuHighlight"] = Resources["DarkMenuHighlight"];
-            }
-            else
-            {
-                Resources["MenuBackground"] = Resources["LightMenuBackground"];
-                Resources["MenuForeground"] = Resources["LightMenuForeground"];
-                Resources["MenuBorder"] = Resources["LightMenuBorder"];
-                Resources["MenuHighlight"] = Resources["LightMenuHighlight"];
-            }
+            Log.Info($"App.ApplyTrayMenuTheme: Dark mode = {BrutalistTheme.IsDark}");
+
+            Resources["MenuBackground"] = Resources["ThemeBg"];
+            Resources["MenuForeground"] = Resources["ThemeText"];
+            Resources["MenuBorder"] = Resources["ThemeBorder"];
+            Resources["MenuHighlight"] = Resources["ThemeHover"];
         }
 
         // Once-per-session guard so a pathological handler that keeps throwing doesn't open a

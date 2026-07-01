@@ -104,7 +104,12 @@ namespace HDRGammaController.Core
             return true;
         }
 
-        public void RequestApply(MonitorInfo monitor, GammaMode mode, CalibrationSettings? manualCalibration = null, int? nightKelvinOverride = null)
+        public void RequestApply(
+            MonitorInfo monitor,
+            GammaMode mode,
+            CalibrationSettings? manualCalibration = null,
+            int? nightKelvinOverride = null,
+            NightModeSettings? nightModeSettingsOverride = null)
         {
             // Mid-calibration guard: a calibration has bypassed this display's corrections so
             // the colorimeter measures the raw panel. The live apply path (slider, night mode,
@@ -148,7 +153,7 @@ namespace HDRGammaController.Core
 
             if (nightModeActive)
             {
-                ApplyNightModeToCalibration(calibration, currentKelvin, _settingsManager.NightMode);
+                ApplyNightModeToCalibration(calibration, currentKelvin, nightModeSettingsOverride ?? _settingsManager.NightMode);
                 calibration.NightMelanopicCoefficients = CcssMelanopicEstimator.TryLoad(calibration.NightModeCcssPath);
             }
 

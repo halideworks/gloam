@@ -580,6 +580,34 @@ namespace HDRGammaController.Tests
             Assert.True(settings.ManualOverrideEnabled);
         }
 
+        [Fact]
+        public void SettingsManager_StartupDefaultFlag_Persists()
+        {
+            string originalData = AppPaths.DataDir;
+            string originalRoaming = AppPaths.RoamingDataDir;
+            string tempDir = CreateTempDirectory();
+
+            try
+            {
+                AppPaths.UseDataDirectoriesForCurrentProcess(tempDir, Path.Combine(tempDir, "roaming"));
+
+                var first = new SettingsManager();
+                Assert.False(first.LoadedExistingSettingsFile);
+                Assert.False(first.StartupDefaultApplied);
+
+                first.MarkStartupDefaultApplied();
+
+                var second = new SettingsManager();
+                Assert.True(second.LoadedExistingSettingsFile);
+                Assert.True(second.StartupDefaultApplied);
+            }
+            finally
+            {
+                AppPaths.UseDataDirectoriesForCurrentProcess(originalData, originalRoaming);
+                DeleteDirectory(tempDir);
+            }
+        }
+
         #endregion
 
         #region AppExclusionRule Tests

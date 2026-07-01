@@ -273,6 +273,19 @@ namespace HDRGammaController.Tests
             Assert.Contains("\"LastTargetVersion\": \"1.0.2\"", json);
         }
 
+        [Fact]
+        public void UpdateReadyNotification_IsOncePerTargetVersion()
+        {
+            var service = new UpdateService(new FakeUpdateManager("1.0.1"));
+
+            Assert.True(service.ShouldNotifyUpdateReady("1.0.2"));
+            service.MarkUpdateReadyNotified("1.0.2");
+
+            Assert.False(service.ShouldNotifyUpdateReady("1.0.2"));
+            Assert.True(service.ShouldNotifyUpdateReady("1.0.3"));
+            Assert.Equal("1.0.2", service.StateSnapshot.LastUpdateReadyNotificationVersion);
+        }
+
         private static UpdateInfo CreateUpdate(
             string version,
             bool isDowngrade = false,

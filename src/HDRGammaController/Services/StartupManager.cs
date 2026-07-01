@@ -33,28 +33,50 @@ namespace HDRGammaController.Services
             }
             set
             {
-                try
-                {
-                    MigrateLegacyValue();
-                    using var key = Registry.CurrentUser.OpenSubKey(RegistryPath, true);
-                    if (key == null) return;
+                TrySetStartupEnabled(value);
+            }
+        }
 
-                    if (value)
-                    {
-                        string exePath = GetExePath();
-                        key.SetValue(AppName, $"\"{exePath}\"");
-                        Log.Info($"StartupManager: Enabled startup with path: {exePath}");
-                    }
-                    else
-                    {
-                        key.DeleteValue(AppName, false);
-                        Log.Info("StartupManager: Disabled startup");
-                    }
-                }
-                catch (Exception ex)
+        public static bool TrySetStartupEnabled(bool value)
+        {
+            try
+            {
+                MigrateLegacyValue();
+                using var key = Registry.CurrentUser.OpenSubKey(RegistryPath, true);
+                if (key == null) return false;
+
+                if (value)
                 {
-                    Log.Info($"StartupManager: Error: {ex.Message}");
+                    string exePath = GetExePath();
+                    key.SetValue(AppName, $"\"{exePath}\"");
+                    Log.Info($"StartupManager: Enabled startup with path: {exePath}");
                 }
+                else
+                {
+                    key.DeleteValue(AppName, false);
+                    Log.Info("StartupManager: Disabled startup");
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"StartupManager: Error: {ex.Message}");
+                return false;
+            }
+        }
+
+        public static void EnableByDefaultForFreshInstall(SettingsManager settings, bool isInstalled)
+        {
+            if (settings == null) return;
+            if (!isInstalled) return;
+            if (settings.LoadedExistingSettingsFile) return;
+            if (settings.StartupDefaultApplied) return;
+
+            if (TrySetStartupEnabled(true))
+            {
+                settings.MarkStartupDefaultApplied();
+                Log.Info("StartupManager: Applied fresh-install default startup registration.");
             }
         }
 

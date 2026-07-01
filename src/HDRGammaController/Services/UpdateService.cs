@@ -246,6 +246,29 @@ namespace HDRGammaController.Services
             SaveState();
         }
 
+        public bool ShouldNotifyUpdateReady(string version)
+        {
+            if (string.IsNullOrWhiteSpace(version))
+                return false;
+
+            lock (_stateLock)
+            {
+                return !string.Equals(_state.LastUpdateReadyNotificationVersion, version, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        public void MarkUpdateReadyNotified(string version)
+        {
+            if (string.IsNullOrWhiteSpace(version))
+                return;
+
+            lock (_stateLock)
+            {
+                _state.LastUpdateReadyNotificationVersion = version;
+            }
+            SaveState();
+        }
+
         /// <summary>Version label for the pending update (e.g. "1.2.0").</summary>
         public static string VersionLabel(UpdateInfo info)
             => info.TargetFullRelease?.Version?.ToString() ?? "new version";
@@ -505,6 +528,7 @@ namespace HDRGammaController.Services
         public long? LastTargetSize { get; set; }
         public string? LastDownloadedVersion { get; set; }
         public string? LastScheduledVersion { get; set; }
+        public string? LastUpdateReadyNotificationVersion { get; set; }
         public int ConsecutiveFailures { get; set; }
         public DateTimeOffset? LastFailureNotificationUtc { get; set; }
 
@@ -525,6 +549,7 @@ namespace HDRGammaController.Services
             LastTargetSize = LastTargetSize,
             LastDownloadedVersion = LastDownloadedVersion,
             LastScheduledVersion = LastScheduledVersion,
+            LastUpdateReadyNotificationVersion = LastUpdateReadyNotificationVersion,
             ConsecutiveFailures = ConsecutiveFailures,
             LastFailureNotificationUtc = LastFailureNotificationUtc
         };

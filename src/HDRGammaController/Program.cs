@@ -29,7 +29,11 @@ namespace HDRGammaController
             // any window is created.
             try
             {
-                VelopackApp.Build().Run();
+                VelopackApp.Build()
+                    .OnAfterInstallFastCallback(_ => ApplyFreshInstallStartupDefault())
+                    .OnBeforeUninstallFastCallback(_ => RemoveStartupRegistration())
+                    .OnFirstRun(_ => ApplyFreshInstallStartupDefault())
+                    .Run();
             }
             catch (Exception ex)
             {
@@ -55,6 +59,31 @@ namespace HDRGammaController
             var app = new App();
             app.InitializeComponent();
             return app.Run();
+        }
+
+        private static void ApplyFreshInstallStartupDefault()
+        {
+            try
+            {
+                var settings = new SettingsManager();
+                StartupManager.EnableByDefaultForFreshInstall(settings, isInstalled: true);
+            }
+            catch (Exception ex)
+            {
+                try { Log.Error("Fresh-install startup default failed: " + ex); } catch { }
+            }
+        }
+
+        private static void RemoveStartupRegistration()
+        {
+            try
+            {
+                StartupManager.TrySetStartupEnabled(false);
+            }
+            catch (Exception ex)
+            {
+                try { Log.Error("Uninstall startup cleanup failed: " + ex); } catch { }
+            }
         }
 
         private static bool IsLaunchSmoke(string[] args)

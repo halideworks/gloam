@@ -93,7 +93,7 @@ namespace HDRGammaController.Services
                 ActionCommand = actionCommand
             };
 
-            var window = new ToastWindow(vm);
+            var window = new ToastWindow(vm, actionCommand == null ? null : TimeSpan.FromSeconds(8));
             // Keep a weak handle so a window that closed on its own (timer) isn't replaced
             // against a stale reference.
             window.Closed += (_, _) =>

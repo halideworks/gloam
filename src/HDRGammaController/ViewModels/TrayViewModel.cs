@@ -138,6 +138,7 @@ namespace HDRGammaController.ViewModels
                 {
                     _pendingUpdate = null;
                     _updateScheduled = true;
+                    NotifyUpdateReady(_updateService.StateSnapshot.LastScheduledVersion, null);
                     return;
                 }
 
@@ -161,11 +162,48 @@ namespace HDRGammaController.ViewModels
                 Log.Info(_updateScheduled
                     ? $"TrayViewModel: update {version} downloaded and scheduled for the next app restart."
                     : $"TrayViewModel: update {version} downloaded but could not be scheduled yet; will retry on exit.");
+                NotifyUpdateReady(version, info);
             }
             catch (Exception ex)
             {
                 Log.Error($"TrayViewModel.CheckForUpdates: {ex.Message}");
             }
+        }
+
+        private void NotifyUpdateReady(string? version, UpdateInfo? info)
+        {
+            if (string.IsNullOrWhiteSpace(version)) return;
+            if (!_updateService.ShouldNotifyUpdateReady(version)) return;
+
+            string message = _updateScheduled
+                ? $"Version {version} is downloaded and will install when Gloam restarts."
+                : $"Version {version} is downloaded. Gloam will retry install scheduling on exit.";
+
+            if (info != null)
+            {
+                _toastService?.Show("Update ready", message, ToastKind.Success, "Restart now", () =>
+                {
+                    try
+                    {
+                        _updateService.ApplyUpdatesAndRestart(info);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error($"TrayViewModel: restart update apply failed: {ex.Message}");
+                        _toastService?.Show("Update will retry later", "Gloam could not restart into the update yet.", ToastKind.Warning);
+                    }
+                });
+            }
+            else
+            {
+                _toastService?.Show("Update ready", message, ToastKind.Success, "Exit now", () =>
+                {
+                    try { Application.Current.Shutdown(); }
+                    catch (Exception ex) { Log.Error($"TrayViewModel: update exit action failed: {ex.Message}"); }
+                });
+            }
+
+            _updateService.MarkUpdateReadyNotified(version);
         }
 
         private void NotifyIfUpdateFailuresPersist()
@@ -414,8 +452,13 @@ namespace HDRGammaController.ViewModels
             RefreshMonitors();
         }
         
-        public void RequestApply(MonitorInfo monitor, GammaMode mode, CalibrationSettings? manualCalibration = null, int? nightKelvinOverride = null)
-            => _applyService.RequestApply(monitor, mode, manualCalibration, nightKelvinOverride);
+        public void RequestApply(
+            MonitorInfo monitor,
+            GammaMode mode,
+            CalibrationSettings? manualCalibration = null,
+            int? nightKelvinOverride = null,
+            NightModeSettings? nightModeSettingsOverride = null)
+            => _applyService.RequestApply(monitor, mode, manualCalibration, nightKelvinOverride, nightModeSettingsOverride);
 
         private void ApplyAll()
             => _applyService.ApplyAll(TrayItems.OfType<MonitorViewModel>().Select(vm => vm.Model));
@@ -656,7 +699,8 @@ namespace HDRGammaController.ViewModels
 
                     var vm = new MonitorViewModel(m, _profileManager, _dispwinRunner, index, _settingsManager);
                     // Point MonitorViewModel to use our centralized RequestApply which handles Night Mode
-                    vm.OnApplyWithCalibration = RequestApply;
+                    vm.OnApplyWithCalibration = (monitor, mode, calibration, nightKelvinOverride) =>
+                        RequestApply(monitor, mode, calibration, nightKelvinOverride);
                     vm.GetAllMonitors = () => monitors;
                     TrayItems.Add(vm);
                     index++;

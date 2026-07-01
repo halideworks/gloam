@@ -278,6 +278,7 @@ namespace HDRGammaController.Core
         private long _dataVersion;
 
         private SettingsData _data = new SettingsData();
+        public bool LoadedExistingSettingsFile { get; private set; }
 
         public NightModeSettings NightMode
         {
@@ -291,6 +292,22 @@ namespace HDRGammaController.Core
         public bool? DarkTheme
         {
             get { lock (_dataLock) { return _data.DarkTheme; } }
+        }
+
+        public bool StartupDefaultApplied
+        {
+            get { lock (_dataLock) { return _data.StartupDefaultApplied; } }
+        }
+
+        public void MarkStartupDefaultApplied()
+        {
+            lock (_dataLock)
+            {
+                if (_data.StartupDefaultApplied) return;
+                _data.StartupDefaultApplied = true;
+                _dataVersion++;
+            }
+            Save();
         }
 
         public void SetDarkTheme(bool dark)
@@ -339,9 +356,11 @@ namespace HDRGammaController.Core
         public void Load()
         {
             SettingsData? loaded = null;
+            bool fileExists = false;
             try
             {
-                if (File.Exists(SettingsFilePath))
+                fileExists = File.Exists(SettingsFilePath);
+                if (fileExists)
                 {
                     string json = File.ReadAllText(SettingsFilePath);
                     var options = new JsonSerializerOptions
@@ -377,6 +396,7 @@ namespace HDRGammaController.Core
                                 lock (_dataLock)
                                 {
                                     _data = loaded;
+                                    LoadedExistingSettingsFile = fileExists;
                                     _dataVersion++;
                                 }
                                 Save();
@@ -402,6 +422,7 @@ namespace HDRGammaController.Core
             lock (_dataLock)
             {
                 _data = loaded ?? new SettingsData();
+                LoadedExistingSettingsFile = fileExists;
                 _dataVersion++;
             }
         }
@@ -888,6 +909,7 @@ namespace HDRGammaController.Core
             public List<AppExclusionRule> ExcludedApps { get; set; } = new List<AppExclusionRule>();
             // Brutalist UI theme: true = dark, false = light, null = follow OS.
             public bool? DarkTheme { get; set; } = null;
+            public bool StartupDefaultApplied { get; set; }
             public Dictionary<string, WindowBoundsData> WindowBounds { get; set; } = new Dictionary<string, WindowBoundsData>();
         }
 

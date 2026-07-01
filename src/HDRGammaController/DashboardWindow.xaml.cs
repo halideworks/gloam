@@ -22,7 +22,7 @@ namespace HDRGammaController
             SettingsManager settingsManager,
             NightModeService nightModeService,
             UpdateService updateService,
-            Action<MonitorInfo, GammaMode, CalibrationSettings?, int?> applyCallback)
+            ApplyCalibrationRequest applyCallback)
         {
             InitializeComponent();
             WindowBoundsPersistence.Attach(this, settingsManager, "Dashboard");
