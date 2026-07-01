@@ -21,7 +21,7 @@ namespace HDRGammaController.Services
     /// </summary>
     public class UpdateService
     {
-        internal static readonly TimeSpan SuccessfulCheckInterval = TimeSpan.FromHours(6);
+        internal static readonly TimeSpan SuccessfulCheckInterval = TimeSpan.FromMinutes(15);
         internal static readonly TimeSpan FailedCheckRetryInterval = TimeSpan.FromMinutes(30);
         internal static readonly TimeSpan FailureNotificationInterval = TimeSpan.FromHours(24);
         private const int FailureNotificationThreshold = 3;

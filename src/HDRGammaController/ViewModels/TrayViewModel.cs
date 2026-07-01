@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HDRGammaController.Core;
@@ -31,6 +32,7 @@ namespace HDRGammaController.ViewModels
         private readonly GammaApplyService _applyService;
         private readonly UpdateService _updateService;
         private readonly IToastService? _toastService;
+        private readonly DispatcherTimer _updateCheckTimer;
 
         private readonly Dictionary<int, Action<MonitorInfo>> _hotkeyActions = new Dictionary<int, Action<MonitorInfo>>();
         private int _panicId = -1;
@@ -122,15 +124,26 @@ namespace HDRGammaController.ViewModels
 
             NotifyIfUpdated();
             CheckForUpdates();
+
+            _updateCheckTimer = new DispatcherTimer
+            {
+                Interval = UpdateService.SuccessfulCheckInterval
+            };
+            _updateCheckTimer.Tick += (_, _) => CheckForUpdates();
+            _updateCheckTimer.Start();
         }
         
         // The downloaded-and-ready update awaiting apply. Null until one is detected and
         // fully downloaded. Scheduled silently for the next normal app exit/restart.
         private UpdateInfo? _pendingUpdate;
         private bool _updateScheduled;
+        private bool _updateCheckInProgress;
 
         private async void CheckForUpdates()
         {
+            if (_updateCheckInProgress) return;
+            _updateCheckInProgress = true;
+
             // async void: any escaped exception would crash the process via the dispatcher.
             try
             {
@@ -172,6 +185,10 @@ namespace HDRGammaController.ViewModels
             catch (Exception ex)
             {
                 Log.Error($"TrayViewModel.CheckForUpdates: {ex.Message}");
+            }
+            finally
+            {
+                _updateCheckInProgress = false;
             }
         }
 
@@ -699,6 +716,7 @@ namespace HDRGammaController.ViewModels
 
             // Stops the night-mode and ramp-guard timers and unhooks the
             // foreground-window event hook.
+            _updateCheckTimer.Stop();
             _applyService.Dispose();
             _nightModeService.Dispose();
             _appDetectionService.Dispose();
