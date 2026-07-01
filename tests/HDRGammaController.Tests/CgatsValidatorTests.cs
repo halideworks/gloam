@@ -1,5 +1,7 @@
 using Xunit;
 using HDRGammaController.Core.Calibration;
+using System;
+using System.IO;
 
 namespace HDRGammaController.Tests
 {
@@ -60,6 +62,26 @@ NUMBER_OF_SETS 2
 BEGIN_DATA
 1 0.5 0.6 0.1
 2 0.4 0.7 0.2
+END_DATA
+";
+
+        private const string RgbCcss = @"CCSS
+
+DESCRIPTOR ""RGB sample""
+KEYWORD ""SPECTRAL_BANDS""
+SPECTRAL_BANDS ""5""
+
+NUMBER_OF_FIELDS 6
+BEGIN_DATA_FORMAT
+SAMPLE_ID SPEC_430 SPEC_490 SPEC_540 SPEC_610 SPEC_660
+END_DATA_FORMAT
+
+NUMBER_OF_SETS 4
+BEGIN_DATA
+1 0.01 0.01 0.01 0.01 0.01
+2 0.02 0.02 0.02 0.80 1.00
+3 0.03 0.20 1.00 0.08 0.02
+4 1.00 0.80 0.10 0.02 0.01
 END_DATA
 ";
 
@@ -213,6 +235,60 @@ END_DATA
             var correction = ValidCcss.Replace("0.7 0.2", "-0.7 0.2");
             var result = CgatsValidator.Validate(correction, "ccss");
             Assert.True(result.IsValid, result.Error ?? "expected negative spectral samples to be accepted");
+        }
+
+        [Fact]
+        public void CcssMelanopicEstimator_InfersPrimaryCoefficients()
+        {
+            var coefficients = CcssMelanopicEstimator.TryEstimate(RgbCcss, "test.ccss");
+
+            Assert.NotNull(coefficients);
+            Assert.True(coefficients!.BlueMelanopicPerLuminance > coefficients.RedMelanopicPerLuminance);
+            Assert.True(coefficients.GreenMelanopicPerLuminance > coefficients.RedMelanopicPerLuminance);
+            Assert.Equal("test.ccss", coefficients.SourceName);
+        }
+
+        [Fact]
+        public void CcssDatabaseClient_Save_ReturnsExistingFileForDuplicateContent()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "GloamCcssTests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var entry = new CcssDatabaseClient.Entry(
+                    "ccss", "M27Q P", "", "", "i1 Pro", "2026-01-01", ValidCcss);
+
+                string first = CcssDatabaseClient.Save(entry, dir);
+                string second = CcssDatabaseClient.Save(entry, dir);
+
+                Assert.Equal(first, second);
+                Assert.Single(Directory.GetFiles(dir, "*.ccss"));
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        }
+
+        [Fact]
+        public void CcssDatabaseClient_ListSaved_DeduplicatesMatchingLocalFiles()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "GloamCcssTests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                File.WriteAllText(Path.Combine(dir, "M27Q P.ccss"), ValidCcss);
+                File.WriteAllText(Path.Combine(dir, "M27Q P (2).ccss"), ValidCcss);
+
+                var saved = CcssDatabaseClient.ListSaved(dir, "M27Q", "ccss");
+
+                Assert.Single(saved);
+                Assert.Equal("Saved", saved[0].Source);
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
         }
     }
 }

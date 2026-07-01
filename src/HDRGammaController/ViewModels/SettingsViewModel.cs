@@ -7,6 +7,7 @@ using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HDRGammaController.Core;
+using HDRGammaController.Core.Calibration;
 
 namespace HDRGammaController.ViewModels
 {
@@ -49,6 +50,7 @@ namespace HDRGammaController.ViewModels
         public ICommand ResetAllCommand { get; }
         public ICommand ApplyCommand { get; }
         public ICommand SaveAndCloseCommand { get; }
+        public ICommand ClearNightSpectrumCommand { get; }
 
         public event Action? CloseRequested;
 
@@ -88,6 +90,7 @@ namespace HDRGammaController.ViewModels
             ResetAllCommand = new RelayCommand(ResetAll);
             ApplyCommand = new RelayCommand(ApplyCurrent);
             SaveAndCloseCommand = new RelayCommand(SaveAndClose);
+            ClearNightSpectrumCommand = new RelayCommand(() => SelectNightSpectrumPath(null));
 
             _selectedMonitor = initialChoice ?? (Monitors.Count > 0 ? Monitors[0] : null);
             if (_selectedMonitor != null)
@@ -251,6 +254,32 @@ namespace HDRGammaController.ViewModels
                 OnPropertyChanged();
                 SchedulePreview();
             }
+        }
+
+        public string CurrentMonitorFriendlyName => _currentMonitor.FriendlyName ?? "";
+
+        public string NightSpectrumLabel => string.IsNullOrWhiteSpace(_profile.NightModeCcssPath)
+            ? "Generic RGB estimate"
+            : System.IO.Path.GetFileName(_profile.NightModeCcssPath);
+
+        public bool HasNightSpectrum => !string.IsNullOrWhiteSpace(_profile.NightModeCcssPath);
+
+        public void SelectNightSpectrumPath(string? path)
+        {
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                if (!path.EndsWith(".ccss", StringComparison.OrdinalIgnoreCase) ||
+                    !CgatsValidator.IsValidFile(path, "ccss"))
+                {
+                    Log.Info($"SettingsViewModel: rejected night spectrum path '{path}'");
+                    return;
+                }
+            }
+
+            _profile.NightModeCcssPath = string.IsNullOrWhiteSpace(path) ? null : path;
+            OnPropertyChanged(nameof(NightSpectrumLabel));
+            OnPropertyChanged(nameof(HasNightSpectrum));
+            SchedulePreview();
         }
 
         private void LoadMonitorProfile(MonitorInfo monitor)

@@ -61,13 +61,22 @@ namespace HDRGammaController.Core
         /// <summary>
         /// Algorithm to use for color temperature transformation.
         /// </summary>
-        public NightModeAlgorithm Algorithm { get; set; } = NightModeAlgorithm.AccurateCIE1931;
+        public NightModeAlgorithm Algorithm { get; set; } = NightModeAlgorithm.Perceptual;
 
         /// <summary>
         /// Enable enhanced warmth curve below 2800K for more dramatic visual changes.
         /// When disabled, uses physically accurate color temperatures (subtle at very warm temps).
         /// </summary>
         public bool UseUltraWarmMode { get; set; } = false;
+
+        /// <summary>
+        /// Intensity of the Perceptual algorithm: fraction of full chromatic adaptation
+        /// (0 = off/neutral, 1 = full colorimetric shift). Lower preserves more colour.
+        /// </summary>
+        public double PerceptualStrength { get; set; } = ColorAdjustments.DefaultPerceptualStrength;
+
+        public static double ClampPerceptualStrength(double value) =>
+            double.IsFinite(value) ? Math.Clamp(value, 0.0, 1.0) : ColorAdjustments.DefaultPerceptualStrength;
 
         /// <summary>
         /// Legacy temperature as -50 to +50 scale. Converts to Kelvin internally.
@@ -119,6 +128,33 @@ namespace HDRGammaController.Core
 
             Schedule.Add(sunrisePoint);
             Schedule.Add(sunsetPoint);
+        }
+
+        /// <summary>
+        /// Converts a simple two-point fixed schedule to sun triggers without relying on list
+        /// order. The daylight/high-K point belongs at sunrise; the warm/low-K point belongs
+        /// at sunset. This also repairs schedules produced by the old auto-detect bug that
+        /// assigned the first row to Sunset and the second to Sunrise.
+        /// </summary>
+        public bool ConvertSimpleScheduleToSunTriggers()
+        {
+            if (Schedule == null || Schedule.Count != 2)
+                return false;
+
+            var daylight = Schedule.OrderByDescending(p => ClampKelvin(p.TargetKelvin)).First();
+            var warm = Schedule.OrderBy(p => ClampKelvin(p.TargetKelvin)).First();
+            if (ReferenceEquals(daylight, warm))
+                return false;
+
+            if (ClampKelvin(daylight.TargetKelvin) < 6000 || ClampKelvin(warm.TargetKelvin) >= 6000)
+                return false;
+
+            daylight.TriggerType = ScheduleTriggerType.Sunrise;
+            daylight.OffsetMinutes = 0;
+            warm.TriggerType = ScheduleTriggerType.Sunset;
+            warm.OffsetMinutes = 0;
+            UseAutoSchedule = true;
+            return true;
         }
 
         /// <summary>
@@ -533,6 +569,7 @@ namespace HDRGammaController.Core
                 TemperatureKelvin = NightModeSettings.ClampKelvin(source.TemperatureKelvin),
                 Algorithm = source.Algorithm,
                 UseUltraWarmMode = source.UseUltraWarmMode,
+                PerceptualStrength = NightModeSettings.ClampPerceptualStrength(source.PerceptualStrength),
                 FadeMinutes = NightModeSettings.ClampFadeMinutes(source.FadeMinutes),
                 Schedule = new List<NightModeSchedulePoint>()
             };

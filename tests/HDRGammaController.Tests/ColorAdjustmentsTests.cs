@@ -239,6 +239,132 @@ namespace HDRGammaController.Tests
 
         #endregion
 
+        #region Temperature Tests - Perceptual (partial adaptation)
+
+        [Fact]
+        public void GetPerceptualMultipliers_6500K_ReturnsNeutral()
+        {
+            var (r, g, b) = ColorAdjustments.GetPerceptualMultipliers(6500);
+
+            Assert.InRange(r, 0.99, 1.01);
+            Assert.InRange(g, 0.99, 1.01);
+            Assert.InRange(b, 0.99, 1.01);
+        }
+
+        [Fact]
+        public void GetPerceptualMultipliers_2700K_IsWarmWithRedAtUnity()
+        {
+            var (r, g, b) = ColorAdjustments.GetPerceptualMultipliers(2700);
+
+            // Red stays at 1.0 (brightest channel not scaled up -> no gamut clipping / colour
+            // cast), and warmth still holds R > G > B.
+            Assert.Equal(1.0, r, 3);
+            Assert.True(r > g && g > b, $"Expected R>G>B, got ({r:F3},{g:F3},{b:F3})");
+        }
+
+        [Fact]
+        public void GetPerceptualMultipliers_2700K_PreservesMoreBlueThanAccurate()
+        {
+            // Partial adaptation eases toward neutral, so blue/green are cut LESS than the full
+            // colorimetric shift — the core "preserve colour" improvement — but still reduced.
+            var perceptual = ColorAdjustments.GetPerceptualMultipliers(2700);
+            var accurate = ColorAdjustments.GetAccurateMultipliers(2700);
+
+            Assert.True(perceptual.B > accurate.B, "Perceptual should keep more blue than Accurate");
+            Assert.True(perceptual.G > accurate.G, "Perceptual should keep more green than Accurate");
+            Assert.True(perceptual.B < 1.0, "Perceptual should still reduce blue below neutral");
+        }
+
+        [Fact]
+        public void DirectPerceptualMultipliers_ExtremeInputs_ReturnFiniteBoundedValues()
+        {
+            foreach (int kelvin in new[] { int.MinValue, -10000, 0, 1000, 6500, 10000, int.MaxValue })
+            {
+                AssertFiniteBounded(ColorAdjustments.GetPerceptualMultipliers(kelvin));
+            }
+        }
+
+        [Fact]
+        public void ApplyUserAdjustmentsLinear_Perceptual_WarmsWhite()
+        {
+            var settings = new CalibrationSettings
+            {
+                Algorithm = NightModeAlgorithm.Perceptual,
+                Temperature = -20.0 // ~5100K
+            };
+
+            var (r, g, b) = ColorAdjustments.ApplyUserAdjustmentsLinear(1.0, 1.0, 1.0, settings);
+
+            Assert.True(b < r, "Perceptual should reduce blue relative to red when warming");
+            Assert.True(double.IsFinite(r) && double.IsFinite(g) && double.IsFinite(b));
+        }
+
+        [Fact]
+        public void GetPerceptualMultipliers_LowerStrength_PreservesMoreColor()
+        {
+            var strong = ColorAdjustments.GetPerceptualMultipliers(2700, 1.0);
+            var weak = ColorAdjustments.GetPerceptualMultipliers(2700, 0.5);
+
+            // Lower strength eases toward neutral (1,1,1): blue/green closer to 1.
+            Assert.True(weak.B > strong.B, "Lower strength keeps more blue");
+            Assert.True(weak.G > strong.G, "Lower strength keeps more green");
+            // Strength 1.0 equals the full colorimetric (Accurate) shift.
+            var accurate = ColorAdjustments.GetAccurateMultipliers(2700);
+            Assert.Equal(accurate.B, strong.B, 6);
+        }
+
+        [Fact]
+        public void GetUltraNightMultipliers_6500K_ReturnsNeutral()
+        {
+            var (r, g, b) = ColorAdjustments.GetUltraNightMultipliers(6500);
+
+            Assert.Equal(1.0, r, 4);
+            Assert.Equal(1.0, g, 4);
+            Assert.Equal(1.0, b, 4);
+        }
+
+        [Fact]
+        public void GetUltraNightMultipliers_Warm_IsAmberDriverSafeAndDimmed()
+        {
+            var (r, g, b) = ColorAdjustments.GetUltraNightMultipliers(2200);
+
+            Assert.True(b > 0.0, "Blue must stay above zero so the gamma ramp is not a flat white→black channel");
+            Assert.True(b <= 0.12, $"Blue should still be deeply cut (~90%), got {b:F3}");
+            // Amber order R > G > B (green ABOVE blue avoids a magenta cast).
+            Assert.True(r > g && g > b, $"Expected R>G>B amber, got ({r:F3},{g:F3},{b:F3})");
+            // Deepest-evening mode is dimmed, so red is pulled below full.
+            Assert.True(r < 1.0 && r > 0.5, $"Ultra Night should dim red below full, got {r:F3}");
+        }
+
+        [Fact]
+        public void GetUltraNightMultipliers_AllChannelsStayAboveZero()
+        {
+            // A zero multiplier makes a flat gamma ramp Windows rejects; every channel must
+            // keep a floor across the whole night-mode range.
+            foreach (int kelvin in new[] { 1000, 1900, 2000, 2426, 2700, 3400, 6500, 10000 })
+            {
+                var (r, g, b) = ColorAdjustments.GetUltraNightMultipliers(kelvin);
+                Assert.True(r > 0.0 && g > 0.0 && b > 0.0, $"{kelvin}K produced a zero channel: ({r:F3},{g:F3},{b:F3})");
+            }
+        }
+
+        [Fact]
+        public void GetUltraNightMultipliers_WithMelanopicCoefficients_ReducesGreenWhenGreenIsCostly()
+        {
+            var generic = ColorAdjustments.GetUltraNightMultipliers(2200);
+            var coefficients = new NightMelanopicCoefficients(
+                redMelanopic: 0.1, greenMelanopic: 1.0, blueMelanopic: 2.0,
+                redLuminance: 1.0, greenLuminance: 1.0, blueLuminance: 0.4,
+                sourceName: "test.ccss");
+
+            var spectral = ColorAdjustments.GetUltraNightMultipliers(2200, coefficients);
+
+            Assert.True(spectral.G < generic.G, $"Expected spectral green cut: generic={generic.G:F3}, spectral={spectral.G:F3}");
+            Assert.True(spectral.G >= spectral.B, "Green must stay at or above blue to avoid a magenta cast");
+        }
+
+        #endregion
+
         #region Tint Tests
 
         [Fact]

@@ -284,10 +284,21 @@
 
                     <!-- Controls -->
                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                        <Button Content="Refresh" Command="{Binding RefreshCommand}" Margin="0,0,10,0"/>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,0">
+                            <TextBlock Text="Night profile" Style="{StaticResource FieldLabel}"
+                                       VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <ComboBox Width="210" Height="36"
+                                      ItemsSource="{Binding AvailableNightModeAlgorithms}"
+                                      DisplayMemberPath="Label"
+                                      SelectedValuePath="Value"
+                                      SelectedValue="{Binding SelectedNightModeAlgorithm}"
+                                      ToolTip="{Binding SelectedNightModeAlgorithmDescription}"/>
+                        </StackPanel>
+
+                        <Button Content="Refresh" Command="{Binding RefreshCommand}" Height="36" Margin="0,0,10,0"/>
 
                         <Button Content="{Binding NightModeModeLabel}" Command="{Binding CycleNightModeCommand}"
-                                Padding="16,9" MinWidth="166"/>
+                                Padding="16,9" Height="36" MinWidth="166"/>
                     </StackPanel>
                 </Grid>
 
@@ -304,13 +315,13 @@
                         <!-- Night Mode Schedule -->
                         <Expander Margin="0,24,0,0" IsExpanded="True" Foreground="{DynamicResource ThemeText}">
                             <Expander.Header>
-                                <TextBlock Text="Night mode schedule"
+                                <TextBlock Text="Night mode controls"
                                            FontFamily="{StaticResource DisplayFont}" FontWeight="Bold" FontSize="14"
                                            Foreground="{DynamicResource ThemeText}"/>
                             </Expander.Header>
                             <Border BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1" Margin="0,10,0,0" Padding="16">
                                 <StackPanel>
-                                    <TextBlock Text="Configure the automatic night mode schedule."
+                                    <TextBlock Text="Configure night mode timing, rendering, and exclusions."
                                                Foreground="{DynamicResource ThemeTextDim}" FontFamily="{StaticResource BodyFont}"
                                                Margin="0,0,0,12"/>
                                     <local:NightModeScheduleControl x:Name="ScheduleEditor"/>

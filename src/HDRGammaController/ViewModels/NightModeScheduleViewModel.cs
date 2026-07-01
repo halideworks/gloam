@@ -59,6 +59,66 @@ namespace HDRGammaController.ViewModels
             }
         }
 
+        /// <summary>
+        /// Rendering algorithms offered in the dashboard, ordered best-perceptual-first.
+        /// </summary>
+        public IReadOnlyList<NightModeAlgorithmOption> AvailableAlgorithms { get; } = NightModeAlgorithmOption.DefaultOptions;
+
+        private NightModeAlgorithm _algorithm = NightModeAlgorithm.Perceptual;
+        public NightModeAlgorithm Algorithm
+        {
+            get => _algorithm;
+            set
+            {
+                if (SetProperty(ref _algorithm, value))
+                {
+                    OnPropertyChanged(nameof(AlgorithmDescription));
+                    OnPropertyChanged(nameof(IsUltraWarmApplicable));
+                    OnPropertyChanged(nameof(IsPerceptualSelected));
+                    if (_settings == null) return;
+                    _settings.Algorithm = value;
+                    SettingsEdited?.Invoke();
+                }
+            }
+        }
+
+        /// <summary>Ultra Warm only affects the Classic (Standard/Helland) curve.</summary>
+        public bool IsUltraWarmApplicable => _algorithm == NightModeAlgorithm.Standard;
+
+        /// <summary>The intensity slider only applies to the Perceptual algorithm.</summary>
+        public bool IsPerceptualSelected => _algorithm == NightModeAlgorithm.Perceptual;
+
+        // Perceptual intensity exposed to the UI as a 0–100% slider (maps to strength 0–1).
+        private double _perceptualStrengthPercent = ColorAdjustments.DefaultPerceptualStrength * 100.0;
+        public double PerceptualStrengthPercent
+        {
+            get => _perceptualStrengthPercent;
+            set
+            {
+                double clamped = Math.Clamp(double.IsFinite(value) ? value : 80.0, 0.0, 100.0);
+                if (SetProperty(ref _perceptualStrengthPercent, clamped))
+                {
+                    if (_settings == null) return;
+                    _settings.PerceptualStrength = clamped / 100.0;
+                    SettingsEdited?.Invoke();
+                }
+            }
+        }
+
+        /// <summary>One-line explanation of the selected algorithm, shown under the selector.</summary>
+        public string AlgorithmDescription => _algorithm switch
+        {
+            NightModeAlgorithm.Perceptual =>
+                "Warm white point eased toward neutral (partial chromatic adaptation) — cuts blue while keeping colours far closer to normal than a full shift.",
+            NightModeAlgorithm.AccurateCIE1931 =>
+                "True black-body white point at full strength. Colorimetrically exact, but strongly warms and desaturates the whole image.",
+            NightModeAlgorithm.Standard =>
+                "Classic photo-style warm tint (Tanner Helland). Pair with Ultra Warm for a stronger effect below 2800K.",
+            NightModeAlgorithm.UltraNight =>
+                "Amber/red for maximum circadian protection — cuts ~90% of blue and deeply cuts green. Not colour-accurate; for the darkest part of the evening.",
+            _ => string.Empty
+        };
+
         #region Drag overlay
 
         private bool _isDragOverlayVisible;
@@ -81,14 +141,30 @@ namespace HDRGammaController.ViewModels
             if (Latitude.HasValue) LatitudeText = Latitude.Value.ToString("F2");
             if (Longitude.HasValue) LongitudeText = Longitude.Value.ToString("F2");
 
-            // Initialize ultra warm checkbox state. Matches the old checkbox wiring:
-            // assigning after _settings is set fires SettingsEdited if the value changes.
-            UseUltraWarmMode = settings.UseUltraWarmMode;
+            // Reflect the persisted rendering settings without triggering a redundant
+            // SettingsEdited/save just by opening or re-syncing the editor.
+            SyncRenderingSettings();
 
             // Ensure schedule exists
             settings.EnsureSchedule(Latitude, Longitude);
 
             RefreshPoints();
+        }
+
+        public void SyncRenderingSettings()
+        {
+            if (_settings == null) return;
+
+            _algorithm = _settings.Algorithm;
+            _perceptualStrengthPercent = NightModeSettings.ClampPerceptualStrength(_settings.PerceptualStrength) * 100.0;
+            _useUltraWarmMode = _settings.UseUltraWarmMode;
+
+            OnPropertyChanged(nameof(Algorithm));
+            OnPropertyChanged(nameof(AlgorithmDescription));
+            OnPropertyChanged(nameof(IsUltraWarmApplicable));
+            OnPropertyChanged(nameof(IsPerceptualSelected));
+            OnPropertyChanged(nameof(PerceptualStrengthPercent));
+            OnPropertyChanged(nameof(UseUltraWarmMode));
         }
 
         /// <summary>
@@ -257,5 +333,33 @@ namespace HDRGammaController.ViewModels
                 Changed?.Invoke();
             }
         }
+    }
+
+    /// <summary>
+    /// A selectable night-mode rendering algorithm plus its display label, bound by the
+    /// dashboard's algorithm ComboBox (SelectedValuePath = Value, DisplayMemberPath = Label).
+    /// </summary>
+    public class NightModeAlgorithmOption
+    {
+        public static IReadOnlyList<NightModeAlgorithmOption> DefaultOptions { get; } = new List<NightModeAlgorithmOption>
+        {
+            new(NightModeAlgorithm.Perceptual, "Perceptual (recommended)"),
+            new(NightModeAlgorithm.UltraNight, "Ultra Night (amber)"),
+            new(NightModeAlgorithm.AccurateCIE1931, "Accurate (CIE 1931)"),
+            new(NightModeAlgorithm.Standard, "Classic (warm)"),
+        };
+
+        public NightModeAlgorithmOption(NightModeAlgorithm value, string label)
+        {
+            Value = value;
+            Label = label;
+        }
+
+        public NightModeAlgorithm Value { get; }
+        public string Label { get; }
+
+        // The Brutalist ComboBox template renders the collapsed selection box via ToString()
+        // rather than DisplayMemberPath, so without this it shows the type name until opened.
+        public override string ToString() => Label;
     }
 }

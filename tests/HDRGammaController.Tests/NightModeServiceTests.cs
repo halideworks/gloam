@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using HDRGammaController.Core;
 using HDRGammaController.ViewModels;
 using Xunit;
@@ -128,6 +129,13 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void NightModeAlgorithmOptions_DefaultOrder_PutsPerceptualThenUltraNight()
+        {
+            Assert.Equal(NightModeAlgorithm.Perceptual, NightModeAlgorithmOption.DefaultOptions[0].Value);
+            Assert.Equal(NightModeAlgorithm.UltraNight, NightModeAlgorithmOption.DefaultOptions[1].Value);
+        }
+
+        [Fact]
         public void ManualOverride_ForcesConfiguredNightTemperature()
         {
             using var service = new NightModeService(new NightModeSettings());
@@ -161,6 +169,38 @@ namespace HDRGammaController.Tests
             };
 
             Assert.Equal(3400, settings.GetManualOverrideKelvin());
+        }
+
+        [Fact]
+        public void AutoDetectConversion_AssignsDaylightToSunriseAndWarmthToSunset()
+        {
+            var settings = new NightModeSettings { TemperatureKelvin = 2700 };
+            settings.EnsureSchedule(null, null);
+
+            bool converted = settings.ConvertSimpleScheduleToSunTriggers();
+
+            Assert.True(converted);
+            Assert.Equal(ScheduleTriggerType.Sunrise, settings.Schedule.Single(p => p.TargetKelvin == 6500).TriggerType);
+            Assert.Equal(ScheduleTriggerType.Sunset, settings.Schedule.Single(p => p.TargetKelvin == 2700).TriggerType);
+            Assert.True(settings.UseAutoSchedule);
+        }
+
+        [Fact]
+        public void AutoDetectConversion_RepairsPreviouslyReversedTwoPointSchedule()
+        {
+            var settings = new NightModeSettings
+            {
+                Schedule =
+                {
+                    new NightModeSchedulePoint { TriggerType = ScheduleTriggerType.Sunset, TargetKelvin = 6500 },
+                    new NightModeSchedulePoint { TriggerType = ScheduleTriggerType.Sunrise, TargetKelvin = 2700 }
+                }
+            };
+
+            settings.ConvertSimpleScheduleToSunTriggers();
+
+            Assert.Equal(ScheduleTriggerType.Sunrise, settings.Schedule[0].TriggerType);
+            Assert.Equal(ScheduleTriggerType.Sunset, settings.Schedule[1].TriggerType);
         }
 
         [Fact]

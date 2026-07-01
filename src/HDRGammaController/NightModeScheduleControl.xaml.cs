@@ -65,6 +65,11 @@ namespace HDRGammaController
             DrawCurve();
         }
 
+        public void SyncRenderingSettings()
+        {
+            Vm.SyncRenderingSettings();
+        }
+
         private void NotifyChange()
         {
             ScheduleChanged?.Invoke();
@@ -108,18 +113,7 @@ namespace HDRGammaController
                     _settings.Latitude = Vm.Latitude;
                     _settings.Longitude = Vm.Longitude;
 
-                    // Auto-convert default schedule to Sunset/Sunrise if simple
-                    if (_settings.Schedule.Count == 2)
-                    {
-                         // Heuristic: If close to default 21:00 / 07:00
-                         var p1 = _settings.Schedule[0];
-                         var p2 = _settings.Schedule[1];
-
-                         p1.TriggerType = ScheduleTriggerType.Sunset;
-                         p2.TriggerType = ScheduleTriggerType.Sunrise;
-
-                         // Reset offsets logic? Just set types.
-                    }
+                    _settings.ConvertSimpleScheduleToSunTriggers();
 
                     Vm.RefreshPoints();
                     DrawGrid();

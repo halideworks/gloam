@@ -149,6 +149,7 @@ namespace HDRGammaController.Core
             if (nightModeActive)
             {
                 ApplyNightModeToCalibration(calibration, currentKelvin, _settingsManager.NightMode);
+                calibration.NightMelanopicCoefficients = CcssMelanopicEstimator.TryLoad(calibration.NightModeCcssPath);
             }
 
             // Extended range: 1900K..10000K. See CalibrationSettings.Temperature
@@ -177,6 +178,7 @@ namespace HDRGammaController.Core
             calibration.Temperature += nightShift;
             calibration.Algorithm = nightModeSettings.Algorithm;
             calibration.UseUltraWarmMode = nightModeSettings.UseUltraWarmMode;
+            calibration.PerceptualStrength = nightModeSettings.PerceptualStrength;
         }
 
         public void ApplyAll(IEnumerable<MonitorInfo> monitors)

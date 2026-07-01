@@ -81,7 +81,39 @@ namespace HDRGammaController.Core
         /// <summary>
         /// Calculates RGB multipliers for a given color temperature based on the selected algorithm.
         /// </summary>
-        public static (double R, double G, double B) GetTemperatureMultipliers(double temperature, NightModeAlgorithm algorithm, bool useUltraWarmMode = false)
+        public static (double R, double G, double B) GetTemperatureMultipliers(
+            double temperature,
+            NightModeAlgorithm algorithm,
+            bool useUltraWarmMode = false,
+            double perceptualStrength = DefaultPerceptualStrength,
+            NightMelanopicCoefficients? melanopicCoefficients = null)
+        {
+            int kelvin = TemperatureScaleToKelvin(temperature);
+
+            return algorithm switch
+            {
+                NightModeAlgorithm.AccurateCIE1931 => GetAccurateMultipliers(kelvin),
+                NightModeAlgorithm.BlueReduction => GetBlueReductionMultipliers(kelvin),
+                NightModeAlgorithm.Perceptual => GetPerceptualMultipliers(kelvin, perceptualStrength),
+                NightModeAlgorithm.UltraNight => GetUltraNightMultipliers(kelvin, melanopicCoefficients),
+                _ => GetStandardMultipliers(kelvin, useUltraWarmMode)
+            };
+        }
+
+        /// <summary>
+        /// Default fraction of full chromatic adaptation applied by
+        /// <see cref="NightModeAlgorithm.Perceptual"/> when the user hasn't set an intensity.
+        /// 1.0 == the colorimetric shift (<see cref="GetAccurateMultipliers"/>); lower values ease
+        /// the white point back toward neutral, preserving colour. 0.8 keeps a clearly warm night
+        /// look while retaining far more blue/green chroma than a full shift.
+        /// </summary>
+        public const double DefaultPerceptualStrength = 0.8;
+
+        /// <summary>
+        /// Converts the -50..+50 UI temperature scale to Kelvin (−50 = 2700K, 0 = 6500K,
+        /// +50 = 10000K, 70 K per unit) and clamps to the supported night-mode range.
+        /// </summary>
+        private static int TemperatureScaleToKelvin(double temperature)
         {
             temperature = ClampFinite(
                 temperature,
@@ -89,16 +121,7 @@ namespace HDRGammaController.Core
                 CalibrationSettings.MaximumTemperatureScale,
                 0.0);
 
-            // Convert -50 to +50 scale to Kelvin: -50 = 2700K, 0 = 6500K, +50 = 10000K
-            int kelvin = (int)Math.Round(6500 + temperature * 70);
-            kelvin = ClampNightModeKelvin(kelvin);
-
-            return algorithm switch
-            {
-                NightModeAlgorithm.AccurateCIE1931 => GetAccurateMultipliers(kelvin),
-                NightModeAlgorithm.BlueReduction => GetBlueReductionMultipliers(kelvin),
-                _ => GetStandardMultipliers(kelvin, useUltraWarmMode)
-            };
+            return ClampNightModeKelvin((int)Math.Round(6500 + temperature * 70));
         }
         
         /// <summary>
@@ -254,6 +277,102 @@ namespace HDRGammaController.Core
         }
 
         /// <summary>
+        /// Perceptual night-mode white point: the colorimetric Planckian multipliers
+        /// (<see cref="GetAccurateMultipliers"/>) eased toward neutral by an incomplete degree
+        /// of chromatic adaptation (<see cref="PerceptualAdaptationDegree"/>). Returns
+        /// linear-light per-channel multipliers.
+        /// </summary>
+        /// <remarks>
+        /// The display correction is a 1D per-channel LUT, so only per-channel transforms reach
+        /// real content faithfully — a full 3×3 chromatic adaptation cannot be baked in. Within
+        /// that constraint the lever that best preserves colour is the *degree* of adaptation:
+        /// a full colorimetric shift crushes blue/green and looks "extremely orange", while a
+        /// partial shift keeps the brightest channel at 1.0 (no clipping / colour cast) and
+        /// retains far more chroma. At 6500K this returns (1, 1, 1); at D = 1 it equals
+        /// <see cref="GetAccurateMultipliers"/>.
+        /// </remarks>
+        public static (double R, double G, double B) GetPerceptualMultipliers(int kelvin, double strength = DefaultPerceptualStrength)
+        {
+            strength = double.IsFinite(strength) ? Math.Clamp(strength, 0.0, 1.0) : DefaultPerceptualStrength;
+            var (r, g, b) = GetAccurateMultipliers(kelvin);
+            return (SoftenToNeutral(r, strength), SoftenToNeutral(g, strength), SoftenToNeutral(b, strength));
+        }
+
+        private static double SoftenToNeutral(double multiplier, double strength) =>
+            1.0 + strength * (multiplier - 1.0);
+
+        /// <summary>
+        /// Maximum-protection "Ultra Night" (amber): drives toward a red/amber white point,
+        /// killing blue and deeply cutting green as the target warms. Blue carries most of a
+        /// display's melanopic (circadian) weight, so this minimises melanopic output at the
+        /// cost of colour fidelity — a deliberate mode for the darkest part of the evening, not
+        /// a colour-accurate one. Red is preserved for readable amber text.
+        /// </summary>
+        public static (double R, double G, double B) GetUltraNightMultipliers(
+            int kelvin,
+            NightMelanopicCoefficients? melanopicCoefficients = null)
+        {
+            kelvin = ClampNightModeKelvin(kelvin);
+
+            double factor = Math.Clamp((6500.0 - kelvin) / (6500.0 - 2000.0), 0.0, 1.0);
+
+            // Base on the true Planckian amber (GetAccurateMultipliers) so the hue sits ON the
+            // blackbody locus. Hand-cutting green below that ratio is what produces a magenta
+            // cast; keeping the Planckian green ratio avoids it. Then apply an overall luminance
+            // reduction — this is the deepest-evening mode, so a full-brightness amber white is
+            // both uncomfortable and needlessly high melanopic dose.
+            var (ar, ag, ab) = GetAccurateMultipliers(kelvin);
+
+            double dim = 1.0 - 0.30 * factor;   // → 0.70 at the warm end
+            double r = ar * dim;                // ar == 1.0
+            double g = ag * dim;
+            double b = ab * dim;
+
+            // A channel driven to 0 makes its gamma ramp map white→black, which Windows'
+            // SetDeviceGammaRamp rejects (nothing applies). Floor blue at the warmest level the
+            // driver accepts before spectral green tuning so the readability floor is honest.
+            b = Math.Max(BlueFloor, b);
+
+            if (melanopicCoefficients != null && factor > 0.0)
+            {
+                g = ApplySpectralGreenReduction(g, b, factor, melanopicCoefficients);
+            }
+
+            // Never let green fall below blue (which would swing magenta).
+            g = Math.Max(g, b);
+
+            return (r, g, b);
+        }
+
+        private static double ApplySpectralGreenReduction(
+            double planckianGreen,
+            double blue,
+            double factor,
+            NightMelanopicCoefficients coefficients)
+        {
+            double redRatio = coefficients.RedMelanopicPerLuminance;
+            double greenRatio = coefficients.GreenMelanopicPerLuminance;
+            if (redRatio <= 0.0 || greenRatio <= 0.0 || !double.IsFinite(redRatio) || !double.IsFinite(greenRatio))
+                return planckianGreen;
+
+            // If the selected CCSS says green has materially more melanopic dose per unit
+            // luminance than red, bias Ultra Night toward a deeper red/amber. Keep a readable
+            // green floor so text does not become harsh magenta-red.
+            double penalty = Math.Clamp((greenRatio / redRatio - 1.0) / 4.0, 0.0, 1.0);
+            if (penalty <= 0.0) return planckianGreen;
+
+            double readableGreenFloor = Math.Max(blue * 1.8, 0.12);
+            double targetGreen = Math.Min(planckianGreen, readableGreenFloor);
+            double strictness = factor * penalty;
+            return planckianGreen + (targetGreen - planckianGreen) * strictness;
+        }
+
+        // Lowest blue multiplier Ultra Night will emit. Zero produces a flat white→black ramp
+        // the GDI gamma validation refuses; this matches the warmest Accurate setting the driver
+        // accepts, while still cutting ~90% of blue.
+        private const double BlueFloor = 0.10;
+
+        /// <summary>
         /// Calculates RGB multipliers for tint adjustment (green/magenta axis).
         /// </summary>
         public static (double R, double G, double B) GetTintMultipliers(double tint)
@@ -352,7 +471,12 @@ namespace HDRGammaController.Core
             double effectiveTemperature = EffectiveTemperatureScale(settings);
             if (Math.Abs(effectiveTemperature) > 0.01)
             {
-                var temp = GetTemperatureMultipliers(effectiveTemperature, settings.Algorithm, settings.UseUltraWarmMode);
+                var temp = GetTemperatureMultipliers(
+                    effectiveTemperature,
+                    settings.Algorithm,
+                    settings.UseUltraWarmMode,
+                    settings.PerceptualStrength,
+                    settings.NightMelanopicCoefficients);
                 r *= temp.R;
                 g *= temp.G;
                 b *= temp.B;

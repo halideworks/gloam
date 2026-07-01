@@ -89,6 +89,13 @@ namespace HDRGammaController.Core
         /// </summary>
         public string? MeterCorrectionPath { get; set; }
 
+        /// <summary>
+        /// Optional DisplayCAL/Argyll .ccss spectral sample used to estimate per-primary
+        /// melanopic weights for Advanced Ultra Night. Unlike MeterCorrectionPath, this is
+        /// used without a colorimeter and only affects night-mode rendering.
+        /// </summary>
+        public string? NightModeCcssPath { get; set; }
+
         /// <summary>Last-used display type in calibration setup (DisplayType enum name).</summary>
         public string? CalibDisplayType { get; set; }
 
@@ -113,7 +120,8 @@ namespace HDRGammaController.Core
             BlueGain = BlueGain,
             RedOffset = RedOffset,
             GreenOffset = GreenOffset,
-            BlueOffset = BlueOffset
+            BlueOffset = BlueOffset,
+            NightModeCcssPath = NightModeCcssPath
         };
         
         public static MonitorProfileData FromCalibrationSettings(CalibrationSettings settings, GammaMode mode) => new MonitorProfileData
@@ -129,7 +137,8 @@ namespace HDRGammaController.Core
             BlueGain = settings.BlueGain,
             RedOffset = settings.RedOffset,
             GreenOffset = settings.GreenOffset,
-            BlueOffset = settings.BlueOffset
+            BlueOffset = settings.BlueOffset,
+            NightModeCcssPath = settings.NightModeCcssPath
         };
         
         public MonitorProfileData Clone() => new MonitorProfileData
@@ -152,6 +161,7 @@ namespace HDRGammaController.Core
             PreviousColorProfileName = PreviousColorProfileName,
             PreviousColorProfileHdrMode = PreviousColorProfileHdrMode,
             MeterCorrectionPath = MeterCorrectionPath,
+            NightModeCcssPath = NightModeCcssPath,
             CalibDisplayType = CalibDisplayType,
             CalibWhitePointOnly = CalibWhitePointOnly,
             CalibTargetName = CalibTargetName,
@@ -173,8 +183,9 @@ namespace HDRGammaController.Core
         public string EndTime { get; set; } = "07:00";
         public int TemperatureKelvin { get; set; } = 2700;
         public int FadeMinutes { get; set; } = 30;
-        public NightModeAlgorithm Algorithm { get; set; } = NightModeAlgorithm.AccurateCIE1931;
+        public NightModeAlgorithm Algorithm { get; set; } = NightModeAlgorithm.Perceptual;
         public bool UseUltraWarmMode { get; set; } = false;
+        public double PerceptualStrength { get; set; } = ColorAdjustments.DefaultPerceptualStrength;
 
         public List<NightModeSchedulePoint> Schedule { get; set; } = new List<NightModeSchedulePoint>();
         
@@ -193,12 +204,20 @@ namespace HDRGammaController.Core
                 : new TimeSpan(7, 0, 0),
             TemperatureKelvin = NightModeSettings.ClampKelvin(TemperatureKelvin),
             FadeMinutes = NightModeSettings.ClampFadeMinutes(FadeMinutes),
-            Algorithm = Enum.IsDefined(typeof(NightModeAlgorithm), Algorithm)
-                ? Algorithm
-                : NightModeAlgorithm.AccurateCIE1931,
+            Algorithm = ResolveAlgorithm(Algorithm),
             UseUltraWarmMode = UseUltraWarmMode,
+            PerceptualStrength = NightModeSettings.ClampPerceptualStrength(PerceptualStrength),
             Schedule = CloneSchedule(Schedule)
         };
+
+        /// <summary>
+        /// Blue reduction was retired as a selectable mode; migrate it — and any unknown value —
+        /// to the perceptual default. The enum member is kept so old settings still deserialize.
+        /// </summary>
+        private static NightModeAlgorithm ResolveAlgorithm(NightModeAlgorithm algorithm) =>
+            algorithm == NightModeAlgorithm.BlueReduction || !Enum.IsDefined(typeof(NightModeAlgorithm), algorithm)
+                ? NightModeAlgorithm.Perceptual
+                : algorithm;
 
         public static NightModeSettingsData FromNightModeSettings(NightModeSettings settings) => new NightModeSettingsData
         {
@@ -213,6 +232,7 @@ namespace HDRGammaController.Core
             FadeMinutes = NightModeSettings.ClampFadeMinutes(settings.FadeMinutes),
             Algorithm = settings.Algorithm,
             UseUltraWarmMode = settings.UseUltraWarmMode,
+            PerceptualStrength = NightModeSettings.ClampPerceptualStrength(settings.PerceptualStrength),
             Schedule = CloneSchedule(settings.Schedule)
         };
 
@@ -813,11 +833,15 @@ namespace HDRGammaController.Core
                 // Fade duration: 0 to 120 minutes
                 nm.FadeMinutes = Math.Clamp(nm.FadeMinutes, 0, 120);
 
-                // Standard/Helland was the historical hidden default. Prefer the CIE path
-                // unless the user/config explicitly chose BlueReduction.
-                nm.Algorithm = nm.Algorithm == NightModeAlgorithm.BlueReduction
-                    ? NightModeAlgorithm.BlueReduction
-                    : NightModeAlgorithm.AccurateCIE1931;
+                // Respect the user's chosen rendering algorithm on reload, but migrate the
+                // retired Blue reduction mode (and any out-of-range value) to the perceptual
+                // default. Clamp the perceptual intensity to [0,1].
+                if (nm.Algorithm == NightModeAlgorithm.BlueReduction ||
+                    !Enum.IsDefined(typeof(NightModeAlgorithm), nm.Algorithm))
+                {
+                    nm.Algorithm = NightModeAlgorithm.Perceptual;
+                }
+                nm.PerceptualStrength = ClampFinite(nm.PerceptualStrength, 0.0, 1.0, ColorAdjustments.DefaultPerceptualStrength);
 
                 // Validate schedule points
                 if (nm.Schedule != null)

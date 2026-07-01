@@ -36,6 +36,10 @@ namespace HDRGammaController.Core
             double RedGain, double GreenGain, double BlueGain,
             double RedOffset, double GreenOffset, double BlueOffset,
             NightModeAlgorithm Algorithm, bool LinearBrightness, bool UltraWarm,
+            double PerceptualStrength,
+            string? NightModeCcssPath,
+            double NightRedMel, double NightGreenMel, double NightBlueMel,
+            double NightRedLum, double NightGreenLum, double NightBlueLum,
             Guid? ProfileId, Lut3D? MeasuredLut)
         {
             public static CalibrationCacheKey From(CalibrationSettings value) => new(
@@ -43,6 +47,14 @@ namespace HDRGammaController.Core
                 value.RedGain, value.GreenGain, value.BlueGain,
                 value.RedOffset, value.GreenOffset, value.BlueOffset,
                 value.Algorithm, value.UseLinearBrightness, value.UseUltraWarmMode,
+                value.PerceptualStrength,
+                value.NightModeCcssPath,
+                value.NightMelanopicCoefficients?.RedMelanopic ?? 0.0,
+                value.NightMelanopicCoefficients?.GreenMelanopic ?? 0.0,
+                value.NightMelanopicCoefficients?.BlueMelanopic ?? 0.0,
+                value.NightMelanopicCoefficients?.RedLuminance ?? 0.0,
+                value.NightMelanopicCoefficients?.GreenLuminance ?? 0.0,
+                value.NightMelanopicCoefficients?.BlueLuminance ?? 0.0,
                 value.CalibrationProfileId, value.MeasuredCorrectionLut);
         }
 

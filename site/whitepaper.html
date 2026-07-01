@@ -42,7 +42,7 @@
       <section>
         <h1>Gloam: A Technical Whitepaper</h1>
         <p class="paper-meta">
-          HDR-native display calibration on Windows. Last updated June 30, 2026.
+          HDR-native display calibration on Windows. Last updated July 1, 2026.
         </p>
         <blockquote>The machine promises fidelity but delivers translation, and every translation is a betrayal.</blockquote>
 
@@ -66,11 +66,11 @@
           engineering constraints of the Windows HDR compositor.
         </p>
         <p>
-          The current implementation also documents the hardened update path, the CIE 1931 night
-          mode default, the three-state Night Mode control, and the calibration wizard's persisted
-          state model. Each of those details supports the same goal as the color pipeline itself:
-          keeping the correction trustworthy after reboot, app restart, display topology changes, and
-          repeated calibration runs.
+          The current implementation also documents the hardened update path, the perceptual night
+          mode default, the Ultra Night spectral experiment, the three-state Night Mode control, and
+          the calibration wizard's persisted state model. Each of those details supports the same goal
+          as the color pipeline itself: keeping the correction trustworthy after reboot, app restart,
+          display topology changes, and repeated calibration runs.
         </p>
 
         <nav class="toc" aria-label="Table of contents">
@@ -568,26 +568,78 @@
           laws of physics.
         </p>
         <p>
-          This CIE 1931 path is the default night-mode algorithm. The older Helland
-          approximation remains useful as a simple reference, but the shipped behavior prefers a
-          perceptual white-point path that follows the Planckian locus more closely. The dashboard
-          exposes night mode as three states: Off, Schedule, and Manual. Off disables both scheduled
-          and manual warmth; Schedule follows the configured schedule; Manual applies the selected
-          temperature immediately.
+          The accurate path supplies the Planckian target used by the current default. Gloam's default
+          night profile is <strong>Perceptual</strong>: it computes the CIE 1931 warm white point, then
+          eases the resulting linear-light channel multipliers toward neutral by a user-facing
+          strength value. At strength 1.0 the result matches the full colorimetric shift; at the
+          shipped default of 0.8 the display remains visibly warm while retaining more green and blue
+          separation than a full 2700 K transform. The older Helland approximation remains available
+          as a simple reference curve.
+        </p>
+
+        <h4>Perceptual Strength</h4>
+        <p>
+          The display ramp is a per-channel 1D device. It can scale red, green, and blue
+          independently and curve each channel. A true 3×3 chromatic adaptation matrix sits outside
+          the Windows ramp API, so Gloam exposes the degree of adaptation:
+        </p>
+        <div class="math">
+          <var>M</var><sub>perceptual</sub> = 1 + <var>D</var> × (<var>M</var><sub>CIE</sub> − 1)
+        </div>
+        <p>
+          Here <var>M</var><sub>CIE</sub> is the linear-light multiplier from the CIE path and
+          <var>D</var> is the perceptual strength in [0, 1]. This keeps the brightest channel at unity
+          and preserves more chroma separation on ordinary desktop content. It is a practical
+          color-appearance compromise designed for the Windows ramp that actually reaches the display.
+        </p>
+
+        <h4>Ultra Night and Spectral Weighting</h4>
+        <p>
+          Ultra Night prioritizes low melanopic output and low luminance. The base curve starts from
+          the CIE warm point, applies a luminance reduction, floors blue at a driver-safe value, and
+          preserves an amber ordering:
+        </p>
+        <div class="math">
+          <var>R</var> &gt; <var>G</var> ≥ <var>B</var> &gt; 0
+        </div>
+        <p>
+          The positive blue floor comes from driver behavior: Windows'
+          <code>SetDeviceGammaRamp</code> rejects flat or degenerate channel ramps on some drivers.
+          The green floor keeps text in an amber range that remains comfortable for reading.
+        </p>
+        <p>
+          When a monitor has an optional DisplayCAL/Argyll <code>.ccss</code> spectral sample selected
+          in Settings, Gloam estimates relative melanopic and photopic coefficients for the display's
+          red, green, and blue primaries. The estimator parses the spectral rows, infers the primary
+          samples by wavelength-band purity, and computes:
+        </p>
+<pre><code>mel_i = Σ P_i(λ) · s_mel(λ)
+Y_i   = Σ P_i(λ) · V(λ)</code></pre>
+        <p>
+          The ratio <code>mel_i / Y_i</code> is then used only inside Ultra Night. If the selected
+          spectrum says green carries a high melanopic cost per unit luminance relative to red, the
+          Ultra Night curve pushes green closer to its readability floor as the target warms. A
+          missing, invalid, or mismatched <code>.ccss</code> file simply falls back to the generic
+          amber curve. The sample is treated as an estimate of panel emission for night-mode weighting.
+        </p>
+        <p>
+          The dashboard exposes night mode as three states: Off, Schedule, and Manual. Off disables
+          both scheduled and manual warmth; Schedule follows the configured controls; Manual applies
+          the selected temperature immediately. The separate Night profile selector chooses between
+          Perceptual, Ultra Night, Accurate CIE 1931, and Classic.
         </p>
 
         <h4>Temperature Offset for Night Mode</h4>
         <p>
-          Rather than specifying an absolute temperature, night mode operates via a
-          <strong>temperature offset</strong> from the base 6500K neutral. A −1500K offset shifts
-          toward warmer 5000K; a +500K offset shifts toward cooler 7000K. This allows the night mode
-          adjustment to layer on top of any existing color profile.
+          Night mode uses a <strong>temperature offset</strong> from the base 6500K neutral. A −1500K
+          offset shifts toward warmer 5000K; a +500K offset shifts toward cooler 7000K. The adjustment
+          layers on top of the active color profile.
         </p>
 
         <h3 id="s6-3">6.3 Tint (Green/Magenta Axis)</h3>
         <p>
           Color temperature adjustments move along the Planckian locus (the blue-to-orange axis).
-          However, many displays and environments require adjustment along the
+          Many displays and environments also require adjustment along the
           <strong>orthogonal</strong> green/magenta axis: the tint control familiar from video color
           correction.
         </p>
@@ -659,7 +711,7 @@
           non-uniformities independent of the artistic intent.
         </p>
 
-        <h3 id="s6-6">6.6 Integrated Night Shift</h3>
+        <h3 id="s6-6">6.6 Integrated Night Mode</h3>
         <p>
           A persistent challenge in Windows color management is the conflict between hardware gamma
           tables (VCGT) and the system's native Night Light feature. When an external tool writes a
@@ -668,11 +720,11 @@
           when it is needed.
         </p>
         <p>
-          Gloam solves this by <strong>integrating Night Shift directly into the correction
-          pipeline</strong>. Rather than relying on Windows to apply a toggleable overlay, the
-          application calculates the sun's position based on the user's geolocation, determines the
-          appropriate color temperature shift, and <em>bakes it mathematically into the gamma
-          LUTs</em> before they are ever sent to the display.
+          Gloam solves this by <strong>integrating night mode directly into the correction
+          pipeline</strong>. The application calculates the sun's position based on the user's
+          geolocation, determines the appropriate color temperature shift and rendering profile, and
+          <em>bakes it mathematically into the gamma LUTs</em> before they are ever sent to the
+          display.
         </p>
         <p>
           This approach offers two profound advantages: first, it eliminates the resource contention
@@ -683,13 +735,12 @@
         </p>
         <p>
           The scheduler driving these transitions is event-disciplined: it emits exactly one change
-          notification per effective state change (a kelvin movement beyond a 5 K threshold, or a
-          settings change that alters the output), and its timer adapts its cadence to the schedule,
-          ticking every 4 seconds only while a fade is actively interpolating, and otherwise sleeping
-          until the next scheduled transition (capped at 60 seconds to remain robust against system
-          clock changes). During a fade, each notification produces at most one ramp write per display,
-          and the deduplication described in <a href="#s7-2">Section 7.2</a> suppresses any redundant
-          ones.
+          notification per effective state change, and its timer adapts its cadence to the schedule.
+          During a fade it targets roughly one Kelvin of movement per update, bounded between display
+          refresh cadence and 500 ms; outside a fade it sleeps until the next scheduled transition,
+          capped at 60 seconds to remain robust against system clock changes. During a fade, each
+          notification produces at most one ramp write per display, and the deduplication described in
+          <a href="#s7-2">Section 7.2</a> suppresses any redundant ones.
         </p>
         <p>
           The updater follows the same operational philosophy. Installed builds check the GitHub
@@ -822,21 +873,21 @@
           white level, and finally the display driver's VCGT gamma ramp where our correction resides.
         </p>
         <p>
-          By injecting the correction at the driver level (VCGT), we effectively intercept the signal
-          <em>after</em> the Windows compositor has done its damage but <em>before</em> it leaves the
-          GPU, allowing us to untwist the distorted tone curve and restore linearity just before the
-          photons are emitted. The integrated Night Shift ensures that this VCGT injection handles both
-          the gamma correction and the circadian warming in a single, unified mathematical pass.
+          By injecting the correction at the driver level (VCGT), we intercept the signal after the
+          Windows compositor has applied its SDR-in-HDR mapping and immediately ahead of display
+          scanout. That placement lets Gloam untwist the distorted tone curve and restore linearity
+          just before the photons are emitted. The integrated night mode ensures that this VCGT
+          injection handles both the gamma correction and the evening color transform in a single
+          mathematical pass.
         </p>
 
         <h3 id="s8-3">8.3 Night Light Interaction</h3>
         <p>
-          Because Windows' native Night Light applies its filter at the compositor level, it would
-          normally stack with or be overridden by VCGT loading. However, by disabling the system's
-          Night Light and relying on Gloam's <strong>Integrated Night Shift</strong>, we avoid this
-          conflict entirely. The application takes responsibility for the circadian adjustment,
-          rendering the system's native toggle redundant and ensuring a conflict-free color pipeline
-          provided the native feature is disabled.
+          Windows' native Night Light applies its filter at the compositor level, where it competes
+          with VCGT loading. Gloam's <strong>integrated night mode</strong> moves that work into the
+          correction pipeline. The application takes responsibility for the circadian adjustment,
+          rendering the system's native toggle redundant and keeping the color pipeline conflict-free
+          when the native feature is disabled.
         </p>
       </section>
 
@@ -1055,8 +1106,9 @@
           <li id="ref10">Kang, B., Moon, O., Hong, C., Lee, H., Cho, B., &amp; Kim, Y. (2002). Design of Advanced Color Temperature Control System for HDTV Applications. <em>Journal of the Korean Physical Society</em>, 41(6), 865-871.</li>
         </ol>
         <p class="paper-meta">
-          Last updated June 30, 2026: documented the CIE 1931 night-mode default, three-state Night
-          Mode control, seamless Velopack update behavior, and calibration wizard state persistence.
+          Last updated July 1, 2026: documented the perceptual night-mode default, Ultra Night
+          spectral weighting from optional DisplayCAL CCSS samples, three-state Night Mode control,
+          seamless Velopack update behavior, and calibration wizard state persistence.
           Section 10 documents the MHC2 matrix XYZ-sandwich semantics, uniform-scale white handling,
           knee-safe PQ LUTs, Advanced Color association, spectral corrections, wire-exact HDR
           measurement via FP16 scRGB patches, and the PQ tracking verification sweep.

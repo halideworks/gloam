@@ -23,6 +23,30 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void GenerateLut_DifferentPerceptualStrength_DoNotAliasInCache()
+        {
+            LutGenerator.ClearCache();
+            // Same warm temperature, different Perceptual intensity — must produce different
+            // LUTs (the intensity slider was a no-op when this wasn't in the cache key).
+            var weak = new CalibrationSettings
+            {
+                Algorithm = NightModeAlgorithm.Perceptual, Temperature = -30.0, PerceptualStrength = 0.5
+            };
+            var strong = new CalibrationSettings
+            {
+                Algorithm = NightModeAlgorithm.Perceptual, Temperature = -30.0, PerceptualStrength = 1.0
+            };
+
+            var weakLut = LutGenerator.GenerateLut(GammaMode.WindowsDefault, 200, weak, isHdr: false);
+            var strongLut = LutGenerator.GenerateLut(GammaMode.WindowsDefault, 200, strong, isHdr: false);
+
+            Assert.NotSame(weakLut.B, strongLut.B);
+            // Higher strength cuts blue harder → lower blue output near white.
+            Assert.True(strongLut.B[900] < weakLut.B[900],
+                $"strong blue {strongLut.B[900]:F4} should be below weak blue {weakLut.B[900]:F4}");
+        }
+
+        [Fact]
         public void GenerateLut_TemperatureOffset_ComposesLikeTemperature()
         {
             LutGenerator.ClearCache();

@@ -67,10 +67,36 @@ namespace HDRGammaController.ViewModels
         public ICommand RemoveExcludedAppCommand { get; }
         public ICommand SaveExcludedAppsCommand { get; }
 
+        public IReadOnlyList<NightModeAlgorithmOption> AvailableNightModeAlgorithms { get; } = NightModeAlgorithmOption.DefaultOptions;
+
+        public NightModeAlgorithm SelectedNightModeAlgorithm
+        {
+            get => _editingNightMode.Algorithm;
+            set
+            {
+                if (_editingNightMode.Algorithm == value) return;
+                _editingNightMode.Algorithm = value;
+                SaveEditedNightMode();
+                RefreshNightRenderingBindings();
+                NightRenderingEdited?.Invoke();
+            }
+        }
+
+        public string SelectedNightModeAlgorithmDescription => SelectedNightModeAlgorithm switch
+        {
+            NightModeAlgorithm.Perceptual => "Balanced color preservation",
+            NightModeAlgorithm.UltraNight => "Amber/red maximum protection",
+            NightModeAlgorithm.AccurateCIE1931 => "Full CIE white-point shift",
+            NightModeAlgorithm.Standard => "Classic warm tint",
+            _ => string.Empty
+        };
+
         /// <summary>
         /// Navigation request: the view opens SettingsWindow for the given monitor card.
         /// </summary>
         public event Action<DashboardItem>? ConfigureRequested;
+
+        public event Action? NightRenderingEdited;
 
         public DashboardViewModel(
             MonitorManager monitorManager,
@@ -214,6 +240,12 @@ namespace HDRGammaController.ViewModels
             }
         }
 
+        public void RefreshNightRenderingBindings()
+        {
+            OnPropertyChanged(nameof(SelectedNightModeAlgorithm));
+            OnPropertyChanged(nameof(SelectedNightModeAlgorithmDescription));
+        }
+
         public List<MonitorInfo> GetMonitorSnapshot()
             => Items.OfType<DashboardItem>().Select(i => i.Model).ToList();
 
@@ -286,6 +318,7 @@ namespace HDRGammaController.ViewModels
                     _editingNightMode = latest;
             }
             OnNightModeModeChanged();
+            RefreshNightRenderingBindings();
 
             var monitors = (reEnumerate || _cachedMonitors == null)
                 ? _monitorManager.EnumerateMonitors()
@@ -416,6 +449,7 @@ namespace HDRGammaController.ViewModels
                 && a.TemperatureKelvin == b.TemperatureKelvin
                 && a.Algorithm == b.Algorithm
                 && a.UseUltraWarmMode == b.UseUltraWarmMode
+                && Math.Abs(a.PerceptualStrength - b.PerceptualStrength) < 0.000001
                 && a.FadeMinutes == b.FadeMinutes;
             // Schedule list intentionally excluded: the editor mutates it in place and
             // comparing list contents would force a swap on every programmatic refresh.

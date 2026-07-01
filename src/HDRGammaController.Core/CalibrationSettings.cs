@@ -82,13 +82,32 @@ namespace HDRGammaController.Core
         /// <summary>
         /// Algorithm to use for temperature adjustment.
         /// </summary>
-        public NightModeAlgorithm Algorithm { get; set; } = NightModeAlgorithm.AccurateCIE1931;
+        public NightModeAlgorithm Algorithm { get; set; } = NightModeAlgorithm.Perceptual;
+
+        /// <summary>
+        /// Optional per-monitor CCSS spectral sample used to estimate RGB melanopic weights
+        /// for Ultra Night. A matching display spectrum improves the amber/green tradeoff.
+        /// </summary>
+        public string? NightModeCcssPath { get; set; }
+
+        /// <summary>
+        /// Parsed coefficients for <see cref="NightModeCcssPath"/>. Runtime-only; populated by
+        /// the apply service so LUT generation does not do file I/O.
+        /// </summary>
+        public NightMelanopicCoefficients? NightMelanopicCoefficients { get; set; }
 
         /// <summary>
         /// Enable enhanced warmth curve below 2800K for more dramatic visual changes.
         /// Only applies when Algorithm is Standard.
         /// </summary>
         public bool UseUltraWarmMode { get; set; } = false;
+
+        /// <summary>
+        /// Strength of the <see cref="NightModeAlgorithm.Perceptual"/> shift: fraction of full
+        /// chromatic adaptation (0 = neutral/off, 1 = full colorimetric = Accurate). Lower values
+        /// preserve more colour and reduce blue less. Only applies when Algorithm is Perceptual.
+        /// </summary>
+        public double PerceptualStrength { get; set; } = ColorAdjustments.DefaultPerceptualStrength;
 
         /// <summary>
         /// If true, uses standard linear dimming instead of perceptual (gamma-lift) dimming.
@@ -140,7 +159,10 @@ namespace HDRGammaController.Core
             GreenOffset = this.GreenOffset,
             BlueOffset = this.BlueOffset,
             Algorithm = this.Algorithm,
-            UseUltraWarmMode = this.UseUltraWarmMode
+            NightModeCcssPath = this.NightModeCcssPath,
+            NightMelanopicCoefficients = this.NightMelanopicCoefficients,
+            UseUltraWarmMode = this.UseUltraWarmMode,
+            PerceptualStrength = this.PerceptualStrength
         };
 
         /// <summary>
@@ -163,8 +185,11 @@ namespace HDRGammaController.Core
             BlueOffset = ClampFinite(BlueOffset, -0.5, 0.5, 0.0),
             Algorithm = Enum.IsDefined(typeof(NightModeAlgorithm), Algorithm)
                 ? Algorithm
-                : NightModeAlgorithm.AccurateCIE1931,
-            UseUltraWarmMode = UseUltraWarmMode
+                : NightModeAlgorithm.Perceptual,
+            NightModeCcssPath = NightModeCcssPath,
+            NightMelanopicCoefficients = NightMelanopicCoefficients,
+            UseUltraWarmMode = UseUltraWarmMode,
+            PerceptualStrength = ClampFinite(PerceptualStrength, 0.0, 1.0, ColorAdjustments.DefaultPerceptualStrength)
         };
 
         private static bool IsAdjusted(double value, double neutral, double tolerance) =>
@@ -194,6 +219,7 @@ namespace HDRGammaController.Core
             int gOffsetKey = (int)Math.Round(GreenOffset * 1000);
             int bOffsetKey = (int)Math.Round(BlueOffset * 1000);
             int lutKey = CalibrationProfileId?.GetHashCode() ?? 0;
+            int nightCcssKey = NightModeCcssPath?.GetHashCode(StringComparison.OrdinalIgnoreCase) ?? 0;
             // Include the measured-correction LUT instance identity. Without this, two
             // settings with identical scalars but a freshly-regenerated Lut3D (same profile
             // id) would collide in LutGenerator's cache and return the stale LUT. Reference
@@ -201,12 +227,14 @@ namespace HDRGammaController.Core
             // false hit. A content hash over the 3D LUT is unnecessary (a suboptimal cache
             // miss is harmless; a *wrong* hit is the failure we're closing).
             int lutInstanceKey = RuntimeHelpers.GetHashCode(MeasuredCorrectionLut);
+            // Perceptual strength changes the multipliers, so it must invalidate the LUT cache.
+            int strengthKey = (int)Math.Round(PerceptualStrength * 100);
 
             return HashCode.Combine(
                 HashCode.Combine(brightnessKey, tempKey, tempOffsetKey, tintKey),
                 HashCode.Combine(rGainKey, gGainKey, bGainKey),
                 HashCode.Combine(rOffsetKey, gOffsetKey, bOffsetKey),
-                HashCode.Combine((int)Algorithm, UseLinearBrightness, UseUltraWarmMode, lutKey, lutInstanceKey)
+                HashCode.Combine((int)Algorithm, UseLinearBrightness, UseUltraWarmMode, strengthKey, lutKey, lutInstanceKey, nightCcssKey)
             );
         }
     }

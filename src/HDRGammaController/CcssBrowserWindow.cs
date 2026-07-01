@@ -21,14 +21,21 @@ namespace HDRGammaController
         private readonly ListView _list;
         private readonly TextBlock _status;
         private readonly string _saveFolder;
+        private readonly string? _typeFilter;
 
         /// <summary>Path of the downloaded correction file when the dialog returns true.</summary>
         public string? SavedPath { get; private set; }
 
-        public CcssBrowserWindow(string initialQuery, string saveFolder)
+        public CcssBrowserWindow(
+            string initialQuery,
+            string saveFolder,
+            string? typeFilter = null,
+            string? title = null,
+            string? introText = null)
         {
             _saveFolder = saveFolder;
-            Title = "Find Meter Correction - DisplayCAL Community Database";
+            _typeFilter = string.IsNullOrWhiteSpace(typeFilter) ? null : typeFilter.Trim().ToLowerInvariant();
+            Title = title ?? "Find Meter Correction - DisplayCAL Community Database";
             Width = 760;
             Height = 520;
             MinWidth = 760;
@@ -60,7 +67,7 @@ namespace HDRGammaController
             _searchButton = MakeButton("Search");
             _searchButton.Click += async (_, _) => await SearchAsync();
 
-            _downloadButton = MakeButton("Download && Use");
+            _downloadButton = MakeButton("Download & Use");
             _downloadButton.IsEnabled = false;
             _downloadButton.Click += (_, _) => DownloadSelected();
 
@@ -77,13 +84,20 @@ namespace HDRGammaController
                 Margin = new Thickness(0, 10, 0, 10),
             };
             var grid = new GridView();
+            grid.Columns.Add(Col("Source", nameof(CcssDatabaseClient.Entry.Source), 70));
             grid.Columns.Add(Col("Display", nameof(CcssDatabaseClient.Entry.Display), 250));
             grid.Columns.Add(Col("Type", nameof(CcssDatabaseClient.Entry.Type), 55));
             grid.Columns.Add(Col("Instrument", nameof(CcssDatabaseClient.Entry.Instrument), 130));
             grid.Columns.Add(Col("Measured with", nameof(CcssDatabaseClient.Entry.Reference), 150));
             grid.Columns.Add(Col("Created", nameof(CcssDatabaseClient.Entry.Created), 120));
             _list.View = grid;
-            _list.SelectionChanged += (_, _) => _downloadButton.IsEnabled = _list.SelectedItem != null;
+            _list.SelectionChanged += (_, _) =>
+            {
+                _downloadButton.IsEnabled = _list.SelectedItem != null;
+                _downloadButton.Content = _list.SelectedItem is CcssDatabaseClient.Entry { LocalPath: not null }
+                    ? "Use Saved"
+                    : "Download & Use";
+            };
             _list.MouseDoubleClick += (_, _) => { if (_list.SelectedItem != null) DownloadSelected(); };
 
             _status = new TextBlock
@@ -91,7 +105,8 @@ namespace HDRGammaController
                 Foreground = new SolidColorBrush(Color.FromRgb(0xA8, 0xB0, 0xBC)),
                 FontSize = 12,
                 VerticalAlignment = VerticalAlignment.Center,
-                Text = "Search the community database by display model. .ccss (spectral sample) entries are " +
+                Text = introText ??
+                       "Search the community database by display model. .ccss (spectral sample) entries are " +
                        "preferred for the i1 Display; ones measured with a spectro for YOUR panel model are best.",
                 TextWrapping = TextWrapping.Wrap,
             };
@@ -125,7 +140,7 @@ namespace HDRGammaController
             root.Children.Add(topRow);
             root.Children.Add(_list);
             root.Children.Add(bottomRow);
-            Services.BrutalistChrome.Apply(this, "Find Meter Correction", root);
+            Services.BrutalistChrome.Apply(this, title ?? "Find Meter Correction", root);
 
             Loaded += async (_, _) => await SearchAsync();
         }
@@ -153,11 +168,27 @@ namespace HDRGammaController
             _status.Text = "Searching…";
             try
             {
-                var results = await CcssDatabaseClient.SearchAsync(_query.Text);
+                var saved = CcssDatabaseClient.ListSaved(_saveFolder, _query.Text, _typeFilter);
+                IReadOnlyList<CcssDatabaseClient.Entry> online = Array.Empty<CcssDatabaseClient.Entry>();
+                Exception? onlineError = null;
+                try
+                {
+                    online = await CcssDatabaseClient.SearchAsync(_query.Text, _typeFilter);
+                }
+                catch (Exception ex)
+                {
+                    onlineError = ex;
+                }
+
+                var results = CcssDatabaseClient.MergePreferSaved(saved, online);
                 _list.ItemsSource = results;
                 _status.Text = results.Count == 0
-                    ? "No matches. Try fewer words (e.g. just the panel model number), or leave empty to browse recent entries."
-                    : $"{results.Count} correction(s) found. .ccss entries work with any i1 Display; pick one made for your exact panel.";
+                    ? onlineError != null
+                        ? $"No saved matches, and online search failed: {onlineError.Message}"
+                        : "No matches. Try fewer words (e.g. just the panel model number), or leave empty to browse recent entries."
+                    : _typeFilter == "ccss"
+                        ? $"{results.Count} spectral sample(s) found, including saved local files. Pick one made for your exact panel or closest display technology."
+                        : $"{results.Count} correction(s) found, including saved local files. .ccss entries work with any i1 Display; pick one made for your exact panel.";
             }
             catch (Exception ex)
             {
@@ -174,7 +205,7 @@ namespace HDRGammaController
             if (_list.SelectedItem is not CcssDatabaseClient.Entry entry) return;
             try
             {
-                SavedPath = CcssDatabaseClient.Save(entry, _saveFolder);
+                SavedPath = entry.LocalPath ?? CcssDatabaseClient.Save(entry, _saveFolder);
                 DialogResult = true;
                 Close();
             }

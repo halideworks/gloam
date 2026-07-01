@@ -24,6 +24,7 @@ namespace HDRGammaController.Tests
                 PreviousColorProfileName = "factory.icm",
                 PreviousColorProfileHdrMode = true,
                 MeterCorrectionPath = @"C:\corrections\panel.ccss",
+                NightModeCcssPath = @"C:\corrections\night-spectrum.ccss",
                 CalibDisplayType = "Oled",
                 CalibWhitePointOnly = true,
                 CalibTargetName = "HDR Desktop PQ (sRGB gamut)",
@@ -38,6 +39,7 @@ namespace HDRGammaController.Tests
             Assert.Equal(source.PreviousColorProfileName, clone.PreviousColorProfileName);
             Assert.Equal(source.PreviousColorProfileHdrMode, clone.PreviousColorProfileHdrMode);
             Assert.Equal(source.MeterCorrectionPath, clone.MeterCorrectionPath);
+            Assert.Equal(source.NightModeCcssPath, clone.NightModeCcssPath);
             Assert.Equal(source.CalibDisplayType, clone.CalibDisplayType);
             Assert.Equal(source.CalibWhitePointOnly, clone.CalibWhitePointOnly);
             Assert.Equal(source.CalibTargetName, clone.CalibTargetName);
@@ -148,7 +150,8 @@ namespace HDRGammaController.Tests
                 Tint = -5.0,
                 RedGain = 1.05,
                 GreenGain = 0.98,
-                BlueGain = 1.02
+                BlueGain = 1.02,
+                NightModeCcssPath = @"C:\corrections\night.ccss"
             };
 
             var settings = profile.ToCalibrationSettings();
@@ -157,6 +160,7 @@ namespace HDRGammaController.Tests
             Assert.Equal(15.0, settings.Temperature);
             Assert.Equal(-5.0, settings.Tint);
             Assert.Equal(1.05, settings.RedGain);
+            Assert.Equal(profile.NightModeCcssPath, settings.NightModeCcssPath);
         }
 
         #endregion
@@ -175,7 +179,31 @@ namespace HDRGammaController.Tests
             Assert.Null(settings.Longitude);
             Assert.Equal(2700, settings.TemperatureKelvin);
             Assert.Equal(30, settings.FadeMinutes);
-            Assert.Equal(NightModeAlgorithm.AccurateCIE1931, settings.Algorithm);
+            Assert.Equal(NightModeAlgorithm.Perceptual, settings.Algorithm);
+            Assert.Equal(ColorAdjustments.DefaultPerceptualStrength, settings.PerceptualStrength, 6);
+        }
+
+        [Fact]
+        public void NightModeSettingsData_RetiredBlueReduction_MigratesToPerceptual()
+        {
+            var data = new NightModeSettingsData { Algorithm = NightModeAlgorithm.BlueReduction };
+
+            var settings = data.ToNightModeSettings();
+
+            Assert.Equal(NightModeAlgorithm.Perceptual, settings.Algorithm);
+        }
+
+        [Theory]
+        [InlineData(0.65, 0.65)]
+        [InlineData(1.5, 1.0)]     // clamped high
+        [InlineData(-0.2, 0.0)]    // clamped low
+        public void NightModeSettingsData_PerceptualStrength_RoundTripsAndClamps(double input, double expected)
+        {
+            var data = new NightModeSettingsData { PerceptualStrength = input };
+
+            var settings = data.ToNightModeSettings();
+
+            Assert.Equal(expected, settings.PerceptualStrength, 6);
         }
 
         [Fact]

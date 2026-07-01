@@ -33,11 +33,20 @@ namespace HDRGammaController
 
             // Init Schedule Editor (Global Settings)
             ScheduleEditor.Initialize(_viewModel.EditingNightMode);
-            ScheduleEditor.ScheduleChanged += _viewModel.SaveEditedNightMode;
+            ScheduleEditor.ScheduleChanged += () =>
+            {
+                _viewModel.SaveEditedNightMode();
+                _viewModel.RefreshNightRenderingBindings();
+            };
             ScheduleEditor.PreviewTemperatureRequested += async (kelvin) => await _viewModel.PreviewTemperatureAsync(kelvin);
+            _viewModel.NightRenderingEdited += ScheduleEditor.SyncRenderingSettings;
 
             // The view model subscribes to NightModeService, which outlives this window.
-            Closed += (s, e) => _viewModel.Dispose();
+            Closed += (s, e) =>
+            {
+                _viewModel.NightRenderingEdited -= ScheduleEditor.SyncRenderingSettings;
+                _viewModel.Dispose();
+            };
 
             // Reflect the current app-wide brutalist theme on the toggle glyph.
             ThemeToggleButton.Content = BrutalistTheme.IsDark ? "◐" : "◑";

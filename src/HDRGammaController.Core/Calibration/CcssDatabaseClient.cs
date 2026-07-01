@@ -38,7 +38,11 @@ namespace HDRGammaController.Core.Calibration
             string Instrument,
             string Reference,    // the spectro the correction was made with
             string Created,
-            string Cgats);       // full correction file content
+            string Cgats,        // full correction file content
+            string? LocalPath = null)
+        {
+            public string Source => string.IsNullOrEmpty(LocalPath) ? "Online" : "Saved";
+        }
 
         /// <summary>
         /// Searches the database. <paramref name="displayQuery"/> is matched as a substring
@@ -77,6 +81,49 @@ namespace HDRGammaController.Core.Calibration
                 .OrderByDescending(e => e.Created, StringComparer.Ordinal)
                 .ToList();
         }
+
+        public static IReadOnlyList<Entry> ListSaved(string folder, string displayQuery, string? type = null)
+        {
+            var results = new List<Entry>();
+            if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
+                return results;
+
+            string query = displayQuery?.Trim() ?? "";
+            var types = type != null ? new[] { type } : new[] { "ccss", "ccmx" };
+            foreach (string t in types)
+            {
+                string pattern = t.Equals("ccmx", StringComparison.OrdinalIgnoreCase) ? "*.ccmx" : "*.ccss";
+                foreach (string path in Directory.GetFiles(folder, pattern, SearchOption.TopDirectoryOnly))
+                {
+                    try
+                    {
+                        string cgats = File.ReadAllText(path);
+                        if (!CgatsValidator.Validate(cgats, t).IsValid)
+                            continue;
+
+                        var entry = ParseLocal(path, cgats, t);
+                        if (query.Length > 0 &&
+                            !entry.Display.Contains(query, StringComparison.OrdinalIgnoreCase) &&
+                            !Path.GetFileName(path).Contains(query, StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
+                        results.Add(entry);
+                    }
+                    catch
+                    {
+                        // Local correction folders may contain hand-copied files. Ignore bad ones here;
+                        // the setup preflight still validates selected files with an explicit error.
+                    }
+                }
+            }
+
+            return Deduplicate(results).ToList();
+        }
+
+        public static IReadOnlyList<Entry> MergePreferSaved(IEnumerable<Entry> saved, IEnumerable<Entry> online)
+            => Deduplicate(saved.Concat(online)).ToList();
 
         private static IEnumerable<Entry> Parse(string json, string type)
         {
@@ -122,6 +169,43 @@ namespace HDRGammaController.Core.Calibration
             }
         }
 
+        private static Entry ParseLocal(string path, string cgats, string type)
+        {
+            string GetKeyword(string keyword)
+            {
+                foreach (string raw in cgats.Split('\n'))
+                {
+                    string line = raw.Trim();
+                    if (!line.StartsWith(keyword, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    string value = line[keyword.Length..].Trim();
+                    if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
+                        value = value[1..^1];
+                    return value;
+                }
+                return "";
+            }
+
+            string display = GetKeyword("DISPLAY");
+            if (string.IsNullOrWhiteSpace(display))
+                display = Path.GetFileNameWithoutExtension(path);
+
+            string reference = GetKeyword("REFERENCE");
+            if (string.IsNullOrWhiteSpace(reference))
+                reference = "saved file";
+
+            return new Entry(
+                Type: type,
+                Display: display,
+                Manufacturer: "",
+                Instrument: GetKeyword("INSTRUMENT"),
+                Reference: reference,
+                Created: GetKeyword("CREATED"),
+                Cgats: cgats,
+                LocalPath: path);
+        }
+
         /// <summary>
         /// Writes the entry's correction content into <paramref name="folder"/> with a
         /// descriptive, sanitized filename. Returns the saved path.
@@ -139,6 +223,10 @@ namespace HDRGammaController.Core.Calibration
                     $"Correction file for '{entry.Display}' failed validation and was not saved: {validation.Error}");
 
             Directory.CreateDirectory(folder);
+            string? existing = FindExistingContentMatch(folder, entry);
+            if (existing != null)
+                return existing;
+
             string name = $"{entry.Display} - {entry.Reference}".Trim(' ', '-');
             if (string.IsNullOrWhiteSpace(name)) name = "correction";
             foreach (char c in Path.GetInvalidFileNameChars()) name = name.Replace(c, ' ');
@@ -154,5 +242,49 @@ namespace HDRGammaController.Core.Calibration
             File.WriteAllText(path, entry.Cgats);
             return path;
         }
+
+        private static string? FindExistingContentMatch(string folder, Entry entry)
+        {
+            string ext = entry.Type.Equals("ccmx", StringComparison.OrdinalIgnoreCase) ? ".ccmx" : ".ccss";
+            string wanted = NormalizeCgats(entry.Cgats);
+
+            foreach (string path in Directory.GetFiles(folder, "*" + ext, SearchOption.TopDirectoryOnly))
+            {
+                try
+                {
+                    if (NormalizeCgats(File.ReadAllText(path)) == wanted)
+                        return path;
+                }
+                catch
+                {
+                    // Ignore unreadable files; Save will write a new one if needed.
+                }
+            }
+
+            return null;
+        }
+
+        private static IEnumerable<Entry> Deduplicate(IEnumerable<Entry> entries)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var entry in entries
+                         .OrderByDescending(e => !string.IsNullOrEmpty(e.LocalPath))
+                         .ThenByDescending(e => e.Created, StringComparer.Ordinal))
+            {
+                string key = NormalizeCgats(entry.Cgats);
+                if (key.Length == 0)
+                    key = $"{entry.Type}|{entry.Display}|{entry.Reference}";
+                if (seen.Add(key))
+                    yield return entry;
+            }
+        }
+
+        private static string NormalizeCgats(string value) =>
+            string.Join("\n", (value ?? "")
+                .Replace("\r\n", "\n")
+                .Replace('\r', '\n')
+                .Split('\n')
+                .Select(line => line.TrimEnd())
+                .Where(line => line.Length > 0));
     }
 }

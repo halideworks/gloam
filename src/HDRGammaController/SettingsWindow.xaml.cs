@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Input;
 using HDRGammaController.Core;
+using HDRGammaController.Core.Calibration;
 using HDRGammaController.Services;
 using HDRGammaController.ViewModels;
 
@@ -65,6 +66,22 @@ namespace HDRGammaController
         {
             _viewModel.CompareEnd();
             e.Handled = true;
+        }
+
+        private void FindNightSpectrum_Click(object sender, RoutedEventArgs e)
+        {
+            var browser = new CcssBrowserWindow(
+                _viewModel.CurrentMonitorFriendlyName,
+                CalibrationSetupViewModel.CorrectionsFolder,
+                typeFilter: "ccss",
+                title: "Find Display Spectrum",
+                introText: "Search for a DisplayCAL .ccss spectral sample matching this panel. Gloam uses it only to estimate Ultra Night melanopic weights.")
+            {
+                Owner = this
+            };
+
+            if (browser.ShowDialog() == true && browser.SavedPath != null)
+                _viewModel.SelectNightSpectrumPath(browser.SavedPath);
         }
     }
 }

@@ -327,6 +327,35 @@
                                     <TextBlock Text="Cooler" Foreground="{DynamicResource ThemeTextDim}" FontSize="10"
                                                HorizontalAlignment="Right"/>
                                 </Grid>
+
+                                <Separator Margin="0,16,0,16" Background="{DynamicResource ThemeBorder}"/>
+                                <TextBlock Text="Advanced Ultra Night spectrum" Style="{StaticResource SectionHeader}" FontSize="11" Margin="0,0,0,8" Foreground="{DynamicResource ThemeTextDim}"/>
+                                <TextBlock Text="Optional DisplayCAL .ccss spectral sample for this panel. Used only to tune Ultra Night's amber/red mix."
+                                           Foreground="{DynamicResource ThemeTextDim}" FontSize="11" Margin="0,-4,0,10" TextWrapping="Wrap"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="{Binding NightSpectrumLabel}" Style="{StaticResource MonoValue}"
+                                               TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                    <Button Grid.Column="1" Content="Find spectrum" Style="{StaticResource SecondaryButton}"
+                                            Padding="12,6" Margin="0,0,8,0" Click="FindNightSpectrum_Click"/>
+                                    <Button Grid.Column="2" Content="Clear"
+                                            Padding="12,6" Command="{Binding ClearNightSpectrumCommand}">
+                                        <Button.Style>
+                                            <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding HasNightSpectrum}" Value="True">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Button.Style>
+                                    </Button>
+                                </Grid>
                             </StackPanel>
                         </Border>
 
