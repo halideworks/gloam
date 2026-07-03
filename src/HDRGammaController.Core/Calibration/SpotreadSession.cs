@@ -48,12 +48,16 @@ namespace HDRGammaController.Core.Calibration
 
         // Spectral header emitted by spotread -s with a spectrometer, e.g.
         //   "Spectrum from 380.000000 to 730.000000 nm in 36 steps"
-        // Wording/precision varies slightly across Argyll versions, so this matches the
-        // announced start/end/count anywhere in the line; the values themselves follow on
-        // the same line (after the header) and/or on subsequent lines, comma or whitespace
-        // separated, possibly wrapped.
+        // Wording/precision varies across Argyll versions: the trailing noun after the count
+        // is "steps" on some builds, "bands"/"samples" on others, and absent entirely on a
+        // few. We therefore key on the integer count and make the trailing word OPTIONAL —
+        // being too strict here means the spectrum never collects, the read times out, and
+        // the whole session is poisoned. The band-count sanity checks in HandleSpectralLine
+        // (3..10000, end > start) still guard against a garbage match. The values themselves
+        // follow on the same line (after the header) and/or on subsequent lines, comma or
+        // whitespace separated, possibly wrapped.
         private static readonly Regex SpectrumHeaderPattern = new(
-            @"Spectrum\s+from\s+([+-]?\d+\.?\d*)\s+to\s+([+-]?\d+\.?\d*)\s+nm\s+in\s+(\d+)\s+steps",
+            @"Spectrum\s+from\s+([+-]?\d+\.?\d*)\s+to\s+([+-]?\d+\.?\d*)\s+nm\s+in\s+(\d+)(?:\s+(?:steps|bands|samples))?",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         // Fragments that indicate spotread is ready to accept the next measurement trigger.
@@ -67,6 +71,34 @@ namespace HDRGammaController.Core.Calibration
             "place instrument",
             "instrument is ready"
         };
+
+        // Fragments that mark a line as a CALIBRATION prompt rather than a measurement-ready
+        // prompt. A spectrometer (i1 Pro / ColorMunki) runs a white/dark reference
+        // calibration before emissive reads, and its calibration prompt — e.g. "Place
+        // instrument on its reference tile, and press any key to start calibration" —
+        // contains "place instrument", which is also a measurement-ready fragment. In
+        // spectral mode we must NOT treat such a line as measurement-ready, or we would fire
+        // a read trigger in the middle of calibration. Colorimeters skip calibration (-N),
+        // so this only matters when spectralMode is set.
+        private static readonly string[] CalibrationPromptFragments =
+        {
+            "calibrat",           // "start calibration", "calibrate", "calibration position"
+            "reference tile",     // i1 Pro white reference tile
+            "reference position",
+            "on its reference",
+            "onto its reference",
+            "white reference"
+        };
+
+        private static bool IsCalibrationPrompt(string lowerLine)
+        {
+            foreach (var fragment in CalibrationPromptFragments)
+            {
+                if (lowerLine.Contains(fragment))
+                    return true;
+            }
+            return false;
+        }
 
         // Fragments that indicate a hard failure — no point waiting for measurement to arrive.
         // These phrasings are specific enough to match anywhere in a line.
@@ -155,6 +187,11 @@ namespace HDRGammaController.Core.Calibration
         private volatile bool _attemptedHidOpen;
         private volatile bool _sharingViolationSeen;
         private volatile bool _poisoned;
+
+        // True when this session drives a spectrometer (spotread -s). Set once before the
+        // process starts, then read on the output-reader thread. Gates the calibration-prompt
+        // ready guard (a spectrometer's calibration prompt must not be read as "ready").
+        private volatile bool _spectralMode;
         private readonly Action<string> _log;
 
         // Process interaction seams. Production wires these to the real spotread process;
@@ -215,6 +252,20 @@ namespace HDRGammaController.Core.Calibration
         internal string? FatalErrorForTest => _fatalError;
 
         /// <summary>
+        /// Whether this session drives a spectrometer. Production sets it in
+        /// <see cref="StartAsync"/>; tests set it on a fake-harness session to exercise the
+        /// spectral-mode calibration-prompt ready guard.
+        /// </summary>
+        internal bool SpectralMode
+        {
+            get => _spectralMode;
+            set => _spectralMode = value;
+        }
+
+        /// <summary>Test-only: true once the startup ready prompt has been observed.</summary>
+        internal bool ReadyForTest => _readyTcs.Task.IsCompletedSuccessfully;
+
+        /// <summary>
         /// Spawns a spotread.exe in interactive mode and waits for the ready prompt.
         /// Throws if spotread can't talk to the instrument, with a diagnostic that
         /// includes the last few lines of spotread output (not just "no color data").
@@ -229,26 +280,6 @@ namespace HDRGammaController.Core.Calibration
             string? correctionFilePath = null,
             bool spectralMode = false)
         {
-            string displayFlag = displayType.ToSpotreadFlag();
-            // -v (verbose): makes Argyll 3.x print the hid_open_port lines we need to
-            // distinguish "silently failed to open HID" (V3.3.0 bug, exits 0 with no
-            // error) from "connecting normally". Without -v we lose the diagnostic.
-            //
-            // Deliberately NO -O: that flag is broken for our use case — it exits before
-            // emitting a usable prompt when stdin is redirected and stdout is piped.
-            //
-            // -N disables the colorimeter's initial dark calibration. i1 Display Plus
-            // doesn't need a lens cap calibration, so this is safe and avoids a ~5s stall.
-            var args = new System.Collections.Generic.List<string>
-            {
-                "-v",
-                "-N",
-                "-c",
-                instrumentIndex.ToString(CultureInfo.InvariantCulture),
-                "-e",
-                "-y",
-                displayFlag
-            };
             // NOTE (flag hygiene): spotread's -H flag is HIGH-RESOLUTION SPECTRAL mode and
             // only applies to spectrometers (i1 Pro etc.) — it is NOT an "HDR mode". This
             // session used to pass -H when hdrMode was true; on colorimeters (i1 Display
@@ -259,31 +290,8 @@ namespace HDRGammaController.Core.Calibration
             // its persistent session on it), so the instrument re-initializes across the
             // OS display-mode flip.
             _ = hdrMode;
-            // Spectral output mode (spectrometers only): -s makes spotread print the raw
-            // emission spectrum after each reading, and -H enables the instrument's
-            // high-resolution spectral mode (3.3 nm bins on an i1 Pro). -H was removed for
-            // colorimeters (where it is meaningless), but it IS the right flag here.
-            if (spectralMode)
-            {
-                args.Add("-s");
-                args.Add("-H");
-            }
-            // Spectral correction sample (.ccss) or matrix (.ccmx): replaces the generic
-            // display-type calibration with one matched to the actual panel spectrum.
-            // Essential on narrow-primary panels (QD-OLED) where the generic corrections
-            // misplace the white point by several ΔE.
-            if (!string.IsNullOrEmpty(correctionFilePath) && File.Exists(correctionFilePath))
-            {
-                // Defense-in-depth: never pass a malformed correction file to spotread — it
-                // could come from a hand-edited path or a stale/older DB entry. CcssDatabaseClient
-                // validates on save, but a file that landed here any other way is still checked.
-                if (!CgatsValidator.IsValidFile(correctionFilePath))
-                    throw new InvalidOperationException(
-                        $"The meter correction file is not a valid CGATS correction:\n{correctionFilePath}\n" +
-                        "Re-download it from the corrections database, or clear it to use the built-in display-type correction.");
-                args.Add("-X");
-                args.Add(correctionFilePath);
-            }
+
+            var args = BuildSpotreadArguments(instrumentIndex, displayType, spectralMode, correctionFilePath);
 
             var psi = new ProcessStartInfo(spotreadPath)
             {
@@ -310,7 +318,7 @@ namespace HDRGammaController.Core.Calibration
             KillStraySpotread(log);
 
             var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
-            var session = new SpotreadSession(process, log);
+            var session = new SpotreadSession(process, log) { SpectralMode = spectralMode };
 
             log($"SpotreadSession starting: {spotreadPath} {string.Join(" ", args)}");
             process.Start();
@@ -350,6 +358,77 @@ namespace HDRGammaController.Core.Calibration
                 await session.DisposeAsync();
                 throw;
             }
+        }
+
+        /// <summary>
+        /// Builds spotread's command-line arguments. Extracted so the colorimeter-vs-
+        /// spectrometer flag differences can be unit-tested without spawning a process.
+        ///
+        /// -v (verbose): makes Argyll 3.x print the hid_open_port lines we use to tell a
+        /// silent HID-open failure (V3.3.0 bug, exits 0 with no error) apart from a normal
+        /// connect. Deliberately NO -O: that flag exits before emitting a usable prompt when
+        /// stdin is redirected and stdout is piped.
+        ///
+        /// Two flags are COLORIMETER-ONLY and are omitted in spectral mode:
+        ///  • -N skips the instrument's power-up calibration. A colorimeter (i1 Display Plus
+        ///    etc.) has no lens-cap/dark calibration, so -N is safe and avoids a ~5s stall.
+        ///    A SPECTROMETER (i1 Pro / ColorMunki) generally REQUIRES a white/dark reference
+        ///    calibration before emissive reads; -N there can make spotread refuse, or emit
+        ///    uncalibrated spectra that still parse — silently undermining accuracy. So in
+        ///    spectral mode we let spotread run its own calibration.
+        ///  • -y &lt;display type&gt; selects a colorimeter's per-technology correction. It is
+        ///    meaningless for a spectrometer (which measures the emission spectrum directly)
+        ///    and spotread may warn/reject it, so it is omitted in spectral mode.
+        ///
+        /// Spectral mode adds -s (print the raw emission spectrum after each reading) and -H
+        /// (the instrument's high-resolution spectral mode, ~3.3 nm bins on an i1 Pro).
+        /// </summary>
+        internal static System.Collections.Generic.List<string> BuildSpotreadArguments(
+            int instrumentIndex,
+            DisplayType displayType,
+            bool spectralMode,
+            string? correctionFilePath)
+        {
+            var args = new System.Collections.Generic.List<string> { "-v" };
+
+            if (!spectralMode)
+                args.Add("-N"); // colorimeter-only: skip power-up dark calibration
+
+            args.Add("-c");
+            args.Add(instrumentIndex.ToString(CultureInfo.InvariantCulture));
+            args.Add("-e");
+
+            if (!spectralMode)
+            {
+                // colorimeter-only: display-type correction (a spectrometer needs none)
+                args.Add("-y");
+                args.Add(displayType.ToSpotreadFlag());
+            }
+
+            if (spectralMode)
+            {
+                args.Add("-s");
+                args.Add("-H");
+            }
+
+            // Spectral correction sample (.ccss) or matrix (.ccmx): replaces the generic
+            // display-type calibration with one matched to the actual panel spectrum.
+            // Essential on narrow-primary panels (QD-OLED) where the generic corrections
+            // misplace the white point by several ΔE.
+            if (!string.IsNullOrEmpty(correctionFilePath) && File.Exists(correctionFilePath))
+            {
+                // Defense-in-depth: never pass a malformed correction file to spotread — it
+                // could come from a hand-edited path or a stale/older DB entry. CcssDatabaseClient
+                // validates on save, but a file that landed here any other way is still checked.
+                if (!CgatsValidator.IsValidFile(correctionFilePath))
+                    throw new InvalidOperationException(
+                        $"The meter correction file is not a valid CGATS correction:\n{correctionFilePath}\n" +
+                        "Re-download it from the corrections database, or clear it to use the built-in display-type correction.");
+                args.Add("-X");
+                args.Add(correctionFilePath);
+            }
+
+            return args;
         }
 
         /// <summary>
@@ -624,8 +703,11 @@ namespace HDRGammaController.Core.Calibration
 
             string lower = line.ToLowerInvariant();
 
-            // 2. Are we ready to accept the next measurement?
-            if (!_readyTcs.Task.IsCompleted)
+            // 2. Are we ready to accept the next measurement? In spectral mode a
+            //    spectrometer's calibration prompt also contains "place instrument", so a
+            //    calibration-context line must NOT be treated as measurement-ready — firing a
+            //    read trigger mid-calibration would abort or corrupt the calibration.
+            if (!_readyTcs.Task.IsCompleted && !(_spectralMode && IsCalibrationPrompt(lower)))
             {
                 foreach (var fragment in ReadyFragments)
                 {

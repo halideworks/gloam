@@ -314,5 +314,110 @@ namespace HDRGammaController.Tests
 
             await Assert.ThrowsAsync<InvalidOperationException>(() => task);
         }
+
+        [Fact]
+        public async Task MeasureSpectralAsync_HeaderWithBandsWord_IsParsed()
+        {
+            // M2: some Argyll builds print "bands" instead of "steps".
+            var session = CreateFakeSession(out _, out _);
+
+            var task = session.MeasureSpectralAsync(CancellationToken.None);
+            session.SimulateOutputLine("Result is XYZ: 10.0 11.0 12.0");
+            session.SimulateOutputLine("Spectrum from 380.0 to 730.0 nm in 3 bands");
+            session.SimulateOutputLine("1.0 2.0 3.0");
+
+            var reading = await task;
+            Assert.Equal(3, reading.Spectrum.Bands);
+            Assert.Equal(new[] { 1.0, 2.0, 3.0 }, reading.Spectrum.Values);
+        }
+
+        [Fact]
+        public async Task MeasureSpectralAsync_HeaderWithNoTrailingWord_IsParsed()
+        {
+            // M2: the trailing noun after the count is optional; key on the integer.
+            var session = CreateFakeSession(out _, out _);
+
+            var task = session.MeasureSpectralAsync(CancellationToken.None);
+            session.SimulateOutputLine("Result is XYZ: 10.0 11.0 12.0");
+            session.SimulateOutputLine("Spectrum from 380.0 to 730.0 nm in 4");
+            session.SimulateOutputLine("1.0 2.0 3.0 4.0");
+
+            var reading = await task;
+            Assert.Equal(4, reading.Spectrum.Bands);
+            Assert.Equal(new[] { 1.0, 2.0, 3.0, 4.0 }, reading.Spectrum.Values);
+        }
+
+        [Fact]
+        public async Task MeasureSpectralAsync_HeaderWithSamplesWord_IsParsed()
+        {
+            // M2: "samples" is another observed trailing noun.
+            var session = CreateFakeSession(out _, out _);
+
+            var task = session.MeasureSpectralAsync(CancellationToken.None);
+            session.SimulateOutputLine("Result is XYZ: 10.0 11.0 12.0");
+            session.SimulateOutputLine("Spectrum from 380.0 to 730.0 nm in 3 samples: 5.0 6.0 7.0");
+
+            var reading = await task;
+            Assert.Equal(new[] { 5.0, 6.0, 7.0 }, reading.Spectrum.Values);
+        }
+
+        // --- spotread argument construction (colorimeter vs spectrometer) ------------
+
+        [Fact]
+        public void BuildSpotreadArguments_ColorimeterMode_IncludesDarkCalSkipAndDisplayType()
+        {
+            var args = SpotreadSession.BuildSpotreadArguments(
+                1, DisplayType.LcdLed, spectralMode: false, correctionFilePath: null);
+
+            Assert.Contains("-N", args);           // colorimeter skips its (nonexistent) dark cal
+            Assert.Contains("-y", args);           // display-type correction applies to colorimeters
+            Assert.DoesNotContain("-s", args);     // no spectral output
+            Assert.DoesNotContain("-H", args);     // no high-res spectral mode
+        }
+
+        [Fact]
+        public void BuildSpotreadArguments_SpectralMode_OmitsDarkCalSkipAndDisplayType()
+        {
+            var args = SpotreadSession.BuildSpotreadArguments(
+                1, DisplayType.LcdLed, spectralMode: true, correctionFilePath: null);
+
+            // M1: a spectrometer must run its own white/dark calibration — never pass -N.
+            Assert.DoesNotContain("-N", args);
+            // m4: -y (display-type) is meaningless for a spectrometer — omit it.
+            Assert.DoesNotContain("-y", args);
+            Assert.Contains("-s", args);           // spectral output on
+            Assert.Contains("-H", args);           // high-res spectral mode on
+        }
+
+        [Fact]
+        public void CalibrationPrompt_InSpectralMode_IsNotTreatedAsReady()
+        {
+            // M1: an i1 Pro calibration prompt contains "place instrument", which is also a
+            // measurement-ready fragment. In spectral mode it must NOT fire the ready gate,
+            // or we would trigger a read in the middle of calibration.
+            var session = CreateFakeSession(out _, out _);
+            session.SpectralMode = true;
+
+            session.SimulateOutputLine(
+                "Place instrument on its reference tile, and press any key to start calibration");
+            Assert.False(session.ReadyForTest);
+
+            // The genuine measurement prompt (no calibration context) still marks ready.
+            session.SimulateOutputLine(
+                "Place instrument on the spot to be measured, and hit [space] to take a reading");
+            Assert.True(session.ReadyForTest);
+        }
+
+        [Fact]
+        public void CalibrationPrompt_InColorimeterMode_StillMarksReady()
+        {
+            // The guard is spectral-only: a colorimeter session (which never calibrates) must
+            // keep its existing ready behavior.
+            var session = CreateFakeSession(out _, out _);
+            // SpectralMode defaults to false.
+
+            session.SimulateOutputLine("Place instrument and hit any other key to take a reading");
+            Assert.True(session.ReadyForTest);
+        }
     }
 }

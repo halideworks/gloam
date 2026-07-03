@@ -179,6 +179,17 @@ namespace HDRGammaController.Core.Calibration
                     if (!line.StartsWith(keyword, StringComparison.OrdinalIgnoreCase))
                         continue;
 
+                    // Require a word boundary after the keyword so "DISPLAY" does not also
+                    // match "DISPLAY_TYPE_REFRESH" (benign today only because DISPLAY happens
+                    // to be emitted first): the keyword must be followed by whitespace or the
+                    // opening quote of its value, or be the whole line.
+                    if (line.Length > keyword.Length)
+                    {
+                        char next = line[keyword.Length];
+                        if (!char.IsWhiteSpace(next) && next != '"')
+                            continue;
+                    }
+
                     string value = line[keyword.Length..].Trim();
                     if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
                         value = value[1..^1];

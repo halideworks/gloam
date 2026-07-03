@@ -22,8 +22,13 @@ namespace HDRGammaController.Core.Calibration
         /// <summary>
         /// Default weight applied to the white patch when solving. White errors dominate
         /// perception — an off-white is visible at a fraction of the delta that makes a
-        /// saturated primary look wrong — so white is emphasized in the fit, matching the
-        /// emphasis ccxxmake places on the white sample.
+        /// saturated primary look wrong — so white is emphasized in the fit.
+        ///
+        /// This is a DELIBERATE Gloam perceptual choice, NOT a match to Argyll ccxxmake:
+        /// ccxxmake fits its correction matrix with an UNWEIGHTED least-squares solve (every
+        /// patch weighted equally). We weight white 2x on purpose to prioritize white-point
+        /// accuracy. With consistent data the weighting does not change the (exact) solution;
+        /// it only biases the fit toward white when the paired readings are inconsistent.
         /// </summary>
         public const double DefaultWhiteWeight = 2.0;
 
@@ -201,8 +206,10 @@ namespace HDRGammaController.Core.Calibration
             sb.Append("CCMX   \n\n");
             sb.Append($"DESCRIPTOR \"{display} - Gloam correction matrix ({instrument} to {reference})\"\n");
             sb.Append("ORIGINATOR \"Gloam\"\n");
-            // ctime()-style date, matching Argyll's writer.
-            sb.Append($"CREATED \"{stamp.ToString("ddd MMM d HH:mm:ss yyyy", inv)}\"\n");
+            // ctime()-style date, matching Argyll's writer. C's ctime() space-pads a
+            // single-digit day to two columns ("Fri Jul  3 ..."), so we pad the day the same
+            // way rather than letting "d" render it as a single digit.
+            sb.Append($"CREATED \"{FormatCtime(stamp, inv)}\"\n");
             AppendKeyword(sb, "INSTRUMENT", instrument);
             AppendKeyword(sb, "REFERENCE", reference);
             AppendKeyword(sb, "DISPLAY", display);
@@ -387,5 +394,12 @@ namespace HDRGammaController.Core.Calibration
             // emitted file stays a valid single-line keyword.
             return text.Replace("\"", "'").Replace('\r', ' ').Replace('\n', ' ').Trim();
         }
+
+        // C ctime() format: "Www Mmm dd HH:MM:SS yyyy" with the day space-padded to two
+        // columns (e.g. "Fri Jul  3 12:00:00 2026"), matching Argyll's CGATS writer.
+        private static string FormatCtime(DateTime stamp, CultureInfo inv) =>
+            stamp.ToString("ddd MMM", inv) + " " +
+            stamp.Day.ToString(inv).PadLeft(2) + " " +
+            stamp.ToString("HH:mm:ss yyyy", inv);
     }
 }

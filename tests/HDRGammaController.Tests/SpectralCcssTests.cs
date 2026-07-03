@@ -51,7 +51,8 @@ namespace HDRGammaController.Tests
             Assert.Contains("SPECTRAL_START_NM \"380.000000\"", content);
             Assert.Contains("SPECTRAL_END_NM \"730.000000\"", content);
             Assert.Contains("SPECTRAL_NORM \"1.000000\"", content);
-            Assert.Contains("CREATED \"Fri Jul 3 12:00:00 2026\"", content);
+            // ctime() space-pads a single-digit day to two columns: "Jul  3", not "Jul 3".
+            Assert.Contains("CREATED \"Fri Jul  3 12:00:00 2026\"", content);
             Assert.Contains("NUMBER_OF_FIELDS 7", content);
             Assert.Contains("SAMPLE_ID SPEC_380 SPEC_450 SPEC_520 SPEC_590 SPEC_660 SPEC_730", content);
             Assert.Contains("KEYWORD \"SPEC_380\"", content); // per-field KEYWORD declarations
