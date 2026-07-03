@@ -25,7 +25,7 @@ namespace HDRGammaController
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             ResizeMode = ResizeMode.NoResize;
             ShowInTaskbar = false;
-            Foreground = new SolidColorBrush(Color.FromRgb(0xF4, 0xF7, 0xFA));
+            this.SetResourceReference(ForegroundProperty, "ThemeText");
 
             Button MakeButton(string label, bool accent)
             {
@@ -34,12 +34,12 @@ namespace HDRGammaController
                     Content = label,
                     Padding = new Thickness(16, 7, 16, 7),
                     Margin = new Thickness(8, 0, 0, 0),
-                    Background = new SolidColorBrush(accent ? Color.FromRgb(0xE3, 0x5F, 0x52) : Color.FromRgb(0x17, 0x1C, 0x23)),
-                    Foreground = new SolidColorBrush(Color.FromRgb(0xF4, 0xF7, 0xFA)),
-                    BorderBrush = new SolidColorBrush(accent ? Color.FromRgb(0xE3, 0x5F, 0x52) : Color.FromRgb(0x46, 0x55, 0x67)),
                     BorderThickness = new Thickness(1),
                     MinWidth = 80,
                 };
+                b.SetResourceReference(BackgroundProperty, accent ? "ThemeAccent" : "ThemeSurface");
+                b.SetResourceReference(ForegroundProperty, accent ? "ThemeOnAccent" : "ThemeText");
+                b.SetResourceReference(Control.BorderBrushProperty, accent ? "ThemeAccent" : "ThemeBorder");
                 return b;
             }
 
@@ -80,25 +80,27 @@ namespace HDRGammaController
                 FontWeight = FontWeights.Bold,
                 Margin = new Thickness(0, 0, 0, 10),
             });
-            stack.Children.Add(new TextBlock
+            var messageText = new TextBlock
             {
                 Text = message,
                 FontFamily = body,
                 FontSize = 13,
                 TextWrapping = TextWrapping.Wrap,
-                Foreground = new SolidColorBrush(Color.FromRgb(0xA8, 0xB0, 0xBC)),
-            });
+            };
+            messageText.SetResourceReference(ForegroundProperty, "ThemeTextDim");
+            stack.Children.Add(messageText);
             stack.Children.Add(buttons);
 
-            // Dark-fixed app chrome: confirmations mostly appear over calibration/utility UI.
-            Content = new Border
+            // Opens in the current app theme; confirmations appear over calibration/utility UI.
+            var frame = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(0x0E, 0x11, 0x16)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(0x36, 0x42, 0x52)),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(0),
                 Child = stack,
             };
+            frame.SetResourceReference(Border.BackgroundProperty, "ThemeBg");
+            frame.SetResourceReference(Border.BorderBrushProperty, "ThemeWindowFrame");
+            Content = frame;
 
             // Merge the shared dark styles so the buttons get the templated look.
             Resources.MergedDictionaries.Add(new ResourceDictionary

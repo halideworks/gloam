@@ -58,11 +58,11 @@ namespace HDRGammaController
                     Content = label,
                     Padding = new Thickness(12, 6, 12, 6),
                     Margin = new Thickness(4, 0, 4, 0),
-                    Background = new SolidColorBrush(Color.FromRgb(0x17, 0x1C, 0x23)),
-                    Foreground = new SolidColorBrush(Color.FromRgb(0xF4, 0xF7, 0xFA)),
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(0x46, 0x55, 0x67)),
                     BorderThickness = new Thickness(1),
                 };
+                b.SetResourceReference(BackgroundProperty, "ThemeSurface");
+                b.SetResourceReference(ForegroundProperty, "ThemeText");
+                b.SetResourceReference(Control.BorderBrushProperty, "ThemeBorder");
                 b.Click += (_, _) => Nudge(dx, dy);
                 return b;
             }
@@ -81,11 +81,11 @@ namespace HDRGammaController
                 Content = "Done - keep this white",
                 Padding = new Thickness(16, 7, 16, 7),
                 Margin = new Thickness(4, 0, 4, 0),
-                Background = new SolidColorBrush(Color.FromRgb(0xE3, 0x5F, 0x52)),
-                Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(0xE3, 0x5F, 0x52)),
                 BorderThickness = new Thickness(1),
             };
+            done.SetResourceReference(BackgroundProperty, "ThemeAccent");
+            done.SetResourceReference(ForegroundProperty, "ThemeOnAccent");
+            done.SetResourceReference(Control.BorderBrushProperty, "ThemeAccent");
             done.Click += (_, _) => { Result = (_dx, _dy); DialogResult = true; Close(); };
 
             var cancel = new Button
@@ -93,11 +93,11 @@ namespace HDRGammaController
                 Content = "Cancel",
                 Padding = new Thickness(16, 7, 16, 7),
                 Margin = new Thickness(4, 0, 4, 0),
-                Background = new SolidColorBrush(Color.FromRgb(0x17, 0x1C, 0x23)),
-                Foreground = new SolidColorBrush(Color.FromRgb(0xF4, 0xF7, 0xFA)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(0x46, 0x55, 0x67)),
                 BorderThickness = new Thickness(1),
             };
+            cancel.SetResourceReference(BackgroundProperty, "ThemeSurface");
+            cancel.SetResourceReference(ForegroundProperty, "ThemeText");
+            cancel.SetResourceReference(Control.BorderBrushProperty, "ThemeBorder");
             cancel.Click += (_, _) => { DialogResult = false; Close(); };
 
             var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 10, 0, 0) };
