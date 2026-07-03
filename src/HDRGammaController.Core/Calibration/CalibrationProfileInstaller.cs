@@ -187,8 +187,11 @@ namespace HDRGammaController.Core.Calibration
             // so white (1,1,1) drives above 1.0 whenever the panel white differs from the target
             // white — that is a luminance shift UniformScale absorbs, not unreachable gamut, and
             // must not trip this reject.
-            double maxPrimaryDrive = GamutReachability.MaxPrimaryDrive(matrix);
-            if (!GamutReachability.IsReachable(maxPrimaryDrive))
+            // Negative drives are the other unreachable signature: a target primary outside
+            // the panel gamut demands negative light from some channel even when the positive
+            // drives stay under the ceiling.
+            var (minPrimaryDrive, maxPrimaryDrive) = GamutReachability.PrimaryDriveExtent(matrix);
+            if (!GamutReachability.IsReachable(maxPrimaryDrive, minPrimaryDrive))
                 return new InstallResult(false, "",
                     $"The chosen target ('{target.Name}') needs primaries about {maxPrimaryDrive:P0} of this " +
                     "display's maximum - i.e. a wider gamut than the panel can physically produce, so the " +
