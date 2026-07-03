@@ -208,8 +208,14 @@ namespace HDRGammaController.Core.Calibration
             double uniformScale = Mhc2ProfileBuilder.UniformScale(maxDrive);
             double[,] scaledMatrix = Mhc2ProfileBuilder.ScaleMatrix(matrix, uniformScale);
 
-            // Tone LUTs are NEUTRAL (identical channels).
-            //  SDR: the caller's signal-domain tone LUTs, as-is.
+            // Tone LUTs.
+            //  SDR: the caller's signal-domain tone LUTs. When the characterization carries
+            //       per-channel tone curves (E4 single-channel ramps) and the caller shipped
+            //       a NEUTRAL LUT (identical channels — the closed-loop decomposition path,
+            //       or an open-loop build without ramp data), the per-channel gray-tracking
+            //       delta f_c⁻¹∘f_neutral is composed on top so grays hold the white point
+            //       at every level. LUTs that already differ per channel pass through
+            //       untouched (LutGenerator built them from these same curves).
             //  HDR: PQ wire-signal domain LUTs built from the HDR measurements, COMPOSED with
             //       the gamut matrix's uniform scale (M5): the DWM applies the scaled matrix
             //       BEFORE the LUTs, so the wire positions the LUTs actually see are the
@@ -219,6 +225,14 @@ namespace HDRGammaController.Core.Calibration
             double[] toneR = lutR, toneG = lutG, toneB = lutB;
             double? headerMinNits = null, headerMaxNits = null;
             bool wireExactLuts = false;
+            bool perChannelGrayTracking = false;
+            if (!hdrMode)
+            {
+                (toneR, toneG, toneB) =
+                    Lut3DGenerator.ComposePerChannelToneLuts(characterization, lutR, lutG, lutB);
+                perChannelGrayTracking =
+                    !ReferenceEquals(toneR, lutR) || !ReferenceEquals(toneG, lutG) || !ReferenceEquals(toneB, lutB);
+            }
             if (hdrMode)
             {
                 HdrMhc2LutBuilder.Result hdrLuts;
@@ -260,6 +274,11 @@ namespace HDRGammaController.Core.Calibration
                 $"  uniform scale {uniformScale:F4} (max target drive {maxDrive:F3}, max primary drive {maxPrimaryDrive:F3})\n" +
                 $"  MHC2 tag matrix (XYZ-domain wrapped): {FormatMatrix(mhc2Matrix)}\n" +
                 $"  mode {(hdrMode ? "HDR (PQ-domain LUTs)" : "SDR")}{(target.WhitePointOnly ? ", WHITE-POINT-ONLY matrix" : "")}" +
+                (!hdrMode ? $", tone LUTs {(perChannelGrayTracking
+                    ? "PER-CHANNEL gray-tracking (ramp-fitted delta composed onto neutral)"
+                    : characterization.HasPerChannelToneCurves
+                        ? "per-channel (built from ramp-fitted curves)"
+                        : "neutral (shared luminance curve)")}" : "") +
                 (hdrMode ? $", header range {headerMinNits:F3}–{headerMaxNits:F0} nits, SDR white {monitor.SdrWhiteLevel:F0} nits" +
                            $", LUT source {(wireExactLuts ? "WIRE-EXACT FP16 ladder" : "SDR-mapped grayscale fallback")}" : ""));
 

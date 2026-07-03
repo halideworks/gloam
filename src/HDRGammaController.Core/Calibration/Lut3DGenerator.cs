@@ -151,16 +151,26 @@ namespace HDRGammaController.Core.Calibration
             char_.BluePrimary = blueMeasurement?.Chromaticity ?? Chromaticity.Rec709Blue;
             char_.WhitePoint = whiteMeasurement?.Chromaticity ?? Chromaticity.D65;
 
-            // Build the tone response curve from grayscale measurements. Tone correction is
-            // LUMINANCE-ONLY: only neutral (grayscale) patches are measured, and the curve's
-            // output is total luminance Y, so a per-channel fit would produce three byte-for-byte
-            // identical curves. We therefore fit a single shared luminance curve and reference it
-            // from all three channels. Per-channel tracking (grayscale color cast) is NOT corrected
-            // by the tone curves - only the RGB->XYZ matrix corrects white point and gamut.
+            // Build the shared NEUTRAL tone response curve from grayscale measurements. Its
+            // output is total luminance Y of neutral patches, so on its own it can only
+            // correct luminance/gamma tracking, not a level-dependent gray cast.
             var luminanceToneCurve = ExtractToneCurve(PatchCategory.Grayscale, m => m.Patch.DisplayRgb.R);
-            char_.RedToneCurve = luminanceToneCurve;
-            char_.GreenToneCurve = luminanceToneCurve;
-            char_.BlueToneCurve = luminanceToneCurve;
+            char_.NeutralToneCurve = luminanceToneCurve;
+
+            // E4: TRUE per-channel tone curves from single-channel R/G/B ramps when the
+            // patch set measured them (Thorough/Full presets). Each channel's ramp gives
+            // that channel's real EOTF (Y at signal v relative to the channel's full-drive
+            // Y), which is what enables level-dependent gray-cast correction — the classic
+            // VCGT construction LUT_c = f_c⁻¹∘target. Channels without usable ramp data
+            // fall back to the shared neutral curve (identity delta), so sets without
+            // ramps behave exactly as before.
+            var redCurve = ExtractSingleChannelToneCurve(0, "red");
+            var greenCurve = ExtractSingleChannelToneCurve(1, "green");
+            var blueCurve = ExtractSingleChannelToneCurve(2, "blue");
+            char_.RedToneCurve = redCurve ?? luminanceToneCurve;
+            char_.GreenToneCurve = greenCurve ?? luminanceToneCurve;
+            char_.BlueToneCurve = blueCurve ?? luminanceToneCurve;
+            char_.HasPerChannelToneCurves = redCurve != null || greenCurve != null || blueCurve != null;
 
             // Calculate RGB to XYZ matrix from measured primaries
             char_.RgbToXyzMatrix = CalculateMeasuredMatrix(char_);
@@ -208,6 +218,100 @@ namespace HDRGammaController.Core.Calibration
                 double normalizedLuminance = (m.Xyz.Y - blackLuminance) / luminanceRange;
                 normalizedLuminance = Clamp01(normalizedLuminance);
                 points.Add((inputLevel, normalizedLuminance));
+            }
+
+            return ToneCurve.CreateFromPoints(points);
+        }
+
+        // E4 single-channel ramp fitting -------------------------------------------------
+
+        /// <summary>
+        /// Ramp samples below this signal are ignored: a single channel at low drive emits
+        /// so little light that colorimeter chroma noise dominates. Matches the patch-set
+        /// design (ramps start at 0.25; the 0.2 floor admits the 8-bit-snapped 0.251 while
+        /// excluding low grid axis nodes like 42/255).
+        /// </summary>
+        private const double MinSingleChannelSignal = 0.2;
+
+        /// <summary>
+        /// Maximum xy distance a ramp sample's chromaticity may stray from the measured
+        /// full-drive primary before it is discarded as a meter/stray-light outlier. A
+        /// clean single-channel patch sits essentially AT the primary's chromaticity at
+        /// every level (additivity); large excursions mean the reading is contaminated.
+        /// </summary>
+        private const double SingleChannelChromaTolerance = 0.05;
+
+        /// <summary>
+        /// Fits one channel's true tone response from single-channel ramp measurements
+        /// (patches with exactly one nonzero channel — the E4 ramps plus any grid axis
+        /// nodes). Output is the channel's linear emission at signal v, normalized to the
+        /// channel's own full-drive emission (black-subtracted), so the curve ends at
+        /// exactly 1.0: per-channel corrections built from these curves agree at full
+        /// drive by construction and never re-balance white (that is the matrix's job).
+        /// Returns null when there is no full-drive anchor or fewer than 3 usable ramp
+        /// samples — the caller then falls back to the shared neutral curve.
+        /// </summary>
+        private ToneCurve? ExtractSingleChannelToneCurve(int channel, string channelName)
+        {
+            double Signal(LinearRgb rgb) => channel switch { 0 => rgb.R, 1 => rgb.G, _ => rgb.B };
+            bool IsSingleChannel(LinearRgb rgb)
+            {
+                double others = channel switch
+                {
+                    0 => Math.Max(rgb.G, rgb.B),
+                    1 => Math.Max(rgb.R, rgb.B),
+                    _ => Math.Max(rgb.R, rgb.G),
+                };
+                return others <= 1e-6 && Signal(rgb) >= MinSingleChannelSignal;
+            }
+
+            var samples = _measurements
+                .Where(m => m.IsValid && m.Patch.Nits is null && IsSingleChannel(m.Patch.DisplayRgb))
+                .OrderBy(m => Signal(m.Patch.DisplayRgb))
+                .ToList();
+            if (samples.Count == 0)
+                return null;
+
+            // The full-drive primary is the ramp's top anchor: it defines both the
+            // normalization scale and the reference chromaticity for outlier gating.
+            var fullDrive = samples.LastOrDefault(m => Signal(m.Patch.DisplayRgb) >= 0.99);
+            if (fullDrive == null)
+                return null;
+
+            double blackY = FindMeasurementByRgb(0, 0, 0)?.Xyz.Y ?? 0.0;
+            double range = fullDrive.Xyz.Y - blackY;
+            if (!double.IsFinite(range) || range <= 1e-6)
+                return null;
+
+            var referenceChroma = fullDrive.Chromaticity;
+            var points = new List<(double input, double output)> { (0.0, 0.0) };
+            int kept = 0;
+            foreach (var m in samples)
+            {
+                double chromaDistance = m.Chromaticity.DistanceTo(referenceChroma);
+                if (chromaDistance > SingleChannelChromaTolerance)
+                {
+                    Log.Info(
+                        $"Lut3DGenerator: discarding {channelName}-ramp sample '{m.Patch.Name}' — " +
+                        $"chromaticity strays {chromaDistance:F4} in xy from the measured primary " +
+                        "(meter noise or stray light); not used for the per-channel tone fit.");
+                    continue;
+                }
+
+                points.Add((Signal(m.Patch.DisplayRgb), Clamp01((m.Xyz.Y - blackY) / range)));
+                kept++;
+            }
+
+            // Need the full-drive anchor plus at least four interior samples for the
+            // PCHIP fit to carry real shape information. The dedicated E4 ramps provide
+            // five; the incidental single-read grid axis nodes of shorter presets (three
+            // in Standard) deliberately stay below this bar, so noisy non-ramp data can
+            // never fabricate a per-channel cast correction on its own.
+            if (kept < 5)
+            {
+                Log.Info($"Lut3DGenerator: only {kept} usable {channelName}-ramp samples; " +
+                         "using the shared neutral tone curve for this channel.");
+                return null;
             }
 
             return ToneCurve.CreateFromPoints(points);
@@ -393,6 +497,86 @@ namespace HDRGammaController.Core.Calibration
             double.IsFinite(value) ? Math.Clamp(value, 0.0, 1.0) : 0.0;
 
         /// <summary>
+        /// E4: rewrites channel-identical (neutral) SDR tone LUTs into TRUE per-channel
+        /// correction LUTs using the per-channel tone curves fitted from single-channel
+        /// ramps: for each channel c, output = f_c⁻¹(f_neutral(lut(v))).
+        ///
+        /// Why that composition is right in BOTH install flows:
+        ///  • Open-loop with shared curves only: the incoming LUT is f_neutral⁻¹(t(v)), so
+        ///    the rewrite yields f_c⁻¹(t(v)) — exactly the classic VCGT construction that
+        ///    makes each channel's linear emission track the target EOTF, holding grays at
+        ///    the white point at every level.
+        ///  • Closed-loop: CalibrationWindow ships DecomposeCorrection's refined NEUTRAL
+        ///    curve N identically on all channels (the static white gains it strips belong
+        ///    to the profile matrix). N satisfies f_neutral(N(v)) ≈ t(v) as verified on
+        ///    screen; the rewrite produces f_c⁻¹(f_neutral(N(v))) — the per-channel DELTA
+        ///    (f_c⁻¹∘f_neutral) applied on top of the verified neutral tone.
+        ///
+        /// Only the LEVEL-DEPENDENT part of the per-channel behavior is added: the fitted
+        /// f_c are normalized to the channel's own full drive (f_c(1) = 1), so the delta
+        /// is identity at white and cannot double-apply the white balance the matrix (or
+        /// the closed loop's stripped gains) already handles.
+        ///
+        /// LUTs that already differ per channel are returned untouched: they were built
+        /// through LutGenerator's per-channel inversion of these same curves (the open-loop
+        /// path when ramp data exists), so composing again would double-correct. Channels
+        /// whose curve fell back to the shared neutral fit also pass through unchanged
+        /// (the delta is identity by construction). On a perfectly-behaved panel
+        /// (f_c == f_neutral) the rewrite reproduces the shared-curve result.
+        /// </summary>
+        public static (double[] R, double[] G, double[] B) ComposePerChannelToneLuts(
+            DisplayCharacterization? characterization, double[] lutR, double[] lutG, double[] lutB)
+        {
+            if (characterization == null ||
+                !characterization.HasPerChannelToneCurves ||
+                characterization.NeutralToneCurve == null ||
+                lutR == null || lutG == null || lutB == null ||
+                lutR.Length < 2 || lutG.Length != lutR.Length || lutB.Length != lutR.Length)
+            {
+                return (lutR!, lutG!, lutB!);
+            }
+
+            if (!ChannelLutsIdentical(lutR, lutG, lutB))
+                return (lutR, lutG, lutB); // already per-channel (built by LutGenerator's inversion)
+
+            var neutral = characterization.NeutralToneCurve;
+            return (ComposeChannelDelta(characterization.RedToneCurve, neutral, lutR),
+                    ComposeChannelDelta(characterization.GreenToneCurve, neutral, lutG),
+                    ComposeChannelDelta(characterization.BlueToneCurve, neutral, lutB));
+        }
+
+        private static bool ChannelLutsIdentical(double[] r, double[] g, double[] b)
+        {
+            for (int i = 0; i < r.Length; i++)
+            {
+                if (Math.Abs(r[i] - g[i]) > 1e-9 || Math.Abs(r[i] - b[i]) > 1e-9)
+                    return false;
+            }
+            return true;
+        }
+
+        private static double[] ComposeChannelDelta(ToneCurve channelCurve, ToneCurve neutralCurve, double[] lut)
+        {
+            // Channel fell back to the shared curve → delta is identity; keep the input
+            // array (also preserves reference equality for "unchanged" detection/logging).
+            if (channelCurve == null || ReferenceEquals(channelCurve, neutralCurve))
+                return lut;
+
+            var result = new double[lut.Length];
+            for (int i = 0; i < lut.Length; i++)
+                result[i] = Clamp01(channelCurve.InverseLookup(neutralCurve.Lookup(Clamp01(lut[i]))));
+
+            // Numerical LUT sampling can leave sub-1e-9 inversions the MHC2 writer's
+            // monotonicity gate would reject; pin them.
+            for (int i = 1; i < result.Length; i++)
+            {
+                if (result[i] < result[i - 1])
+                    result[i] = result[i - 1];
+            }
+            return result;
+        }
+
+        /// <summary>
         /// Finds a measurement matching the specified RGB values.
         /// </summary>
         private MeasurementResult? FindMeasurementByRgb(double r, double g, double b, double tolerance = 0.02)
@@ -447,14 +631,35 @@ namespace HDRGammaController.Core.Calibration
         /// <summary>Measured average gamma.</summary>
         public double MeasuredGamma { get; set; }
 
-        /// <summary>Red channel tone response curve.</summary>
+        /// <summary>
+        /// Red channel tone response curve. When <see cref="HasPerChannelToneCurves"/> is
+        /// true this is the channel's TRUE response fitted from single-channel ramps
+        /// (normalized to the channel's own full drive); otherwise it references the
+        /// shared neutral luminance fit.
+        /// </summary>
         public ToneCurve RedToneCurve { get; set; } = ToneCurve.CreateGamma(2.2);
 
-        /// <summary>Green channel tone response curve.</summary>
+        /// <summary>Green channel tone response curve (see <see cref="RedToneCurve"/>).</summary>
         public ToneCurve GreenToneCurve { get; set; } = ToneCurve.CreateGamma(2.2);
 
-        /// <summary>Blue channel tone response curve.</summary>
+        /// <summary>Blue channel tone response curve (see <see cref="RedToneCurve"/>).</summary>
         public ToneCurve BlueToneCurve { get; set; } = ToneCurve.CreateGamma(2.2);
+
+        /// <summary>
+        /// The shared NEUTRAL luminance tone curve fitted from grayscale patches (total Y
+        /// of neutral stimuli vs signal). This is the light domain of the closed-loop
+        /// corrector and the reference the per-channel deltas are computed against in
+        /// <see cref="Lut3DGenerator.ComposePerChannelToneLuts"/>. Null only for
+        /// characterizations restored from persistence, which never carried it.
+        /// </summary>
+        public ToneCurve? NeutralToneCurve { get; set; }
+
+        /// <summary>
+        /// True when at least one of the channel tone curves was fitted from genuine
+        /// single-channel ramp data (E4) rather than the shared neutral fit — the gate for
+        /// per-channel gray-tracking correction at install time.
+        /// </summary>
+        public bool HasPerChannelToneCurves { get; set; }
 
         /// <summary>RGB to XYZ conversion matrix for this display.</summary>
         public double[,] RgbToXyzMatrix { get; set; } = ColorMath.SrgbToXyzMatrix;

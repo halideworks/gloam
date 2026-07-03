@@ -69,9 +69,12 @@ namespace HDRGammaController.Core.Calibration
             // reflect the panel's real contrast instead of degenerating to pure 2.4.
             _effectiveTarget = MakeEffectiveTarget(_target, characterization);
 
-            // All three characterization tone curves reference the same shared luminance fit
-            // (tone correction is luminance-only); keep it for linear-domain gain application.
-            _nativeTone = characterization.GreenToneCurve;
+            // The closed loop's model is LUMINANCE-based (it refines against measured Y of
+            // neutral patches), so linear-domain gain application must use the shared
+            // neutral luminance fit. Since E4 the per-channel curves can carry genuine
+            // single-channel responses, so GreenToneCurve is only the fallback for
+            // characterizations that predate NeutralToneCurve.
+            _nativeTone = characterization.NeutralToneCurve ?? characterization.GreenToneCurve;
 
             // Tone target routed through the target's ACTUAL EOTF (M3) — the same
             // linearization the residual score and the verifier use, so the first refinement

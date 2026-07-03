@@ -111,6 +111,93 @@ namespace HDRGammaController.Tests
             Assert.DoesNotContain(patches, p => p.Category == PatchCategory.DriftCheck);
         }
 
+        private static bool IsSingleChannel(ColorPatch p, int channel)
+        {
+            double[] v = { p.DisplayRgb.R, p.DisplayRgb.G, p.DisplayRgb.B };
+            for (int c = 0; c < 3; c++)
+            {
+                if (c == channel && v[c] <= 1e-9) return false;
+                if (c != channel && v[c] > 1e-9) return false;
+            }
+            return true;
+        }
+
+        [Theory]
+        [InlineData(PatchSetGenerator.CalibrationPreset.Thorough)]
+        [InlineData(PatchSetGenerator.CalibrationPreset.Full)]
+        public void LongPresets_IncludeSingleChannelRampsPerChannel(PatchSetGenerator.CalibrationPreset preset)
+        {
+            var patches = PatchSetGenerator.GeneratePatchSet(StandardTargets.SrgbGamma22, preset);
+
+            for (int channel = 0; channel < 3; channel++)
+            {
+                foreach (double level in PatchSetGenerator.SingleChannelRampLevels)
+                {
+                    double snapped = PatchSetGenerator.Snap8Bit(level);
+                    var member = patches.FirstOrDefault(p =>
+                        IsSingleChannel(p, channel) &&
+                        Math.Abs(Math.Max(p.DisplayRgb.R, Math.Max(p.DisplayRgb.G, p.DisplayRgb.B)) - snapped) < 1e-9);
+                    Assert.True(member != null, $"{preset}: missing channel-{channel} ramp member at {level}");
+
+                    // Sub-full members are Saturated so the validator's Primary near-black
+                    // gate cannot false-fail a dim panel's blue 25% reading. The 1.0 anchor
+                    // dedupes onto the preset's existing full-drive patch: Primary in
+                    // Thorough (AddPrimariesAndSecondaries), Saturated in Full (whose
+                    // full-drive primaries come from the saturation ladder at 1.0).
+                    if (level < 0.99)
+                        Assert.Equal(PatchCategory.Saturated, member!.Category);
+                    else
+                        Assert.True(member!.Category is PatchCategory.Primary or PatchCategory.Saturated,
+                            $"{preset}: unexpected category {member.Category} for the full-drive anchor");
+                }
+            }
+        }
+
+        [Fact]
+        public void SingleChannelRamps_SkipLevelsBelowChromaNoiseFloor()
+        {
+            // No sub-25% single-channel ramp members: colorimeter chroma noise dominates
+            // single-channel readings at low drive. (Grid axis nodes below that level are
+            // General-category and get filtered by the same floor in Lut3DGenerator.)
+            foreach (var preset in new[] { PatchSetGenerator.CalibrationPreset.Thorough, PatchSetGenerator.CalibrationPreset.Full })
+            {
+                var patches = PatchSetGenerator.GeneratePatchSet(StandardTargets.SrgbGamma22, preset);
+                foreach (var p in patches.Where(p =>
+                             p.Category is PatchCategory.Primary or PatchCategory.Saturated))
+                {
+                    for (int channel = 0; channel < 3; channel++)
+                    {
+                        if (!IsSingleChannel(p, channel)) continue;
+                        double drive = Math.Max(p.DisplayRgb.R, Math.Max(p.DisplayRgb.G, p.DisplayRgb.B));
+                        Assert.True(drive >= PatchSetGenerator.Snap8Bit(0.25) - 1e-9,
+                            $"{preset}/{p.Name}: single-channel ramp member below the 25% noise floor");
+                    }
+                }
+            }
+        }
+
+        [Theory]
+        [InlineData(PatchSetGenerator.CalibrationPreset.Quick)]
+        [InlineData(PatchSetGenerator.CalibrationPreset.Standard)]
+        public void ShortPresets_HaveNoSingleChannelRampMembers(PatchSetGenerator.CalibrationPreset preset)
+        {
+            var patches = PatchSetGenerator.GeneratePatchSet(StandardTargets.SrgbGamma22, preset);
+
+            // Among Primary/Saturated patches, only the three full-drive primaries are
+            // single-channel in short presets — no dedicated ramp members. (Grid axis
+            // nodes are General-category and not ramp members.)
+            for (int channel = 0; channel < 3; channel++)
+            {
+                var singles = patches
+                    .Where(p => p.Category is PatchCategory.Primary or PatchCategory.Saturated)
+                    .Where(p => IsSingleChannel(p, channel))
+                    .ToList();
+                Assert.Single(singles);
+                Assert.Equal(1.0, Math.Max(singles[0].DisplayRgb.R,
+                    Math.Max(singles[0].DisplayRgb.G, singles[0].DisplayRgb.B)), 12);
+            }
+        }
+
         [Fact]
         public void Snap8Bit_RoundsToNearestCode()
         {
