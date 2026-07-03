@@ -75,23 +75,26 @@ namespace HDRGammaController.Core.Calibration
                 : valid.Count > 0 ? valid.Max(m => m.Xyz.Y) : 1.0;
             if (!double.IsFinite(peakY) || peakY <= 0) peakY = 1.0;
 
-            // Tone reference for the patches. For PQ (HDR) targets the patches are still SDR
-            // content — Windows renders them with the sRGB curve scaled to the SDR white
-            // level — so THAT is the curve they should be graded against. PQ-decoding the
-            // patch signal would compare against a curve nothing in the pipeline applies.
-            double Linearize(double s) => target.TransferFunction == TransferFunctionType.Pq
-                ? ColorMath.SrgbEotf(s)
-                : target.ApplyEotf(s);
+            // Lab reference white (m6): the TARGET's white, so for non-D65 targets a neutral
+            // gray on the target white reads a* = b* = 0 at every luminance and the
+            // tone/chroma decomposition below stays meaningful. All standard targets are D65,
+            // where this is exactly the previous behavior (shared D65 constant reused
+            // verbatim so D65 numbers are bit-identical).
+            var labWhite = target.WhitePoint.Equals(Chromaticity.D65)
+                ? ColorMath.D65White
+                : target.WhitePoint.ToXyz(1.0);
 
             foreach (var measurement in valid)
             {
                 var rgb = measurement.Patch.DisplayRgb;
                 var targetXyz = target.LinearRgbToXyz(new LinearRgb(
-                    Linearize(rgb.R), Linearize(rgb.G), Linearize(rgb.B)));
-                var targetLab = ColorMath.XyzToLab(targetXyz);
+                    LinearizePatchSignal(target, rgb.R),
+                    LinearizePatchSignal(target, rgb.G),
+                    LinearizePatchSignal(target, rgb.B)));
+                var targetLab = ColorMath.XyzToLab(targetXyz, labWhite);
                 var normalized = new CieXyz(
                     measurement.Xyz.X / peakY, measurement.Xyz.Y / peakY, measurement.Xyz.Z / peakY);
-                var measuredLab = ColorMath.XyzToLab(normalized);
+                var measuredLab = ColorMath.XyzToLab(normalized, labWhite);
 
                 double deltaE = measuredLab.DeltaE2000(targetLab);
                 if (!double.IsFinite(deltaE))
@@ -142,6 +145,20 @@ namespace HDRGammaController.Core.Calibration
             return metrics;
         }
 
+        /// <summary>
+        /// The ONE authoritative signal→linear rule for grading SDR content patches against a
+        /// calibration target. For PQ (HDR) targets the patches are still SDR content —
+        /// Windows renders them with the sRGB curve scaled to the SDR white level — so THAT
+        /// is the curve they are graded against; PQ-decoding the patch signal would compare
+        /// against a curve nothing in the pipeline applies. Every producer of expected patch
+        /// colors (this grader, <see cref="VerificationPatchSets.Detailed"/>) must call this
+        /// instead of restating the rule.
+        /// </summary>
+        public static double LinearizePatchSignal(CalibrationTarget target, double signal) =>
+            target.TransferFunction == TransferFunctionType.Pq
+                ? ColorMath.SrgbEotf(signal)
+                : target.ApplyEotf(signal);
+
         // ITU-R BT.2124 XYZ→LMS crosstalk matrix (the ICtCp cone basis).
         private static readonly double[,] XyzToLms =
         {
@@ -153,11 +170,14 @@ namespace HDRGammaController.Core.Calibration
         /// <summary>
         /// ΔE ITP per ITU-R BT.2124: XYZ (absolute nits) → LMS → PQ-encode → ICtCp, then
         /// 720·√(ΔI² + ΔT² + ΔP²) with T = 0.5·Ct. One unit ≈ one just-noticeable difference.
+        /// Non-physical inputs return NaN (m3): a 0.0 sentinel reads as "perfect match" and
+        /// survives IsFinite filters, silently dragging AverageItpDeltaE toward zero. NaN is
+        /// excluded by the aggregation's IsFinite check in <see cref="ComputeMetrics"/>.
         /// </summary>
         public static double DeltaEItp(CieXyz a, CieXyz b)
         {
             if (!IsPhysicalXyz(a) || !IsPhysicalXyz(b))
-                return 0.0;
+                return double.NaN;
 
             var (i1, t1, p1) = ToItp(a);
             var (i2, t2, p2) = ToItp(b);

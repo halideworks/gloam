@@ -1353,16 +1353,37 @@ namespace HDRGammaController
             {
                 double white = _targetMonitor.SdrWhiteLevel;
 
-                // TONE-ONLY per-channel LUTs for the MHC2: each channel is inverse-mapped to
-                // the target transfer with no cross-channel white balance. The MHC2 *matrix*
-                // does ALL the chromatic correction (primaries + white point). Using the
-                // closed-loop correction here instead would white-balance a second time on top
-                // of the matrix — that double-correction is what turned the image magenta.
-                double targetGamma = _calibrationTarget.Gamma ?? 2.2;
-                var (lr, lg, lb, _) = LutGenerator.GenerateCalibratedLut(
-                    targetGamma, _displayCharacterization, CalibrationSettings.Default,
-                    white, isHdr: false);
-                (double[] r, double[] g, double[] b) corr = (lr, lg, lb);
+                // TONE-ONLY per-channel LUTs for the MHC2: no cross-channel white balance.
+                // The MHC2 *matrix* does ALL the chromatic correction (primaries + white
+                // point). Shipping the raw closed-loop correction here would white-balance a
+                // second time on top of the matrix — that double-correction is what turned
+                // the image magenta.
+                //
+                // M4: when the closed loop ran, its final VCGT is the MEASURED-verified tone;
+                // decompose it into neutral tone × white gains and ship ONLY the neutral
+                // component (the gains' job belongs to the matrix). This way the installed
+                // profile carries the correction the loop actually verified on screen instead
+                // of a fresh open-loop rebuild that silently discards the refinement.
+                // M3/m4: the open-loop fallback routes the tone target through the target's
+                // real EOTF (with measured black wired into BT.1886) — the same linearization
+                // the closed loop and the verifier use — not a bare pow(v, gamma).
+                (double[] r, double[] g, double[] b) corr;
+                if (_calibrationResult is { ClosedLoopRan: true, FinalCorrection: { } finalVcgt }
+                    && !_measuredInHdr)
+                {
+                    var (neutralTone, _, _, _) = ClosedLoopCorrector.DecomposeCorrection(
+                        finalVcgt, _displayCharacterization.GreenToneCurve);
+                    corr = (neutralTone, (double[])neutralTone.Clone(), (double[])neutralTone.Clone());
+                }
+                else
+                {
+                    var effectiveTarget = ClosedLoopCorrector.MakeEffectiveTarget(
+                        _calibrationTarget, _displayCharacterization);
+                    var (lr, lg, lb, _) = LutGenerator.GenerateCalibratedLut(
+                        effectiveTarget, _displayCharacterization, CalibrationSettings.Default,
+                        white, isHdr: false);
+                    corr = (lr, lg, lb);
+                }
 
                 var monitor = _targetMonitor;
                 reportWindow.SetApplyContext(new CalibrationReportWindow.ApplyContext(

@@ -217,7 +217,81 @@ namespace HDRGammaController.Tests
 
             Assert.Equal(4, metrics.PatchResults.Count);
             Assert.DoesNotContain(metrics.PatchResults, p => p.Name == "Negative gray");
-            Assert.Equal(0.0, CalibrationVerifier.DeltaEItp(new CieXyz(-0.01, 1.0, 1.0), new CieXyz(1.0, 1.0, 1.0)), 10);
+            // m3: non-physical XYZ must return NaN, not 0.0 — a zero sentinel reads as a
+            // PERFECT match, passes IsFinite filters and drags AverageItpDeltaE toward zero.
+            Assert.True(double.IsNaN(CalibrationVerifier.DeltaEItp(new CieXyz(-0.01, 1.0, 1.0), new CieXyz(1.0, 1.0, 1.0))));
+        }
+
+        [Fact]
+        public void DeltaEItp_NonPhysicalInputs_ReturnNaN_AndAreExcludedFromAggregates()
+        {
+            // m3 regression: the invalid-input sentinel used to be 0.0 (= "perfect"), which
+            // silently biased AverageItpDeltaE. NaN is excluded by the aggregation filter.
+            Assert.True(double.IsNaN(CalibrationVerifier.DeltaEItp(
+                new CieXyz(double.NaN, 100, 100), new CieXyz(95, 100, 108))));
+            Assert.True(double.IsNaN(CalibrationVerifier.DeltaEItp(
+                new CieXyz(95, 100, 108), new CieXyz(95, -5, 108))));
+
+            var target = StandardTargets.SrgbGamma22;
+            var measurements = BuildGrayscale(target, whiteNits: 120.0, extraBlueGain: 1.10);
+            int validCount = measurements.Count;
+            measurements.Add(new MeasurementResult
+            {
+                Patch = new ColorPatch
+                {
+                    Name = "Negative gray",
+                    DisplayRgb = new LinearRgb(0.5, 0.5, 0.5),
+                    Category = PatchCategory.Grayscale,
+                },
+                Xyz = new CieXyz(10, 50, -0.5),
+                IsValid = true
+            });
+
+            var metrics = CalibrationVerifier.ComputeMetrics(measurements, target);
+
+            Assert.Equal(validCount, metrics.ItpDeltaEs.Count);
+            Assert.All(metrics.ItpDeltaEs, v => Assert.True(double.IsFinite(v)));
+            Assert.True(metrics.AverageItpDeltaE > 0);
+        }
+
+        [Fact]
+        public void ComputeMetrics_NonD65Target_DecomposesToneErrorWithoutChromaLeak()
+        {
+            // m6: the Lab reference white must be the TARGET's white. With a hardcoded D65
+            // reference, a neutral gray on a non-D65 target white has a*/b* that drift with
+            // luminance, so a PURE tone (gamma) error leaks into the chroma component and the
+            // tone/chroma decomposition stops meaning anything.
+            var d50 = new Chromaticity(0.3457, 0.3585);
+            var target = StandardTargets.Rec709PureGamma22.WithWhitePoint(d50);
+
+            var measurements = new List<MeasurementResult>();
+            for (int i = 0; i < 16; i++)
+            {
+                double lvl = i / 15.0;
+                // Measured tone tracks gamma 2.4 instead of the 2.2 target — tone-only error,
+                // chromaticity exactly on the (D50) target white at every level.
+                double measuredLin = Math.Pow(lvl, 2.4);
+                var xyz = target.LinearRgbToXyz(new LinearRgb(measuredLin, measuredLin, measuredLin));
+                measurements.Add(new MeasurementResult
+                {
+                    Patch = new ColorPatch
+                    {
+                        Name = lvl >= 1.0 ? "White" : $"Gray {lvl * 100:F0}%",
+                        DisplayRgb = new LinearRgb(lvl, lvl, lvl),
+                        Category = PatchCategory.Grayscale,
+                        Index = i
+                    },
+                    Xyz = new CieXyz(xyz.X * 100, xyz.Y * 100, xyz.Z * 100),
+                    IsValid = true
+                });
+            }
+
+            var metrics = CalibrationVerifier.ComputeMetrics(measurements, target);
+
+            Assert.True(metrics.AverageGrayscaleToneDeltaE > 1.0,
+                $"gamma 2.4 vs 2.2 must register as tone error, got {metrics.AverageGrayscaleToneDeltaE:F2}");
+            Assert.True(metrics.AverageGrayscaleColorDeltaE < 0.2,
+                $"a pure tone error on the target white must not leak into chroma, got {metrics.AverageGrayscaleColorDeltaE:F2}");
         }
 
         [Fact]
