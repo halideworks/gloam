@@ -58,7 +58,7 @@
                 <StackPanel>
                     <!-- Intro -->
                     <TextBlock Text="Configure your colorimeter calibration settings below."
-                               Foreground="{StaticResource TextDim}" TextWrapping="Wrap" Margin="0,0,0,20"/>
+                               Foreground="{DynamicResource ThemeTextDim}" TextWrapping="Wrap" Margin="0,0,0,20"/>
 
                     <!-- Monitor Selection -->
                     <TextBlock Text="Select Monitor" FontWeight="SemiBold" FontSize="14" Margin="0,0,0,8"/>
@@ -75,13 +75,13 @@
 
                     <!-- Display Type Selection -->
                     <TextBlock Text="Display Type" FontWeight="SemiBold" FontSize="14" Margin="0,0,0,8"/>
-                    <Border Background="{StaticResource CardBackground}" BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1" Padding="16" Margin="0,0,0,18">
+                    <Border Background="{DynamicResource ThemeSurface}" BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1" Padding="16" Margin="0,0,0,18">
                         <StackPanel>
                             <RadioButton GroupName="DisplayType" IsChecked="{Binding IsLcdLed}">
                                 <StackPanel>
                                     <TextBlock Text="LCD (LED backlight)" FontWeight="Medium"/>
                                     <TextBlock Text="Most modern monitors and TVs"
-                                               Foreground="{StaticResource TextDim}" FontSize="12"/>
+                                               Foreground="{DynamicResource ThemeTextDim}" FontSize="12"/>
                                 </StackPanel>
                             </RadioButton>
                             <RadioButton GroupName="DisplayType" IsChecked="{Binding IsOled}" Margin="0,8,0,0">
@@ -95,7 +95,7 @@
                                         </Border>
                                     </StackPanel>
                                     <TextBlock Text="Self-emissive pixels, deep blacks"
-                                               Foreground="{StaticResource TextDim}" FontSize="12"/>
+                                               Foreground="{DynamicResource ThemeTextDim}" FontSize="12"/>
                                 </StackPanel>
                             </RadioButton>
                             <RadioButton GroupName="DisplayType" IsChecked="{Binding IsLcdWideGamut}" Margin="0,8,0,0">
@@ -109,14 +109,14 @@
                                         </Border>
                                     </StackPanel>
                                     <TextBlock Text="Professional monitors with extended color"
-                                               Foreground="{StaticResource TextDim}" FontSize="12"/>
+                                               Foreground="{DynamicResource ThemeTextDim}" FontSize="12"/>
                                 </StackPanel>
                             </RadioButton>
                             <RadioButton GroupName="DisplayType" IsChecked="{Binding IsLcdCcfl}" Margin="0,8,0,0">
                                 <StackPanel>
                                     <TextBlock Text="LCD (CCFL backlight)" FontWeight="Medium"/>
                                     <TextBlock Text="Older LCD monitors (pre-2012)"
-                                               Foreground="{StaticResource TextDim}" FontSize="12"/>
+                                               Foreground="{DynamicResource ThemeTextDim}" FontSize="12"/>
                                 </StackPanel>
                             </RadioButton>
 
@@ -145,7 +145,7 @@
                                 <Button Grid.Column="2" Content="Browse…"
                                         Margin="6,0,0,0" Padding="10,2" Click="BrowseCorrection_Click"/>
                             </Grid>
-                            <TextBlock Foreground="{StaticResource TextDim}" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0"
+                            <TextBlock Foreground="{DynamicResource ThemeTextDim}" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0"
                                        Text="A correction file (.ccss/.ccmx) matched to this exact panel makes the colorimeter read it truthfully. Essential on QD-OLED, where generic corrections shift the white point green/magenta by several ΔE. Use Find online to get one from the DisplayCAL community database. Remembered per monitor."/>
 
                             <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
@@ -159,7 +159,7 @@
 
                     <!-- Calibration Target -->
                     <TextBlock Text="Calibration Target" FontWeight="SemiBold" FontSize="14" Margin="0,0,0,8"/>
-                    <Border Background="{StaticResource CardBackground}" BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1" Padding="16" Margin="0,0,0,18">
+                    <Border Background="{DynamicResource ThemeSurface}" BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1" Padding="16" Margin="0,0,0,18">
                         <StackPanel>
                             <ItemsControl ItemsSource="{Binding Targets}">
                                 <ItemsControl.ItemTemplate>
@@ -186,37 +186,37 @@
                             <CheckBox Margin="0,12,0,0" Foreground="{DynamicResource ThemeText}"
                                       IsChecked="{Binding WhitePointOnly}"
                                       Content="White point correction only (skip gamut re-mapping)"/>
-                            <TextBlock Foreground="{StaticResource TextDim}" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0"
+                            <TextBlock Foreground="{DynamicResource ThemeTextDim}" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0"
                                        Text="Corrects white point and tone but leaves the panel's color gamut untouched. Recommended when the native gamut already measures close to the target, or on OLEDs in HDR, where the panel's own processing makes full gamut correction overshoot. Auto-suggested for OLED."/>
                         </StackPanel>
                     </Border>
 
                     <!-- Calibration Preset -->
                     <TextBlock Text="Calibration Preset" FontWeight="SemiBold" FontSize="14" Margin="0,0,0,8"/>
-                    <Border Background="{StaticResource CardBackground}" BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1" Padding="16" Margin="0,0,0,18">
+                    <Border Background="{DynamicResource ThemeSurface}" BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1" Padding="16" Margin="0,0,0,18">
                         <StackPanel>
                             <RadioButton GroupName="Preset" IsChecked="{Binding IsPresetAdaptive}">
                                 <StackPanel>
                                     <TextBlock Text="{Binding AdaptivePresetLabel}" FontWeight="Medium"/>
-                                    <TextBlock Text="{Binding AdaptivePresetDetail}" Foreground="{StaticResource TextDim}" FontSize="12"/>
+                                    <TextBlock Text="{Binding AdaptivePresetDetail}" Foreground="{DynamicResource ThemeTextDim}" FontSize="12"/>
                                 </StackPanel>
                             </RadioButton>
                             <RadioButton GroupName="Preset" IsChecked="{Binding IsPresetQuick}" Margin="0,8,0,0">
                                 <StackPanel>
                                     <TextBlock Text="{Binding QuickPresetLabel}" FontWeight="Medium"/>
-                                    <TextBlock Text="{Binding QuickPresetDetail}" Foreground="{StaticResource TextDim}" FontSize="12"/>
+                                    <TextBlock Text="{Binding QuickPresetDetail}" Foreground="{DynamicResource ThemeTextDim}" FontSize="12"/>
                                 </StackPanel>
                             </RadioButton>
                             <RadioButton GroupName="Preset" IsChecked="{Binding IsPresetStandard}" Margin="0,8,0,0">
                                 <StackPanel>
                                     <TextBlock Text="{Binding StandardPresetLabel}" FontWeight="Medium"/>
-                                    <TextBlock Text="{Binding StandardPresetDetail}" Foreground="{StaticResource TextDim}" FontSize="12"/>
+                                    <TextBlock Text="{Binding StandardPresetDetail}" Foreground="{DynamicResource ThemeTextDim}" FontSize="12"/>
                                 </StackPanel>
                             </RadioButton>
                             <RadioButton GroupName="Preset" IsChecked="{Binding IsPresetThorough}" Margin="0,8,0,0">
                                 <StackPanel>
                                     <TextBlock Text="{Binding ThoroughPresetLabel}" FontWeight="Medium"/>
-                                    <TextBlock Text="{Binding ThoroughPresetDetail}" Foreground="{StaticResource TextDim}" FontSize="12"/>
+                                    <TextBlock Text="{Binding ThoroughPresetDetail}" Foreground="{DynamicResource ThemeTextDim}" FontSize="12"/>
                                 </StackPanel>
                             </RadioButton>
                         </StackPanel>
@@ -225,7 +225,7 @@
                     <!-- Preflight -->
                     <TextBlock Text="Preflight" FontWeight="SemiBold" FontSize="14" Margin="0,0,0,8"
                                Visibility="{Binding HasPreflightItems, Converter={StaticResource BoolToVis}}"/>
-                    <Border Background="{StaticResource CardBackground}" BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1" Padding="16" Margin="0,0,0,18"
+                    <Border Background="{DynamicResource ThemeSurface}" BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1" Padding="16" Margin="0,0,0,18"
                             Visibility="{Binding HasPreflightItems, Converter={StaticResource BoolToVis}}">
                         <ItemsControl ItemsSource="{Binding PreflightItems}">
                             <ItemsControl.ItemTemplate>
@@ -248,7 +248,7 @@
 
                     <!-- Colorimeter Status -->
                     <TextBlock Text="Colorimeter Status" FontWeight="SemiBold" FontSize="14" Margin="0,0,0,8"/>
-                    <Border Background="{StaticResource CardBackground}" BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1" Padding="16" Margin="0,0,0,16">
+                    <Border Background="{DynamicResource ThemeSurface}" BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1" Padding="16" Margin="0,0,0,16">
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto"/>
@@ -259,7 +259,7 @@
                                      VerticalAlignment="Center" Margin="0,0,12,0"/>
                             <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                 <TextBlock Text="{Binding StatusText}" FontWeight="Medium"/>
-                                <TextBlock Text="{Binding StatusDetailText}" Foreground="{StaticResource TextDim}" FontSize="12"/>
+                                <TextBlock Text="{Binding StatusDetailText}" Foreground="{DynamicResource ThemeTextDim}" FontSize="12"/>
                             </StackPanel>
                             <Button Grid.Column="2" Content="Refresh" Padding="12,6"
                                     Command="{Binding RefreshColorimeterCommand}" VerticalAlignment="Center"/>

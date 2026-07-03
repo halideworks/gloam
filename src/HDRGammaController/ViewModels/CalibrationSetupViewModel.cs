@@ -304,7 +304,10 @@ namespace HDRGammaController.ViewModels
 
         #region Preset
 
-        private CalibrationPreset _preset = CalibrationPreset.Standard;
+        // Adaptive is the default for a fresh setup (a returning user's saved preset is
+        // restored over this in the load path). It is badged "recommended", so it must be
+        // the one actually selected.
+        private CalibrationPreset _preset = CalibrationPreset.Adaptive;
 
         public bool IsPresetAdaptive { get => _preset == CalibrationPreset.Adaptive; set { if (value) SetPreset(CalibrationPreset.Adaptive); } }
         public bool IsPresetQuick { get => _preset == CalibrationPreset.Quick; set { if (value) SetPreset(CalibrationPreset.Quick); } }
@@ -314,9 +317,10 @@ namespace HDRGammaController.ViewModels
         // Adaptive measures a small seed, then spends patches only where the fitted model
         // is least certain, so it reaches the same accuracy as a fixed grid in far fewer
         // patches. The time is a budget-based UPPER bound — it usually stops early.
-        public string AdaptivePresetLabel => $"Adaptive (recommended)";
+        public string AdaptivePresetLabel =>
+            $"Adaptive (recommended) — up to {PatchSetGenerator.GetApproximatePatchCount(CalibrationPreset.Adaptive)} patches";
         public string AdaptivePresetDetail =>
-            $"up to {FormatEstimatedTime(PatchSetGenerator.GetApproximatePatchCount(CalibrationPreset.Adaptive))}, usually finishes early - excellent accuracy";
+            $"up to {FormatEstimatedTime(PatchSetGenerator.GetApproximatePatchCount(CalibrationPreset.Adaptive))}, usually finishes early - Excellent accuracy";
         public string QuickPresetLabel => PresetLabel("Quick", CalibrationPreset.Quick);
         public string QuickPresetDetail => PresetDetail(CalibrationPreset.Quick, "Good accuracy");
         public string StandardPresetLabel => PresetLabel("Standard", CalibrationPreset.Standard);
