@@ -200,6 +200,16 @@ namespace HDRGammaController.Core.Calibration
         Saturated,
 
         /// <summary>Memory colors (ColorChecker-style skin, sky, foliage) for verification.</summary>
-        MemoryColor
+        MemoryColor,
+
+        /// <summary>
+        /// Periodic white/black re-reads interleaved into long runs for drift analysis
+        /// (panel warm-up, ABL). Excluded from model building: the tone-curve, gamma and
+        /// anchor extraction paths all filter on <see cref="Grayscale"/>/<see cref="Primary"/>,
+        /// so DriftCheck patches never enter the fitted characterization. They ARE consumed
+        /// by <see cref="DriftCompensator"/> (multiplicative luminance normalization) and by
+        /// the measurement validator's repeated-white/black drift gates.
+        /// </summary>
+        DriftCheck
     }
 }

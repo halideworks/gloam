@@ -116,6 +116,55 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void MeasurementValidator_DriftCheckWhites_TenPercentDrift_Fails()
+        {
+            // Uncorrected 10% drift across the interleaved DriftCheck anchors (the
+            // compensator refuses to fix >8%, leaving it for this gate).
+            var list = GoodRamp(); // ramp white is ~120.1 cd/m²
+            list.Add(Meas(1, 1, 1, 120.5, PatchCategory.DriftCheck));
+            list.Add(Meas(1, 1, 1, 132.5, PatchCategory.DriftCheck)); // ~10% above ramp white
+
+            var result = CalibrationMeasurementValidator.ValidateForProfile(
+                list, StandardTargets.SrgbGamma22, hdrMode: false);
+
+            Assert.False(result.IsValid);
+            Assert.Contains("drifted", result.Error, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void MeasurementValidator_DriftCheckAnchorsWithinTolerance_Pass()
+        {
+            // Intended drift-check re-reads must NOT trip the duplicate-white gates when
+            // the panel is stable (or the drift was compensated to near-zero).
+            var list = GoodRamp();
+            list.Add(Meas(1, 1, 1, 120.4, PatchCategory.DriftCheck));
+            list.Add(Meas(1, 1, 1, 121.0, PatchCategory.DriftCheck));
+            list.Add(Meas(0, 0, 0, 0.11, PatchCategory.DriftCheck));
+            list.Add(Meas(0, 0, 0, 0.13, PatchCategory.DriftCheck));
+
+            var result = CalibrationMeasurementValidator.ValidateForProfile(
+                list, StandardTargets.SrgbGamma22, hdrMode: false);
+
+            Assert.True(result.IsValid, result.Error);
+        }
+
+        [Fact]
+        public void MeasurementValidator_DriftCheckBlacks_LargeBlackRise_Fails()
+        {
+            // Black creeping up during the run: ambient light hit the probe or a dynamic
+            // dimming feature changed state. Additive, so drift compensation can't fix it.
+            var list = GoodRamp();
+            list.Add(Meas(0, 0, 0, 0.10, PatchCategory.DriftCheck));
+            list.Add(Meas(0, 0, 0, 2.20, PatchCategory.DriftCheck));
+
+            var result = CalibrationMeasurementValidator.ValidateForProfile(
+                list, StandardTargets.SrgbGamma22, hdrMode: false);
+
+            Assert.False(result.IsValid);
+            Assert.Contains("black", result.Error, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
         public void MeasurementValidator_NonFiniteAccuracyMeasurement_Fails()
         {
             var list = GoodRamp();

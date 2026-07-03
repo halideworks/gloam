@@ -103,8 +103,9 @@ namespace HDRGammaController.Core.Calibration
 
         /// <summary>
         /// Gets whether a colorimeter is connected and ready.
+        /// Virtual so orchestrator-level tests can substitute a fake service.
         /// </summary>
-        public bool IsReady => _isInitialized && _connectedColorimeter != null;
+        public virtual bool IsReady => _isInitialized && _connectedColorimeter != null;
 
         /// <summary>
         /// Creates a new ColorimeterService.
@@ -269,7 +270,8 @@ namespace HDRGammaController.Core.Calibration
         /// <param name="hdrMode">Whether to use HDR measurement mode</param>
         /// <param name="cancellationToken">Cancellation token</param>
         /// <returns>The measurement result</returns>
-        public async Task<MeasurementResult> MeasureAsync(
+        /// <remarks>Virtual so orchestrator-level tests can substitute a fake service.</remarks>
+        public virtual async Task<MeasurementResult> MeasureAsync(
             ColorPatch patch,
             bool hdrMode = false,
             CancellationToken cancellationToken = default)
@@ -319,7 +321,7 @@ namespace HDRGammaController.Core.Calibration
         /// call <see cref="EndMeasurementSessionAsync"/>. Surfaces connection failures
         /// here rather than partway through the patch loop.
         /// </summary>
-        public async Task BeginMeasurementSessionAsync(bool hdrMode, CancellationToken cancellationToken = default)
+        public virtual async Task BeginMeasurementSessionAsync(bool hdrMode, CancellationToken cancellationToken = default)
         {
             if (!IsReady)
                 throw new InvalidOperationException("Colorimeter not initialized. Call InitializeAsync first.");
@@ -327,7 +329,10 @@ namespace HDRGammaController.Core.Calibration
                 throw new InvalidOperationException("spotread path not configured.");
 
             // If a session already exists for the right mode, reuse it. If HDR mode changed,
-            // we must close and reopen (spotread is started with -H or not at process spawn).
+            // close and reopen: no spotread flag differs between the modes (-H is high-res
+            // SPECTRAL mode for spectrometers, not an HDR switch — see SpotreadSession), but
+            // the OS display mode flips between the SDR and HDR phases and a fresh instrument
+            // initialization across that transition is deliberate.
             if (_session != null)
             {
                 if (_sessionHdrMode == hdrMode) return;
@@ -360,7 +365,7 @@ namespace HDRGammaController.Core.Calibration
         /// <summary>
         /// Closes the persistent spotread session. Safe to call if no session is active.
         /// </summary>
-        public async Task EndMeasurementSessionAsync()
+        public virtual async Task EndMeasurementSessionAsync()
         {
             if (_session == null) return;
             Log("Closing spotread session");
@@ -382,9 +387,22 @@ namespace HDRGammaController.Core.Calibration
             // Happy path: an orchestrated calibration has already opened a session.
             if (_session != null && _sessionHdrMode == hdrMode)
             {
+                // C1 stale-reading protection: a session that hit a per-measurement timeout
+                // is poisoned — its timed-out trigger is still queued inside spotread, and
+                // reusing the process would pair that late reading with the NEXT patch
+                // (silent off-by-one for the rest of the run). Kill it and start fresh
+                // before measuring. The retry loop in the orchestrator lands here on its
+                // next attempt, so a single timeout costs one session restart, not the run.
+                if (_session.IsPoisoned)
+                {
+                    Log("spotread session is poisoned (measurement timeout) - restarting it before the next measurement");
+                    await EndMeasurementSessionAsync();
+                    await BeginMeasurementSessionAsync(hdrMode, cancellationToken);
+                }
+
                 try
                 {
-                    return await _session.MeasureAsync(cancellationToken);
+                    return await _session!.MeasureAsync(cancellationToken);
                 }
                 catch (InvalidOperationException ex) when (UsbDriverHelper.IsDriverError(ex.Message))
                 {
