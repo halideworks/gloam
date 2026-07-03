@@ -11,6 +11,12 @@ namespace HDRGammaController.Core.Calibration
     /// gamma ramp alone cannot do, because the ramp is per-channel 1D with no cross-channel
     /// matrix.
     ///
+    /// Besides the MHC2 tag, the builder can synthesize TRUE ICC characterization tags
+    /// (wtpt/chad/rXYZ/gXYZ/bXYZ/rTRC/gTRC/bTRC/chrm) for the colorimetry the display
+    /// actually presents once the profile is active — without that, ICC-aware apps
+    /// (Photoshop etc.) read the template's synthetic sRGB/G2.2 description regardless of
+    /// what the calibration installed. See <see cref="Build"/>'s colorimetry parameter.
+    ///
     /// MHC2 tag binary layout (reverse-engineered from the shipped templates, which were
     /// produced by MHC2Gen):
     ///   +0   'MHC2'                       (type signature)
@@ -36,6 +42,20 @@ namespace HDRGammaController.Core.Calibration
         private const int DescSignature = 0x64657363; // 'desc'
         private const int MlucSignature = 0x6D6C7563; // 'mluc'
 
+        // ICC characterization tags synthesized from the installed colorimetry (M6).
+        private const int WtptSignature = 0x77747074; // 'wtpt'
+        private const int ChadSignature = 0x63686164; // 'chad'
+        private const int RXyzSignature = 0x7258595A; // 'rXYZ'
+        private const int GXyzSignature = 0x6758595A; // 'gXYZ'
+        private const int BXyzSignature = 0x6258595A; // 'bXYZ'
+        private const int RTrcSignature = 0x72545243; // 'rTRC'
+        private const int GTrcSignature = 0x67545243; // 'gTRC'
+        private const int BTrcSignature = 0x62545243; // 'bTRC'
+        private const int ChrmSignature = 0x6368726D; // 'chrm'
+        private const int CurvSignature = 0x63757276; // 'curv'
+        private const int XyzTypeSignature = 0x58595A20; // 'XYZ '
+        private const int TrcSampleCount = 1024;
+
         /// <summary>
         /// Reads <paramref name="templatePath"/>, patches its MHC2 tag with the given matrix
         /// and per-channel LUTs, and writes <paramref name="outputPath"/>.
@@ -49,11 +69,25 @@ namespace HDRGammaController.Core.Calibration
         /// tag). Null keeps the template values. Required for HDR: Windows uses these to
         /// scale tone mapping (the Windows HDR Calibration app's profile carries exactly
         /// this — measured min/max with identity transforms).</param>
+        /// <param name="colorimetry">The colorimetry the display presents once this profile
+        /// is active (primaries, white point, transfer function). When set, the profile's
+        /// wtpt/chad/rXYZ/gXYZ/bXYZ/rTRC/gTRC/bTRC/chrm tags are rewritten so ICC-aware apps
+        /// see the real display instead of the template's synthetic sRGB/G2.2 values
+        /// (ICC v4 convention: wtpt = PCS D50, chad = Bradford(actual white → D50),
+        /// r/g/bXYZ = chad-adapted primaries, TRC = the colorimetry's EOTF). Null keeps
+        /// the template's tags untouched.</param>
+        /// <param name="lumiPeakNits">Measured peak luminance written to the 'lumi' tag ONLY
+        /// (the MHC2 header stays untouched) — the SDR install path uses this so the lumi tag
+        /// carries the measured peak without altering the MHC2 header range Windows reads for
+        /// HDR tone mapping. Redundant when <paramref name="maxLuminanceNits"/> is set (that
+        /// already patches lumi).</param>
         public static void Build(
             string templatePath, string outputPath,
             double[,] matrix3x3, double[] lutR, double[] lutG, double[] lutB,
             string? description = null,
-            double? minLuminanceNits = null, double? maxLuminanceNits = null)
+            double? minLuminanceNits = null, double? maxLuminanceNits = null,
+            CalibrationTarget? colorimetry = null,
+            double? lumiPeakNits = null)
         {
             if (matrix3x3.GetLength(0) != 3 || matrix3x3.GetLength(1) != 3)
                 throw new ArgumentException("matrix must be 3x3", nameof(matrix3x3));
@@ -100,6 +134,15 @@ namespace HDRGammaController.Core.Calibration
                 WriteS15Fixed16(data, tagStart + 16, maxL);
             }
 
+            if (lumiPeakNits is double lumiPeak)
+            {
+                ValidateLuminanceMetadata(lumiPeak, nameof(lumiPeakNits), "Peak");
+                PatchLumiTag(data, lumiPeak);
+            }
+
+            if (colorimetry != null)
+                data = PatchCharacterizationTags(data, colorimetry);
+
             if (!string.IsNullOrWhiteSpace(description))
                 data = PatchDescription(data, description);
 
@@ -118,14 +161,8 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         private static byte[] PatchDescription(byte[] data, string description)
         {
-            int tagCount = ReadU32(data, IccHeaderSize);
-            int descEntry = -1;
-            for (int i = 0; i < tagCount; i++)
-            {
-                int e = IccHeaderSize + 4 + i * IccTagEntrySize;
-                if (e + 12 <= data.Length && ReadU32(data, e) == DescSignature) { descEntry = e; break; }
-            }
-            if (descEntry < 0) return data; // template has no desc tag; nothing to clean up
+            if (FindTagEntry(data, DescSignature) < 0)
+                return data; // template has no desc tag; nothing to clean up
 
             // mluc: sig(4) reserved(4) recordCount=1(4) recordSize=12(4)
             //       lang 'enUS'(4) stringLength(4) stringOffset=28(4) + UTF-16BE text
@@ -139,17 +176,213 @@ namespace HDRGammaController.Core.Calibration
             WriteU32(mluc, 24, 28);
             Array.Copy(text, 0, mluc, 28, text.Length);
 
+            return AppendTagBlock(data, mluc, DescSignature);
+        }
+
+        /// <summary>
+        /// Rewrites the profile's colorimetric characterization tags so they describe the
+        /// display the profile actually calibrates (the M6 fix) instead of the template's
+        /// synthetic sRGB/G2.2 values. ICC v4 display-profile convention:
+        ///   wtpt = the PCS illuminant D50 (the media white AFTER chromatic adaptation),
+        ///   chad = the Bradford matrix adapting the display's ACTUAL white to D50,
+        ///   rXYZ/gXYZ/bXYZ = the display primaries pushed through chad (PCS-adapted),
+        ///   rTRC/gTRC/bTRC = the colorimetry's EOTF (shared 'curv' tag, like the template),
+        ///   chrm = the raw device chromaticities (informational, patched when present).
+        /// The fixed-size tags (wtpt/chad/XYZ/chrm) are patched in place; the TRC curve is
+        /// appended and the three TRC tag-table entries repointed at the shared block, the
+        /// same mechanism <see cref="PatchDescription"/> uses.
+        /// </summary>
+        private static byte[] PatchCharacterizationTags(byte[] data, CalibrationTarget colorimetry)
+        {
+            // Bradford adaptation from the profile's actual white to the D50 PCS.
+            CieXyz actualWhite = colorimetry.WhitePoint.ToXyz(1.0);
+            double[,] chad = BradfordAdaptationMatrix(actualWhite, ColorMath.D50White);
+
+            // PCS-adapted primaries: the columns of the device RGB→XYZ matrix (white-relative,
+            // Y_white = 1 by CalculateRgbToXyzMatrix's normalization) pushed through chad.
+            double[,] pcsPrimaries = ColorMath.MultiplyMatrices(chad, colorimetry.RgbToXyzMatrix);
+
+            WriteXyzTag(data, WtptSignature, ColorMath.D50White.X, ColorMath.D50White.Y, ColorMath.D50White.Z);
+            WriteChadTag(data, chad);
+            WriteXyzTag(data, RXyzSignature, pcsPrimaries[0, 0], pcsPrimaries[1, 0], pcsPrimaries[2, 0]);
+            WriteXyzTag(data, GXyzSignature, pcsPrimaries[0, 1], pcsPrimaries[1, 1], pcsPrimaries[2, 1]);
+            WriteXyzTag(data, BXyzSignature, pcsPrimaries[0, 2], pcsPrimaries[1, 2], pcsPrimaries[2, 2]);
+            PatchChrmTag(data, colorimetry);
+
+            return AppendTagBlock(data, BuildTrcCurve(colorimetry),
+                RTrcSignature, GTrcSignature, BTrcSignature);
+        }
+
+        /// <summary>
+        /// The 3×3 Bradford chromatic adaptation matrix mapping XYZ relative to
+        /// <paramref name="sourceWhite"/> onto XYZ relative to <paramref name="destWhite"/>.
+        /// Reconstructed column-by-column from <see cref="ColorMath.ChromaticAdaptation"/>
+        /// (a linear transform), so the tag agrees exactly with the app's adaptation math.
+        /// </summary>
+        private static double[,] BradfordAdaptationMatrix(CieXyz sourceWhite, CieXyz destWhite)
+        {
+            var m = new double[3, 3];
+            for (int c = 0; c < 3; c++)
+            {
+                var basis = new CieXyz(c == 0 ? 1 : 0, c == 1 ? 1 : 0, c == 2 ? 1 : 0);
+                var adapted = ColorMath.ChromaticAdaptation(basis, sourceWhite, destWhite);
+                m[0, c] = adapted.X;
+                m[1, c] = adapted.Y;
+                m[2, c] = adapted.Z;
+            }
+            return m;
+        }
+
+        /// <summary>
+        /// Builds the shared TRC 'curv' tag for the colorimetry's EOTF: a compact gamma
+        /// entry for pure power-law targets, the ICC identity form for linear, and a
+        /// 1024-point sampled curve for everything piecewise (sRGB, BT.1886, PQ, HLG —
+        /// PQ is normalized to the target peak and clips at 1.0 above it).
+        /// </summary>
+        private static byte[] BuildTrcCurve(CalibrationTarget colorimetry)
+        {
+            if (colorimetry.TransferFunction == TransferFunctionType.Gamma &&
+                colorimetry.Gamma is double gamma &&
+                double.IsFinite(gamma) && gamma is >= 1.0 and <= 4.0)
+            {
+                // curv with count=1: a single u8Fixed8 gamma value.
+                byte[] tag = new byte[14];
+                WriteU32(tag, 0, CurvSignature);
+                WriteU32(tag, 8, 1);
+                WriteU16(tag, 12, (int)Math.Round(gamma * 256.0));
+                return tag;
+            }
+
+            if (colorimetry.TransferFunction == TransferFunctionType.Linear)
+            {
+                // curv with count=0 is the ICC identity curve.
+                byte[] tag = new byte[12];
+                WriteU32(tag, 0, CurvSignature);
+                return tag;
+            }
+
+            byte[] sampled = new byte[12 + TrcSampleCount * 2];
+            WriteU32(sampled, 0, CurvSignature);
+            WriteU32(sampled, 8, TrcSampleCount);
+            for (int i = 0; i < TrcSampleCount; i++)
+            {
+                double signal = i / (double)(TrcSampleCount - 1);
+                double linear = Math.Clamp(colorimetry.ApplyEotf(signal), 0.0, 1.0);
+                WriteU16(sampled, 12 + i * 2, (int)Math.Round(linear * 65535.0));
+            }
+            return sampled;
+        }
+
+        /// <summary>Writes an in-place XYZType tag (sig + reserved + 3 × s15Fixed16).</summary>
+        private static void WriteXyzTag(byte[] data, int tagSignature, double x, double y, double z)
+        {
+            int off = RequireTagDataOffset(data, tagSignature, 20);
+            if (ReadU32(data, off) != XyzTypeSignature)
+                throw new InvalidDataException($"Tag '{SignatureName(tagSignature)}' is not XYZ-typed where expected.");
+            WriteS15Fixed16(data, off + 8, x);
+            WriteS15Fixed16(data, off + 12, y);
+            WriteS15Fixed16(data, off + 16, z);
+        }
+
+        /// <summary>Writes the chad tag's 3×3 s15Fixed16 matrix (sf32 type) in place, row-major.</summary>
+        private static void WriteChadTag(byte[] data, double[,] chad)
+        {
+            int off = RequireTagDataOffset(data, ChadSignature, 8 + 9 * 4);
+            if (ReadU32(data, off) != Sf32Signature)
+                throw new InvalidDataException("chad tag is not 'sf32' typed where expected.");
+            for (int r = 0; r < 3; r++)
+                for (int c = 0; c < 3; c++)
+                    WriteS15Fixed16(data, off + 8 + (r * 3 + c) * 4, chad[r, c]);
+        }
+
+        /// <summary>
+        /// Patches the optional 'chrm' tag in place with the raw device chromaticities
+        /// (phosphor/colorant type set to 0 = unknown, since these are measured/target
+        /// values, not a standard set). Skipped silently when the template lacks the tag.
+        /// </summary>
+        private static void PatchChrmTag(byte[] data, CalibrationTarget colorimetry)
+        {
+            int entry = FindTagEntry(data, ChrmSignature);
+            if (entry < 0) return;
+            int off = ReadU32(data, entry + 4);
+            int size = ReadU32(data, entry + 8);
+            // chrm: sig(4) reserved(4) channels u16(2) phosphorType u16(2) + 3 × (x,y) u16Fixed16.
+            if (off < 0 || size < 12 + 3 * 8 || off + size > data.Length) return;
+
+            WriteU16(data, off + 10, 0); // phosphor/colorant type: unknown
+            var xy = new[] { colorimetry.RedPrimary, colorimetry.GreenPrimary, colorimetry.BluePrimary };
+            for (int i = 0; i < 3; i++)
+            {
+                WriteU16Fixed16(data, off + 12 + i * 8, xy[i].X);
+                WriteU16Fixed16(data, off + 12 + i * 8 + 4, xy[i].Y);
+            }
+        }
+
+        /// <summary>
+        /// Appends <paramref name="tagData"/> as a new 4-byte-aligned block at the end of the
+        /// profile and repoints every listed tag-table entry at it (shared data is legal —
+        /// the template's three TRC entries already share one block). Updates the header
+        /// profile-size field; the old tag bytes become unused slack, which readers ignore
+        /// because they only follow the tag table.
+        /// </summary>
+        private static byte[] AppendTagBlock(byte[] data, byte[] tagData, params int[] tagSignatures)
+        {
+            var entries = new int[tagSignatures.Length];
+            for (int i = 0; i < tagSignatures.Length; i++)
+            {
+                entries[i] = FindTagEntry(data, tagSignatures[i]);
+                if (entries[i] < 0)
+                    throw new InvalidDataException(
+                        $"Template lacks required tag '{SignatureName(tagSignatures[i])}'.");
+            }
+
             int newOffset = (data.Length + 3) & ~3; // 4-byte aligned tag start
-            int padded = (mluc.Length + 3) & ~3;
+            int padded = (tagData.Length + 3) & ~3;
             byte[] result = new byte[newOffset + padded];
             Array.Copy(data, result, data.Length);
-            Array.Copy(mluc, 0, result, newOffset, mluc.Length);
+            Array.Copy(tagData, 0, result, newOffset, tagData.Length);
 
-            WriteU32(result, descEntry + 4, newOffset);
-            WriteU32(result, descEntry + 8, mluc.Length);
+            foreach (int entry in entries)
+            {
+                WriteU32(result, entry + 4, newOffset);
+                WriteU32(result, entry + 8, tagData.Length);
+            }
             WriteU32(result, 0, result.Length); // header profile-size field
             return result;
         }
+
+        /// <summary>Tag-table entry offset for <paramref name="signature"/>, or -1 when absent.</summary>
+        private static int FindTagEntry(byte[] data, int signature)
+        {
+            int tagCount = ReadU32(data, IccHeaderSize);
+            for (int i = 0; i < tagCount; i++)
+            {
+                int e = IccHeaderSize + 4 + i * IccTagEntrySize;
+                if (e + 12 <= data.Length && ReadU32(data, e) == signature)
+                    return e;
+            }
+            return -1;
+        }
+
+        private static int RequireTagDataOffset(byte[] data, int signature, int minSize)
+        {
+            int entry = FindTagEntry(data, signature);
+            if (entry < 0)
+                throw new InvalidDataException($"Template lacks required tag '{SignatureName(signature)}'.");
+            int off = ReadU32(data, entry + 4);
+            int size = ReadU32(data, entry + 8);
+            if (off < 0 || size < minSize || off + size > data.Length)
+                throw new InvalidDataException($"Tag '{SignatureName(signature)}' offset/size out of range.");
+            return off;
+        }
+
+        private static string SignatureName(int signature) => new(new[]
+        {
+            (char)((signature >> 24) & 0xFF),
+            (char)((signature >> 16) & 0xFF),
+            (char)((signature >> 8) & 0xFF),
+            (char)(signature & 0xFF),
+        });
 
         /// <summary>Writes the display peak luminance into the 'lumi' tag's XYZ Y field.</summary>
         private static void PatchLumiTag(byte[] data, double maxNits)
@@ -176,6 +409,20 @@ namespace HDRGammaController.Core.Calibration
             b[o + 1] = (byte)((v >> 16) & 0xFF);
             b[o + 2] = (byte)((v >> 8) & 0xFF);
             b[o + 3] = (byte)(v & 0xFF);
+        }
+
+        private static void WriteU16(byte[] b, int o, int v)
+        {
+            b[o] = (byte)((v >> 8) & 0xFF);
+            b[o + 1] = (byte)(v & 0xFF);
+        }
+
+        /// <summary>u16Fixed16: unsigned 16.16 (used by the 'chrm' tag's xy coordinates).</summary>
+        private static void WriteU16Fixed16(byte[] b, int o, double value)
+        {
+            long fixed16 = (long)Math.Round(value * 65536.0);
+            fixed16 = Math.Clamp(fixed16, 0, uint.MaxValue);
+            WriteU32(b, o, unchecked((int)(uint)fixed16));
         }
 
         /// <summary>
@@ -228,6 +475,12 @@ namespace HDRGammaController.Core.Calibration
         /// engine's sandwich turned our gentle warm correction into red ≈1.39 (clipped) with
         /// green crushed to ≈0.87. Wrapping the matrix as srgbToXyz · M · xyzToSrgb makes the
         /// engine's fixed conversions cancel exactly, so it applies precisely M in linear RGB.
+        ///
+        /// NOTE (m8): the sandwich — and the exact sRGB/D65 constants of its fixed stages —
+        /// is UNDOCUMENTED Windows behavior, reverse-engineered from MHC2Gen and validated
+        /// on-screen against the Windows 11 22621 DWM (the magenta-cast repro machine). A
+        /// regression test pins the identity wrap (ToMhc2MatrixDomain(I) ≈ I) so any change
+        /// to the D65/sRGB wrap constants is caught before it can re-tint installs.
         /// </summary>
         public static double[,] ToMhc2MatrixDomain(double[,] rgbToRgbMatrix)
         {

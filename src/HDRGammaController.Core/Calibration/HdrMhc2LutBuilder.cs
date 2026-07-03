@@ -9,9 +9,10 @@ namespace HDRGammaController.Core.Calibration
     ///
     /// In HDR the wire format is BT.2100 PQ, and the MHC2 LUTs operate on PQ SIGNAL
     /// (0..1 ≙ 0..10000 nits via ST.2084) — not on the gamma-encoded SDR signal the SDR
-    /// path uses. The goal is PQ tracking: wire signal p should produce ST2084(p) nits
-    /// (scaled per channel by the white-point gains that move the panel's native white to
-    /// the target white).
+    /// path uses. The goal is PQ tracking: CONTENT signal v should produce ST2084(v) nits.
+    /// Because the DWM applies the (uniformly scaled) gamut matrix BEFORE these LUTs, the
+    /// builder composes that scale into the inversion (see Build's matrixNeutralScale) so
+    /// the matrix+LUT chain — not the LUT in isolation — tracks PQ.
     ///
     /// Two measurement sources, by preference:
     ///  - HDR wire-ladder patches (ColorPatch.Nits, FP16 scRGB rendering): wire positions
@@ -35,13 +36,24 @@ namespace HDRGammaController.Core.Calibration
         /// in the (uniformly scaled, absolute) gamut matrix. Per-channel gains here would
         /// re-tint saturated colors the matrix already placed.
         /// </remarks>
+        /// <param name="matrixNeutralScale">
+        /// The uniform scale s (0 &lt; s ≤ 1) baked into the MHC2 gamut matrix that Windows
+        /// applies BEFORE these LUTs. The LUT model composes it in (see the MATRIX
+        /// COMPOSITION comment in the sample loop); 1.0 (identity/no matrix dimming)
+        /// reproduces the uncomposed build bit-for-bit.
+        /// </param>
         public static Result Build(
             IEnumerable<MeasurementResult> measurements,
-            double sdrWhiteNits)
+            double sdrWhiteNits,
+            double matrixNeutralScale = 1.0)
         {
             if (!double.IsFinite(sdrWhiteNits) || sdrWhiteNits < 40 || sdrWhiteNits > 1000)
                 throw new ArgumentOutOfRangeException(nameof(sdrWhiteNits),
                     $"SDR white level {sdrWhiteNits:F0} nits is implausible.");
+
+            if (!double.IsFinite(matrixNeutralScale) || matrixNeutralScale <= 0.0 || matrixNeutralScale > 1.0 + 1e-9)
+                throw new ArgumentOutOfRangeException(nameof(matrixNeutralScale),
+                    $"Matrix neutral-axis scale {matrixNeutralScale} must be in (0, 1] — the uniform-scale policy only ever dims.");
 
             // PREFERRED: HDR wire-ladder patches (ColorPatch.Nits set) rendered through the
             // FP16 scRGB path. Their wire position is EXACT - PQ⁻¹(requested nits) - with no
@@ -117,7 +129,29 @@ namespace HDRGammaController.Core.Calibration
             for (int i = 0; i < LutSamples; i++)
             {
                 double p = i / (double)(LutSamples - 1);
-                double desired = TransferFunctions.PqEotf(p);
+
+                // MATRIX COMPOSITION (the M5 fix). Windows evaluates the MHC2 pipeline as
+                //     wire → PQ-decode → gamut matrix (uniformly scaled by s) → PQ-encode → LUT → panel
+                // but the panel response in `points` was measured with NO matrix installed.
+                // At apply time this LUT therefore never sees raw content wire positions:
+                // on the NEUTRAL axis the matrix scales linear luminance by exactly s —
+                // both the display and target RGB→XYZ matrices are white-normalized to
+                // Y=1, so the absolute matrix maps content white to a display drive of
+                // relative luminance 1 (chromaticity changes, luminance does not) and the
+                // uniform scale is the only neutral-axis luminance change. Content at PQ
+                // position v thus reaches this LUT at w'(v) = PQ⁻¹(s·PQ(v)).
+                //
+                // Building the LUT against raw positions (the old behavior) made the
+                // installed matrix+LUT chain output s·d nits instead of the absolute
+                // target d for content d, and — because PQ is nonlinear and the LUT is
+                // per-channel over unequal post-matrix drives — re-tinted near-neutrals
+                // (fallback reason #2 below describes that failure). Composing s into the
+                // model: LUT input p corresponds to content luminance PQ(p)/s, so invert
+                // the measured response at THAT target. Then LUT(w'(v)) = f⁻¹(PQ(v)):
+                // absolute PQ tracking through matrix+LUT up to the panel's reachable
+                // peak, identity above it, exactly as designed. With s = 1 the division
+                // is exact and the output is bit-identical to the pre-composition build.
+                double desired = TransferFunctions.PqEotf(p) / matrixNeutralScale;
 
                 // Analytic passthrough: identity — preserves the panel's own behavior.
                 double analytic = p;

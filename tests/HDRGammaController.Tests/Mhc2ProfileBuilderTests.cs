@@ -337,6 +337,22 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void ToMhc2MatrixDomain_IdentityWrap_RoundTripsToIdentity()
+        {
+            // m8 regression pin: the MHC2 engine sandwich is UNDOCUMENTED Windows behavior
+            // (validated on-screen against the Windows 11 22621 DWM). Wrapping an identity
+            // calibration matrix must return identity within numeric noise — the wrap's
+            // srgbToXyz and its inverse are built from the same D65/sRGB constants, so any
+            // drift in those constants (or an asymmetric wrap) shows up here immediately.
+            var identity = new double[,] { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } };
+            var wrapped = Mhc2ProfileBuilder.ToMhc2MatrixDomain(identity);
+            for (int r = 0; r < 3; r++)
+                for (int c = 0; c < 3; c++)
+                    Assert.True(Math.Abs(wrapped[r, c] - (r == c ? 1.0 : 0.0)) < 1e-6,
+                        $"identity wrap drifted at [{r},{c}]: {wrapped[r, c]:E3}");
+        }
+
+        [Fact]
         public void ToMhc2MatrixDomain_EngineSandwichRecoversIntendedRgbMatrix()
         {
             // Wrapping must make the engine's fixed conversions cancel exactly, so the engine
@@ -390,6 +406,243 @@ namespace HDRGammaController.Tests
             m[1,0]*a + m[1,1]*b + m[1,2]*c,
             m[2,0]*a + m[2,1]*b + m[2,2]*c,
         };
+
+        // ---- True ICC characterization tags (M6) ---------------------------------------
+
+        private static int FindTag(byte[] b, int sig, out int size)
+        {
+            int tagCount = ReadU32(b, 128);
+            for (int i = 0; i < tagCount; i++)
+            {
+                int e = 132 + i * 12;
+                if (ReadU32(b, e) == sig) { size = ReadU32(b, e + 8); return ReadU32(b, e + 4); }
+            }
+            size = 0;
+            return -1;
+        }
+
+        private static double[] ReadXyzTag(byte[] b, int sig)
+        {
+            int off = FindTag(b, sig, out _);
+            Assert.True(off > 0, $"tag 0x{sig:X8} missing");
+            return new[] { ReadS15(b, off + 8), ReadS15(b, off + 12), ReadS15(b, off + 16) };
+        }
+
+        private static double[,] ReadChad(byte[] b)
+        {
+            int off = FindTag(b, 0x63686164, out _);
+            Assert.True(off > 0, "chad tag missing");
+            var m = new double[3, 3];
+            for (int r = 0; r < 3; r++)
+                for (int c = 0; c < 3; c++)
+                    m[r, c] = ReadS15(b, off + 8 + (r * 3 + c) * 4);
+            return m;
+        }
+
+        private static Chromaticity XyzToXy(double[] xyz)
+        {
+            double sum = xyz[0] + xyz[1] + xyz[2];
+            return new Chromaticity(xyz[0] / sum, xyz[1] / sum);
+        }
+
+        [Fact]
+        public void Build_WritesTrueCharacterizationTags_ForP3Target()
+        {
+            string? template = FindTemplate();
+            if (template == null) return; // template not present in this checkout; skip silently
+
+            // A P3-primaries / D65-white / pure-gamma-2.2 target: previously the installed
+            // profile still described the display as sRGB/G2.2 with the template's synthetic
+            // values regardless (the M6 finding). Round-trip every synthesized tag.
+            var target = StandardTargets.P3D65Gamma22;
+            var identity = new double[,] { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } };
+            var lut = IdentityLut();
+
+            string outPath = Path.Combine(Path.GetTempPath(), $"mhc2_char_{Guid.NewGuid():N}.icm");
+            try
+            {
+                Mhc2ProfileBuilder.Build(template, outPath, identity, lut, lut, lut,
+                    description: "M27Q P - Display P3 G2.2 - characterization test",
+                    colorimetry: target, lumiPeakNits: 412.5);
+                var b = File.ReadAllBytes(outPath);
+
+                // Header profile-size must track the grown file (TRC + desc appends).
+                Assert.Equal(b.Length, ReadU32(b, 0));
+
+                // wtpt = the PCS illuminant D50 (ICC v4: media white is stored ADAPTED).
+                var wtpt = ReadXyzTag(b, 0x77747074);
+                Assert.Equal(0.96422, wtpt[0], 3);
+                Assert.Equal(1.00000, wtpt[1], 3);
+                Assert.Equal(0.82521, wtpt[2], 3);
+
+                // chad carries Bradford(D65 → D50): its inverse must take the stored wtpt
+                // back to the target's actual white within chromaticity tolerance.
+                var chad = ReadChad(b);
+                var chadInv = ColorMath.Invert3x3(chad);
+                double[] deviceWhite = MulVec(chadInv, wtpt[0], wtpt[1], wtpt[2]);
+                var whiteXy = XyzToXy(deviceWhite);
+                Assert.True(Math.Abs(whiteXy.X - target.WhitePoint.X) < 1e-3, $"white x {whiteXy.X:F5}");
+                Assert.True(Math.Abs(whiteXy.Y - target.WhitePoint.Y) < 1e-3, $"white y {whiteXy.Y:F5}");
+
+                // rXYZ/gXYZ/bXYZ are PCS-adapted primaries: inverse-chad recovers the device
+                // chromaticities, which must land on P3 within 1e-3.
+                var expected = new[]
+                {
+                    (Sig: 0x7258595A, Xy: target.RedPrimary),
+                    (Sig: 0x6758595A, Xy: target.GreenPrimary),
+                    (Sig: 0x6258595A, Xy: target.BluePrimary),
+                };
+                double sumY = 0;
+                foreach (var (sig, xy) in expected)
+                {
+                    var pcs = ReadXyzTag(b, sig);
+                    double[] device = MulVec(chadInv, pcs[0], pcs[1], pcs[2]);
+                    var deviceXy = XyzToXy(device);
+                    Assert.True(Math.Abs(deviceXy.X - xy.X) < 1e-3, $"{sig:X8} x: {deviceXy.X:F5} vs {xy.X:F5}");
+                    Assert.True(Math.Abs(deviceXy.Y - xy.Y) < 1e-3, $"{sig:X8} y: {deviceXy.Y:F5} vs {xy.Y:F5}");
+                    sumY += device[1];
+                }
+                // The three device-relative primary luminances must sum to the white Y (=1).
+                Assert.Equal(1.0, sumY, 2);
+
+                // TRC: pure-gamma target → shared 'curv' gamma tag on all three channels.
+                int rTrc = FindTag(b, 0x72545243, out int rTrcSize);
+                int gTrc = FindTag(b, 0x67545243, out int gTrcSize);
+                int bTrc = FindTag(b, 0x62545243, out int bTrcSize);
+                Assert.True(rTrc > 0 && rTrc == gTrc && rTrc == bTrc, "TRC entries must share one block");
+                Assert.Equal(rTrcSize, gTrcSize);
+                Assert.Equal(rTrcSize, bTrcSize);
+                Assert.Equal(0x63757276, ReadU32(b, rTrc));      // 'curv'
+                Assert.Equal(1, ReadU32(b, rTrc + 8));           // count=1: u8Fixed8 gamma
+                double gammaStored = ((b[rTrc + 12] << 8) | b[rTrc + 13]) / 256.0;
+                Assert.Equal(2.2, gammaStored, 2);
+
+                // lumi carries the measured peak (patched via lumiPeakNits, SDR path).
+                int lumi = FindTag(b, 0x6C756D69, out _);
+                Assert.True(lumi > 0, "lumi tag missing");
+                Assert.Equal(412.5, ReadS15(b, lumi + 12), 3);
+
+                // chrm (informational) carries the raw device chromaticities.
+                int chrm = FindTag(b, 0x6368726D, out _);
+                Assert.True(chrm > 0, "chrm tag missing");
+                for (int i = 0; i < 3; i++)
+                {
+                    double x = (uint)ReadU32(b, chrm + 12 + i * 8) / 65536.0;
+                    double y = (uint)ReadU32(b, chrm + 12 + i * 8 + 4) / 65536.0;
+                    var xy = expected[i].Xy;
+                    Assert.True(Math.Abs(x - xy.X) < 1e-4 && Math.Abs(y - xy.Y) < 1e-4,
+                        $"chrm[{i}] ({x:F5},{y:F5}) vs ({xy.X:F5},{xy.Y:F5})");
+                }
+
+                // Windows-required tag set intact, every entry within the file.
+                foreach (int sig in new[]
+                {
+                    0x64657363 /*desc*/, 0x63707274 /*cprt*/, 0x77747074 /*wtpt*/,
+                    0x63686164 /*chad*/, 0x7258595A, 0x6758595A, 0x6258595A,
+                    0x72545243, 0x67545243, 0x62545243, 0x6C756D69 /*lumi*/,
+                    0x4D484332 /*MHC2*/,
+                })
+                {
+                    int off = FindTag(b, sig, out int size);
+                    Assert.True(off > 0 && size > 0 && off + size <= b.Length,
+                        $"tag 0x{sig:X8} missing or out of range (off={off}, size={size})");
+                }
+
+                // The MHC2 payload still parses and the profile ID was re-zeroed.
+                Assert.True(FindMhc2(b) > 0);
+                for (int z = 84; z < 100; z++) Assert.Equal(0, b[z]);
+            }
+            finally
+            {
+                try { File.Delete(outPath); } catch { }
+            }
+        }
+
+        [Fact]
+        public void Build_WritesSampledTrc_ForPiecewiseTargets()
+        {
+            string? template = FindTemplate();
+            if (template == null) return; // template not present in this checkout; skip silently
+
+            // sRGB's piecewise EOTF can't be a single gamma value: it must round-trip as a
+            // 1024-point sampled 'curv' matching the target EOTF at arbitrary probe points.
+            var target = StandardTargets.SrgbGamma22;
+            var identity = new double[,] { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } };
+            var lut = IdentityLut();
+
+            string outPath = Path.Combine(Path.GetTempPath(), $"mhc2_trc_{Guid.NewGuid():N}.icm");
+            try
+            {
+                Mhc2ProfileBuilder.Build(template, outPath, identity, lut, lut, lut, colorimetry: target);
+                var b = File.ReadAllBytes(outPath);
+
+                int trc = FindTag(b, 0x72545243, out int trcSize);
+                Assert.True(trc > 0, "rTRC missing");
+                Assert.Equal(0x63757276, ReadU32(b, trc));   // 'curv'
+                Assert.Equal(1024, ReadU32(b, trc + 8));
+                Assert.Equal(12 + 1024 * 2, trcSize);
+
+                foreach (int idx in new[] { 0, 25, 102, 256, 512, 767, 1023 })
+                {
+                    double stored = ((b[trc + 12 + idx * 2] << 8) | b[trc + 12 + idx * 2 + 1]) / 65535.0;
+                    double expected = ColorMath.SrgbEotf(idx / 1023.0);
+                    Assert.True(Math.Abs(stored - expected) < 1e-3,
+                        $"TRC[{idx}] = {stored:F5}, expected sRGB EOTF {expected:F5}");
+                }
+
+                // Device white round trip for an sRGB/D65 target too.
+                var chadInv = ColorMath.Invert3x3(ReadChad(b));
+                var wtpt = ReadXyzTag(b, 0x77747074);
+                var whiteXy = XyzToXy(MulVec(chadInv, wtpt[0], wtpt[1], wtpt[2]));
+                Assert.True(Math.Abs(whiteXy.X - Chromaticity.D65.X) < 1e-3);
+                Assert.True(Math.Abs(whiteXy.Y - Chromaticity.D65.Y) < 1e-3);
+
+                // Cross-validation against an INDEPENDENT implementation: for an sRGB/D65
+                // target our synthesized D50-adapted rXYZ must agree with the template's own
+                // (MHC2Gen-produced) sRGB rXYZ — the canonical Bradford-adapted red primary.
+                var rXyz = ReadXyzTag(b, 0x7258595A);
+                Assert.True(Math.Abs(rXyz[0] - 0.43607) < 2e-3, $"rXYZ.X {rXyz[0]:F5}");
+                Assert.True(Math.Abs(rXyz[1] - 0.22249) < 2e-3, $"rXYZ.Y {rXyz[1]:F5}");
+                Assert.True(Math.Abs(rXyz[2] - 0.01392) < 2e-3, $"rXYZ.Z {rXyz[2]:F5}");
+            }
+            finally
+            {
+                try { File.Delete(outPath); } catch { }
+            }
+        }
+
+        [Fact]
+        public void Build_WithoutColorimetry_LeavesTemplateCharacterizationBytes()
+        {
+            string? template = FindTemplate();
+            if (template == null) return; // template not present in this checkout; skip silently
+
+            // Callers that don't opt in (colorimetry: null) must get the template's original
+            // characterization tags byte-for-byte — the M6 synthesis is opt-in.
+            var identity = new double[,] { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } };
+            var lut = IdentityLut();
+            string outPath = Path.Combine(Path.GetTempPath(), $"mhc2_nochar_{Guid.NewGuid():N}.icm");
+            try
+            {
+                Mhc2ProfileBuilder.Build(template, outPath, identity, lut, lut, lut);
+                var templateBytes = File.ReadAllBytes(template);
+                var b = File.ReadAllBytes(outPath);
+
+                foreach (int sig in new[] { 0x77747074, 0x63686164, 0x7258595A, 0x6758595A, 0x6258595A, 0x72545243 })
+                {
+                    int tOff = FindTag(templateBytes, sig, out int tSize);
+                    int oOff = FindTag(b, sig, out int oSize);
+                    Assert.Equal(tOff, oOff);
+                    Assert.Equal(tSize, oSize);
+                    for (int i = 0; i < tSize; i++)
+                        Assert.Equal(templateBytes[tOff + i], b[oOff + i]);
+                }
+            }
+            finally
+            {
+                try { File.Delete(outPath); } catch { }
+            }
+        }
 
         [Fact]
         public void GamutGuard_AllowsP3_BlocksRec2020_OnA98PercentP3Panel()
