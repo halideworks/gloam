@@ -547,6 +547,135 @@ namespace HDRGammaController.Tests
             Assert.InRange(result.G, -0.01f, 0.01f); // Clamped to 0
         }
 
+        /// <summary>
+        /// Reference implementation of 6-tetrahedron interpolation: sort the fractional
+        /// coordinates descending and accumulate corner differences along that axis order.
+        /// This is the standard Kasson/Plouffe dissection, valid for every ordering.
+        /// </summary>
+        private static (float R, float G, float B) TetrahedralGroundTruth(
+            Lut3D lut, float r, float g, float b)
+        {
+            int size = lut.Size;
+            float rn = Math.Clamp(r, 0f, 1f) * (size - 1);
+            float gn = Math.Clamp(g, 0f, 1f) * (size - 1);
+            float bn = Math.Clamp(b, 0f, 1f) * (size - 1);
+            int r0 = Math.Min((int)rn, size - 2);
+            int g0 = Math.Min((int)gn, size - 2);
+            int b0 = Math.Min((int)bn, size - 2);
+            float rf = rn - r0, gf = gn - g0, bf = bn - b0;
+
+            // Axis order sorted by descending fraction (0=R, 1=G, 2=B).
+            var axes = new[] { (f: rf, a: 0), (f: gf, a: 1), (f: bf, a: 2) };
+            Array.Sort(axes, (x, y) => y.f.CompareTo(x.f));
+
+            var offset = new int[3];
+            var prev = lut.GetEntry(r0, g0, b0);
+            float outR = prev.R, outG = prev.G, outB = prev.B;
+            foreach (var (f, a) in axes)
+            {
+                offset[a] = 1;
+                var next = lut.GetEntry(r0 + offset[0], g0 + offset[1], b0 + offset[2]);
+                outR += f * (next.R - prev.R);
+                outG += f * (next.G - prev.G);
+                outB += f * (next.B - prev.B);
+                prev = next;
+            }
+            return (outR, outG, outB);
+        }
+
+        [Fact]
+        public void Lut3D_LookupTetrahedral_MatchesGroundTruth_InAllSixOrderings()
+        {
+            // Asymmetric LUT: every corner distinct, so a wrong tetrahedron cannot
+            // accidentally agree with the correct one (identity/affine LUTs would).
+            var lut = new Lut3D(3);
+            var rng = new Random(12345);
+            for (int ri = 0; ri < 3; ri++)
+                for (int gi = 0; gi < 3; gi++)
+                    for (int bi = 0; bi < 3; bi++)
+                        lut.SetEntry(ri, gi, bi,
+                            (float)rng.NextDouble(), (float)rng.NextDouble(), (float)rng.NextDouble());
+
+            // One representative point per strict ordering, plus random coverage.
+            var probes = new List<(float r, float g, float b)>
+            {
+                (0.30f, 0.20f, 0.10f), // r > g > b
+                (0.30f, 0.10f, 0.20f), // r > b > g
+                (0.20f, 0.10f, 0.30f), // b > r > g
+                (0.10f, 0.20f, 0.30f), // b > g > r
+                (0.10f, 0.30f, 0.20f), // g > b > r
+                (0.20f, 0.30f, 0.10f), // g > r > b  (the historically broken region)
+                (0.40f, 0.50f, 0.20f), // regression: previously returned out-of-hull values
+            };
+            for (int i = 0; i < 500; i++)
+                probes.Add(((float)rng.NextDouble(), (float)rng.NextDouble(), (float)rng.NextDouble()));
+
+            foreach (var (r, g, b) in probes)
+            {
+                var expected = TetrahedralGroundTruth(lut, r, g, b);
+                var actual = lut.Lookup(r, g, b);
+                Assert.Equal(expected.R, actual.R, 5);
+                Assert.Equal(expected.G, actual.G, 5);
+                Assert.Equal(expected.B, actual.B, 5);
+            }
+        }
+
+        [Fact]
+        public void Lut3D_LookupTetrahedral_StaysInsideCornerValueHull()
+        {
+            // Spike at c011 only, all other corners zeroed (the constructor produces
+            // an identity LUT). Interpolated values must stay within [0, 10]
+            // everywhere; the broken g >= r > b branch produced negative output.
+            var lut = new Lut3D(2);
+            for (int ri = 0; ri < 2; ri++)
+                for (int gi = 0; gi < 2; gi++)
+                    for (int bi = 0; bi < 2; bi++)
+                        lut.SetEntry(ri, gi, bi, 0f, 0f, 0f);
+            lut.SetEntry(0, 1, 1, 10f, 10f, 10f);
+
+            for (float r = 0f; r <= 1f; r += 0.1f)
+                for (float g = 0f; g <= 1f; g += 0.1f)
+                    for (float b = 0f; b <= 1f; b += 0.1f)
+                    {
+                        var v = lut.Lookup(r, g, b);
+                        Assert.InRange(v.R, -1e-4f, 10.0001f);
+                    }
+
+            // The reviewer's original repro: (0.4, 0.5, 0.2) does not touch c011.
+            var probe = lut.Lookup(0.4f, 0.5f, 0.2f);
+            Assert.Equal(0f, probe.R, 5);
+        }
+
+        [Fact]
+        public void Lut3D_LookupTetrahedral_ContinuousAcrossTetrahedronBoundaries()
+        {
+            var lut = new Lut3D(2);
+            var rng = new Random(99);
+            for (int ri = 0; ri < 2; ri++)
+                for (int gi = 0; gi < 2; gi++)
+                    for (int bi = 0; bi < 2; bi++)
+                        lut.SetEntry(ri, gi, bi,
+                            (float)rng.NextDouble(), (float)rng.NextDouble(), (float)rng.NextDouble());
+
+            const float eps = 1e-4f;
+            // Sweep across the r == b diagonal plane inside the r <= g halfspace
+            // (the boundary between tetrahedra 5 and 6), and the other planes too.
+            for (float t = 0.05f; t < 0.95f; t += 0.05f)
+            {
+                foreach (var (lo, hi) in new[]
+                {
+                    (lut.Lookup(t - eps, 0.97f, t + eps), lut.Lookup(t + eps, 0.97f, t - eps)), // r==b plane
+                    (lut.Lookup(t - eps, t + eps, 0.03f), lut.Lookup(t + eps, t - eps, 0.03f)), // r==g plane
+                    (lut.Lookup(0.97f, t - eps, t + eps), lut.Lookup(0.97f, t + eps, t - eps)), // g==b plane
+                })
+                {
+                    Assert.True(Math.Abs(lo.R - hi.R) < 0.01f, $"discontinuity at t={t}");
+                    Assert.True(Math.Abs(lo.G - hi.G) < 0.01f, $"discontinuity at t={t}");
+                    Assert.True(Math.Abs(lo.B - hi.B) < 0.01f, $"discontinuity at t={t}");
+                }
+            }
+        }
+
         [Fact]
         public void Lut3D_Lookup_NonFiniteInputClampsToDomainMinimum()
         {
@@ -869,6 +998,79 @@ namespace HDRGammaController.Tests
             {
                 Thread.CurrentThread.CurrentCulture = originalCulture;
                 Thread.CurrentThread.CurrentUICulture = originalUiCulture;
+                if (System.IO.File.Exists(tempPath))
+                    System.IO.File.Delete(tempPath);
+            }
+        }
+
+        [Fact]
+        public void Lut3D_SaveAsCube_WritesRedFastestPerAdobeSpec()
+        {
+            // Identity LUT: every entry's value equals its own grid coordinates, so
+            // the data line order directly reveals the loop nesting. The Adobe/IRIDAS
+            // cube spec requires the RED index to change fastest.
+            var lut = Lut3D.CreateIdentity(2);
+            string tempPath = System.IO.Path.GetTempFileName() + ".cube";
+
+            try
+            {
+                lut.SaveAsCube(tempPath);
+                var dataLines = new List<string>();
+                foreach (var line in System.IO.File.ReadAllLines(tempPath))
+                {
+                    string trimmed = line.Trim();
+                    if (trimmed.Length == 0 || trimmed.StartsWith("#") ||
+                        char.IsLetter(trimmed[0]))
+                        continue;
+                    dataLines.Add(trimmed);
+                }
+
+                Assert.Equal(8, dataLines.Count);
+                Assert.Equal("0.000000 0.000000 0.000000", dataLines[0]);
+                Assert.Equal("1.000000 0.000000 0.000000", dataLines[1]); // red changes first
+                Assert.Equal("0.000000 1.000000 0.000000", dataLines[2]);
+                Assert.Equal("1.000000 1.000000 1.000000", dataLines[7]);
+            }
+            finally
+            {
+                if (System.IO.File.Exists(tempPath))
+                    System.IO.File.Delete(tempPath);
+            }
+        }
+
+        [Fact]
+        public void Lut3D_LoadFromCube_ReadsRedFastestPerAdobeSpec()
+        {
+            // Hand-written spec-conformant cube: value encodes (ri, gi, bi).
+            // A blue-fastest reader would transpose R and B.
+            string tempPath = System.IO.Path.GetTempFileName() + ".cube";
+            string[] cube =
+            {
+                "LUT_3D_SIZE 2",
+                "0.0 0.0 0.0", // ri=0 gi=0 bi=0
+                "1.0 0.0 0.0", // ri=1 gi=0 bi=0
+                "0.0 1.0 0.0", // ri=0 gi=1 bi=0
+                "1.0 1.0 0.0", // ri=1 gi=1 bi=0
+                "0.0 0.0 1.0", // ri=0 gi=0 bi=1
+                "1.0 0.0 1.0", // ri=1 gi=0 bi=1
+                "0.0 1.0 1.0", // ri=0 gi=1 bi=1
+                "1.0 1.0 1.0", // ri=1 gi=1 bi=1
+            };
+
+            try
+            {
+                System.IO.File.WriteAllLines(tempPath, cube);
+                var lut = Lut3D.LoadFromCube(tempPath);
+
+                var e100 = lut.GetEntry(1, 0, 0);
+                Assert.Equal(1.0, e100.R, 6);
+                Assert.Equal(0.0, e100.B, 6);
+                var e001 = lut.GetEntry(0, 0, 1);
+                Assert.Equal(0.0, e001.R, 6);
+                Assert.Equal(1.0, e001.B, 6);
+            }
+            finally
+            {
                 if (System.IO.File.Exists(tempPath))
                     System.IO.File.Delete(tempPath);
             }

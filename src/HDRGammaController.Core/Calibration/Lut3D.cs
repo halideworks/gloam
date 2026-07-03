@@ -256,9 +256,9 @@ namespace HDRGammaController.Core.Calibration
                     outG = c000.G + bf * (c001.G - c000.G) + gf * (c011.G - c001.G) + rf * (c111.G - c011.G);
                     outB = c000.B + bf * (c001.B - c000.B) + gf * (c011.B - c001.B) + rf * (c111.B - c011.B);
                 }
-                else if (gf > rf)
+                else if (bf > rf)
                 {
-                    // gf > bf > rf: Tetrahedron 5
+                    // gf >= bf > rf: Tetrahedron 5
                     outR = c000.R + gf * (c010.R - c000.R) + bf * (c011.R - c010.R) + rf * (c111.R - c011.R);
                     outG = c000.G + gf * (c010.G - c000.G) + bf * (c011.G - c010.G) + rf * (c111.G - c011.G);
                     outB = c000.B + gf * (c010.B - c000.B) + bf * (c011.B - c010.B) + rf * (c111.B - c011.B);
@@ -312,12 +312,12 @@ namespace HDRGammaController.Core.Calibration
                 "DOMAIN_MAX {0:F6} {0:F6} {0:F6}", DomainMax));
             writer.WriteLine();
 
-            // Cube format: B changes fastest, then G, then R
-            for (int ri = 0; ri < Size; ri++)
+            // Adobe/IRIDAS cube format: R changes fastest, then G, then B
+            for (int bi = 0; bi < Size; bi++)
             {
                 for (int gi = 0; gi < Size; gi++)
                 {
-                    for (int bi = 0; bi < Size; bi++)
+                    for (int ri = 0; ri < Size; ri++)
                     {
                         writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
                             "{0:F6} {1:F6} {2:F6}",
@@ -401,12 +401,13 @@ namespace HDRGammaController.Core.Calibration
 
             var lut = new Lut3D(size) { DomainMin = domainMin, DomainMax = domainMax };
 
+            // Adobe/IRIDAS cube format: R changes fastest, then G, then B
             int index = 0;
-            for (int ri = 0; ri < size; ri++)
+            for (int bi = 0; bi < size; bi++)
             {
                 for (int gi = 0; gi < size; gi++)
                 {
-                    for (int bi = 0; bi < size; bi++)
+                    for (int ri = 0; ri < size; ri++)
                     {
                         if (index < values.Count)
                         {
