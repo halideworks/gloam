@@ -18,7 +18,14 @@ namespace HDRGammaController.Core.Calibration
         // White levels for which an MHC2 template is shipped/extracted.
         private static readonly int[] TemplateWhiteLevels = { 100, 200, 300, 400 };
 
-        public sealed record InstallResult(bool Success, string ProfileName, string? Error);
+        /// <param name="HdrLuts">
+        /// HDR installs only: the PQ-domain tone LUTs actually written into the profile
+        /// (built by <see cref="HdrMhc2LutBuilder.Build"/>, or the caller's refined override).
+        /// Callers keep this so a later closed-loop refinement can start from the LUT that is
+        /// really on the wire. Null for SDR installs and failures before LUT generation.
+        /// </param>
+        public sealed record InstallResult(bool Success, string ProfileName, string? Error,
+            HdrMhc2LutBuilder.Result? HdrLuts = null);
 
         /// <summary>
         /// Chooses the Windows profile backup to preserve before activating a Gloam profile.
@@ -122,7 +129,8 @@ namespace HDRGammaController.Core.Calibration
             double whiteLevel,
             bool hdrMode = false,
             IReadOnlyList<MeasurementResult>? measurements = null,
-            string? profileNameOverride = null)
+            string? profileNameOverride = null,
+            HdrMhc2LutBuilder.Result? hdrLutsOverride = null)
         {
             if (string.IsNullOrEmpty(monitor.MonitorDevicePath))
                 return new InstallResult(false, "", "Monitor has no device path; cannot associate a profile.");
@@ -233,11 +241,31 @@ namespace HDRGammaController.Core.Calibration
                 perChannelGrayTracking =
                     !ReferenceEquals(toneR, lutR) || !ReferenceEquals(toneG, lutG) || !ReferenceEquals(toneB, lutB);
             }
+            HdrMhc2LutBuilder.Result? installedHdrLuts = null;
             if (hdrMode)
             {
                 HdrMhc2LutBuilder.Result hdrLuts;
-                try { hdrLuts = HdrMhc2LutBuilder.Build(measurements!, monitor.SdrWhiteLevel, uniformScale); }
-                catch (Exception ex) { return new InstallResult(false, "", $"HDR LUT generation failed: {ex.Message}"); }
+                // Closed-loop refinement path: the caller hands back a refined version of the
+                // LUTs a previous Install built. It is only valid if it composed the SAME
+                // matrix neutral scale this install computes (the LUT input domain depends on
+                // it); a mismatch means the matrix changed since (re-anchored white, trimmed
+                // target), so rebuild from the measurements instead of installing a LUT built
+                // for a different matrix.
+                if (hdrLutsOverride != null &&
+                    Math.Abs(hdrLutsOverride.MatrixNeutralScale - uniformScale) <= 1e-9)
+                {
+                    hdrLuts = hdrLutsOverride;
+                }
+                else
+                {
+                    if (hdrLutsOverride != null)
+                        Log.Info("CalibrationProfileInstaller: HDR LUT override composed scale " +
+                                 $"{hdrLutsOverride.MatrixNeutralScale:F6} but this install needs {uniformScale:F6} — " +
+                                 "the matrix changed since the override was built; rebuilding from measurements.");
+                    try { hdrLuts = HdrMhc2LutBuilder.Build(measurements!, monitor.SdrWhiteLevel, uniformScale); }
+                    catch (Exception ex) { return new InstallResult(false, "", $"HDR LUT generation failed: {ex.Message}"); }
+                }
+                installedHdrLuts = hdrLuts;
                 (toneR, toneG, toneB) = (hdrLuts.LutR, hdrLuts.LutG, hdrLuts.LutB);
                 wireExactLuts = hdrLuts.WireExact;
 
@@ -280,7 +308,9 @@ namespace HDRGammaController.Core.Calibration
                         ? "per-channel (built from ramp-fitted curves)"
                         : "neutral (shared luminance curve)")}" : "") +
                 (hdrMode ? $", header range {headerMinNits:F3}–{headerMaxNits:F0} nits, SDR white {monitor.SdrWhiteLevel:F0} nits" +
-                           $", LUT source {(wireExactLuts ? "WIRE-EXACT FP16 ladder" : "SDR-mapped grayscale fallback")}" : ""));
+                           $", LUT source {(wireExactLuts ? "WIRE-EXACT FP16 ladder" : "SDR-mapped grayscale fallback")}" +
+                           (ReferenceEquals(installedHdrLuts, hdrLutsOverride) && hdrLutsOverride != null
+                               ? " (CLOSED-LOOP REFINED)" : "") : ""));
 
             // Override names support the live white-trim preview: it alternates between two
             // fixed names so each step forces the compositor to load fresh content instead
@@ -359,7 +389,7 @@ namespace HDRGammaController.Core.Calibration
                 }
 
                 Log.Info($"CalibrationProfileInstaller: Installed + set default '{profileName}' for {monitor.FriendlyName} ({(hdrMode ? "advanced color" : "SDR")} association).");
-                return new InstallResult(true, profileName, null);
+                return new InstallResult(true, profileName, null, installedHdrLuts);
             }
             catch (Exception ex)
             {

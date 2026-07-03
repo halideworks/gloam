@@ -571,6 +571,18 @@
                             Margin="0,0,10,0"
                             Click="VerifyButton_Click"/>
 
+                    <!-- HDR only (shown by code-behind once the apply context arrives; enabled
+                         after the profile is applied): closed-loop refinement of the PQ tone
+                         LUT through the installed correction. -->
+                    <Button x:Name="RefineHdrButton"
+                            Content="Refine HDR"
+                            Visibility="Collapsed"
+                            IsEnabled="False"
+                            ToolTip="Re-measures the PQ ladder through the installed profile and applies one closed-loop correction to the HDR tone curve, then re-installs and re-verifies (Calman-style EOTF iteration). Place the probe on the display first."
+                            Style="{StaticResource BrutBtnSecondary}"
+                            Margin="0,0,10,0"
+                            Click="RefineHdrButton_Click"/>
+
                     <Button x:Name="WhiteToolsButton"
                             Content="White Tools"
                             IsEnabled="{Binding IsWhiteToolsEnabled}"
