@@ -68,7 +68,11 @@ namespace HDRGammaController.Services
                 VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right,
                 Padding = new Thickness(8, 4, 8, 4),
             };
-            close.MouseLeftButtonUp += (_, _) => win.Close();
+            // Handle the Down event so it never bubbles to the header's DragMove().
+            // DragMove() captures the mouse for a modal move loop, which would swallow
+            // the Up event and make the close glyph inert.
+            close.MouseLeftButtonDown += (_, e) => e.Handled = true;
+            close.MouseLeftButtonUp += (_, e) => { e.Handled = true; win.Close(); };
             close.MouseEnter += (_, _) => close.Foreground = Accent;
             close.MouseLeave += (_, _) => close.Foreground = Dim;
             hg.Children.Add(close);
