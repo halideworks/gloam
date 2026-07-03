@@ -323,6 +323,95 @@ namespace HDRGammaController.Tests
             Assert.Equal("1.0.2", service.StateSnapshot.LastUpdatedNotificationVersion);
         }
 
+        [Fact]
+        public void TrySchedulePendingUpdateOnExit_DeletesStaleStagedPackage()
+        {
+            Directory.CreateDirectory(AppPaths.DataDir);
+            string stalePackage = Path.Combine(AppPaths.DataDir, "GloamApp-1.0.1-full.nupkg");
+            File.WriteAllText(stalePackage, "stale package bytes");
+
+            var manager = new FakeUpdateManager("1.0.1")
+            {
+                PendingAsset = CreateAsset("1.0.1"),
+                LocalPackagePath = stalePackage
+            };
+            var service = new UpdateService(manager);
+
+            bool scheduled = service.TrySchedulePendingUpdateOnExit();
+
+            Assert.False(scheduled);
+            Assert.Equal(0, manager.ScheduleCount);
+            Assert.False(File.Exists(stalePackage));
+        }
+
+        [Fact]
+        public void TrySchedulePendingUpdateOnExit_StalePackageDeleteFailureIsNonFatal()
+        {
+            var manager = new FakeUpdateManager("1.0.1")
+            {
+                PendingAsset = CreateAsset("1.0.0"),
+                LocalPackagePath = Path.Combine(AppPaths.DataDir, "no-such-dir", "missing.nupkg")
+            };
+            var service = new UpdateService(manager);
+
+            Assert.False(service.TrySchedulePendingUpdateOnExit());
+        }
+
+        [Fact]
+        public void TrySchedulePendingUpdateOnExit_DoesNotDeleteNewerStagedPackage()
+        {
+            Directory.CreateDirectory(AppPaths.DataDir);
+            string stagedPackage = Path.Combine(AppPaths.DataDir, "GloamApp-1.0.2-full.nupkg");
+            File.WriteAllText(stagedPackage, "staged package bytes");
+
+            var manager = new FakeUpdateManager("1.0.1")
+            {
+                PendingAsset = CreateAsset("1.0.2"),
+                LocalPackagePath = stagedPackage
+            };
+            var service = new UpdateService(manager);
+
+            Assert.True(service.TrySchedulePendingUpdateOnExit());
+            Assert.True(File.Exists(stagedPackage));
+        }
+
+        [Fact]
+        public async Task ThrottledCheck_DoesNotOverwriteLastResult()
+        {
+            var now = new DateTimeOffset(2026, 6, 30, 12, 0, 0, TimeSpan.Zero);
+            var manager = new FakeUpdateManager("1.0.1")
+            {
+                NextUpdate = null
+            };
+            var service = new UpdateService(manager, () => now);
+
+            Assert.Null(await service.CheckForUpdatesAsync());
+            Assert.Equal("up-to-date", service.StateSnapshot.LastResult);
+
+            // Second check within the throttle window is skipped; the skip reason must land
+            // in LastSkipReason, never clobber the last real result.
+            now += TimeSpan.FromMinutes(1);
+            Assert.Null(await service.CheckForUpdatesAsync());
+
+            var state = service.StateSnapshot;
+            Assert.Equal("up-to-date", state.LastResult);
+            Assert.Contains("last check was", state.LastSkipReason);
+            Assert.Equal(1, manager.CheckCount);
+        }
+
+        [Theory]
+        [InlineData("1.0.3", "1.0.2", true)]   // feed newer than pending -> supersede
+        [InlineData("1.0.2", "1.0.2", false)]  // same as pending -> keep pending
+        [InlineData("1.0.1", "1.0.2", false)]  // older than pending -> keep pending
+        [InlineData("1.0.2", null, true)]      // no pending version recorded -> accept
+        [InlineData("1.0.2", "not-a-version", true)] // unparseable state -> accept
+        public void IsNewerThanVersionLabel_ComparesAgainstPendingVersion(string feedVersion, string? pendingVersion, bool expected)
+        {
+            var info = CreateUpdate(feedVersion);
+
+            Assert.Equal(expected, UpdateService.IsNewerThanVersionLabel(info, pendingVersion));
+        }
+
         private static UpdateInfo CreateUpdate(
             string version,
             bool isDowngrade = false,
@@ -386,6 +475,10 @@ namespace HDRGammaController.Tests
                 Assert.False(restart);
                 ScheduleCount++;
             }
+
+            public string? LocalPackagePath { get; set; }
+
+            public string? GetLocalPackagePath(VelopackAsset asset) => LocalPackagePath;
         }
 
         public void Dispose()

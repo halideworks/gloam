@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using HDRGammaController.Core;
 using Velopack;
+using Velopack.Locators;
 using Velopack.Sources;
 
 namespace HDRGammaController.Services
@@ -116,6 +117,10 @@ namespace HDRGammaController.Services
 
             if (!IsNewerThanCurrent(pending, _manager.CurrentVersion))
             {
+                // A staged package that is older-or-equal to the running version will never
+                // be applied; delete it so a superseded full .nupkg (100+ MB) does not
+                // linger in the packages directory forever.
+                TryDeleteStalePackage(pending);
                 RecordResult("ignored-non-newer-pending-update", error: null, target: pending, clearFailures: false);
                 return false;
             }
@@ -143,7 +148,9 @@ namespace HDRGammaController.Services
             if (!force && !ShouldCheckNow(out var skipReason))
             {
                 Log.Info($"UpdateService: update check skipped; {skipReason}.");
-                RecordResult(skipReason, error: null, target: null, clearFailures: false);
+                // A throttle skip is not a check outcome: record it separately so it never
+                // overwrites LastResult (the last REAL result) in diagnostics.
+                RecordThrottleSkip(skipReason);
                 return null;
             }
 
@@ -336,6 +343,23 @@ namespace HDRGammaController.Services
         internal static bool IsNewerThanCurrent(UpdateInfo info, SemanticVersion? currentVersion)
             => IsNewerThanCurrent(info.TargetFullRelease, currentVersion, info.IsDowngrade);
 
+        /// <summary>
+        /// True when the feed update targets a strictly newer version than the given version
+        /// label (e.g. the already-scheduled pending update's version). An unparseable or
+        /// missing label counts as "newer" so a feed hit is never dropped by bad state.
+        /// </summary>
+        internal static bool IsNewerThanVersionLabel(UpdateInfo info, string? versionLabel)
+        {
+            var target = info.TargetFullRelease?.Version;
+            if (target == null)
+                return false;
+
+            if (string.IsNullOrWhiteSpace(versionLabel) || !SemanticVersion.TryParse(versionLabel, out var current))
+                return true;
+
+            return target > current;
+        }
+
         internal static bool IsAcceptableRemoteUpdate(UpdateInfo info, SemanticVersion? currentVersion)
         {
             if (!IsNewerThanCurrent(info, currentVersion))
@@ -445,6 +469,39 @@ namespace HDRGammaController.Services
             }
         }
 
+        /// <summary>
+        /// Best-effort delete of a staged package that can never be applied (older-or-equal
+        /// to the running version). Failure is non-fatal: the file is only disk waste.
+        /// </summary>
+        private void TryDeleteStalePackage(VelopackAsset? asset)
+        {
+            try
+            {
+                if (asset == null)
+                    return;
+
+                string? packagePath = _manager.GetLocalPackagePath(asset);
+                if (string.IsNullOrEmpty(packagePath) || !File.Exists(packagePath))
+                    return;
+
+                File.Delete(packagePath);
+                Log.Info($"UpdateService: deleted stale staged package {Path.GetFileName(packagePath)} ({VersionLabel(asset)}).");
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"UpdateService: could not delete stale staged package: {ex.Message}");
+            }
+        }
+
+        private void RecordThrottleSkip(string reason)
+        {
+            lock (_stateLock)
+            {
+                _state.LastSkipReason = reason;
+            }
+            SaveState();
+        }
+
         private void RecordCheckAttempt()
         {
             lock (_stateLock)
@@ -549,6 +606,8 @@ namespace HDRGammaController.Services
         Task DownloadUpdatesAsync(UpdateInfo info);
         void ApplyUpdatesAndRestart(UpdateInfo info);
         void WaitExitThenApplyUpdates(VelopackAsset asset, bool silent, bool restart);
+        /// <summary>Local path the asset's package is staged at, or null when unknown.</summary>
+        string? GetLocalPackagePath(VelopackAsset asset);
     }
 
     internal sealed class VelopackUpdateManagerAdapter : IUpdateManagerAdapter
@@ -569,6 +628,29 @@ namespace HDRGammaController.Services
         public void ApplyUpdatesAndRestart(UpdateInfo info) => _manager.ApplyUpdatesAndRestart(info);
         public void WaitExitThenApplyUpdates(VelopackAsset asset, bool silent, bool restart)
             => _manager.WaitExitThenApplyUpdates(asset, silent, restart);
+
+        public string? GetLocalPackagePath(VelopackAsset asset)
+        {
+            try
+            {
+                // VelopackApp.Run() (and UpdateManager construction) establish the ambient
+                // locator; when it is not set (dev/portable runs) there is nothing staged.
+                if (!VelopackLocator.IsCurrentSet)
+                    return null;
+
+                string? packagesDir = VelopackLocator.Current.PackagesDir;
+                string? fileName = asset.FileName;
+                if (string.IsNullOrEmpty(packagesDir) || string.IsNullOrEmpty(fileName))
+                    return null;
+
+                return Path.Combine(packagesDir, fileName);
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"UpdateService: could not resolve staged package path: {ex.Message}");
+                return null;
+            }
+        }
     }
 
     public sealed class UpdateState
@@ -581,6 +663,8 @@ namespace HDRGammaController.Services
         public DateTimeOffset? LastCheckAttemptUtc { get; set; }
         public DateTimeOffset? LastSuccessfulCheckUtc { get; set; }
         public string? LastResult { get; set; }
+        /// <summary>Last throttle-skip reason. Kept separate so skips never mask LastResult.</summary>
+        public string? LastSkipReason { get; set; }
         public string? LastError { get; set; }
         public string? LastTargetVersion { get; set; }
         public string? LastTargetFileName { get; set; }
@@ -604,6 +688,7 @@ namespace HDRGammaController.Services
             LastCheckAttemptUtc = LastCheckAttemptUtc,
             LastSuccessfulCheckUtc = LastSuccessfulCheckUtc,
             LastResult = LastResult,
+            LastSkipReason = LastSkipReason,
             LastError = LastError,
             LastTargetVersion = LastTargetVersion,
             LastTargetFileName = LastTargetFileName,

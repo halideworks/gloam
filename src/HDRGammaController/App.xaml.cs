@@ -99,10 +99,16 @@ namespace HDRGammaController
 
                 var updateService = _serviceProvider.GetRequiredService<UpdateService>();
                 StartupManager.EnableByDefaultForFreshInstall(themeSettings, updateService.IsInstalled);
+                // Self-heal a stale HKCU Run value (e.g. one still pointing at a legacy
+                // pre-Velopack install) so boot never resurrects an old binary. Installed
+                // builds only: a portable/dev run must not steal the registration.
+                StartupManager.RepairIfStale(updateService.IsInstalled);
 
                 Log.Info("App.OnStartup: Creating MainWindow...");
                 var mainWindow = new MainWindow();
                 Log.Info("App.OnStartup: MainWindow created.");
+
+                WarnIfLegacyInstallPresent(themeSettings);
             }
             catch (Exception ex)
             {
@@ -110,6 +116,46 @@ namespace HDRGammaController
                 // directory was unwritable when installed under Program Files.
                 Log.Error("CRITICAL STARTUP ERROR: " + ex);
                 Shutdown(-1);
+            }
+        }
+
+        // The pre-Velopack v1.0.0 installer put the app here. If that build still exists it
+        // can be resurrected by stale shortcuts/registrations, and its old settings parser
+        // destructively resets settings.json on load failure — so warn until it is removed.
+        private const string LegacyInstallExePath = @"C:\Program Files\HDR-Gamma-Adjust\Gloam.exe";
+
+        /// <summary>
+        /// Detects a lingering legacy (pre-Velopack) install and warns the user once via the
+        /// existing toast mechanism. Deletion is NOT attempted: the legacy install lives
+        /// under Program Files and removing it needs elevation.
+        /// </summary>
+        private void WarnIfLegacyInstallPresent(SettingsManager settings)
+        {
+            try
+            {
+                if (!System.IO.File.Exists(LegacyInstallExePath))
+                    return;
+
+                Log.Error($"App: legacy pre-Velopack install detected at {LegacyInstallExePath}. " +
+                          "It should be uninstalled/removed manually; its old settings parser can corrupt settings.json if launched.");
+
+                if (settings.LegacyInstallWarningShown)
+                    return;
+
+                var toastService = _serviceProvider?.GetService<IToastService>();
+                if (toastService == null)
+                    return;
+
+                toastService.Show(
+                    "Old Gloam install found",
+                    "An outdated Gloam install remains at C:\\Program Files\\HDR-Gamma-Adjust. " +
+                    "Please uninstall or delete it — running it can corrupt Gloam's settings.",
+                    ToastKind.Warning);
+                settings.MarkLegacyInstallWarningShown();
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"App: legacy install check failed: {ex.Message}");
             }
         }
 

@@ -150,22 +150,39 @@ namespace HDRGammaController.ViewModels
                 // Dev (F5) and the portable zip have no Velopack install to update.
                 if (!_updateService.IsInstalled) return;
 
+                bool pendingScheduled = false;
+                string? pendingVersion = null;
                 if (_updateService.TrySchedulePendingUpdateOnExit())
                 {
                     _pendingUpdate = null;
                     _updateScheduled = true;
-                    NotifyUpdateReady(_updateService.StateSnapshot.LastScheduledVersion, null);
-                    return;
+                    pendingScheduled = true;
+                    pendingVersion = _updateService.StateSnapshot.LastScheduledVersion;
+                    NotifyUpdateReady(pendingVersion, null);
+                    // Fall through: still check the feed so a release NEWER than the pending
+                    // package is discovered now (and replaces it) instead of only after the
+                    // pending update has been applied on some future restart.
                 }
 
                 var info = await _updateService.CheckForUpdatesAsync();
                 if (info == null)
                 {
-                    NotifyIfUpdateFailuresPersist();
+                    if (!pendingScheduled)
+                        NotifyIfUpdateFailuresPersist();
                     return; // up to date, throttled, or failed and logged
                 }
 
                 string version = UpdateService.VersionLabel(info);
+                if (pendingScheduled)
+                {
+                    if (!UpdateService.IsNewerThanVersionLabel(info, pendingVersion))
+                    {
+                        Log.Info($"TrayViewModel: feed target {version} does not supersede the already-scheduled {pendingVersion ?? "unknown"}; keeping pending update.");
+                        return;
+                    }
+
+                    Log.Info($"TrayViewModel: feed has {version}, newer than the scheduled {pendingVersion ?? "unknown"}; downloading the newer release.");
+                }
                 NotifyUpdateAvailable(version);
 
                 // Download silently in the background - no prompt, no manual download step.
