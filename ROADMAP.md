@@ -15,10 +15,22 @@ why it matters and the technical shape of the solution.
 
 ## Tier 0 — Trust: prove what we built (before any new features)
 
-**0.1 Hardware validation protocol.** Everything in 1.3.0 is code- and simulation-verified. Run the
-full matrix on real panels (SDR + HDR on both dev monitors, all presets, Refine HDR, per-channel
-ramps, drift comp on a deliberately warm OLED): record before/after reports, archive as golden
-fixtures. Any release from now on ships only after this protocol passes.
+**0.1 Hardware validation protocol.** Everything in 1.3.0/1.4.0 is code- and simulation-verified. Run the
+full matrix on real panels (SDR + HDR on both dev monitors, all presets incl. Adaptive, Refine HDR,
+per-channel ramps, drift comp on a deliberately warm OLED): record before/after reports, archive as
+golden fixtures. Any release from now on ships only after this protocol passes.
+
+*v1.4.0 additions needing a real instrument (the software-only tests cannot exercise these because
+the spotread process is faked):*
+- **Spectrometer capture (1.2):** with `-N` correctly dropped for spectrometers, spotread runs its
+  own white/dark calibration and may pause for a keypress under `ARGYLL_NOT_INTERACTIVE=1` — confirm
+  the i1Pro/ColorMunki calibration handshake completes without hitting the startup timeout. Confirm
+  the real spectral-header wording (the parser accepts steps/bands/samples) and the exact
+  calibration-vs-measurement prompt strings against the bundled Argyll (V3.3.0).
+- **Meter-offset CCMX (1.5):** run a real spectro+colorimeter pair, confirm the generated `.ccmx`
+  measurably improves colorimeter agreement vs. the reference.
+- **Uncertainty (1.3):** sanity-check that reported ± intervals bracket the spread of repeated real
+  calibrations of the same panel.
 
 **0.2 Cross-tool cross-check.** Calibrate a panel with Gloam, verify with DisplayCAL/ArgyllCMS
 (and Calman if available), and vice versa. Publish the comparison — agreement within instrument
@@ -34,9 +46,15 @@ regressions.
 
 ## Tier 1 — Calibration: to instrument-grade
 
-> **Status (v1.4.0):** Tier 1 COMPLETE — all five items implemented and test-verified
-> (985 tests green). Hardware validation with real instruments remains the gate before any
-> public release (see Tier 0). Statuses are updated in place as items land.
+> **Status (v1.4.0):** Tier 1 COMPLETE — all five items implemented, test-verified
+> (1009 tests green), and independently audited for math correctness (three expert reviews:
+> formats/solver, uncertainty/statistics, adaptive/DOE). The audits confirmed the hard parts
+> are correct (CCMX solver direction/scale, genuine leave-one-out, GUM quadrature) and found
+> a set of real defects — all since fixed: the drift-residual term was dropping to zero for
+> compensated runs (interval too narrow); the small-n median SE used the asymptotic factor;
+> the adaptive plateau guard could stop under-target and report success; and the "2.53×"
+> benchmark was circular (withdrawn, rebuilt honestly — see 1.1). Hardware validation with
+> real instruments remains the gate before any public release (see Tier 0).
 
 **1.1 Adaptive patch placement (the DisplayCAL/Argyll OFPS gap).** `[DONE — v1.4.0]` Fixed grids spend samples where
 the display is well-behaved. Instead: fit the display model after an initial coarse pass, compute
