@@ -558,7 +558,51 @@ namespace HDRGammaController.ViewModels
             => _applyService.RequestApply(monitor, mode, manualCalibration, nightKelvinOverride, nightModeSettingsOverride);
 
         private void ApplyAll()
-            => _applyService.ApplyAll(TrayItems.OfType<MonitorViewModel>().Select(vm => vm.Model));
+        {
+            EnsureWindowsNightLightDisabled();
+            _applyService.ApplyAll(TrayItems.OfType<MonitorViewModel>().Select(vm => vm.Model));
+        }
+
+        private DateTime _nightLightGuardLastCheck = DateTime.MinValue;
+        private bool _nightLightToastShown;
+
+        /// <summary>
+        /// Windows Night Light layers its own warm shift through the same pipeline Gloam
+        /// owns, corrupting calibrated output and night-mode colorimetry alike — whether
+        /// or not Gloam's night mode is on. While Gloam manages displays it therefore
+        /// keeps Night Light off (opt out via "AllowWindowsNightLight": true in
+        /// settings.json). Hooked into the apply path so a scheduled evening Night Light
+        /// activation is caught within a minute; the check itself is one registry read,
+        /// throttled to once per 60s.
+        /// </summary>
+        private void EnsureWindowsNightLightDisabled()
+        {
+            try
+            {
+                if (_settingsManager.AllowWindowsNightLight) return;
+
+                var now = DateTime.UtcNow;
+                if (now - _nightLightGuardLastCheck < TimeSpan.FromSeconds(60)) return;
+                _nightLightGuardLastCheck = now;
+
+                if (WindowsNightLight.Detect() != true) return;
+                if (!WindowsNightLight.TryDisable()) return;
+
+                Log.Info("TrayViewModel: Windows Night Light was active; disabled so it cannot stack on Gloam's output.");
+                if (!_nightLightToastShown)
+                {
+                    _nightLightToastShown = true;
+                    _toastService?.Show("Windows Night Light disabled",
+                        "Night Light layers a second colour shift on top of Gloam's calibrated output, " +
+                        "so Gloam has turned it off and manages display colour instead.",
+                        ToastKind.Info);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"TrayViewModel: Night Light guard failed: {ex.Message}");
+            }
+        }
 
         private void PanicAll()
         {

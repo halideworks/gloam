@@ -377,6 +377,17 @@ namespace HDRGammaController.Core
             Save();
         }
 
+        /// <summary>
+        /// When true, Gloam leaves Windows Night Light alone. Default (false): Gloam turns
+        /// Night Light off whenever it's detected active, because it layers a second warm
+        /// shift through the same pipeline Gloam owns and corrupts calibrated output. No UI
+        /// for this escape hatch — set "AllowWindowsNightLight": true in settings.json.
+        /// </summary>
+        public bool AllowWindowsNightLight
+        {
+            get { lock (_dataLock) { return _data.AllowWindowsNightLight; } }
+        }
+
         /// <summary>True once the user has been told about a lingering legacy (pre-Velopack) install.</summary>
         public bool LegacyInstallWarningShown
         {
@@ -1055,6 +1066,7 @@ namespace HDRGammaController.Core
             public bool? DarkTheme { get; set; } = null;
             public bool StartupDefaultApplied { get; set; }
             public bool LegacyInstallWarningShown { get; set; }
+            public bool AllowWindowsNightLight { get; set; }
             public Dictionary<string, WindowBoundsData> WindowBounds { get; set; } = new Dictionary<string, WindowBoundsData>();
         }
 
