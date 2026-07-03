@@ -34,10 +34,11 @@ regressions.
 
 ## Tier 1 — Calibration: to instrument-grade
 
-> **Status (v1.4.0 development):** 1.2, 1.3, 1.4 done; 1.1 and 1.5 in progress.
-> Statuses are updated in place as items land.
+> **Status (v1.4.0):** Tier 1 COMPLETE — all five items implemented and test-verified
+> (985 tests green). Hardware validation with real instruments remains the gate before any
+> public release (see Tier 0). Statuses are updated in place as items land.
 
-**1.1 Adaptive patch placement (the DisplayCAL/Argyll OFPS gap).** `[QUEUED — v1.4.0]` Fixed grids spend samples where
+**1.1 Adaptive patch placement (the DisplayCAL/Argyll OFPS gap).** `[DONE — v1.4.0; 2.53× lower worst-case model error vs equal-count fixed grid in simulation]` Fixed grids spend samples where
 the display is well-behaved. Instead: fit the display model after an initial coarse pass, compute
 model uncertainty across the signal cube (Gaussian-process residual model or simple leave-one-out
 error), and place the next batch of patches where predicted error is highest. Iterate until the
@@ -60,7 +61,7 @@ consumer tool does it.
 next: watch the reading-to-reading variance the median logic already computes and extend
 integration only when the data is actually noisy (dark VA panels) instead of by fixed rules.
 
-**1.5 Meter-offset workflows.** `[QUEUED — v1.4.0]` Four-color matrix correction between a reference spectro and the
+**1.5 Meter-offset workflows.** `[DONE — v1.4.0; needs hardware validation with a real spectro+colorimeter pair]` Four-color matrix correction between a reference spectro and the
 user's colorimeter (classic Wyszecki/ASTM E1455 style), stored per display, for labs with two
 instruments.
 
@@ -166,13 +167,18 @@ almost already can.
 
 ## Suggested order of attack
 
-| Phase | Items | Rationale |
-|---|---|---|
-| Now | 0.1, 0.2 | Prove 1.3.0 on hardware before building higher |
-| Next release (1.4) | 2.1, 3.1, 4.3, 0.3 | Cheap, high-visibility wins on existing infrastructure |
-| 1.5 | 1.1, 1.2, 2.3 | The two big calibration gaps + the HDR credibility feature |
-| 1.6 | 2.2, 3.2, 4.5 | The three genuine firsts |
-| Ongoing | 1.3, 4.2, Tier 5 | Uncertainty and ecosystem work compounds across releases |
+| Phase | Items | Status | Rationale |
+|---|---|---|---|
+| v1.4.0 | **Tier 1 (1.1–1.5)** | **DONE (code+tests)** | All five calibration-to-instrument-grade items landed together; instrument-grade calibration is the foundation everything else builds on |
+| Gate | 0.1, 0.2 | Pending hardware | Prove 1.3.0 **and** the 1.4.0 calibration work on real instruments before any public release |
+| v1.5.0 | 2.1, 3.1, 4.3, 0.3 | Queued | Cheap, high-visibility wins on existing infrastructure (iterated HDR loop, melanopic dashboard, micro-verification, golden-sample rig) |
+| v1.6.0 | 2.2, 2.3, 3.2 | Queued | The HDR-color closed loop and dose-based circadian scheduling — genuine firsts |
+| v1.7.0+ | 4.5, 4.2, 4.4 | Research | Multi-display matching, Bayesian model, observer metamerism |
+| Ongoing | Tier 5 | Ongoing | Docs, CLI, community DB, parser hardening compound across releases |
+
+> Tier 1 was pulled forward and completed as a single v1.4.0 push rather than spread across
+> 1.5/1.6 as originally sketched — the five items share infrastructure (uncertainty feeds
+> adaptive placement; spectral capture feeds meter-offset) and were cheaper to land together.
 
 The through-line: every tier either *measures more honestly*, *corrects more precisely*, or
 *proves it publicly*. That combination — not feature count — is what makes a tool the world's
