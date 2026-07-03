@@ -340,6 +340,31 @@ namespace HDRGammaController.Core
             }
         }
 
+        /// <summary>
+        /// Recomputes the current night-mode state immediately and reschedules the tick.
+        /// Callers should invoke this on resume-from-sleep and on system clock/date changes
+        /// (SystemEvents.TimeChanged): the one-shot timer may have slept through a scheduled
+        /// trigger, and cached sun times may belong to the wrong day — both otherwise leave a
+        /// stale kelvin applied until the next natural tick.
+        /// </summary>
+        // TODO(wire-up): call from TrayViewModel.HandleResume and a SystemEvents.TimeChanged handler.
+        public void Refresh()
+        {
+            double? blend;
+            lock (_stateLock)
+            {
+                if (_disposed) return;
+
+                // The clock or calendar day may have moved underneath us; drop the resolved
+                // schedule so sun times are recomputed for the new "today".
+                _resolvedSchedule = null;
+
+                blend = UpdateStateLocked();
+                ScheduleNextTickLocked();
+            }
+            if (blend.HasValue) BlendChanged?.Invoke(blend.Value);
+        }
+
         private void OnTimerElapsed(object? sender, ElapsedEventArgs e)
         {
             double? blend;
@@ -353,13 +378,31 @@ namespace HDRGammaController.Core
         }
 
         // Tick adaptively while a fade is interpolating and sleep while idle. The cadence
-        // targets at most 1 K per update, so short and long transitions are both smooth.
+        // targets a constant perceptual step per update (see MaxMiredStepPerTick), so short
+        // and long transitions are both smooth.
         private const double MinFadeTickMs = 1000.0 / 60.0;
         private const double MaxFadeTickMs = 500;
         private const double IdleTickMs = 60000;
+
+        // Fades interpolate in mired (reciprocal Kelvin), so tick density must be based on
+        // mired distance too: 6500→6000K spans ~13 mired while 2400→1900K spans ~110 — the
+        // same Kelvin distance, wildly different perceptual distances. 0.05 mired ≈ 1 K near
+        // 4500K, matching the old "≤1 K per update" smoothness target mid-transition.
+        private const double MaxMiredStepPerTick = 0.05;
+
         private bool _inFadeWindow;
         private double _fadeTickMs = MaxFadeTickMs;
         private double _msToNextTrigger = double.MaxValue;
+
+        // Resolved (time-sorted) schedule cache. Resolving a sun-trigger point runs the full
+        // NOAA ephemeris math, and the old code redid it for every point on every tick. The
+        // resolved times only change when the settings object is replaced (UpdateSettings
+        // clones wholesale, so reference identity is a sufficient key) or the calendar day
+        // rolls over. Refresh() also drops it because a clock change moves "today".
+        // Guarded by _stateLock.
+        private List<(TimeSpan Time, NightModeSchedulePoint Point)>? _resolvedSchedule;
+        private NightModeSettings? _resolvedScheduleSettings;
+        private DateTime _resolvedScheduleDate;
 
         /// <summary>Caller must hold <see cref="_stateLock"/>.</summary>
         private void ScheduleNextTickLocked()
@@ -435,17 +478,13 @@ namespace HDRGammaController.Core
             _fadeTickMs = MaxFadeTickMs;
             _msToNextTrigger = double.MaxValue;
 
-            // 1. Resolve all points to absolute TimeSpans for today
+            // 1. Resolve all points to absolute TimeSpans for today (cached per settings
+            // instance and calendar day — sun-trigger resolution is ephemeris math we must
+            // not redo per point per tick).
             var points = _settings.Schedule;
             if (points == null || points.Count == 0) return 6500;
 
-            // Sort points by resolved time
-            var resolvedPoints = new List<(TimeSpan Time, NightModeSchedulePoint Point)>();
-            foreach (var p in points)
-            {
-                resolvedPoints.Add((p.GetTimeOfDay(_settings.Latitude, _settings.Longitude), p));
-            }
-            resolvedPoints.Sort((a, b) => a.Time.CompareTo(b.Time));
+            var resolvedPoints = GetResolvedScheduleLocked(now.Date, points);
 
             // 2. Find the last point that occurred (Time <= Now)
             int currentIndex = -1;
@@ -520,20 +559,68 @@ namespace HDRGammaController.Core
                 double progress = timeSinceTrigger.TotalMinutes / fadeMinutes;
                 progress = Math.Clamp(progress, 0.0, 1.0);
 
-                return (int)(startKelvin + (endKelvin - startKelvin) * progress);
+                return InterpolateKelvinInMired(startKelvin, endKelvin, progress);
             }
 
             // Otherwise we have arrived
             return endKelvin;
         }
 
+        /// <summary>Caller must hold <see cref="_stateLock"/>.</summary>
+        private List<(TimeSpan Time, NightModeSchedulePoint Point)> GetResolvedScheduleLocked(
+            DateTime today, List<NightModeSchedulePoint> points)
+        {
+            if (_resolvedSchedule != null &&
+                ReferenceEquals(_resolvedScheduleSettings, _settings) &&
+                _resolvedScheduleDate == today &&
+                _resolvedSchedule.Count == points.Count)
+            {
+                return _resolvedSchedule;
+            }
+
+            var resolved = new List<(TimeSpan Time, NightModeSchedulePoint Point)>(points.Count);
+            foreach (var p in points)
+            {
+                resolved.Add((p.GetTimeOfDay(_settings.Latitude, _settings.Longitude), p));
+            }
+            resolved.Sort((a, b) => a.Time.CompareTo(b.Time));
+
+            _resolvedSchedule = resolved;
+            _resolvedScheduleSettings = _settings;
+            _resolvedScheduleDate = today;
+            return resolved;
+        }
+
+        /// <summary>
+        /// Interpolates a fade in MIRED space (reciprocal Kelvin). CCT is a reciprocal
+        /// quantity — equal Kelvin steps are perceptually much larger at the warm end — so a
+        /// linear-Kelvin lerp front-loads the perceived change into the cool half of the
+        /// transition. Constant mired rate is the perceptually uniform fade.
+        /// </summary>
+        internal static int InterpolateKelvinInMired(int startKelvin, int endKelvin, double progress)
+        {
+            progress = double.IsFinite(progress) ? Math.Clamp(progress, 0.0, 1.0) : 1.0;
+            if (startKelvin <= 0 || endKelvin <= 0) return endKelvin;
+
+            double startMired = 1e6 / startKelvin;
+            double endMired = 1e6 / endKelvin;
+            double mired = startMired + (endMired - startMired) * progress;
+
+            return mired > 0.0 ? (int)Math.Round(1e6 / mired) : endKelvin;
+        }
+
         internal static double CalculateFadeTickMilliseconds(int startKelvin, int endKelvin, double fadeMinutes)
         {
-            int distance = Math.Abs(endKelvin - startKelvin);
-            if (distance == 0 || fadeMinutes <= 0) return MaxFadeTickMs;
+            if (startKelvin <= 0 || endKelvin <= 0 || fadeMinutes <= 0) return MaxFadeTickMs;
 
-            double millisecondsPerKelvin = fadeMinutes * 60_000.0 / distance;
-            return Math.Clamp(millisecondsPerKelvin, MinFadeTickMs, MaxFadeTickMs);
+            // The fade advances at a constant mired rate (see InterpolateKelvinInMired), so
+            // the tick interval that yields a fixed perceptual step per update is derived
+            // from the mired distance, not the Kelvin distance.
+            double distanceMired = Math.Abs(1e6 / endKelvin - 1e6 / startKelvin);
+            if (distanceMired <= 0) return MaxFadeTickMs;
+
+            double millisecondsPerMired = fadeMinutes * 60_000.0 / distanceMired;
+            return Math.Clamp(millisecondsPerMired * MaxMiredStepPerTick, MinFadeTickMs, MaxFadeTickMs);
         }
 
         /// <summary>

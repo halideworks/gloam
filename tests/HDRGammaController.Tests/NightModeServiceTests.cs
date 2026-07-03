@@ -9,11 +9,25 @@ namespace HDRGammaController.Tests
     public class NightModeServiceTests
     {
         [Fact]
-        public void FadeCadence_DefaultTransition_TargetsOneKelvinSteps()
+        public void FadeCadence_DefaultTransition_TargetsUniformMiredSteps()
         {
+            // 6500K -> 2700K spans 216.52 mired; at 0.05 mired per tick over 30 minutes the
+            // interval is 1,800,000 * 0.05 / 216.52 ≈ 415.7 ms.
             double interval = NightModeService.CalculateFadeTickMilliseconds(6500, 2700, 30);
 
-            Assert.InRange(interval, 473.6, 473.8);
+            Assert.InRange(interval, 415.5, 415.8);
+        }
+
+        [Fact]
+        public void FadeCadence_BasedOnMiredDistance_NotKelvinDistance()
+        {
+            // Equal Kelvin distances, very different perceptual (mired) distances:
+            // 6500->6000K is ~12.8 mired, 2400->1900K is ~109.6 mired. The warm fade needs
+            // proportionally denser ticks.
+            double cool = NightModeService.CalculateFadeTickMilliseconds(6500, 6000, 5);
+            double warm = NightModeService.CalculateFadeTickMilliseconds(2400, 1900, 5);
+
+            Assert.True(warm < cool, $"Warm-end fade should tick faster: warm={warm}, cool={cool}");
         }
 
         [Fact]
@@ -201,6 +215,78 @@ namespace HDRGammaController.Tests
 
             Assert.Equal(ScheduleTriggerType.Sunrise, settings.Schedule[0].TriggerType);
             Assert.Equal(ScheduleTriggerType.Sunset, settings.Schedule[1].TriggerType);
+        }
+
+        [Fact]
+        public void Refresh_RecomputesStaleKelvinImmediately()
+        {
+            // Simulates resume-from-sleep / clock change: the service holds a stale daytime
+            // kelvin while the schedule says night. Both fixed points target 2700K with no
+            // fade, so "night" holds at any wall-clock time the test runs.
+            var settings = new NightModeSettings
+            {
+                Enabled = true,
+                Schedule =
+                {
+                    new NightModeSchedulePoint
+                    {
+                        TriggerType = ScheduleTriggerType.FixedTime,
+                        Time = TimeSpan.Zero,
+                        TargetKelvin = 2700,
+                        FadeMinutes = 0
+                    },
+                    new NightModeSchedulePoint
+                    {
+                        TriggerType = ScheduleTriggerType.FixedTime,
+                        Time = TimeSpan.FromHours(12),
+                        TargetKelvin = 2700,
+                        FadeMinutes = 0
+                    }
+                }
+            };
+
+            using var service = new NightModeService(settings);
+            Assert.Equal(6500, service.CurrentNightKelvin); // stale: never started/ticked
+
+            double? blend = null;
+            service.BlendChanged += b => blend = b;
+
+            service.Refresh();
+
+            Assert.Equal(2700, service.CurrentNightKelvin);
+            Assert.True(service.IsNightModeActive);
+            Assert.Equal(1.0, blend);
+        }
+
+        [Fact]
+        public void MiredInterpolation_Midpoint_IsMiredMidpointNotKelvinMidpoint()
+        {
+            // Mired midpoint of 6500K (153.85 mired) and 2700K (370.37 mired) is 262.11
+            // mired ≈ 3815K — NOT the linear-Kelvin midpoint of 4600K.
+            int midpoint = NightModeService.InterpolateKelvinInMired(6500, 2700, 0.5);
+
+            Assert.InRange(midpoint, 3810, 3820);
+        }
+
+        [Fact]
+        public void MiredInterpolation_Endpoints_AreExact()
+        {
+            Assert.Equal(6500, NightModeService.InterpolateKelvinInMired(6500, 2700, 0.0));
+            Assert.Equal(2700, NightModeService.InterpolateKelvinInMired(6500, 2700, 1.0));
+            Assert.Equal(2700, NightModeService.InterpolateKelvinInMired(2700, 2700, 0.37));
+        }
+
+        [Fact]
+        public void MiredInterpolation_IsMonotonicAndBounded()
+        {
+            int previous = 6500;
+            for (double progress = 0.0; progress <= 1.0; progress += 0.01)
+            {
+                int kelvin = NightModeService.InterpolateKelvinInMired(6500, 2700, progress);
+                Assert.InRange(kelvin, 2700, 6500);
+                Assert.True(kelvin <= previous, $"Not monotonic at progress {progress}: {previous} -> {kelvin}");
+                previous = kelvin;
+            }
         }
 
         [Fact]
