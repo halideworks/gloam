@@ -32,6 +32,22 @@ namespace HDRGammaController.Core.Calibration
         /// <summary>A drift-check black is re-read after this many ordinary patches.</summary>
         internal const int DriftBlackIntervalPatches = 50;
 
+        // ------- Per-channel grayscale-tracking ramps (E4) -------
+        // A shared luminance tone curve + 3×3 matrix cannot correct a LEVEL-DEPENDENT gray
+        // cast (e.g. green running hot only at mid-levels). Single-channel R/G/B ramps
+        // measure each channel's true EOTF so Lut3DGenerator can fit per-channel tone
+        // curves and the install path can ship true per-channel correction LUTs
+        // (VCGT-style: LUT_c = f_c⁻¹ ∘ target).
+
+        /// <summary>
+        /// Signal levels for the single-channel grayscale-tracking ramps. Levels below 0.25
+        /// are deliberately skipped: at low drives a single channel emits so little light
+        /// that colorimeter chroma noise dominates the reading and would corrupt the fit.
+        /// The 1.0 entries collapse onto the existing full-drive primaries during snapping
+        /// dedupe, which is intended — the full-drive primary IS the ramp's top anchor.
+        /// </summary>
+        internal static readonly double[] SingleChannelRampLevels = { 0.25, 0.4, 0.55, 0.7, 0.85, 1.0 };
+
         /// <summary>
         /// Preset calibration configurations.
         /// </summary>
@@ -182,6 +198,11 @@ namespace HDRGammaController.Core.Calibration
             AddPrimariesAtSaturation(patches, ref index, 0.5, target);
             AddPrimariesAtSaturation(patches, ref index, 0.25, target);
 
+            // Single-channel ramps for per-channel grayscale-tracking correction (E4).
+            // Added BEFORE the grid so a colliding grid axis node dedupes in favor of the
+            // named ramp member (dedupe keeps the first occurrence).
+            AddSingleChannelRamps(patches, ref index, target);
+
             // 7x7x7 grid
             AddGrid(patches, ref index, 7, target, skipExisting: true);
 
@@ -215,6 +236,9 @@ namespace HDRGammaController.Core.Calibration
             {
                 AddPrimariesAtSaturation(patches, ref index, sat, target);
             }
+
+            // Single-channel ramps for per-channel grayscale-tracking correction (E4).
+            AddSingleChannelRamps(patches, ref index, target);
 
             // 9x9x9 grid
             AddGrid(patches, ref index, 9, target, skipExisting: true);
@@ -294,6 +318,34 @@ namespace HDRGammaController.Core.Calibration
             patches.Add(CreatePatch($"Cyan {satStr}", new LinearRgb(bg, 1, 1), PatchCategory.Saturated, index++, false, target));
             patches.Add(CreatePatch($"Magenta {satStr}", new LinearRgb(1, bg, 1), PatchCategory.Saturated, index++, false, target));
             patches.Add(CreatePatch($"Yellow {satStr}", new LinearRgb(1, 1, bg), PatchCategory.Saturated, index++, false, target));
+        }
+
+        /// <summary>
+        /// Single-channel R-only/G-only/B-only ramps (E4). Downstream consumers identify
+        /// ramp members by DisplayRgb inspection (exactly one nonzero channel), NOT by
+        /// category, so no validator/report switch needs a new case.
+        ///
+        /// Category choice: sub-full levels are <see cref="PatchCategory.Saturated"/>, not
+        /// Primary. The measurement validator applies a near-black plausibility gate to
+        /// every Primary patch (Y &gt; black + 0.5 cd/m²), which a legitimate Blue-at-25%
+        /// reading (~0.4 nits on a 100-nit panel) would false-fail — tagging ramps Primary
+        /// would make Thorough/Full runs unvalidatable on dim panels. The 1.0 entries
+        /// dedupe onto the existing full-drive PRIMARY patches, so the ramp's top anchor
+        /// keeps Primary's median multi-read (M8) and validator gates.
+        /// </summary>
+        private static void AddSingleChannelRamps(List<ColorPatch> patches, ref int index, CalibrationTarget target)
+        {
+            foreach (double level in SingleChannelRampLevels)
+            {
+                var category = level >= 0.99 ? PatchCategory.Primary : PatchCategory.Saturated;
+                string levelStr = $"{level * 100:F0}%";
+                patches.Add(CreatePatch($"Red Ramp {levelStr}", new LinearRgb(level, 0, 0),
+                    category, index++, false, target));
+                patches.Add(CreatePatch($"Green Ramp {levelStr}", new LinearRgb(0, level, 0),
+                    category, index++, false, target));
+                patches.Add(CreatePatch($"Blue Ramp {levelStr}", new LinearRgb(0, 0, level),
+                    category, index++, false, target));
+            }
         }
 
         private static void AddGrid(List<ColorPatch> patches, ref int index, int size, CalibrationTarget target, bool skipExisting = false)
