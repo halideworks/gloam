@@ -348,5 +348,120 @@ namespace HDRGammaController.Tests
             var result = HdrMhc2LutBuilder.Build(measurements, SdrWhite);
             Assert.False(result.WireExact);
         }
+
+        // ---- Gamut-matrix composition (M5) ---------------------------------------------
+
+        /// <summary>Linear interpolation of the 1024-sample LUT at wire position p.</summary>
+        private static double SampleLut(double[] lut, double p)
+        {
+            double x = Math.Clamp(p, 0.0, 1.0) * (lut.Length - 1);
+            int i = (int)Math.Floor(x);
+            if (i >= lut.Length - 1) return lut[^1];
+            double t = x - i;
+            return lut[i] + (lut[i + 1] - lut[i]) * t;
+        }
+
+        [Fact]
+        public void MatrixScaleOne_IsBitIdentical_ToDefaultBuild()
+        {
+            // Regression guard: composing an identity/absent matrix (s = 1) must not change
+            // a single LUT bit — the division by 1.0 is exact in IEEE arithmetic. Checked on
+            // both measurement sources (wire ladder and SDR-mapped grayscale fallback).
+            const double gain = 0.867;
+            var wire = SimulateWireLadder(p => Math.Max(TransferFunctions.PqEotf(p) * gain, 0.02));
+            var wireBaseline = HdrMhc2LutBuilder.Build(wire, SdrWhite);
+            var wireScaled = HdrMhc2LutBuilder.Build(wire, SdrWhite, matrixNeutralScale: 1.0);
+            Assert.Equal(wireBaseline.LutR, wireScaled.LutR);
+            Assert.Equal(wireBaseline.LutG, wireScaled.LutG);
+            Assert.Equal(wireBaseline.LutB, wireScaled.LutB);
+
+            var gray = SimulatePanel(p => Math.Max(TransferFunctions.PqEotf(p), 0.05));
+            var grayBaseline = HdrMhc2LutBuilder.Build(gray, SdrWhite);
+            var grayScaled = HdrMhc2LutBuilder.Build(gray, SdrWhite, matrixNeutralScale: 1.0);
+            Assert.Equal(grayBaseline.LutR, grayScaled.LutR);
+        }
+
+        [Fact]
+        public void ComposedLut_HitsTargetNits_ThroughScaledMatrix_WhereOldBehaviorMisses()
+        {
+            // The M5 scenario: a panel that renders a flat 86.7% of the PQ spec, calibrated
+            // with a gamut matrix carrying uniform scale s = 0.8. In the DWM pipeline the
+            // matrix runs BEFORE the LUT, so on the neutral axis content at d nits reaches
+            // the LUT at wire position PQ⁻¹(s·d). A LUT built against RAW wire positions
+            // (old behavior) lands the chain at ≈ s·d — a 20% luminance miss; the composed
+            // LUT must land on d.
+            const double gain = 0.867;
+            const double s = 0.8;
+            var measurements = SimulateWireLadder(p => Math.Max(TransferFunctions.PqEotf(p) * gain, 0.02));
+
+            var composed = HdrMhc2LutBuilder.Build(measurements, SdrWhite, matrixNeutralScale: s);
+            var old = HdrMhc2LutBuilder.Build(measurements, SdrWhite);
+            Assert.True(composed.WireExact);
+
+            // Targets on the measured ladder knots (gain × ladder nits) to keep the
+            // piecewise-linear response inversion exact at the probe points. All sit well
+            // below the wire-exact blend window (0.9 × 867-nit measured peak).
+            foreach (double ladderNits in new[] { 16.0, 64.0, 150.0, 320.0, 650.0 })
+            {
+                double target = gain * ladderNits;
+                double wPrime = TransferFunctions.PqInverseEotf(s * target);
+
+                double composedOut = gain * TransferFunctions.PqEotf(SampleLut(composed.LutR, wPrime));
+                double oldOut = gain * TransferFunctions.PqEotf(SampleLut(old.LutR, wPrime));
+
+                Assert.True(Math.Abs(composedOut - target) / target < 0.02,
+                    $"composed chain should hit {target:F1} nits, got {composedOut:F1}");
+                Assert.True(Math.Abs(oldOut - target) / target > 0.15,
+                    $"old behavior should miss {target:F1} nits by ~{1 - s:P0}, got {oldOut:F1}");
+                // Looser tolerance: s·d falls BETWEEN ladder knots, where the piecewise-linear
+                // response inversion carries a few percent of interpolation error (largest at
+                // the sparse low end of the ladder). Still far from the 25% gap up to d.
+                Assert.True(Math.Abs(oldOut - s * target) / (s * target) < 0.08,
+                    $"old behavior lands at s·d = {s * target:F1} nits, got {oldOut:F1}");
+            }
+        }
+
+        [Fact]
+        public void ComposedLut_GoesIdentity_AboveTheReachableRange()
+        {
+            // The corrected branch tops out at the panel's TOP MEASURED wire position (the
+            // inversion clamps there for any unreachable target), and the monotonic cleanup
+            // holds that value through the blend window — same near-peak hold the uncomposed
+            // build has, just anchored at post-matrix positions. Above the top measured wire
+            // position (1000-nit request on this panel) the LUT must be pure identity: the
+            // composition must never "correct" wire signals beyond the measured range.
+            const double gain = 0.867;
+            const double s = 0.8;
+            var measurements = SimulateWireLadder(p => Math.Max(TransferFunctions.PqEotf(p) * gain, 0.02));
+            var composed = HdrMhc2LutBuilder.Build(measurements, SdrWhite, matrixNeutralScale: s);
+
+            double topMeasuredWire = TransferFunctions.PqInverseEotf(1000.0); // top ladder request
+            int identityChecked = 0;
+            for (int i = 1; i < 1024; i++)
+            {
+                double p = i / 1023.0;
+                if (p <= topMeasuredWire + 0.01) continue;
+                Assert.True(Math.Abs(composed.LutR[i] - p) < 0.002,
+                    $"identity expected above the measured wire range at p={p:F3}, got {composed.LutR[i]:F3}");
+                identityChecked++;
+
+                // And monotonic throughout — the hold region must never invert.
+                Assert.True(composed.LutR[i] >= composed.LutR[i - 1], $"LUT not monotonic at {i}");
+            }
+            Assert.True(identityChecked > 100, "test did not cover the identity region");
+        }
+
+        [Theory]
+        [InlineData(0.0)]
+        [InlineData(-0.5)]
+        [InlineData(1.5)]
+        [InlineData(double.NaN)]
+        [InlineData(double.PositiveInfinity)]
+        public void InvalidMatrixScale_Throws(double scale)
+        {
+            var measurements = SimulatePanel(p => Math.Max(TransferFunctions.PqEotf(p), 0.05));
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                HdrMhc2LutBuilder.Build(measurements, SdrWhite, matrixNeutralScale: scale));
+        }
     }
 }

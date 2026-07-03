@@ -207,22 +207,38 @@ namespace HDRGammaController.Core.Calibration
 
             // Tone LUTs are NEUTRAL (identical channels).
             //  SDR: the caller's signal-domain tone LUTs, as-is.
-            //  HDR: PQ wire-signal domain LUTs built from the HDR measurements.
+            //  HDR: PQ wire-signal domain LUTs built from the HDR measurements, COMPOSED with
+            //       the gamut matrix's uniform scale (M5): the DWM applies the scaled matrix
+            //       BEFORE the LUTs, so the wire positions the LUTs actually see are the
+            //       matrix-scaled encodings, not the raw content positions the response was
+            //       measured at. The builder inverts the measured response at the post-matrix
+            //       positions so matrix+LUT together track absolute PQ.
             double[] toneR = lutR, toneG = lutG, toneB = lutB;
             double? headerMinNits = null, headerMaxNits = null;
             bool wireExactLuts = false;
             if (hdrMode)
             {
                 HdrMhc2LutBuilder.Result hdrLuts;
-                try { hdrLuts = HdrMhc2LutBuilder.Build(measurements!, monitor.SdrWhiteLevel); }
+                try { hdrLuts = HdrMhc2LutBuilder.Build(measurements!, monitor.SdrWhiteLevel, uniformScale); }
                 catch (Exception ex) { return new InstallResult(false, "", $"HDR LUT generation failed: {ex.Message}"); }
                 (toneR, toneG, toneB) = (hdrLuts.LutR, hdrLuts.LutG, hdrLuts.LutB);
                 wireExactLuts = hdrLuts.WireExact;
 
-                // MHC2 header range: the panel's DXGI-reported HDR range when available
-                // (matches what the Windows HDR Calibration app writes), else measured.
-                headerMinNits = hdrLuts.MeasuredBlackNits;
-                headerMaxNits = monitor.HdrPeakNits > 50 ? monitor.HdrPeakNits : hdrLuts.MeasuredPeakNits;
+                // MHC2 header range provenance (m7): one policy — MEASURED for BOTH ends
+                // whenever the calibration produced a usable black/peak pair (min from the
+                // black reading, max from the measured peak), so both numbers describe the
+                // same panel the same way. The old mix of measured black + DXGI-advertised
+                // peak gave the header two provenances, and DXGI metadata routinely disagrees
+                // with the measured panel. DXGI peak is the FALLBACK only (defensive — the
+                // builder already validates the measured range before returning).
+                bool measuredRangeValid =
+                    double.IsFinite(hdrLuts.MeasuredBlackNits) && hdrLuts.MeasuredBlackNits >= 0.0 &&
+                    double.IsFinite(hdrLuts.MeasuredPeakNits) &&
+                    hdrLuts.MeasuredPeakNits > hdrLuts.MeasuredBlackNits;
+                headerMinNits = measuredRangeValid ? hdrLuts.MeasuredBlackNits : 0.0;
+                headerMaxNits = measuredRangeValid
+                    ? hdrLuts.MeasuredPeakNits
+                    : (monitor.HdrPeakNits > 50 ? monitor.HdrPeakNits : hdrLuts.MeasuredPeakNits);
             }
 
             // Windows applies the MHC2 matrix sandwiched between fixed sRGB↔XYZ conversions,
@@ -254,9 +270,24 @@ namespace HDRGammaController.Core.Calibration
             {
                 // The internal description is what Windows Color Management displays — without
                 // it the profile shows the template's leftover "SDR ACM: srgb_d50 [...]" text.
+                //
+                // colorimetry (M6): rewrite the template's synthetic sRGB/G2.2 characterization
+                // tags (wtpt/chad/rXYZ/gXYZ/bXYZ/TRC/chrm) with the colorimetry the display
+                // presents once this profile is active, so ICC-aware apps (Photoshop etc.) see
+                // the real display. matrixTarget is exactly that colorimetry: the calibration
+                // target for full-gamut installs, or the panel's MEASURED primaries with the
+                // (matrix-corrected) target white for white-point-only installs.
+                //
+                // lumiPeakNits: SDR installs carry the measured peak in the 'lumi' tag without
+                // touching the MHC2 header range; HDR installs already patch lumi through
+                // maxLuminanceNits (measured peak per the m7 provenance policy above).
                 Mhc2ProfileBuilder.Build(template, srcPath, mhc2Matrix, toneR, toneG, toneB,
                     description: Path.GetFileNameWithoutExtension(profileName),
-                    minLuminanceNits: headerMinNits, maxLuminanceNits: headerMaxNits);
+                    minLuminanceNits: headerMinNits, maxLuminanceNits: headerMaxNits,
+                    colorimetry: matrixTarget,
+                    lumiPeakNits: !hdrMode && characterization.PeakLuminance > 0
+                        ? characterization.PeakLuminance
+                        : null);
 
                 // Copy into the system color store. Returns false if an identical name already
                 // exists — harmless, we re-associate below regardless.
