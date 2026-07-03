@@ -175,8 +175,11 @@ namespace HDRGammaController.Core
                     // 1. Decode the signal with the target gamma into linear light.
                     double linear = Math.Pow(input, targetGamma);
 
-                    // 2. Apply calibration (temp/tint/dimming/gains) in linear space.
-                    var (r, g, b) = ColorAdjustments.ApplyUserAdjustmentsLinear(linear, linear, linear, calibration);
+                    // 2. Apply calibration (temp/tint/dimming/gains) in linear space. The SDR
+                    // wire signal is sRGB/Rec.709, so temperature multipliers are derived in
+                    // the sRGB basis.
+                    var (r, g, b) = ColorAdjustments.ApplyUserAdjustmentsLinear(
+                        linear, linear, linear, calibration, NightBasis.Srgb);
 
                     // 3. Re-encode for the display's native ~2.2 response.
                     lutR[i] = Math.Pow(r, 1.0 / 2.2);
@@ -238,7 +241,12 @@ namespace HDRGammaController.Core
                     double normG = Clamp01(outputG / sdrWhiteLevel);
                     double normB = Clamp01(outputB / sdrWhiteLevel);
 
-                    var (adjR, adjG, adjB) = ColorAdjustments.ApplyUserAdjustmentsLinear(normR, normG, normB, calibration);
+                    // The HDR10 wire signal lives in a Rec.2020 container, and a diagonal
+                    // white-point scale is basis-dependent — the temperature multipliers must
+                    // be derived in the same Rec.2020 basis they are applied in. sRGB-derived
+                    // ratios applied here land off the Planckian locus and under-warm.
+                    var (adjR, adjG, adjB) = ColorAdjustments.ApplyUserAdjustmentsLinear(
+                        normR, normG, normB, calibration, NightBasis.Rec2020);
 
                     // Scale back to nits
                     outputR = adjR * sdrWhiteLevel;
@@ -380,9 +388,9 @@ namespace HDRGammaController.Core
                     // (Input represents the encoded signal, target gamma defines the desired decoding)
                     double targetLinear = Math.Pow(input, targetGamma);
 
-                    // Apply calibration adjustments to the target
+                    // Apply calibration adjustments to the target (SDR wire = sRGB basis)
                     var (adjR, adjG, adjB) = ColorAdjustments.ApplyUserAdjustmentsLinear(
-                        targetLinear, targetLinear, targetLinear, calibration);
+                        targetLinear, targetLinear, targetLinear, calibration, NightBasis.Srgb);
 
                     // What signal must we send to the display to get this output?
                     // Use the INVERSE of the measured response, in the black-subtracted fit domain.
@@ -431,7 +439,9 @@ namespace HDRGammaController.Core
                     double normG = Clamp01(outputG / sdrWhiteLevel);
                     double normB = Clamp01(outputB / sdrWhiteLevel);
 
-                    var (adjR, adjG, adjB) = ColorAdjustments.ApplyUserAdjustmentsLinear(normR, normG, normB, calibration);
+                    // HDR10 wire = Rec.2020 container; see GenerateLutInternal for rationale.
+                    var (adjR, adjG, adjB) = ColorAdjustments.ApplyUserAdjustmentsLinear(
+                        normR, normG, normB, calibration, NightBasis.Rec2020);
 
                     outputR = adjR * sdrWhiteLevel;
                     outputG = adjG * sdrWhiteLevel;

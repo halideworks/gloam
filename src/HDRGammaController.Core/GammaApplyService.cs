@@ -179,8 +179,12 @@ namespace HDRGammaController.Core
 
         internal static void ApplyNightModeToCalibration(CalibrationSettings calibration, int currentKelvin, NightModeSettings nightModeSettings)
         {
+            // Compose the night shift with any user temperature in mired space (reciprocal
+            // Kelvin): summing on the linear (K−6500)/70 scale makes the combined result
+            // over-warm, because the same scale distance is a far larger perceptual step at
+            // the warm end. When the base temperature is 0 this reduces to the plain shift.
             double nightShift = (currentKelvin - 6500) / 70.0;
-            calibration.Temperature += nightShift;
+            calibration.Temperature = ColorAdjustments.ComposeTemperatureScaleMired(calibration.Temperature, nightShift);
             calibration.Algorithm = nightModeSettings.Algorithm;
             calibration.UseUltraWarmMode = nightModeSettings.UseUltraWarmMode;
             calibration.PerceptualStrength = nightModeSettings.PerceptualStrength;

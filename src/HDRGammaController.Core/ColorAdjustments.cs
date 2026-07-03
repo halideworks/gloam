@@ -4,6 +4,23 @@ using HDRGammaController.Core.Calibration;
 namespace HDRGammaController.Core
 {
     /// <summary>
+    /// RGB basis in which colorimetric night-mode multipliers are derived. A diagonal
+    /// (per-channel) white-point scale is basis-dependent: the channel ratios that reach a
+    /// given chromaticity in sRGB primaries land at a different chromaticity when applied
+    /// to a Rec.2020-encoded signal. The multipliers must therefore be derived in the
+    /// primaries of the wire signal they scale — sRGB for the SDR ramp, Rec.2020 for the
+    /// HDR10 (PQ / Rec.2020 container) LUT path.
+    /// </summary>
+    public enum NightBasis
+    {
+        /// <summary>sRGB / Rec.709 primaries — the SDR wire signal.</summary>
+        Srgb,
+
+        /// <summary>Rec.2020 primaries — the HDR10 wire signal container.</summary>
+        Rec2020
+    }
+
+    /// <summary>
     /// Color adjustment functions for temperature, tint, dimming, and RGB corrections.
     /// </summary>
     public static class ColorAdjustments
@@ -81,21 +98,28 @@ namespace HDRGammaController.Core
         /// <summary>
         /// Calculates RGB multipliers for a given color temperature based on the selected algorithm.
         /// </summary>
+        /// <remarks>
+        /// <paramref name="basis"/> selects the wire RGB primaries the colorimetric algorithms
+        /// (Accurate/Perceptual, and the Planckian core of UltraNight) derive their diagonal in.
+        /// Standard and BlueReduction are signal-space heuristics with no colorimetric target,
+        /// so the basis does not apply to their per-channel factors.
+        /// </remarks>
         public static (double R, double G, double B) GetTemperatureMultipliers(
             double temperature,
             NightModeAlgorithm algorithm,
             bool useUltraWarmMode = false,
             double perceptualStrength = DefaultPerceptualStrength,
-            NightMelanopicCoefficients? melanopicCoefficients = null)
+            NightMelanopicCoefficients? melanopicCoefficients = null,
+            NightBasis basis = NightBasis.Srgb)
         {
             int kelvin = TemperatureScaleToKelvin(temperature);
 
             return algorithm switch
             {
-                NightModeAlgorithm.AccurateCIE1931 => GetAccurateMultipliers(kelvin),
+                NightModeAlgorithm.AccurateCIE1931 => GetAccurateMultipliers(kelvin, basis),
                 NightModeAlgorithm.BlueReduction => GetBlueReductionMultipliers(kelvin),
-                NightModeAlgorithm.Perceptual => GetPerceptualMultipliers(kelvin, perceptualStrength),
-                NightModeAlgorithm.UltraNight => GetUltraNightMultipliers(kelvin, melanopicCoefficients),
+                NightModeAlgorithm.Perceptual => GetPerceptualMultipliers(kelvin, perceptualStrength, basis),
+                NightModeAlgorithm.UltraNight => GetUltraNightMultipliers(kelvin, melanopicCoefficients, basis),
                 _ => GetStandardMultipliers(kelvin, useUltraWarmMode)
             };
         }
@@ -110,8 +134,9 @@ namespace HDRGammaController.Core
         public const double DefaultPerceptualStrength = 0.8;
 
         /// <summary>
-        /// Converts the -50..+50 UI temperature scale to Kelvin (−50 = 2700K, 0 = 6500K,
+        /// Converts the -50..+50 UI temperature scale to Kelvin (−50 = 3000K, 0 = 6500K,
         /// +50 = 10000K, 70 K per unit) and clamps to the supported night-mode range.
+        /// Night mode reaches below the slider's nominal −50 (down to 1900K ≈ −65.7).
         /// </summary>
         private static int TemperatureScaleToKelvin(double temperature)
         {
@@ -206,20 +231,35 @@ namespace HDRGammaController.Core
 
         /// <summary>
         /// Physically accurate conversion using CIE 1931 color space (Kang et al. approximation).
-        /// Converts Kelvin -> xy Chromaticity -> XYZ -> sRGB.
-        /// Normalized against a 6500K reference computed through the same path so that, like
-        /// <see cref="GetStandardMultipliers"/>, 6500K returns exactly (1, 1, 1) — and the
-        /// neutral point doesn't shift when the user switches temperature algorithm.
+        /// Converts Kelvin -> xy Chromaticity -> XYZ -> linear RGB in the requested wire basis.
+        /// Normalized against a 6500K reference computed through the same path AND the same
+        /// basis so that, like <see cref="GetStandardMultipliers"/>, 6500K returns exactly
+        /// (1, 1, 1) in every basis — the neutral point doesn't shift when the user switches
+        /// temperature algorithm or when the pipeline switches between SDR and HDR.
         /// Returns LINEAR-light multipliers because the LUT applies temperature after decoding
-        /// to linear light. Returning gamma-encoded sRGB ratios here under-corrects warm/cool
-        /// shifts and mixes transfer-function math into chromatic adaptation.
+        /// to linear light. Returning gamma-encoded ratios here under-corrects warm/cool
+        /// shifts and mixes transfer-function math into the white-point shift.
         /// </summary>
-        public static (double R, double G, double B) GetAccurateMultipliers(int kelvin)
+        /// <remarks>
+        /// This is a von Kries-style diagonal in DISPLAY (wire) RGB primaries, not an LMS-cone
+        /// chromatic adaptation transform: a 1D per-channel gamma ramp can only realize a
+        /// diagonal scale in the wire's own RGB basis, so an LMS-space CAT is not expressible
+        /// here. Because the diagonal is basis-dependent, <paramref name="basis"/> must match
+        /// the primaries of the signal the multipliers will scale (sRGB for the SDR ramp,
+        /// Rec.2020 for the HDR10 LUT path).
+        ///
+        /// Luminance is intentionally uncontrolled: normalizing to the brightest channel
+        /// (rather than preserving Y) means output luminance falls as the chromaticity target
+        /// warms and green/blue are cut. For night use this is desirable — no channel is ever
+        /// pushed above 1.0 (which would clip), and the dimmer warm white further reduces
+        /// melanopic dose.
+        /// </remarks>
+        public static (double R, double G, double B) GetAccurateMultipliers(int kelvin, NightBasis basis = NightBasis.Srgb)
         {
             kelvin = ClampNightModeKelvin(kelvin);
 
-            var target = GetRawKelvinLinearRgb_Accurate(kelvin);
-            var ref6500 = GetRawKelvinLinearRgb_Accurate(6500);
+            var target = GetRawKelvinLinearRgb_Accurate(kelvin, basis);
+            var ref6500 = GetRawKelvinLinearRgb_Accurate(6500, basis);
             if (!IsUsableRgb(target) || !IsUsableRgb(ref6500)) return (1.0, 1.0, 1.0);
 
             // Normalize each to its own max (so the brightest channel = 1), then express the
@@ -238,14 +278,18 @@ namespace HDRGammaController.Core
         /// <summary>
         /// Raw linear RGB values for a Kelvin temperature via the Kang/XYZ path, before
         /// any neutral-point normalization. Factored out so <see cref="GetAccurateMultipliers"/>
-        /// can compute a 6500K reference through the identical pipeline.
+        /// can compute a 6500K reference through the identical pipeline (same basis included —
+        /// mixing bases between target and reference would break the 6500K identity).
         /// </summary>
-        private static (double r, double g, double b) GetRawKelvinLinearRgb_Accurate(int kelvin)
+        private static (double r, double g, double b) GetRawKelvinLinearRgb_Accurate(int kelvin, NightBasis basis)
         {
             kelvin = ClampNightModeKelvin(kelvin);
 
             var xy = ColorMath.CctToChromaticity(kelvin);
-            var rgb = ColorMath.XyzToLinearSrgb(xy.ToXyz(1.0));
+            var xyz = xy.ToXyz(1.0);
+            var rgb = basis == NightBasis.Rec2020
+                ? ColorMath.XyzToLinearRec2020(xyz)
+                : ColorMath.XyzToLinearSrgb(xyz);
 
             // Clip only negative out-of-gamut values. High channels are normalized by
             // GetAccurateMultipliers; clipping them here would change chromaticity before
@@ -283,18 +327,23 @@ namespace HDRGammaController.Core
         /// linear-light per-channel multipliers.
         /// </summary>
         /// <remarks>
-        /// The display correction is a 1D per-channel LUT, so only per-channel transforms reach
-        /// real content faithfully — a full 3×3 chromatic adaptation cannot be baked in. Within
-        /// that constraint the lever that best preserves colour is the *degree* of adaptation:
-        /// a full colorimetric shift crushes blue/green and looks "extremely orange", while a
-        /// partial shift keeps the brightest channel at 1.0 (no clipping / colour cast) and
-        /// retains far more chroma. At 6500K this returns (1, 1, 1); at D = 1 it equals
-        /// <see cref="GetAccurateMultipliers"/>.
+        /// The display correction is a 1D per-channel LUT, so only a diagonal scale in the
+        /// wire's RGB basis reaches real content faithfully — a full 3×3 chromatic adaptation
+        /// (LMS or otherwise) cannot be baked in. Within that constraint the lever that best
+        /// preserves colour is the *degree* of adaptation: a full colorimetric shift crushes
+        /// blue/green and looks "extremely orange", while a partial shift keeps the brightest
+        /// channel at 1.0 (no clipping / colour cast) and retains far more chroma. At 6500K
+        /// this returns (1, 1, 1); at D = 1 it equals <see cref="GetAccurateMultipliers"/>.
+        /// The degree-of-adaptation blend is applied to the multipliers in the wire basis, so
+        /// <paramref name="basis"/> follows the same rule as the accurate path.
         /// </remarks>
-        public static (double R, double G, double B) GetPerceptualMultipliers(int kelvin, double strength = DefaultPerceptualStrength)
+        public static (double R, double G, double B) GetPerceptualMultipliers(
+            int kelvin,
+            double strength = DefaultPerceptualStrength,
+            NightBasis basis = NightBasis.Srgb)
         {
             strength = double.IsFinite(strength) ? Math.Clamp(strength, 0.0, 1.0) : DefaultPerceptualStrength;
-            var (r, g, b) = GetAccurateMultipliers(kelvin);
+            var (r, g, b) = GetAccurateMultipliers(kelvin, basis);
             return (SoftenToNeutral(r, strength), SoftenToNeutral(g, strength), SoftenToNeutral(b, strength));
         }
 
@@ -310,7 +359,8 @@ namespace HDRGammaController.Core
         /// </summary>
         public static (double R, double G, double B) GetUltraNightMultipliers(
             int kelvin,
-            NightMelanopicCoefficients? melanopicCoefficients = null)
+            NightMelanopicCoefficients? melanopicCoefficients = null,
+            NightBasis basis = NightBasis.Srgb)
         {
             kelvin = ClampNightModeKelvin(kelvin);
 
@@ -320,8 +370,10 @@ namespace HDRGammaController.Core
             // blackbody locus. Hand-cutting green below that ratio is what produces a magenta
             // cast; keeping the Planckian green ratio avoids it. Then apply an overall luminance
             // reduction — this is the deepest-evening mode, so a full-brightness amber white is
-            // both uncomfortable and needlessly high melanopic dose.
-            var (ar, ag, ab) = GetAccurateMultipliers(kelvin);
+            // both uncomfortable and needlessly high melanopic dose. The dim/floor/green tuning
+            // below is a signal-space heuristic, but the Planckian core it scales is
+            // basis-dependent and must be derived in the wire basis.
+            var (ar, ag, ab) = GetAccurateMultipliers(kelvin, basis);
 
             double dim = 1.0 - 0.30 * factor;   // → 0.70 at the warm end
             double r = ar * dim;                // ar == 1.0
@@ -448,9 +500,15 @@ namespace HDRGammaController.Core
         /// Applies only user-facing adjustments to linear-light RGB.
         /// Order: Dimming → Temperature → Tint → RGB Gains → RGB Offsets.
         /// </summary>
+        /// <param name="temperatureBasis">
+        /// Wire RGB basis the temperature multipliers are derived in. Must match the container
+        /// of the signal being adjusted: <see cref="NightBasis.Srgb"/> for SDR ramps,
+        /// <see cref="NightBasis.Rec2020"/> for the HDR10 LUT path. See <see cref="NightBasis"/>.
+        /// </param>
         public static (double R, double G, double B) ApplyUserAdjustmentsLinear(
             double r, double g, double b,
-            CalibrationSettings settings)
+            CalibrationSettings settings,
+            NightBasis temperatureBasis = NightBasis.Srgb)
         {
             settings = (settings ?? CalibrationSettings.Default).Sanitized();
             r = double.IsFinite(r) ? Math.Clamp(r, 0.0, 1.0) : 0.0;
@@ -476,7 +534,8 @@ namespace HDRGammaController.Core
                     settings.Algorithm,
                     settings.UseUltraWarmMode,
                     settings.PerceptualStrength,
-                    settings.NightMelanopicCoefficients);
+                    settings.NightMelanopicCoefficients,
+                    temperatureBasis);
                 r *= temp.R;
                 g *= temp.G;
                 b *= temp.B;
@@ -512,12 +571,48 @@ namespace HDRGammaController.Core
         private static double ClampFinite(double value, double min, double max, double fallback) =>
             double.IsFinite(value) ? Math.Clamp(value, min, max) : fallback;
 
-        private static double EffectiveTemperatureScale(CalibrationSettings settings) =>
-            ClampFinite(
-                settings.Temperature + settings.TemperatureOffset,
+        /// <summary>
+        /// Composes two adjustments on the -50..+50 temperature scale in MIRED space
+        /// (reciprocal megakelvin, the perceptually uniform CCT axis) and returns the
+        /// composed value on the same scale, clamped to the supported range.
+        /// </summary>
+        /// <remarks>
+        /// CCT is a reciprocal quantity: summing offsets on the linear (K−6500)/70 scale
+        /// makes the same nominal step a far larger perceptual step at the warm end, so a
+        /// user white trim stacked on a night shift over-warms. Each component is converted
+        /// to its mired offset from the 6500K reference, the offsets are summed, and the sum
+        /// is converted back. A single non-zero component composes to itself exactly, so this
+        /// is behavior-preserving whenever only one adjustment is active. The clamp keeps the
+        /// existing Kelvin bounds (1900K–10000K).
+        /// </remarks>
+        public static double ComposeTemperatureScaleMired(double scaleA, double scaleB)
+        {
+            scaleA = ClampFinite(scaleA, CalibrationSettings.MinimumTemperatureScale, CalibrationSettings.MaximumTemperatureScale, 0.0);
+            scaleB = ClampFinite(scaleB, CalibrationSettings.MinimumTemperatureScale, CalibrationSettings.MaximumTemperatureScale, 0.0);
+
+            // Single-component composition is exact by construction; skip the mired
+            // round-trip so existing single-adjustment behavior is bit-identical.
+            if (scaleA == 0.0 || scaleB == 0.0)
+                return scaleA + scaleB;
+
+            const double referenceMired = 1e6 / 6500.0;
+            double miredA = 1e6 / (6500.0 + scaleA * 70.0);
+            double miredB = 1e6 / (6500.0 + scaleB * 70.0);
+
+            // Both components are clamped to [1900K, 10000K], so the composed mired value
+            // stays strictly positive (worst case ≈ 46 mired at double-maximum cooling).
+            double composedMired = miredA + (miredB - referenceMired);
+            double composedKelvin = 1e6 / composedMired;
+
+            return ClampFinite(
+                (composedKelvin - 6500.0) / 70.0,
                 CalibrationSettings.MinimumTemperatureScale,
                 CalibrationSettings.MaximumTemperatureScale,
                 0.0);
+        }
+
+        private static double EffectiveTemperatureScale(CalibrationSettings settings) =>
+            ComposeTemperatureScaleMired(settings.Temperature, settings.TemperatureOffset);
 
         private static int ClampNightModeKelvin(int kelvin) =>
             Math.Clamp(kelvin, MinimumNightModeKelvin, MaximumNightModeKelvin);
