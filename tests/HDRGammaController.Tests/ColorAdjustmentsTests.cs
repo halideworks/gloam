@@ -1,4 +1,5 @@
 using Xunit;
+using Xunit.Abstractions;
 using HDRGammaController.Core;
 using HDRGammaController.Core.Calibration;
 using System;
@@ -8,6 +9,13 @@ namespace HDRGammaController.Tests
     public class ColorAdjustmentsTests
     {
         private const double Tolerance = 0.001;
+
+        private readonly ITestOutputHelper _output;
+
+        public ColorAdjustmentsTests(ITestOutputHelper output)
+        {
+            _output = output;
+        }
 
         #region Dimming Tests
 
@@ -265,14 +273,132 @@ namespace HDRGammaController.Tests
         [Fact]
         public void GetPerceptualMultipliers_2700K_PreservesMoreBlueThanAccurate()
         {
-            // Partial adaptation eases toward neutral, so blue/green are cut LESS than the full
-            // colorimetric shift — the core "preserve colour" improvement — but still reduced.
+            // Partial adaptation (CAT16 illuminant blend, D < 1) eases toward neutral, so
+            // blue/green are cut LESS than the full colorimetric shift — the core "preserve
+            // colour" improvement — but still reduced.
             var perceptual = ColorAdjustments.GetPerceptualMultipliers(2700);
             var accurate = ColorAdjustments.GetAccurateMultipliers(2700);
 
             Assert.True(perceptual.B > accurate.B, "Perceptual should keep more blue than Accurate");
             Assert.True(perceptual.G > accurate.G, "Perceptual should keep more green than Accurate");
             Assert.True(perceptual.B < 1.0, "Perceptual should still reduce blue below neutral");
+        }
+
+        [Fact]
+        public void GetPerceptualMultipliers_FullStrength_EqualsAccurateExactly()
+        {
+            // Guardrail: D = 1 is complete adaptation, which must collapse to the plain
+            // colorimetric Planckian shift. The CAT16 path round-trips the whites through
+            // M16/M16⁻¹, so agreement is to double precision rather than bit-exact.
+            foreach (int kelvin in new[] { 1667, 2200, 2700, 4000, 5000, 8000, 10000 })
+            {
+                var accurate = ColorAdjustments.GetAccurateMultipliers(kelvin);
+                var perceptual = ColorAdjustments.GetPerceptualMultipliers(kelvin, 1.0);
+
+                Assert.Equal(accurate.R, perceptual.R, 12);
+                Assert.Equal(accurate.G, perceptual.G, 12);
+                Assert.Equal(accurate.B, perceptual.B, 12);
+            }
+        }
+
+        [Fact]
+        public void GetPerceptualMultipliers_ZeroStrength_IsExactNeutral()
+        {
+            // Guardrail: D = 0 is no adaptation at all. Because the target and the 6500K
+            // reference run through the bit-identical CAT16 path, the ratio is exactly 1.
+            foreach (int kelvin in new[] { 1667, 2200, 2700, 5000, 6500, 10000 })
+            {
+                var (r, g, b) = ColorAdjustments.GetPerceptualMultipliers(kelvin, 0.0);
+
+                Assert.Equal(1.0, r, 15);
+                Assert.Equal(1.0, g, 15);
+                Assert.Equal(1.0, b, 15);
+            }
+        }
+
+        [Fact]
+        public void GetPerceptualMultipliers_6500K_IsExactIdentityAtAnyStrength()
+        {
+            // Load-bearing invariant: 6500K must be an exact identity so the neutral point
+            // does not shift when the user switches temperature algorithm. Same-path
+            // reference normalization makes target and reference bit-identical at 6500K.
+            foreach (double strength in new[] { 0.0, 0.3, 0.5, 0.8, 1.0 })
+            {
+                var (r, g, b) = ColorAdjustments.GetPerceptualMultipliers(6500, strength);
+
+                Assert.Equal(1.0, r, 15);
+                Assert.Equal(1.0, g, 15);
+                Assert.Equal(1.0, b, 15);
+            }
+        }
+
+        [Fact]
+        public void GetPerceptualMultipliers_HalfStrength_AchievedWhiteLandsOnCat16BlendLine()
+        {
+            // Guardrail: at intermediate D the achieved white chromaticity must sit ON the
+            // source→target adaptation path in CAT16 cone space (the D-blend point), not on
+            // some display-RGB interpolation of it. Reconstruct the achieved white by pushing
+            // the multipliers back through the same reference normalization and sRGB basis
+            // matrices the algorithm used.
+            const double degree = 0.5;
+            var sourceWhite = ColorMath.CctToChromaticity(6500).ToXyz(1.0);
+            var targetWhite = ColorMath.CctToChromaticity(2700).ToXyz(1.0);
+
+            // The cone-space blend point the model promises (converted back to xy).
+            var expected = ColorMath.Cat16Adapt(sourceWhite, sourceWhite, targetWhite, degree)
+                .ToChromaticity();
+
+            // Reconstruct: multipliers scale the (CAT16-round-tripped) 6500K reference white.
+            var adaptedReference = ColorMath.Cat16Adapt(sourceWhite, sourceWhite, sourceWhite, degree);
+            var refRgb = ColorMath.XyzToLinearSrgb(adaptedReference);
+            double refMax = Math.Max(refRgb.R, Math.Max(refRgb.G, refRgb.B));
+
+            var m = ColorAdjustments.GetPerceptualMultipliers(2700, degree);
+            var achievedRgb = new LinearRgb(
+                m.R * refRgb.R / refMax,
+                m.G * refRgb.G / refMax,
+                m.B * refRgb.B / refMax);
+            var achieved = ColorMath.LinearSrgbToXyz(achievedRgb).ToChromaticity();
+
+            // Observed deviation is ~3.3e-8 xy, entirely from the independently rounded
+            // published sRGB matrices (XyzToSrgbMatrix is not the exact inverse of
+            // SrgbToXyzMatrix); 1e-6 bounds that while catching any real model drift.
+            double deviation = achieved.DistanceTo(expected);
+            _output.WriteLine($"xy deviation from cone-space blend: {deviation:E3}");
+            Assert.True(deviation < 1e-6, $"Achieved white off the CAT16 blend line by {deviation:E3} xy");
+        }
+
+        [Fact]
+        public void GetPerceptualMultipliers_DefaultStrength2700K_DiffersFromLegacyRgbLerp()
+        {
+            // Semantic upgrade guardrail: the perceptual path used to lerp the finished
+            // display-RGB multipliers toward 1.0 (SoftenToNeutral: 1 + D·(m − 1)), i.e.
+            // incomplete von Kries in the display-RGB basis. Modelling the SAME degree of
+            // adaptation in CAT16 sharpened cone space gives a measurably different (and
+            // more principled) answer. Measured at 2700K, D = 0.8:
+            //   legacy RGB lerp : (1.000000, 0.553781, 0.280591)
+            //   CAT16 blend     : (1.000000, 0.508612, 0.207768)
+            //   delta           : (0, −0.045169, −0.072823), max |delta| ≈ 0.0728
+            // (The cone-space blend keeps the intermediate white ON the adaptation path,
+            // which cuts blue/green harder than the RGB-basis lerp at the same D.)
+            var accurate = ColorAdjustments.GetAccurateMultipliers(2700);
+            var legacy = (
+                R: 1.0 + 0.8 * (accurate.R - 1.0),
+                G: 1.0 + 0.8 * (accurate.G - 1.0),
+                B: 1.0 + 0.8 * (accurate.B - 1.0));
+
+            var cat16 = ColorAdjustments.GetPerceptualMultipliers(2700, 0.8);
+
+            double maxDelta = Math.Max(
+                Math.Abs(cat16.R - legacy.R),
+                Math.Max(Math.Abs(cat16.G - legacy.G), Math.Abs(cat16.B - legacy.B)));
+            _output.WriteLine(
+                $"legacy=({legacy.R:F6},{legacy.G:F6},{legacy.B:F6}) " +
+                $"cat16=({cat16.R:F6},{cat16.G:F6},{cat16.B:F6}) maxDelta={maxDelta:F6}");
+
+            Assert.True(maxDelta > 0.03, $"CAT16 model should differ measurably from the RGB lerp, maxDelta={maxDelta:F6}");
+            // And still warmer-than-neutral, ordered R ≥ G ≥ B.
+            Assert.True(cat16.R >= cat16.G && cat16.G >= cat16.B);
         }
 
         [Fact]
@@ -305,7 +431,10 @@ namespace HDRGammaController.Tests
             var strong = ColorAdjustments.GetPerceptualMultipliers(2700, 1.0);
             var weak = ColorAdjustments.GetPerceptualMultipliers(2700, 0.5);
 
-            // Lower strength eases toward neutral (1,1,1): blue/green closer to 1.
+            // Lower strength (degree of adaptation D in the CAT16 illuminant blend) eases the
+            // adapted white back toward the 6500K reference: blue/green closer to 1. The
+            // easing now happens in CAT16 cone space, not as a display-RGB lerp, but the
+            // monotonicity in D is unchanged.
             Assert.True(weak.B > strong.B, "Lower strength keeps more blue");
             Assert.True(weak.G > strong.G, "Lower strength keeps more green");
             // Strength 1.0 equals the full colorimetric (Accurate) shift.

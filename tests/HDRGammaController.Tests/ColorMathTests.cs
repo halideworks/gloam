@@ -305,6 +305,132 @@ namespace HDRGammaController.Tests
 
         #endregion
 
+        #region CAT16 Chromatic Adaptation Tests
+
+        [Fact]
+        public void Cat16Matrix_TimesInverse_IsIdentity()
+        {
+            var product = ColorMath.MultiplyMatrices(ColorMath.Cat16Matrix, ColorMath.Cat16InverseMatrix);
+
+            for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 3; c++)
+                Assert.Equal(r == c ? 1.0 : 0.0, product[r, c], 12);
+        }
+
+        [Fact]
+        public void Cat16Adapt_FullAdaptation_MapsD65WhiteToIlluminantAWhite()
+        {
+            // Known corresponding-colour check: at D = 1 the source white must land exactly
+            // on the destination white (von Kries in CAT16 cone space is exact for whites).
+            var d65 = Chromaticity.D65.ToXyz(1.0);
+            var illuminantA = Chromaticity.IlluminantA.ToXyz(1.0);
+
+            var adapted = ColorMath.Cat16Adapt(d65, d65, illuminantA, 1.0);
+
+            Assert.True(Math.Abs(adapted.X - illuminantA.X) < 1e-9, $"X off by {adapted.X - illuminantA.X:E2}");
+            Assert.True(Math.Abs(adapted.Y - illuminantA.Y) < 1e-9, $"Y off by {adapted.Y - illuminantA.Y:E2}");
+            Assert.True(Math.Abs(adapted.Z - illuminantA.Z) < 1e-9, $"Z off by {adapted.Z - illuminantA.Z:E2}");
+        }
+
+        [Fact]
+        public void Cat16Adapt_ZeroDegree_IsIdentity()
+        {
+            // D = 0 means no adaptation at all: any colour must pass through unchanged
+            // (up to the forward/inverse matrix round trip).
+            var xyz = new CieXyz(0.5, 0.4, 0.3);
+            var d65 = Chromaticity.D65.ToXyz(1.0);
+            var illuminantA = Chromaticity.IlluminantA.ToXyz(1.0);
+
+            var adapted = ColorMath.Cat16Adapt(xyz, d65, illuminantA, 0.0);
+
+            Assert.Equal(xyz.X, adapted.X, 12);
+            Assert.Equal(xyz.Y, adapted.Y, 12);
+            Assert.Equal(xyz.Z, adapted.Z, 12);
+        }
+
+        [Fact]
+        public void Cat16Adapt_FullDegree_MatchesManualFullCat16Transform()
+        {
+            // D = 1 must reproduce the plain (complete) CAT16 corresponding-colour
+            // transform: cone-space von Kries scaling by destWhite_c / sourceWhite_c.
+            var xyz = new CieXyz(0.5, 0.4, 0.3);
+            var d65 = Chromaticity.D65.ToXyz(1.0);
+            var illuminantA = Chromaticity.IlluminantA.ToXyz(1.0);
+
+            double[] srcCone = Multiply(ColorMath.Cat16Matrix, d65.X, d65.Y, d65.Z);
+            double[] dstCone = Multiply(ColorMath.Cat16Matrix, illuminantA.X, illuminantA.Y, illuminantA.Z);
+            double[] inputCone = Multiply(ColorMath.Cat16Matrix, xyz.X, xyz.Y, xyz.Z);
+            double[] expected = Multiply(
+                ColorMath.Cat16InverseMatrix,
+                inputCone[0] * dstCone[0] / srcCone[0],
+                inputCone[1] * dstCone[1] / srcCone[1],
+                inputCone[2] * dstCone[2] / srcCone[2]);
+
+            var adapted = ColorMath.Cat16Adapt(xyz, d65, illuminantA, 1.0);
+
+            Assert.Equal(expected[0], adapted.X, 12);
+            Assert.Equal(expected[1], adapted.Y, 12);
+            Assert.Equal(expected[2], adapted.Z, 12);
+        }
+
+        [Fact]
+        public void Cat16Adapt_IntermediateDegree_AdaptedWhiteIsConeSpaceBlend()
+        {
+            // The illuminant-blend formulation: the source white adapted at degree D must
+            // land exactly on D·destWhite_c + (1−D)·sourceWhite_c in CAT16 cone space.
+            var d65 = Chromaticity.D65.ToXyz(1.0);
+            var illuminantA = Chromaticity.IlluminantA.ToXyz(1.0);
+            const double degree = 0.5;
+
+            var adapted = ColorMath.Cat16Adapt(d65, d65, illuminantA, degree);
+
+            double[] srcCone = Multiply(ColorMath.Cat16Matrix, d65.X, d65.Y, d65.Z);
+            double[] dstCone = Multiply(ColorMath.Cat16Matrix, illuminantA.X, illuminantA.Y, illuminantA.Z);
+            double[] adaptedCone = Multiply(ColorMath.Cat16Matrix, adapted.X, adapted.Y, adapted.Z);
+
+            for (int i = 0; i < 3; i++)
+            {
+                double blend = degree * dstCone[i] + (1.0 - degree) * srcCone[i];
+                Assert.Equal(blend, adaptedCone[i], 12);
+            }
+        }
+
+        [Fact]
+        public void Cat16Adapt_SameWhites_ReturnsOriginalAtAnyDegree()
+        {
+            var xyz = new CieXyz(0.5, 0.4, 0.3);
+            var d65 = Chromaticity.D65.ToXyz(1.0);
+
+            foreach (double degree in new[] { 0.0, 0.3, 0.8, 1.0 })
+            {
+                var adapted = ColorMath.Cat16Adapt(xyz, d65, d65, degree);
+                Assert.Equal(xyz.X, adapted.X, 12);
+                Assert.Equal(xyz.Y, adapted.Y, 12);
+                Assert.Equal(xyz.Z, adapted.Z, 12);
+            }
+        }
+
+        [Fact]
+        public void Cat16Adapt_NonFiniteInputs_ReturnsFiniteSafeValues()
+        {
+            var result = ColorMath.Cat16Adapt(
+                new CieXyz(double.NaN, 0.4, double.PositiveInfinity),
+                new CieXyz(0, double.NaN, 0),
+                new CieXyz(double.PositiveInfinity, 0, 0),
+                double.NaN);
+
+            AssertFinite(result);
+        }
+
+        private static double[] Multiply(double[,] m, double x, double y, double z) => new[]
+        {
+            m[0, 0] * x + m[0, 1] * y + m[0, 2] * z,
+            m[1, 0] * x + m[1, 1] * y + m[1, 2] * z,
+            m[2, 0] * x + m[2, 1] * y + m[2, 2] * z
+        };
+
+        #endregion
+
         #region RGB ↔ XYZ Conversion Tests
 
         [Fact]
