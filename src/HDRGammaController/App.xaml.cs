@@ -79,10 +79,14 @@ namespace HDRGammaController
                 // Re-apply theme when the user flips between Light and Dark in Windows Settings.
                 // If Gloam has a saved theme override, that override remains authoritative.
                 SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
+                // A clock/time-zone change invalidates the night-mode schedule state the
+                // same way a resume does; re-evaluate it for the new "now".
+                SystemEvents.TimeChanged += OnTimeChanged;
                 BrutalistTheme.Changed += ApplyTrayMenuTheme;
                 Exit += (_, _) =>
                 {
                     SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
+                    SystemEvents.TimeChanged -= OnTimeChanged;
                     BrutalistTheme.Changed -= ApplyTrayMenuTheme;
                 };
 
@@ -120,6 +124,33 @@ namespace HDRGammaController
             // these when MainWindow closes; their Dispose methods are idempotent.
             _serviceProvider?.Dispose();
             base.OnExit(e);
+        }
+
+        /// <summary>
+        /// System clock or time-zone change: the night-mode service's cached kelvin and
+        /// next-trigger interval were computed against the old "now" and can be hours
+        /// stale. Re-feeding the persisted settings forces an immediate re-evaluation and
+        /// timer reschedule; if the effective kelvin moved, the service raises
+        /// BlendChanged and TrayViewModel answers with ApplyAll — the same refresh+apply
+        /// path the resume handler uses. SystemEvents raises this on a broadcast thread,
+        /// so marshal to the dispatcher first.
+        /// </summary>
+        private void OnTimeChanged(object? sender, EventArgs e)
+        {
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    var settings = _serviceProvider?.GetService<SettingsManager>();
+                    var nightMode = _serviceProvider?.GetService<NightModeService>();
+                    if (settings != null && nightMode != null)
+                        nightMode.UpdateSettings(settings.NightMode);
+                }
+                catch (Exception ex)
+                {
+                    Log.Error($"App.OnTimeChanged: {ex.Message}");
+                }
+            }));
         }
 
         private void OnUserPreferenceChanged(object? sender, UserPreferenceChangedEventArgs e)

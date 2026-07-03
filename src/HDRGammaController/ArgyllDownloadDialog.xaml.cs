@@ -79,13 +79,22 @@ namespace HDRGammaController
             }
             catch (OperationCanceledException)
             {
-                // User cancelled
-                ShowResult(false, "Download cancelled", "You can try again later from the calibration setup.");
+                // User cancelled via the button, or the window closed mid-download
+                // (OnClosed cancels the CTS). In the latter case the dialog is gone -
+                // there is nothing to show.
+                if (IsVisible)
+                    ShowResult(false, "Download cancelled", "You can try again later from the calibration setup.");
+            }
+            catch (ObjectDisposedException)
+            {
+                // Window closed and disposed the CTS while this continuation was still in
+                // flight; swallow quietly.
             }
             catch (Exception ex)
             {
                 // Download failed
-                ShowResult(false, "Download failed", ex.Message + "\n\nYou can install ArgyllCMS manually from argyllcms.com");
+                if (IsVisible)
+                    ShowResult(false, "Download failed", ex.Message + "\n\nYou can install ArgyllCMS manually from argyllcms.com");
             }
         }
 
@@ -125,6 +134,12 @@ namespace HDRGammaController
 
         protected override void OnClosed(EventArgs e)
         {
+            // Cancel BEFORE disposing: closing the window mid-download (Alt+F4) must stop
+            // the transfer instead of leaving it running headless, and the orphaned
+            // Yes_Click continuation must observe a cancellation rather than touching a
+            // disposed CTS.
+            try { _cts?.Cancel(); }
+            catch (ObjectDisposedException) { /* already torn down */ }
             _cts?.Dispose();
             base.OnClosed(e);
         }

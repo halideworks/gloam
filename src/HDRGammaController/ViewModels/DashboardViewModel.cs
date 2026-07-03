@@ -48,8 +48,15 @@ namespace HDRGammaController.ViewModels
 
         // True while we're persisting _editingNightMode ourselves, so a Refresh triggered by
         // our own SetNightMode (via the BlendChanged round-trip) doesn't clobber the in-flight
-        // edit with a freshly-read snapshot.
+        // edit with a freshly-read snapshot. See SaveEditedNightMode for how the flag is
+        // cleared: the round-trip lands via Dispatcher.BeginInvoke AFTER SaveEditedNightMode
+        // returns, so a plain try/finally reset never actually covered it.
         private bool _savingNightMode;
+
+        // Monotonically increasing save generation. Each SaveEditedNightMode bumps it and
+        // queues a low-priority reset of _savingNightMode; the generation check makes the
+        // reset a no-op if a newer save has started in the meantime.
+        private int _saveGeneration;
 
         // Throttle refresh to avoid excessive UI updates
         private DateTime _lastRefreshTime = DateTime.MinValue;
@@ -105,6 +112,16 @@ namespace HDRGammaController.ViewModels
 
         public event Action? NightRenderingEdited;
 
+        /// <summary>
+        /// Raised when Refresh() replaced <see cref="EditingNightMode"/> with a freshly
+        /// read snapshot (e.g. the header Off/Auto/Manual toggle or a tray change wrote
+        /// settings). The window must re-run ScheduleEditor.Initialize with the new
+        /// instance; otherwise the editor keeps mutating the orphaned old clone and the
+        /// next SaveEditedNightMode persists the new snapshot, silently discarding the
+        /// user's graph edits.
+        /// </summary>
+        public event Action? EditingNightModeReplaced;
+
         public DashboardViewModel(
             MonitorManager monitorManager,
             SettingsManager settingsManager,
@@ -131,7 +148,7 @@ namespace HDRGammaController.ViewModels
             });
             Pause1hCommand = new RelayCommand(() => _nightModeService.PauseUntil(DateTime.Now.AddHours(1)));
             Pause4hCommand = new RelayCommand(() => _nightModeService.PauseUntil(DateTime.Now.AddHours(4)));
-            PauseUntilMorningCommand = new RelayCommand(() => _nightModeService.PauseUntil(DateTime.Today.AddDays(1).AddHours(7))); // 7 AM next day
+            PauseUntilMorningCommand = new RelayCommand(() => _nightModeService.PauseUntil(NextMorning(DateTime.Now)));
             CycleNightModeCommand = new RelayCommand(() => NightModeModeIndex = (NightModeModeIndex + 1) % 3);
             AddExcludedAppCommand = new RelayCommand<AppExclusionItem>(AddExcludedApp);
             RemoveExcludedAppCommand = new RelayCommand<AppExclusionRule>(RemoveExcludedApp);
@@ -236,6 +253,16 @@ namespace HDRGammaController.ViewModels
         {
             // Guard: a Refresh triggered by the BlendChanged round-trip from our own save
             // must not overwrite _editingNightMode mid-persist with a re-read snapshot.
+            //
+            // Mechanism: SetNightMode fires NightModeChanged -> NightModeService.UpdateSettings
+            // -> BlendChanged, whose handler queues ThrottledRefresh via Dispatcher.BeginInvoke
+            // (and the throttled path re-queues at Background priority). Both land AFTER this
+            // method returns, so resetting the flag in a finally block here left the guard
+            // ineffective. Instead, the reset is queued at ContextIdle priority - below the
+            // Normal/Background priorities the round-trip refreshes run at - so it executes
+            // only after those refreshes have drained. The generation check keeps overlapping
+            // saves correct: only the most recent save's reset actually clears the flag.
+            int generation = ++_saveGeneration;
             _savingNightMode = true;
             try
             {
@@ -243,7 +270,19 @@ namespace HDRGammaController.ViewModels
             }
             finally
             {
-                _savingNightMode = false;
+                var dispatcher = Application.Current?.Dispatcher;
+                if (dispatcher == null)
+                {
+                    _savingNightMode = false; // no dispatcher (tests/shutdown): reset inline
+                }
+                else
+                {
+                    dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(() =>
+                    {
+                        if (generation == _saveGeneration)
+                            _savingNightMode = false;
+                    }));
+                }
             }
         }
 
@@ -322,7 +361,12 @@ namespace HDRGammaController.ViewModels
             {
                 var latest = SettingsManager.NightMode;
                 if (!NightModeSettingsEqual(_editingNightMode, latest))
+                {
                     _editingNightMode = latest;
+                    // The schedule editor holds a reference to the old instance; tell the
+                    // window to re-Initialize it or its edits will mutate an orphaned clone.
+                    EditingNightModeReplaced?.Invoke();
+                }
             }
             OnNightModeModeChanged();
             RefreshNightRenderingBindings();
@@ -436,6 +480,19 @@ namespace HDRGammaController.ViewModels
 
         private void SaveExcludedApps()
             => SettingsManager.SetExcludedApps(_appExclusionItem.ExcludedApps.ToList());
+
+        /// <summary>
+        /// The next 7 AM strictly after <paramref name="now"/>: today's 7 AM when it has
+        /// not passed yet (e.g. "pause until morning" clicked at 1 AM), otherwise
+        /// tomorrow's. The old DateTime.Today.AddDays(1) form always targeted tomorrow,
+        /// which paused ~30 hours when clicked after midnight.
+        /// </summary>
+        internal static DateTime NextMorning(DateTime now)
+        {
+            var morning = now.Date.AddHours(7);
+            if (now >= morning) morning = morning.AddDays(1);
+            return morning;
+        }
 
         /// <summary>
         /// Field-wise comparison of two night-mode snapshots. Used by Refresh to decide

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Linq;
 using CommunityToolkit.Mvvm.ComponentModel;
 using HDRGammaController.Core;
@@ -173,9 +174,9 @@ namespace HDRGammaController.ViewModels
         /// </summary>
         public void CommitLocation()
         {
-            if (double.TryParse(LatitudeText, out double lat))
+            if (TryParseCoordinate(LatitudeText, out double lat))
                 Latitude = NightModeSettings.ClampLatitude(lat);
-            if (double.TryParse(LongitudeText, out double lon))
+            if (TryParseCoordinate(LongitudeText, out double lon))
                 Longitude = NightModeSettings.ClampLongitude(lon);
 
             _settings.Latitude = Latitude;
@@ -183,6 +184,20 @@ namespace HDRGammaController.ViewModels
 
             LatitudeText = Latitude.HasValue ? Latitude.Value.ToString("F2") : "";
             LongitudeText = Longitude.HasValue ? Longitude.Value.ToString("F2") : "";
+        }
+
+        /// <summary>
+        /// Culture-tolerant coordinate parsing: invariant first (auto-detect writes "40.67"
+        /// with an invariant dot, which must parse the same on every locale), then the
+        /// user's culture so typed comma-decimal input ("40,67" on fr-FR) still works.
+        /// NumberStyles.Float deliberately excludes AllowThousands: with the default styles
+        /// the invariant pass would read "40,67" as 4067 (comma = group separator) before
+        /// the current-culture pass ever ran, turning it into clamped garbage.
+        /// </summary>
+        internal static bool TryParseCoordinate(string? text, out double value)
+        {
+            return double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value)
+                || double.TryParse(text, NumberStyles.Float, CultureInfo.CurrentCulture, out value);
         }
 
         /// <summary>Rebuilds the row list from the settings, sorted chronologically.</summary>

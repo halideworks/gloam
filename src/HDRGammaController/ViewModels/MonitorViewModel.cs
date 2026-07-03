@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Linq;
+using System.Windows;
 using System.Windows.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -134,11 +136,15 @@ namespace HDRGammaController.ViewModels
              }
              catch (Exception ex)
              {
-                 System.Windows.MessageBox.Show(
-                     $"Failed to apply gamma:\n\n{ex.Message}",
-                     "Gloam - Error",
-                     System.Windows.MessageBoxButton.OK,
-                     System.Windows.MessageBoxImage.Error);
+                 // Themed dialog with a real owner instead of a stock parentless MessageBox,
+                 // which could appear behind other windows or on the wrong monitor (same
+                 // pattern as TrayViewModel.ExportDiagnostics: prefer the active visible
+                 // window, fall back to MainWindow since this VM has no window of its own).
+                 var owner = Application.Current?.Windows
+                     .OfType<Window>()
+                     .FirstOrDefault(w => w.IsActive && w.IsVisible)
+                     ?? Application.Current?.MainWindow;
+                 ConfirmDialog.Info(owner!, "Gloam - Error", $"Failed to apply gamma:\n\n{ex.Message}");
              }
         }
     }
