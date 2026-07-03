@@ -261,6 +261,85 @@ END_DATA
         }
 
         [Fact]
+        public void Preflight_NightLightActive_Warns()
+        {
+            var messages = CalibrationSetupViewModel.BuildPreflightMessages(
+                Monitor(hdrActive: false),
+                StandardTargets.SrgbGamma22,
+                selectedOption: null,
+                DisplayType.LcdLed,
+                detectedDisplayType: null,
+                correction: new CorrectionChoice("Built-in", null),
+                whitePointOnly: false,
+                monitorProfile: null,
+                nightLightActive: true);
+
+            Assert.Contains(messages, m =>
+                m.Severity == "WARN" &&
+                m.Message.Contains("Night Light", StringComparison.OrdinalIgnoreCase));
+        }
+
+        [Fact]
+        public void Preflight_NightLightUnknownOrOff_StaysSilent()
+        {
+            foreach (bool? state in new bool?[] { null, false })
+            {
+                var messages = CalibrationSetupViewModel.BuildPreflightMessages(
+                    Monitor(hdrActive: false),
+                    StandardTargets.SrgbGamma22,
+                    selectedOption: null,
+                    DisplayType.LcdLed,
+                    detectedDisplayType: null,
+                    correction: new CorrectionChoice("Built-in", null),
+                    whitePointOnly: false,
+                    monitorProfile: null,
+                    nightLightActive: state);
+
+                Assert.DoesNotContain(messages, m =>
+                    m.Message.Contains("Night Light", StringComparison.OrdinalIgnoreCase));
+            }
+        }
+
+        [Fact]
+        public void Preflight_SdrAcmActive_WarnsForSdrCalibration()
+        {
+            var messages = CalibrationSetupViewModel.BuildPreflightMessages(
+                Monitor(hdrActive: false),
+                StandardTargets.SrgbGamma22,
+                selectedOption: null,
+                DisplayType.LcdLed,
+                detectedDisplayType: null,
+                correction: new CorrectionChoice("Built-in", null),
+                whitePointOnly: false,
+                monitorProfile: null,
+                sdrAcmActive: true);
+
+            Assert.Contains(messages, m =>
+                m.Severity == "WARN" &&
+                m.Message.Contains("Auto Color Management", StringComparison.OrdinalIgnoreCase));
+        }
+
+        [Fact]
+        public void Preflight_SdrAcm_DoesNotWarnInHdrMode()
+        {
+            // In HDR the Advanced Color pipeline is expected; the ACM warning is only
+            // meaningful for SDR-basis calibrations.
+            var messages = CalibrationSetupViewModel.BuildPreflightMessages(
+                Monitor(hdrActive: true),
+                StandardTargets.Rec709Pq,
+                selectedOption: null,
+                DisplayType.LcdLed,
+                detectedDisplayType: null,
+                correction: new CorrectionChoice("Built-in", null),
+                whitePointOnly: false,
+                monitorProfile: null,
+                sdrAcmActive: true);
+
+            Assert.DoesNotContain(messages, m =>
+                m.Message.Contains("Auto Color Management", StringComparison.OrdinalIgnoreCase));
+        }
+
+        [Fact]
         public void Preflight_HdrTargetWithMissingPeakMetadata_Warns()
         {
             var messages = CalibrationSetupViewModel.BuildPreflightMessages(

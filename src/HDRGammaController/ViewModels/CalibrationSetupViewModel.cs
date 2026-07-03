@@ -620,7 +620,9 @@ namespace HDRGammaController.ViewModels
             DisplayType? detectedDisplayType,
             CorrectionChoice? correction,
             bool whitePointOnly,
-            MonitorProfileData? monitorProfile)
+            MonitorProfileData? monitorProfile,
+            bool? nightLightActive = null,
+            bool? sdrAcmActive = null)
         {
             var items = new List<(string Severity, string Message)>();
 
@@ -629,6 +631,21 @@ namespace HDRGammaController.ViewModels
                 items.Add(("ERROR", "Select a display before starting calibration."));
                 return items;
             }
+
+            // Windows Night Light warms the whole output at the compositor: every reading
+            // through it is corrupted. Detection is heuristic (undocumented registry blob),
+            // so only a confident "on" warns — unknown stays silent.
+            if (nightLightActive == true)
+                items.Add(("WARN", CalibrationInstallPreflight.NightLightWarning));
+
+            // SDR Auto Color Management re-renders SDR through a color pipeline; measuring
+            // through it unknowingly gives the characterization the wrong basis. Only
+            // relevant to SDR-mode calibrations (in HDR the pipeline is expected).
+            if (sdrAcmActive == true && !monitor.IsHdrActive)
+                items.Add(("WARN",
+                    "Windows Auto Color Management (ACM) is active on this display. SDR is being " +
+                    "re-rendered through a color pipeline, so measurements will include ACM's " +
+                    "correction — disable ACM in Windows display settings to calibrate the native panel."));
 
             if (selectedOption != null && !selectedOption.IsEnabled)
                 items.Add(("ERROR", selectedOption.DisabledReason ?? "The selected target is not available for this display state."));
@@ -736,6 +753,13 @@ namespace HDRGammaController.ViewModels
             var selectedOption = Targets.FirstOrDefault(t => t.IsSelected);
             var profile = monitor != null ? _settingsManager?.GetMonitorProfile(monitor.MonitorDevicePath ?? "") : null;
 
+            // Environment detections (registry / DisplayConfig reads). Each returns null
+            // on any failure — "unknown" never blocks or warns.
+            bool? nightLightActive = CalibrationInstallPreflight.DetectNightLightActive();
+            bool? sdrAcmActive = monitor != null
+                ? CalibrationInstallPreflight.DetectSdrAutoColorManagement(monitor.DeviceName, monitor.IsHdrActive)
+                : null;
+
             PreflightItems.Clear();
             foreach (var item in BuildPreflightMessages(
                          monitor,
@@ -745,7 +769,9 @@ namespace HDRGammaController.ViewModels
                          DetectedDisplayType,
                          SelectedCorrection,
                          WhitePointOnly,
-                         profile))
+                         profile,
+                         nightLightActive,
+                         sdrAcmActive))
             {
                 PreflightItems.Add(new CalibrationPreflightItem(item.Severity, item.Message, BrushForSeverity(item.Severity)));
             }

@@ -14,6 +14,7 @@ namespace HDRGammaController.Interop
     {
         private const uint QDC_ONLY_ACTIVE_PATHS = 0x2;
         private const int DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME = 1;
+        private const int DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO = 9;
         private const int DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL = 11;
 
         [StructLayout(LayoutKind.Sequential)]
@@ -75,6 +76,17 @@ namespace HDRGammaController.Interop
         }
 
         [StructLayout(LayoutKind.Sequential)]
+        private struct DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO
+        {
+            public DISPLAYCONFIG_DEVICE_INFO_HEADER header;
+            // Bitfield union: bit0 advancedColorSupported, bit1 advancedColorEnabled,
+            // bit2 wideColorEnforced, bit3 advancedColorForceDisabled.
+            public uint value;
+            public uint colorEncoding;     // DISPLAYCONFIG_COLOR_ENCODING
+            public uint bitsPerColorChannel;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
         private struct DISPLAYCONFIG_SDR_WHITE_LEVEL
         {
             public DISPLAYCONFIG_DEVICE_INFO_HEADER header;
@@ -95,6 +107,9 @@ namespace HDRGammaController.Interop
 
         [DllImport("user32.dll")]
         private static extern int DisplayConfigGetDeviceInfo(ref DISPLAYCONFIG_SDR_WHITE_LEVEL requestPacket);
+
+        [DllImport("user32.dll")]
+        private static extern int DisplayConfigGetDeviceInfo(ref DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO requestPacket);
 
         /// <summary>
         /// Finds the active DisplayConfig path whose GDI source name matches
@@ -143,6 +158,39 @@ namespace HDRGammaController.Interop
                 return true;
             }
             return false;
+        }
+
+        /// <summary>
+        /// Reads the display's Advanced Color state (DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO,
+        /// queried per TARGET like the SDR white level). On Windows 11 22H2+
+        /// advancedColorEnabled is also set when SDR "Auto Color Management" (ACM) is on —
+        /// callers combine it with the display's HDR state to tell the two apart.
+        /// Returns false when the state cannot be determined.
+        /// </summary>
+        public static bool TryGetAdvancedColorInfo(
+            string gdiDeviceName,
+            out bool advancedColorSupported,
+            out bool advancedColorEnabled,
+            out bool advancedColorForceDisabled)
+        {
+            advancedColorSupported = advancedColorEnabled = advancedColorForceDisabled = false;
+            if (!TryGetPathForGdiName(gdiDeviceName, out var adapterId, out _, out uint targetId))
+                return false;
+            var req = new DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO
+            {
+                header = new DISPLAYCONFIG_DEVICE_INFO_HEADER
+                {
+                    type = DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO,
+                    size = Marshal.SizeOf<DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO>(),
+                    adapterId = adapterId,
+                    id = targetId,
+                }
+            };
+            if (DisplayConfigGetDeviceInfo(ref req) != 0) return false;
+            advancedColorSupported = (req.value & 0x1) != 0;
+            advancedColorEnabled = (req.value & 0x2) != 0;
+            advancedColorForceDisabled = (req.value & 0x8) != 0;
+            return true;
         }
 
         /// <summary>
