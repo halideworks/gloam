@@ -95,13 +95,58 @@ namespace HDRGammaController.Tests
         #region Repeatability term
 
         [Fact]
-        public void MultiRead_StandardErrorOfMedianFormula()
+        public void MultiRead_StandardErrorOfMedian_UsesSmallNTable()
         {
-            // spread = d₂(3)·σ with σ = 1 → SE(median) = 1.2533·1/√3.
+            // spread = d₂(3)·σ with σ = 1 → SE(median) = table(3)·σ = 0.6698 (NOT the
+            // asymptotic 1.2533/√3 ≈ 0.7236, which over-estimates at n=3).
             double stdU = UncertaintyBudget.RepeatabilityYStdU(
                 measuredY: 100.0, readingCount: 3, readingSpreadY: D2For3, noiseModel: null);
 
-            Assert.Equal(UncertaintyBudget.MedianEfficiencyFactor / Math.Sqrt(3.0), stdU, 3);
+            Assert.Equal(UncertaintyBudget.MedianStandardErrorFactor(3), stdU, 6);
+            Assert.Equal(0.6698, stdU, 4);
+            Assert.NotEqual(UncertaintyBudget.MedianEfficiencyFactor / Math.Sqrt(3.0), stdU, 3);
+        }
+
+        [Fact]
+        public void MedianStandardErrorFactor_SmallNTableMatchesExactValues()
+        {
+            // Median of 2 IS the mean: SE = σ/√2. The asymptotic form would give +25%.
+            Assert.Equal(1.0 / Math.Sqrt(2.0), UncertaintyBudget.MedianStandardErrorFactor(2), 4);
+            Assert.NotEqual(UncertaintyBudget.MedianEfficiencyFactor / Math.Sqrt(2.0),
+                UncertaintyBudget.MedianStandardErrorFactor(2), 3);
+
+            Assert.Equal(0.6698, UncertaintyBudget.MedianStandardErrorFactor(3), 4);
+            Assert.Equal(0.5834, UncertaintyBudget.MedianStandardErrorFactor(4), 4);
+            Assert.Equal(0.5109, UncertaintyBudget.MedianStandardErrorFactor(5), 4);
+        }
+
+        [Fact]
+        public void MedianStandardErrorFactor_FallsBackToAsymptoticBeyondTable()
+        {
+            // n beyond the table uses the asymptotic √(π/2)/√n.
+            Assert.Equal(UncertaintyBudget.MedianEfficiencyFactor / Math.Sqrt(6.0),
+                UncertaintyBudget.MedianStandardErrorFactor(6), 9);
+            Assert.Equal(UncertaintyBudget.MedianEfficiencyFactor / Math.Sqrt(12.0),
+                UncertaintyBudget.MedianStandardErrorFactor(12), 9);
+        }
+
+        [Fact]
+        public void MedianStandardErrorFactor_GuardsBelowTwo()
+        {
+            Assert.Equal(1.0, UncertaintyBudget.MedianStandardErrorFactor(1), 9);
+            Assert.Equal(1.0, UncertaintyBudget.MedianStandardErrorFactor(0), 9);
+        }
+
+        [Fact]
+        public void MultiRead_TwoReads_UsesSigmaOverRootTwo_NotAsymptotic()
+        {
+            // spread = d₂(2)·σ with σ = 1 → SE(median) = σ/√2, the exact n=2 result.
+            const double d2For2 = 1.128;
+            double stdU = UncertaintyBudget.RepeatabilityYStdU(
+                measuredY: 100.0, readingCount: 2, readingSpreadY: d2For2, noiseModel: null);
+
+            Assert.Equal(1.0 / Math.Sqrt(2.0), stdU, 3);
+            Assert.NotEqual(UncertaintyBudget.MedianEfficiencyFactor / Math.Sqrt(2.0), stdU, 3);
         }
 
         [Fact]
@@ -180,6 +225,38 @@ namespace HDRGammaController.Tests
             Assert.Equal(uncompensated * UncertaintyBudget.DriftResidualFraction, compensated, 9);
             Assert.Equal(0.0, UncertaintyBudget.DriftResidualStdU(null, true), 9);
             Assert.Equal(0.0, UncertaintyBudget.DriftResidualStdU(0.0, true), 9);
+        }
+
+        [Fact]
+        public void CompensatedRunWithOriginalDrift_KeepsNonzeroDriftTermAndWidensInterval()
+        {
+            // Regression for the report bug: a compensated run must carry its PERSISTED
+            // pre-compensation peak drift (4%) into the budget, not a re-analyzed ~0. The
+            // same run reported as zero-drift (what re-analyzing the already-compensated
+            // measurements produced) must yield a strictly narrower k=2 interval.
+            var patches = new List<UncertaintyBudget.PatchTerm>
+            {
+                new("a", 100.0, 0.1, 0.2),
+                new("b", 10.0, 0.1, 0.3),
+            };
+
+            var drifted = UncertaintyBudget.Combine(
+                patches, UncertaintyBudget.InstrumentClass.ColorimeterWithCorrection,
+                peakWhiteDriftFraction: 0.04, driftCompensated: true);
+            var reportedZeroDrift = UncertaintyBudget.Combine(
+                patches, UncertaintyBudget.InstrumentClass.ColorimeterWithCorrection,
+                peakWhiteDriftFraction: null, driftCompensated: true);
+
+            // 4% compensated drift → 22.0·0.25·0.04/√3 ≈ 0.127 std-u: comparable to the
+            // 0.5 instrument term, definitely not droppable.
+            double expectedDrift = UncertaintyBudget.LStarPerRelativeLuminance *
+                                   UncertaintyBudget.DriftResidualFraction * 0.04 / Math.Sqrt(3.0);
+            Assert.Equal(expectedDrift, drifted.DriftStdU, 9);
+            Assert.True(drifted.DriftStdU > 0.1, $"drift term {drifted.DriftStdU} should be material");
+
+            Assert.Equal(0.0, reportedZeroDrift.DriftStdU, 9);
+            Assert.True(drifted.ExpandedU > reportedZeroDrift.ExpandedU,
+                $"drifted k=2 interval {drifted.ExpandedU} should exceed zero-drift {reportedZeroDrift.ExpandedU}");
         }
 
         #endregion

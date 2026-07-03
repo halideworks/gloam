@@ -146,8 +146,9 @@ namespace HDRGammaController.Core.Calibration
     /// Three terms are combined for average-ΔE-class metrics:
     /// <list type="bullet">
     /// <item><b>Repeatability</b> — from each patch's recorded read spread (standard error
-    /// of the median ≈ 1.2533·σ/√n; σ recovered from the max−min range via the standard
-    /// d₂ range factors). Single-read patches inherit the relative-spread estimate of
+    /// of the median via an exact small-n SE(median)/σ table, falling back to the
+    /// asymptotic 1.2533·σ/√n only beyond n=5; σ recovered from the max−min range via the
+    /// standard d₂ range factors). Single-read patches inherit the relative-spread estimate of
     /// their luminance decade from <see cref="LuminanceNoiseModel"/>. Per-patch Y noise
     /// is propagated to ΔE by a numeric two-point sensitivity (ΔE evaluated at Y±σ), not
     /// calculus. Patch noise is treated as independent, so the term on the AVERAGE ΔE is
@@ -240,10 +241,44 @@ namespace HDRGammaController.Core.Calibration
         public const double CoverageFactorK = 2.0;
 
         /// <summary>
-        /// Statistical efficiency penalty of the median vs the mean for normal noise:
-        /// SE(median) ≈ 1.2533·σ/√n (= √(π/2)).
+        /// ASYMPTOTIC statistical efficiency penalty of the median vs the mean for normal
+        /// noise: SE(median) → 1.2533·σ/√n (= √(π/2)·σ/√n) as n→∞. Only used as the
+        /// large-n fallback of <see cref="MedianStandardErrorFactor"/>; at the small read
+        /// counts this budget actually sees (n=2–5) it over-estimates by ~8–15% and is
+        /// flatly wrong at n=2, so the exact small-n table below is used instead.
         /// </summary>
         public const double MedianEfficiencyFactor = 1.2533;
+
+        /// <summary>
+        /// Exact/near-exact SE(median)/σ for the SAMPLE MEDIAN of n i.i.d. normal reads,
+        /// indexed by n. Unlike the asymptotic <see cref="MedianEfficiencyFactor"/>/√n
+        /// this is the standard deviation of the median directly (already ÷√n-equivalent),
+        /// so callers multiply it by σ, NOT by σ/√n.
+        /// <list type="bullet">
+        /// <item>n=2 → 1/√2 ≈ 0.7071: the "median" of two reads IS their mean, Var=σ²/2.
+        /// The asymptotic form would wrongly give 1.2533/√2 ≈ 0.886 (+25%).</item>
+        /// <item>n=3 → 0.6698, n=4 → 0.5834, n=5 → 0.5109: standard-deviation of the
+        /// sample median of n standard normals — the variance of the middle order
+        /// statistic for odd n, of the mean of the two middle order statistics for even n
+        /// (David &amp; Nagaraja, <i>Order Statistics</i>, 3e, normal order-statistic
+        /// moment tables). The asymptotic 1.2533/√n over-estimates these by ~8–15%.</item>
+        /// </list>
+        /// Index 0/1 are placeholders; n&lt;2 is guarded in <see cref="MedianStandardErrorFactor"/>.
+        /// </summary>
+        private static readonly double[] MedianSeOverSigma = { 0, 1.0, 0.7071, 0.6698, 0.5834, 0.5109 };
+
+        /// <summary>
+        /// SE(median)/σ for a burst of <paramref name="readingCount"/> reads: the exact
+        /// small-n table for n=2–5, the asymptotic √(π/2)/√n beyond it, and 1.0 (σ) for a
+        /// guarded single read (n&lt;2). Multiply the result by σ to get the standard error
+        /// of the reported median.
+        /// </summary>
+        public static double MedianStandardErrorFactor(int readingCount)
+        {
+            if (readingCount < 2) return 1.0;
+            if (readingCount < MedianSeOverSigma.Length) return MedianSeOverSigma[readingCount];
+            return MedianEfficiencyFactor / Math.Sqrt(readingCount);
+        }
 
         /// <summary>
         /// d₂ range-to-sigma factors: E[max−min] = d₂(n)·σ for n normal samples.
@@ -284,7 +319,8 @@ namespace HDRGammaController.Core.Calibration
         /// <summary>
         /// Standard uncertainty of a patch's reported Y (cd/m²) from measurement
         /// repeatability. Multi-read patches use their own recorded spread: σ from the
-        /// range via d₂, then the standard error of the median 1.2533·σ/√n. Single-read
+        /// range via d₂, then the standard error of the median via the small-n
+        /// SE(median)/σ table (<see cref="MedianStandardErrorFactor"/>). Single-read
         /// patches inherit their luminance decade's relative-spread estimate from the
         /// noise model (converted to σ with d₂(3), the burst size that fed the model);
         /// with no model data the term is 0 — the budget then honestly collapses to the
@@ -299,7 +335,7 @@ namespace HDRGammaController.Core.Calibration
             if (readingCount > 1 && readingSpreadY is double spread)
             {
                 double sigma = RangeToSigma(spread, readingCount);
-                return MedianEfficiencyFactor * sigma / Math.Sqrt(readingCount);
+                return MedianStandardErrorFactor(readingCount) * sigma;
             }
 
             double? relativeSpread = noiseModel?.RelativeSpreadEstimate(measuredY);

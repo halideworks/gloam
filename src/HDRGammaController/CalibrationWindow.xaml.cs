@@ -1721,7 +1721,12 @@ namespace HDRGammaController
             // Open the report window
             var reportWindow = new CalibrationReportWindow(
                 profile, _calibrationMetrics, _displayCharacterization, _generatedLut,
-                _calibrationResult?.Measurements);
+                _calibrationResult?.Measurements,
+                // Persisted pre-compensation drift so the uncertainty budget can honestly
+                // size the drift-residual term (the measurements above are already
+                // drift-normalized, so the report can no longer recover this itself).
+                _calibrationResult?.PeakWhiteDriftFraction,
+                _calibrationResult?.DriftCompensationApplied ?? false);
 
             // Pre-check "Detailed verification" so the auto-verify on load (AutoApplyOnLoad)
             // runs the extended sweep the user asked for on the finalize screen.

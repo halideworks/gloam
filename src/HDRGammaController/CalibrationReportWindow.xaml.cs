@@ -27,6 +27,15 @@ namespace HDRGammaController
         private readonly DisplayCharacterization? _characterization;
         private readonly Lut3D? _correctionLut;
         private readonly IReadOnlyList<MeasurementResult>? _measurements;
+
+        // Persisted drift observation from the calibration run (CalibrationResult), captured
+        // BEFORE the orchestrator drift-normalized _measurements. The uncertainty budget must
+        // use this pre-compensation peak drift: re-analyzing the (already compensated)
+        // _measurements sees ~zero residual and would silently drop the drift-residual term.
+        // Null when unknown (historical report re-opened from a saved profile).
+        private readonly double? _peakWhiteDriftFraction;
+        private readonly bool _driftCompensationApplied;
+
         private IReadOnlyList<MeasurementResult>? _verifyMeasurements;
         private System.Threading.CancellationTokenSource? _verifyCts;
 
@@ -167,7 +176,9 @@ namespace HDRGammaController
             CalibrationMetrics? metrics = null,
             DisplayCharacterization? characterization = null,
             Lut3D? correctionLut = null,
-            IReadOnlyList<MeasurementResult>? measurements = null)
+            IReadOnlyList<MeasurementResult>? measurements = null,
+            double? peakWhiteDriftFraction = null,
+            bool driftCompensationApplied = false)
         {
             InitializeComponent();
             DataContext = Vm;
@@ -185,6 +196,8 @@ namespace HDRGammaController
             _activeCharacterization = characterization;
             _correctionLut = correctionLut;
             _measurements = measurements;
+            _peakWhiteDriftFraction = peakWhiteDriftFraction;
+            _driftCompensationApplied = driftCompensationApplied;
             _isHistorical = metrics == null && measurements == null;
 
             PopulateReport();
@@ -386,18 +399,33 @@ namespace HDRGammaController
             {
                 var noiseModel = LuminanceNoiseModel.FromMeasurements(_measurements);
 
-                // Drift term: re-analyze the stored measurements. If the orchestrator
-                // already compensated them, the re-analysis sees ~zero residual drift
-                // (correct: compensation ran); if drift was observed but NOT correctable,
-                // the full drift fraction lands in the budget.
-                var drift = DriftCompensator.Compensate(_measurements);
+                // Drift term: prefer the run's PERSISTED pre-compensation peak drift
+                // (CalibrationResult.PeakWhiteDriftFraction). _measurements have ALREADY been
+                // drift-normalized by the orchestrator, so re-analyzing them here is
+                // idempotent-to-zero and would silently drop the drift-residual term for
+                // every compensated run. Fall back to re-analysis only when the persisted
+                // fraction is unavailable (e.g. a historical report re-opened from a saved
+                // profile) — there the measurements are whatever the profile carried.
+                double? peakDrift;
+                bool driftApplied;
+                if (_peakWhiteDriftFraction is double persistedPeak)
+                {
+                    peakDrift = persistedPeak;
+                    driftApplied = _driftCompensationApplied;
+                }
+                else
+                {
+                    var drift = DriftCompensator.Compensate(_measurements);
+                    peakDrift = drift.MaxWhiteDriftFraction;
+                    driftApplied = drift.Applied;
+                }
 
                 bool hasCorrection = !string.IsNullOrEmpty(_applyContext?.SettingsManager?
                     .GetMonitorProfile(_applyContext.Monitor.MonitorDevicePath)?.MeterCorrectionPath);
                 var instrument = UncertaintyBudget.ClassifyInstrument(_profile?.ColorimeterModel, hasCorrection);
 
                 var context = new UncertaintyBudget.Context(
-                    instrument, noiseModel, drift.MaxWhiteDriftFraction, drift.Applied);
+                    instrument, noiseModel, peakDrift, driftApplied);
                 CalibrationVerifier.ComputeMetrics(gradedMeasurements, target, context, out var uncertainty);
                 return uncertainty;
             }
