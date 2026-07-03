@@ -1,3 +1,7 @@
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 using HDRGammaController.Core.Calibration;
 using Xunit;
 
@@ -5,6 +9,142 @@ namespace HDRGammaController.Tests
 {
     public class SpotreadSessionTests
     {
+        /// <summary>
+        /// Fake-process harness: builds a session wired to in-memory hooks instead of a
+        /// real spotread.exe. Output lines are injected with SimulateOutputLine.
+        /// </summary>
+        private static SpotreadSession CreateFakeSession(
+            out List<string> log, out List<string> written, Action? onKill = null)
+        {
+            var logLines = new List<string>();
+            var writes = new List<string>();
+            var session = new SpotreadSession(
+                text => { lock (writes) writes.Add(text); return Task.CompletedTask; },
+                onKill ?? (() => { }),
+                line => { lock (logLines) logLines.Add(line); });
+            log = logLines;
+            written = writes;
+            return session;
+        }
+
+        [Fact]
+        public async Task MeasureAsync_XyzLineArrives_ReturnsParsedResult()
+        {
+            var session = CreateFakeSession(out _, out var written);
+
+            var task = session.MeasureAsync(CancellationToken.None);
+            Assert.Contains(" \r\n", written); // trigger was sent
+            session.SimulateOutputLine(" Result is XYZ: 95.047 100.000 108.883, D50 Lab: 100 0 0");
+
+            var xyz = await task;
+            Assert.Equal(100.0, xyz.Y, 6);
+            Assert.Equal(95.047, xyz.X, 6);
+            Assert.False(session.IsPoisoned);
+        }
+
+        [Fact]
+        public async Task MeasureAsync_Timeout_PoisonsSessionAndKillsProcess()
+        {
+            bool killed = false;
+            var session = CreateFakeSession(out _, out _, () => killed = true);
+            session.MeasureTimeout = TimeSpan.FromMilliseconds(50);
+
+            await Assert.ThrowsAsync<TimeoutException>(
+                () => session.MeasureAsync(CancellationToken.None));
+
+            Assert.True(session.IsPoisoned);
+            Assert.True(killed);
+        }
+
+        [Fact]
+        public async Task MeasureAsync_LateXyzAfterTimeout_IsNotAttributedToNextMeasurement()
+        {
+            // C1: the timed-out trigger's XYZ line eventually arrives. It must NOT complete
+            // the next measurement (off-by-one stale attribution); the poisoned session
+            // refuses to measure until restarted.
+            var session = CreateFakeSession(out var log, out _);
+            session.MeasureTimeout = TimeSpan.FromMilliseconds(50);
+
+            await Assert.ThrowsAsync<TimeoutException>(
+                () => session.MeasureAsync(CancellationToken.None));
+
+            // Late arrival from the timed-out trigger:
+            session.SimulateOutputLine("Result is XYZ: 10.0 20.0 30.0");
+            Assert.Contains(log, l => l.Contains("stale", StringComparison.OrdinalIgnoreCase));
+
+            // The next measurement must not consume the stale value.
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => session.MeasureAsync(CancellationToken.None));
+            Assert.Contains("poisoned", ex.Message, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void StaleXyzLine_WithNoPendingMeasurement_IsIgnoredAndLogged()
+        {
+            var session = CreateFakeSession(out var log, out _);
+
+            session.SimulateOutputLine("Result is XYZ: 1.0 2.0 3.0");
+
+            Assert.Contains(log, l => l.Contains("stale", StringComparison.OrdinalIgnoreCase));
+            Assert.Null(session.FatalErrorForTest);
+            Assert.False(session.IsPoisoned);
+        }
+
+        [Fact]
+        public async Task MeasureAsync_UserCancellation_DoesNotPoisonSession()
+        {
+            var session = CreateFakeSession(out _, out _);
+            using var cts = new CancellationTokenSource();
+            var task = session.MeasureAsync(cts.Token);
+            cts.Cancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => task);
+            Assert.False(session.IsPoisoned);
+        }
+
+        [Fact]
+        public void FatalMatching_MidLineErrorMention_IsNotFatal()
+        {
+            // m11: instrument-info lines that merely CONTAIN an error token must not
+            // abort the run.
+            var session = CreateFakeSession(out _, out _);
+
+            session.SimulateOutputLine("Instrument info: supports error compensation and error- style diagnostics");
+            session.SimulateOutputLine("Serial number ERROR-42-B (hardware revision)");
+
+            Assert.Null(session.FatalErrorForTest);
+        }
+
+        [Fact]
+        public void FatalMatching_ErrorAtLineStart_IsFatal()
+        {
+            var session = CreateFakeSession(out _, out _);
+
+            session.SimulateOutputLine("Error - Opening the USB port failed");
+
+            Assert.NotNull(session.FatalErrorForTest);
+        }
+
+        [Fact]
+        public void FatalMatching_SpotreadPrefixedError_IsFatal()
+        {
+            var session = CreateFakeSession(out _, out _);
+
+            session.SimulateOutputLine("spotread: Error - Communications failure with the instrument");
+
+            Assert.NotNull(session.FatalErrorForTest);
+        }
+
+        [Fact]
+        public void FatalMatching_SpecificFragments_RemainFatalAnywhereInLine()
+        {
+            var session = CreateFakeSession(out _, out _);
+
+            session.SimulateOutputLine("diagnostic: instrument did not respond to init");
+
+            Assert.NotNull(session.FatalErrorForTest);
+        }
+
         [Fact]
         public void TryAcceptMeasuredXyz_FiniteNonNegativePhysicalSample_Passes()
         {

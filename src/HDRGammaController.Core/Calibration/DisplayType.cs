@@ -36,6 +36,18 @@ namespace HDRGammaController.Core.Calibration
         /// <summary>
         /// Gets the ArgyllCMS spotread -y flag value for this display type.
         /// </summary>
+        /// <remarks>
+        /// CAVEAT: these letter codes are NOT a stable ArgyllCMS contract. The -y table is
+        /// generated per instrument and per Argyll version — spotread prints the letters
+        /// that are valid for the CONNECTED probe in its usage output, and the same letter
+        /// can mean different things for different instruments (or be absent entirely).
+        /// The mapping below matches Argyll V2.2+ with an i1 Display Pro/Plus class
+        /// colorimeter, which is the hardware this app targets. Parsing the actual -y
+        /// table from `spotread -?` output for the connected instrument is future work;
+        /// until then, an unknown letter degrades to a wrong generic correction rather
+        /// than a hard failure (spotread reports "unrecognised" and exits, which surfaces
+        /// through the session's fatal-error path).
+        /// </remarks>
         public static string ToSpotreadFlag(this DisplayType type) => type switch
         {
             DisplayType.LcdLed => "e",      // LCD with white LED backlight

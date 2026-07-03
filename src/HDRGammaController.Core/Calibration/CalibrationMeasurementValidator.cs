@@ -178,8 +178,16 @@ namespace HDRGammaController.Core.Calibration
                 }
             }
 
+            // Repeated-white drift gate. Includes the DriftCheck anchors PatchSetGenerator
+            // interleaves into Thorough/Full runs — those make this check genuinely live
+            // (most sets otherwise contain a single white). Note the interaction with
+            // DriftCompensator: drift WITHIN its correctable range (≤8%) is normalized
+            // away before validation, which is intended — the run was measurably corrected.
+            // Drift ABOVE the range is deliberately left raw so this gate fails the run.
+            // Chromaticity drift is never masked (compensation is a pure luminance scale).
             var whites = valid
-                .Where(m => m.Patch.Category == PatchCategory.Grayscale &&
+                .Where(m => (m.Patch.Category == PatchCategory.Grayscale ||
+                             m.Patch.Category == PatchCategory.DriftCheck) &&
                             m.Patch.DisplayRgb.R >= 0.99 &&
                             m.Patch.DisplayRgb.G >= 0.99 &&
                             m.Patch.DisplayRgb.B >= 0.99)
@@ -197,6 +205,30 @@ namespace HDRGammaController.Core.Calibration
                     if (first.DistanceTo(w.Chromaticity) > 0.01)
                         return Result.Fail("Repeated white patches changed chromaticity noticeably during the run.");
                 }
+            }
+
+            // Repeated-black drift gate (DriftCheck black re-reads). Black drift is
+            // additive (ambient light creeping in, local dimming state changes, panel
+            // glow) and cannot be corrected multiplicatively, so it is only gated.
+            // Threshold is deliberately loose — black readings are meter-noise dominated —
+            // and catches only genuinely broken setups (light leaking onto the probe).
+            var blacks = valid
+                .Where(m => (m.Patch.Category == PatchCategory.Grayscale ||
+                             m.Patch.Category == PatchCategory.DriftCheck) &&
+                            m.Patch.DisplayRgb.R <= 0.01 &&
+                            m.Patch.DisplayRgb.G <= 0.01 &&
+                            m.Patch.DisplayRgb.B <= 0.01)
+                .ToList();
+            if (blacks.Count > 1)
+            {
+                double minBlackY = blacks.Min(m => m.Xyz.Y);
+                double maxBlackY = blacks.Max(m => m.Xyz.Y);
+                double blackDriftTolerance = Math.Max(0.5, peak * 0.01);
+                if (maxBlackY - minBlackY > blackDriftTolerance)
+                    return Result.Fail(
+                        $"Repeated black patches drifted by {maxBlackY - minBlackY:F2} cd/m² " +
+                        $"({minBlackY:F3}-{maxBlackY:F3} cd/m²) during the run — ambient light or a dynamic " +
+                        "dimming feature is contaminating the dark readings.");
             }
 
             var grayscale = valid

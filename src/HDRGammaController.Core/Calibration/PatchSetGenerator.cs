@@ -20,6 +20,18 @@ namespace HDRGammaController.Core.Calibration
     /// </remarks>
     public class PatchSetGenerator
     {
+        // ------- Drift-anchor scheduling (M7) -------
+        // Long runs on OLED/ABL-prone panels drift in luminance as the panel heats and the
+        // average picture level wanders. Periodic re-reads of white and black provide the
+        // time series DriftCompensator fits its multiplicative correction from, and give
+        // the measurement validator real repeated-white data to gate on.
+
+        /// <summary>A drift-check white is re-read after this many ordinary patches.</summary>
+        internal const int DriftWhiteIntervalPatches = 25;
+
+        /// <summary>A drift-check black is re-read after this many ordinary patches.</summary>
+        internal const int DriftBlackIntervalPatches = 50;
+
         /// <summary>
         /// Preset calibration configurations.
         /// </summary>
@@ -89,8 +101,9 @@ namespace HDRGammaController.Core.Calibration
             // 3D grid
             AddGrid(patches, ref index, gridSize, target);
 
-            // Optimize ordering for minimal settling time
-            return OptimizePatchOrder(patches);
+            // Optimize ordering for minimal settling time. No drift anchors for custom
+            // sets: callers control the patch budget explicitly.
+            return FinalizePatchSet(patches, target, insertDriftAnchors: false);
         }
 
         #region Preset Generators
@@ -116,7 +129,9 @@ namespace HDRGammaController.Core.Calibration
             // Near-neutral patches (critical for white point accuracy)
             AddNearNeutrals(patches, ref index, target);
 
-            return OptimizePatchOrder(patches);
+            // Quick is a short run (~5 min): drift over that window is small and the
+            // anchor overhead would be a large fraction of the patch budget. Skip.
+            return FinalizePatchSet(patches, target, insertDriftAnchors: false);
         }
 
         private static IReadOnlyList<ColorPatch> GenerateStandardSet(CalibrationTarget target)
@@ -144,7 +159,9 @@ namespace HDRGammaController.Core.Calibration
             // Additional critical colors
             AddSkinTones(patches, ref index, target);
 
-            return OptimizePatchOrder(patches);
+            // Standard (~15 min) stays anchor-free to preserve its advertised duration;
+            // drift compensation is a Thorough/Full feature where run length warrants it.
+            return FinalizePatchSet(patches, target, insertDriftAnchors: false);
         }
 
         private static IReadOnlyList<ColorPatch> GenerateThoroughSet(CalibrationTarget target)
@@ -177,7 +194,8 @@ namespace HDRGammaController.Core.Calibration
             // Shadow detail
             AddShadowDetail(patches, ref index, target);
 
-            return OptimizePatchOrder(patches);
+            // Long run: interleave periodic white/black re-reads for drift compensation.
+            return FinalizePatchSet(patches, target, insertDriftAnchors: true);
         }
 
         private static IReadOnlyList<ColorPatch> GenerateFullSet(CalibrationTarget target)
@@ -211,7 +229,8 @@ namespace HDRGammaController.Core.Calibration
             AddShadowDetail(patches, ref index, target);
             AddHighlightDetail(patches, ref index, target);
 
-            return OptimizePatchOrder(patches);
+            // Long run: interleave periodic white/black re-reads for drift compensation.
+            return FinalizePatchSet(patches, target, insertDriftAnchors: true);
         }
 
         private static IReadOnlyList<ColorPatch> GenerateGrayscaleSet(CalibrationTarget target, int points)
@@ -224,7 +243,11 @@ namespace HDRGammaController.Core.Calibration
 
             AddGrayscaleRamp(patches, ref index, points, target);
 
-            return patches; // No need to optimize order for grayscale
+            // No reorder needed for a monotone ramp; dedupe in case 8-bit snapping
+            // collapsed neighboring levels for very dense ramps.
+            var deduped = DeduplicateBySnappedSignal(patches);
+            Reindex(deduped);
+            return deduped;
         }
 
         #endregion
@@ -363,9 +386,28 @@ namespace HDRGammaController.Core.Calibration
 
         #region Utilities
 
+        /// <summary>
+        /// Snaps a 0-1 signal value onto the 8-bit grid (v = round(v*255)/255).
+        /// </summary>
+        /// <remarks>
+        /// M9 measurement integrity: the patch window renders SDR patches through an 8-bit
+        /// swapchain, so the stimulus that physically reaches the panel is quantized to
+        /// n/255 regardless of what value we generate. Snapping at GENERATION time makes
+        /// the model's input coordinate equal the displayed stimulus exactly, instead of
+        /// fitting measured light against a coordinate up to half an 8-bit step away.
+        /// HDR wire-ladder patches (ColorPatch.Nits) are NOT snapped — they render through
+        /// an FP16 scRGB surface with no 8-bit quantization (and are generated elsewhere).
+        /// </remarks>
+        internal static double Snap8Bit(double v) =>
+            Math.Round(Math.Clamp(v, 0.0, 1.0) * 255.0) / 255.0;
+
         private static ColorPatch CreatePatch(string name, LinearRgb signalRgb, PatchCategory category,
             int index, bool isCritical, CalibrationTarget target)
         {
+            // Snap the requested signal to the displayable 8-bit grid BEFORE computing the
+            // target XYZ, so the target corresponds to the stimulus actually shown.
+            signalRgb = new LinearRgb(Snap8Bit(signalRgb.R), Snap8Bit(signalRgb.G), Snap8Bit(signalRgb.B));
+
             // Calculate target XYZ for this patch
             // IMPORTANT: signalRgb contains the gamma-encoded signal values (0-1) that will be sent to the display.
             // To compute the target XYZ (what the color SHOULD look like), we must:
@@ -399,14 +441,131 @@ namespace HDRGammaController.Core.Calibration
                 : target.ApplyEotf(signal);
 
         /// <summary>
+        /// Shared tail of every preset generator: dedupe patches that collapsed onto the
+        /// same 8-bit signal after snapping, order for minimal settling, optionally
+        /// interleave drift anchors, then re-index.
+        /// </summary>
+        private static IReadOnlyList<ColorPatch> FinalizePatchSet(
+            List<ColorPatch> patches, CalibrationTarget target, bool insertDriftAnchors)
+        {
+            var deduped = DeduplicateBySnappedSignal(patches);
+            var ordered = OptimizePatchOrder(deduped);
+            if (insertDriftAnchors)
+                ordered = InsertDriftAnchors(ordered, target);
+            Reindex(ordered);
+            return ordered;
+        }
+
+        /// <summary>
+        /// Removes patches whose (snapped) 8-bit signal triple duplicates an earlier patch,
+        /// keeping the first occurrence. Snapping can collapse neighbors (e.g. very dense
+        /// ramps or grid nodes that coincide with existing anchors), and duplicate model
+        /// inputs waste measurement time without adding information.
+        /// </summary>
+        private static List<ColorPatch> DeduplicateBySnappedSignal(List<ColorPatch> patches)
+        {
+            var seen = new HashSet<(int R, int G, int B)>();
+            var result = new List<ColorPatch>(patches.Count);
+            foreach (var p in patches)
+            {
+                var key = ((int)Math.Round(p.DisplayRgb.R * 255.0),
+                           (int)Math.Round(p.DisplayRgb.G * 255.0),
+                           (int)Math.Round(p.DisplayRgb.B * 255.0));
+                if (seen.Add(key))
+                    result.Add(p);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Interleaves periodic drift-check anchors into an already-ordered sequence (M7):
+        /// a white re-read every <see cref="DriftWhiteIntervalPatches"/> ordinary patches
+        /// and a black re-read every <see cref="DriftBlackIntervalPatches"/>, plus a white
+        /// at the very start (the t0 reference all later ratios are computed against) and
+        /// at the very end (so the drift fit covers the tail of the run).
+        ///
+        /// Anchors are deliberately inserted AFTER OptimizePatchOrder and are never
+        /// reordered: their value is their fixed periodic position in TIME, which is what
+        /// lets DriftCompensator interpolate a luminance factor for every timestamp.
+        /// </summary>
+        private static List<ColorPatch> InsertDriftAnchors(List<ColorPatch> ordered, CalibrationTarget target)
+        {
+            int whiteN = 0, blackN = 0;
+            ColorPatch White() => CreatePatch($"Drift White {++whiteN}", new LinearRgb(1, 1, 1),
+                PatchCategory.DriftCheck, 0, false, target);
+            ColorPatch Black() => CreatePatch($"Drift Black {++blackN}", new LinearRgb(0, 0, 0),
+                PatchCategory.DriftCheck, 0, false, target);
+
+            var result = new List<ColorPatch>(ordered.Count + ordered.Count / DriftWhiteIntervalPatches + 4)
+            {
+                White() // t0 reference, before warm-up/ABL has developed
+            };
+
+            int sinceWhite = 0, sinceBlack = 0;
+            foreach (var p in ordered)
+            {
+                result.Add(p);
+                sinceWhite++;
+                sinceBlack++;
+                if (sinceWhite >= DriftWhiteIntervalPatches)
+                {
+                    result.Add(White());
+                    sinceWhite = 0;
+                }
+                if (sinceBlack >= DriftBlackIntervalPatches)
+                {
+                    result.Add(Black());
+                    sinceBlack = 0;
+                }
+            }
+
+            if (sinceWhite > 0)
+                result.Add(White()); // closing anchor
+
+            return result;
+        }
+
+        private static void Reindex(List<ColorPatch> ordered)
+        {
+            for (int i = 0; i < ordered.Count; i++)
+            {
+                ordered[i] = new ColorPatch
+                {
+                    Name = ordered[i].Name,
+                    DisplayRgb = ordered[i].DisplayRgb,
+                    Category = ordered[i].Category,
+                    Index = i,
+                    IsCritical = ordered[i].IsCritical,
+                    TargetXyz = ordered[i].TargetXyz,
+                    TargetLab = ordered[i].TargetLab
+                };
+            }
+        }
+
+        /// <summary>
         /// Optimizes patch order to minimize display settling time.
         /// </summary>
         /// <remarks>
-        /// Large luminance jumps require longer settling time. This algorithm
-        /// orders patches to minimize the maximum luminance change between
-        /// consecutive patches while still grouping related patches.
+        /// Large luminance jumps require longer settling time. This greedy nearest-neighbor
+        /// pass minimizes the luminance change between consecutive patches.
+        ///
+        /// Ordering key: the "luminance" used below is the Rec.709-weighted sum of the
+        /// GAMMA-ENCODED signal values, not true linear-light luminance. That is fine —
+        /// the key is ordinal only (it decides which patch is "nearest"), and gamma
+        /// encoding is monotone per channel, so the produced order is a sensible
+        /// low-settle sequence even though the numeric distances are not photometric.
+        ///
+        /// Tradeoff (m3): step-minimization produces a quasi-monotonic luminance ramp,
+        /// which concentrates any panel drift (warm-up, ABL) into a systematic error along
+        /// the ramp — the worst case for drift ALIASING into the tone curve. Full
+        /// randomization would decorrelate drift from level but multiplies settle time
+        /// (every step becomes a large luminance jump) and hammers OLED fall-time
+        /// behavior. We keep step-minimization for the time budget and instead measure
+        /// the drift directly: DriftCheck anchors are interleaved at fixed periodic
+        /// positions AFTER this reordering (see InsertDriftAnchors) and DriftCompensator
+        /// removes the fitted drift from all measurements.
         /// </remarks>
-        private static IReadOnlyList<ColorPatch> OptimizePatchOrder(List<ColorPatch> patches)
+        private static List<ColorPatch> OptimizePatchOrder(List<ColorPatch> patches)
         {
             if (patches.Count <= 2) return patches;
 
@@ -458,22 +617,8 @@ namespace HDRGammaController.Core.Calibration
                 }
             }
 
-            // Re-index patches
-            for (int i = 0; i < ordered.Count; i++)
-            {
-                // Create new patch with updated index
-                ordered[i] = new ColorPatch
-                {
-                    Name = ordered[i].Name,
-                    DisplayRgb = ordered[i].DisplayRgb,
-                    Category = ordered[i].Category,
-                    Index = i,
-                    IsCritical = ordered[i].IsCritical,
-                    TargetXyz = ordered[i].TargetXyz,
-                    TargetLab = ordered[i].TargetLab
-                };
-            }
-
+            // Note: re-indexing happens in FinalizePatchSet AFTER drift anchors are
+            // interleaved, so Index always reflects the final measurement sequence.
             return ordered;
         }
 

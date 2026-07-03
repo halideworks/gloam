@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -42,6 +43,64 @@ namespace HDRGammaController.Core.Calibration
         private readonly int _settleTimeMs;
         private readonly int _maxRetries;
         private readonly bool _hdrMode;
+
+        // ------- Adaptive settle (m2) -------
+        // A fixed settle underwaits large luminance transitions (OLED/VA pixel fall time,
+        // backlight modulation) and overwaits small ones. Settle is scaled with the
+        // signal-luminance step between consecutive patches instead. Internal setters let
+        // tests shrink the delays; production uses the defaults.
+
+        /// <summary>Base settle applied to every patch regardless of step size.</summary>
+        internal int SettleBaseMs { get; set; } = 200;
+
+        /// <summary>Extra settle per unit of |Δsignal-luminance| (full-scale swing adds this much).</summary>
+        internal int SettleScaleFullSwingMs { get; set; } = 600;
+
+        /// <summary>
+        /// Floor after a LARGE DOWNWARD luminance step (&gt;50% of full scale): OLED/VA
+        /// panels decay toward dark much slower than they rise, and measuring too early
+        /// reads residual glow into the dark patch.
+        /// </summary>
+        internal int LargeFallSettleFloorMs { get; set; } = 500;
+
+        /// <summary>
+        /// Settle ceiling. 1200ms matches the first-patch settle used by the PQ verify
+        /// sweep and the report verification pass — the longest settle used anywhere.
+        /// </summary>
+        internal int SettleMaxMs { get; set; } = 1200;
+
+        /// <summary>Downward signal step treated as a "large fall" (fraction of full scale).</summary>
+        private const double LargeFallThresholdFraction = 0.5;
+
+        /// <summary>Signal-luminance of the previously displayed patch (null before the first).</summary>
+        private double? _lastPatchKeyLuminance;
+
+        // ------- Multi-read averaging (M8) -------
+        // Near-black patches are meter-noise dominated and white/primary patches anchor
+        // the whole characterization, so those take the per-component median of several
+        // readings (mirroring the report window's 3× ReanchorWhite pattern). Ordinary
+        // mid-tone patches keep single reads for the time budget.
+
+        /// <summary>Readings taken for patches that qualify for multi-read.</summary>
+        internal const int MultiReadCount = 3;
+
+        /// <summary>One extra reading is taken when the Y spread across the reads exceeds the noise gate.</summary>
+        internal const int MaxReadsPerPatch = 4;
+
+        /// <summary>Signal level at/below which a patch counts as near-black (multi-read).</summary>
+        internal const double LowSignalThreshold = 0.10;
+
+        /// <summary>Re-read once more when Y spread exceeds this fraction of the mean…</summary>
+        internal const double SpreadReReadFraction = 0.05;
+
+        /// <summary>…or this absolute spread in cd/m² for near-black readings.</summary>
+        internal const double SpreadReReadAbsoluteY = 0.02;
+
+        /// <summary>Pause between repeated reads of the same patch (no display change to settle).</summary>
+        internal int InterReadDelayMs { get; set; } = 150;
+
+        /// <summary>Drift analysis from the last completed run (M7), if any.</summary>
+        public DriftCompensator.DriftAnalysis? LastDriftAnalysis { get; private set; }
 
         /// <summary>
         /// When set, the orchestrator runs an in-session apply→verify→refine loop after the
@@ -254,6 +313,20 @@ namespace HDRGammaController.Core.Calibration
                     SetState(CalibrationState.Running);
                     await RunMeasurementLoopAsync(_cancellationTokenSource.Token);
 
+                    // M7: fit the drift curve from the interleaved DriftCheck whites and
+                    // normalize every measurement to the run's initial state BEFORE the
+                    // measurements feed model building or the closed loop. When the patch
+                    // set carries no drift anchors (Quick/Standard/GrayscaleOnly) this is
+                    // a no-op. Excessive drift (>8%) is deliberately NOT corrected so the
+                    // measurement validator rejects the run instead.
+                    if (_measurements is { Count: > 0 } && _state != CalibrationState.Cancelled)
+                    {
+                        LastDriftAnalysis = DriftCompensator.Compensate(_measurements);
+                        PhaseChanged?.Invoke(this, LastDriftAnalysis.Summary);
+                        if (LastDriftAnalysis.Applied)
+                            _measurements = new List<MeasurementResult>(LastDriftAnalysis.Measurements);
+                    }
+
                     // In-session apply → verify → refine, while spotread is still connected.
                     if (ClosedLoop != null && _state != CalibrationState.Cancelled && _measurements != null)
                     {
@@ -329,7 +402,10 @@ namespace HDRGammaController.Core.Calibration
                     FinalCorrection = closedLoop?.Correction,
                     NativeResidualDeltaE = closedLoop?.NativeResidual,
                     CorrectedResidualDeltaE = closedLoop?.CorrectedResidual,
-                    RefinementRounds = closedLoop?.Rounds ?? 0
+                    RefinementRounds = closedLoop?.Rounds ?? 0,
+                    DriftCompensationApplied = LastDriftAnalysis?.Applied ?? false,
+                    PeakWhiteDriftFraction = LastDriftAnalysis?.MaxWhiteDriftFraction,
+                    DriftSummary = LastDriftAnalysis?.Summary
                 };
 
                 CalibrationCompleted?.Invoke(this, new CalibrationResultEventArgs(result));
@@ -443,7 +519,7 @@ namespace HDRGammaController.Core.Calibration
                 // fires after the measurement completes to advance the percentage.)
                 RaiseProgressChanged();
 
-                var measurement = await MeasurePatchWithRetryAsync(patch, cancellationToken);
+                var measurement = await MeasurePatchAsync(patch, cancellationToken);
 
                 // If the user paused while this patch was in flight, the reading is suspect
                 // (the probe or panel may have been disturbed mid-pause) - and recording it
@@ -465,13 +541,133 @@ namespace HDRGammaController.Core.Calibration
         }
 
         /// <summary>
-        /// Displays nothing new (caller handles display) and measures the patch with retry.
+        /// Full per-patch measurement: adaptive settle (m2) scaled with the luminance step
+        /// from the previous patch, then a single read for ordinary mid-tones or a
+        /// median-of-3 (median-of-4 when noisy) for near-black/white/primary patches (M8).
         /// Shared by the main measurement loop and the closed-loop verification passes.
+        /// Progress is reported per PATCH by the callers, so multi-reads never double-count.
+        /// </summary>
+        private async Task<MeasurementResult> MeasurePatchAsync(ColorPatch patch, CancellationToken cancellationToken)
+        {
+            await Task.Delay(ComputeSettleDelayMs(patch), cancellationToken);
+
+            var first = await MeasurePatchWithRetryAsync(patch, cancellationToken);
+            if (!NeedsMultiRead(patch))
+                return first;
+
+            var reads = new List<MeasurementResult>(MaxReadsPerPatch) { first };
+            for (int i = 1; i < MultiReadCount; i++)
+            {
+                // Same stimulus, no display change: only a short inter-read pause
+                // (the probe's own integration time dominates).
+                await Task.Delay(InterReadDelayMs, cancellationToken);
+                reads.Add(await MeasurePatchWithRetryAsync(patch, cancellationToken));
+            }
+
+            // Noise gate: if the readings disagree by more than ~5% of the mean
+            // (or 0.02 cd/m² absolute near black), take one extra reading so a single
+            // outlier can't tie the median.
+            double meanY = reads.Average(r => r.Xyz.Y);
+            double spreadY = reads.Max(r => r.Xyz.Y) - reads.Min(r => r.Xyz.Y);
+            if (spreadY > Math.Max(meanY * SpreadReReadFraction, SpreadReReadAbsoluteY) &&
+                reads.Count < MaxReadsPerPatch)
+            {
+                await Task.Delay(InterReadDelayMs, cancellationToken);
+                reads.Add(await MeasurePatchWithRetryAsync(patch, cancellationToken));
+            }
+
+            return MedianMeasurement(patch, reads);
+        }
+
+        /// <summary>
+        /// M8: which patches warrant multiple readings. Near-black patches (signal ≤ 10%,
+        /// expected luminance well under ~1 cd/m² on any plausible display) are meter-noise
+        /// dominated; white and 100% primaries anchor the white point, peak luminance and
+        /// gamut matrix, so an outlier there skews the whole profile. HDR wire-ladder
+        /// patches keep single reads: the PQ sweep has its own monotonicity validation and
+        /// a tight time budget.
+        /// </summary>
+        internal static bool NeedsMultiRead(ColorPatch patch)
+        {
+            if (patch.Nits is not null) return false;
+            var rgb = patch.DisplayRgb;
+            bool nearBlack = rgb.Max <= LowSignalThreshold;
+            bool isWhite = rgb.R >= 0.99 && rgb.G >= 0.99 && rgb.B >= 0.99;
+            bool isPrimary = patch.Category == PatchCategory.Primary;
+            return nearBlack || isWhite || isPrimary;
+        }
+
+        /// <summary>
+        /// Per-component median of several readings of the same patch. The median (unlike
+        /// the mean) fully rejects a single glitched reading. Even counts average the two
+        /// middle values. Timestamp is taken from the middle reading so drift fitting sees
+        /// the temporal center of the read burst.
+        /// </summary>
+        internal static MeasurementResult MedianMeasurement(ColorPatch patch, IReadOnlyList<MeasurementResult> reads)
+        {
+            if (reads.Count == 1) return reads[0];
+
+            static double Median(IEnumerable<double> values)
+            {
+                var v = values.OrderBy(x => x).ToList();
+                int n = v.Count;
+                return n % 2 == 1 ? v[n / 2] : 0.5 * (v[n / 2 - 1] + v[n / 2]);
+            }
+
+            var byTime = reads.OrderBy(r => r.Timestamp).ToList();
+            return new MeasurementResult
+            {
+                Patch = patch,
+                Timestamp = byTime[byTime.Count / 2].Timestamp,
+                Xyz = new CieXyz(
+                    Median(reads.Select(r => r.Xyz.X)),
+                    Median(reads.Select(r => r.Xyz.Y)),
+                    Median(reads.Select(r => r.Xyz.Z))),
+                IsValid = true,
+                SequenceIndex = reads[0].SequenceIndex
+            };
+        }
+
+        /// <summary>
+        /// m2: settle time scaled with the signal step from the previously displayed patch:
+        /// base + scale·|Δ|, with a floor after large downward steps (slow pixel decay on
+        /// OLED/VA) and a cap consistent with the PQ verify sweep's 1200ms first-patch
+        /// settle. Never less than the constructor-configured fixed settle, so this only
+        /// ever adds margin relative to the old fixed behavior.
+        /// The luminance key is the gamma-encoded Rec.709-weighted signal — ordinal only,
+        /// which is all a settle heuristic needs.
+        /// </summary>
+        private int ComputeSettleDelayMs(ColorPatch patch)
+        {
+            double key = PatchKeyLuminance(patch);
+            // Before the first patch assume a bright screen (setup UI), which conservatively
+            // treats the usual black first patch as a large downward step.
+            double prev = _lastPatchKeyLuminance ?? 1.0;
+            _lastPatchKeyLuminance = key;
+
+            double delta = Math.Abs(key - prev);
+            int settle = SettleBaseMs + (int)(delta * SettleScaleFullSwingMs);
+            if (prev - key > LargeFallThresholdFraction)
+                settle = Math.Max(settle, LargeFallSettleFloorMs);
+            settle = Math.Max(settle, Math.Min(_settleTimeMs, SettleMaxMs));
+            return Math.Min(settle, SettleMaxMs);
+        }
+
+        private static double PatchKeyLuminance(ColorPatch patch)
+        {
+            if (patch.Nits is double nits && double.IsFinite(nits))
+                return Math.Clamp(nits / 1000.0, 0.0, 1.0); // coarse: wire ladder tops out ~1000 nits
+            var rgb = patch.DisplayRgb;
+            return 0.2126 * rgb.R + 0.7152 * rgb.G + 0.0722 * rgb.B;
+        }
+
+        /// <summary>
+        /// Single reading with the retry loop. Settle is handled by <see cref="MeasurePatchAsync"/>;
+        /// this method only waits between RETRY attempts.
         /// </summary>
         private async Task<MeasurementResult> MeasurePatchWithRetryAsync(ColorPatch patch, CancellationToken cancellationToken)
         {
             _retryCount = 0;
-            await Task.Delay(_settleTimeMs, cancellationToken); // settle
 
             MeasurementResult? measurement = null;
             string? lastError = null;
@@ -531,7 +727,7 @@ namespace HDRGammaController.Core.Calibration
                 var patch = patches[i];
                 DisplayPatchRequested?.Invoke(this, new DisplayPatchEventArgs(patch, i, patches.Count));
                 PhaseChanged?.Invoke(this, $"{phaseLabel}: {i + 1}/{patches.Count}");
-                results.Add(await MeasurePatchWithRetryAsync(patch, cancellationToken));
+                results.Add(await MeasurePatchAsync(patch, cancellationToken));
             }
             return results;
         }
@@ -765,6 +961,17 @@ namespace HDRGammaController.Core.Calibration
 
         /// <summary>Number of refinement rounds actually performed.</summary>
         public int RefinementRounds { get; init; }
+
+        // --- Drift compensation (M7), present when the patch set carried drift anchors ---
+
+        /// <summary>Whether multiplicative luminance drift compensation was applied.</summary>
+        public bool DriftCompensationApplied { get; init; }
+
+        /// <summary>Peak white drift observed across the run (|Y/Y0 - 1|), if analyzed.</summary>
+        public double? PeakWhiteDriftFraction { get; init; }
+
+        /// <summary>Human-readable drift analysis summary for logs/report.</summary>
+        public string? DriftSummary { get; init; }
     }
 
     #endregion

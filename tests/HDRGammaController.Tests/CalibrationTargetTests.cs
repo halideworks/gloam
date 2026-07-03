@@ -80,9 +80,13 @@ namespace HDRGammaController.Tests
 
             var midGray = patches.Single(p => p.Name == "Gray 50%");
 
+            // Patch signals are snapped to the 8-bit grid at generation time (M9), so the
+            // target is computed from the snapped stimulus (128/255), not the ideal 0.5.
+            double snapped = PatchSetGenerator.Snap8Bit(0.5);
+            Assert.Equal(128.0 / 255.0, snapped, 12);
             Assert.NotNull(midGray.TargetXyz);
-            Assert.Equal(ColorMath.SrgbEotf(0.5), midGray.TargetXyz!.Value.Y, 10);
-            Assert.NotEqual(StandardTargets.Rec709Pq.ApplyEotf(0.5), midGray.TargetXyz.Value.Y, 6);
+            Assert.Equal(ColorMath.SrgbEotf(snapped), midGray.TargetXyz!.Value.Y, 10);
+            Assert.NotEqual(StandardTargets.Rec709Pq.ApplyEotf(snapped), midGray.TargetXyz.Value.Y, 6);
         }
 
         private static void AssertTransferOutputIsFiniteAndBounded(double value, string targetName)

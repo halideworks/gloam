@@ -43,6 +43,7 @@ namespace HDRGammaController.Core.Calibration
         };
 
         // Fragments that indicate a hard failure — no point waiting for measurement to arrive.
+        // These phrasings are specific enough to match anywhere in a line.
         private static readonly string[] FatalFragments =
         {
             "failed to open",
@@ -50,10 +51,36 @@ namespace HDRGammaController.Core.Calibration
             "instrument did not",
             "unable to initialise",
             "no instrument found",
-            "couldn't find an instrument",
+            "couldn't find an instrument"
+        };
+
+        // Generic error tokens are only fatal when they START the message. Matching
+        // "error: "/"error-" anywhere in the line (as this class used to) aborts runs on
+        // harmless instrument-info output that merely mentions the word (e.g. correction
+        // descriptions or verbose status lines containing "... error compensation ...").
+        // Argyll prefixes its real failures as either "Error - ..." / "error: ..." at the
+        // start of the line, or "spotread: Error - ..."; both shapes are handled here.
+        private static readonly string[] FatalLinePrefixes =
+        {
             "error: ",
+            "error - ",
             "error-"
         };
+
+        private static bool IsFatalErrorLine(string lowerLine)
+        {
+            string t = lowerLine.TrimStart();
+            const string toolPrefix = "spotread:";
+            if (t.StartsWith(toolPrefix, StringComparison.Ordinal))
+                t = t.Substring(toolPrefix.Length).TrimStart();
+
+            foreach (var prefix in FatalLinePrefixes)
+            {
+                if (t.StartsWith(prefix, StringComparison.Ordinal))
+                    return true;
+            }
+            return false;
+        }
 
         // When spotread hit ERROR_SHARING_VIOLATION (err 32) opening the HID handle, it
         // means another process has the device open. V2.3.1 reports this clearly; V3.3.0
@@ -80,7 +107,7 @@ namespace HDRGammaController.Core.Calibration
             "about to open hid port"
         };
 
-        private readonly Process _process;
+        private readonly Process? _process;
         private readonly TaskCompletionSource<bool> _readyTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly object _stateLock = new();
         private readonly StringBuilder _recentLog = new();
@@ -89,16 +116,65 @@ namespace HDRGammaController.Core.Calibration
         private volatile bool _disposed;
         private volatile bool _attemptedHidOpen;
         private volatile bool _sharingViolationSeen;
+        private volatile bool _poisoned;
         private readonly Action<string> _log;
+
+        // Process interaction seams. Production wires these to the real spotread process;
+        // the internal test constructor substitutes fakes so the trigger/timeout/poison
+        // protocol can be exercised without spawning an executable.
+        private readonly Func<string, Task> _writeInput;
+        private readonly Func<bool> _hasExited;
+        private readonly Action _killProcess;
+
+        // Per-measurement timeout. Internal-settable so tests don't wait 30 real seconds.
+        internal TimeSpan MeasureTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
+        /// <summary>
+        /// True once a per-measurement timeout has occurred. A timed-out trigger is still
+        /// queued inside spotread: when its XYZ line eventually arrives it would complete
+        /// the NEXT measurement's wait, silently attributing a stale reading to the wrong
+        /// patch (off-by-one for the rest of the run). A poisoned session refuses further
+        /// measurements; the owner must kill it and start a fresh session.
+        /// </summary>
+        public bool IsPoisoned => _poisoned;
 
         private SpotreadSession(Process process, Action<string> log)
         {
             _process = process;
             _log = log;
+            _writeInput = async text =>
+            {
+                await process.StandardInput.WriteAsync(text);
+                await process.StandardInput.FlushAsync();
+            };
+            _hasExited = () => process.HasExited;
+            _killProcess = () =>
+            {
+                try { process.Kill(entireProcessTree: true); } catch { /* already gone */ }
+            };
             process.OutputDataReceived += (_, e) => OnLine(e.Data, isError: false);
             process.ErrorDataReceived  += (_, e) => OnLine(e.Data, isError: true);
             process.Exited += OnExited;
         }
+
+        /// <summary>
+        /// Test-only constructor: runs the session protocol against fake process hooks.
+        /// Output lines are injected via <see cref="SimulateOutputLine"/>.
+        /// </summary>
+        internal SpotreadSession(Func<string, Task> writeInput, Action killProcess, Action<string> log)
+        {
+            _process = null;
+            _log = log;
+            _writeInput = writeInput;
+            _hasExited = () => false;
+            _killProcess = killProcess;
+        }
+
+        /// <summary>Test-only: feeds a line as if spotread had printed it.</summary>
+        internal void SimulateOutputLine(string line, bool isError = false) => OnLine(line, isError);
+
+        /// <summary>Test-only: the fatal error recorded from output parsing, if any.</summary>
+        internal string? FatalErrorForTest => _fatalError;
 
         /// <summary>
         /// Spawns a spotread.exe in interactive mode and waits for the ready prompt.
@@ -134,7 +210,16 @@ namespace HDRGammaController.Core.Calibration
                 "-y",
                 displayFlag
             };
-            if (hdrMode) args.Add("-H");
+            // NOTE (flag hygiene): spotread's -H flag is HIGH-RESOLUTION SPECTRAL mode and
+            // only applies to spectrometers (i1 Pro etc.) — it is NOT an "HDR mode". This
+            // session used to pass -H when hdrMode was true; on colorimeters (i1 Display
+            // Plus and friends) that is at best ignored and at worst rejected. HDR vs SDR
+            // needs no spotread flag at all: the instrument reports absolute cd/m² either
+            // way. The hdrMode parameter is retained because the SDR and HDR measurement
+            // phases still deliberately run in SEPARATE sessions (ColorimeterService keys
+            // its persistent session on it), so the instrument re-initializes across the
+            // OS display-mode flip.
+            _ = hdrMode;
             // Spectral correction sample (.ccss) or matrix (.ccmx): replaces the generic
             // display-type calibration with one matched to the actual panel spectrum.
             // Essential on narrow-primary panels (QD-OLED) where the generic corrections
@@ -226,11 +311,16 @@ namespace HDRGammaController.Core.Calibration
         public async Task<CieXyz> MeasureAsync(CancellationToken cancellationToken)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(SpotreadSession));
+            if (_poisoned)
+                throw new InvalidOperationException(
+                    "spotread session was poisoned by a measurement timeout and must be restarted. " +
+                    "The timed-out trigger is still queued inside spotread; reusing this session " +
+                    "would attribute its late reading to the wrong patch.");
             if (_fatalError != null)
                 throw new InvalidOperationException($"spotread session failed: {_fatalError}");
-            if (_process.HasExited)
+            if (_hasExited())
                 throw new InvalidOperationException(
-                    $"spotread exited unexpectedly (code {_process.ExitCode}).\nRecent output:\n{SnapshotRecentLog()}");
+                    $"spotread exited unexpectedly (code {TryGetExitCode()}).\nRecent output:\n{SnapshotRecentLog()}");
 
             var tcs = new TaskCompletionSource<CieXyz>(TaskCreationOptions.RunContinuationsAsynchronously);
             lock (_stateLock)
@@ -244,22 +334,35 @@ namespace HDRGammaController.Core.Calibration
             {
                 // Space + CRLF. Space = "take reading" under ARGYLL_NOT_INTERACTIVE.
                 // CRLF (not just LF) — Windows-line-ending quirk in spotread's scripted mode.
-                await _process.StandardInput.WriteAsync(" \r\n");
-                await _process.StandardInput.FlushAsync();
+                await _writeInput(" \r\n");
 
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                cts.CancelAfter(TimeSpan.FromSeconds(30));
+                cts.CancelAfter(MeasureTimeout);
                 return await tcs.Task.WaitAsync(cts.Token);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
+                // CRITICAL: the trigger we just sent is still queued inside spotread. If we
+                // simply retried on this session, its late XYZ line would complete the NEXT
+                // measurement's wait — every subsequent reading would be off-by-one against
+                // the displayed patch, silently. Poison the session and kill the process so
+                // the owner is forced to start a fresh one before the next measurement.
+                _poisoned = true;
+                _log($"Measurement timed out after {MeasureTimeout.TotalSeconds:F0}s - poisoning session and killing spotread.");
+                _killProcess();
                 throw new TimeoutException(
-                    $"Measurement timed out after 30s. Recent spotread output:\n{SnapshotRecentLog()}");
+                    $"Measurement timed out after {MeasureTimeout.TotalSeconds:F0}s. The spotread session will be " +
+                    $"restarted before the next measurement. Recent spotread output:\n{SnapshotRecentLog()}");
             }
             finally
             {
                 lock (_stateLock) _pendingMeasurement = null;
             }
+        }
+
+        private int TryGetExitCode()
+        {
+            try { return _process?.ExitCode ?? -1; } catch { return -1; }
         }
 
         /// <summary>
@@ -362,16 +465,26 @@ namespace HDRGammaController.Core.Calibration
                 double.TryParse(xyzMatch.Groups[2].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double y) &&
                 double.TryParse(xyzMatch.Groups[3].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double z))
             {
-                if (!TryAcceptMeasuredXyz(new CieXyz(x, y, z), out string? error))
+                TaskCompletionSource<CieXyz>? pending;
+                lock (_stateLock) pending = _pendingMeasurement;
+
+                // Defense-in-depth against stale-reading attribution: an XYZ line with no
+                // measurement pending is a late arrival from a timed-out (or otherwise
+                // abandoned) trigger. Consuming it later would pair a stale reading with
+                // the wrong patch, so drop it loudly instead.
+                if (pending == null || _poisoned)
                 {
-                    var ex = new InvalidOperationException(error);
-                    lock (_stateLock) _pendingMeasurement?.TrySetException(ex);
+                    _log($"Ignoring stale spotread XYZ line (no measurement pending{(_poisoned ? ", session poisoned" : "")}): {line.Trim()}");
                     return;
                 }
 
-                TaskCompletionSource<CieXyz>? pending;
-                lock (_stateLock) pending = _pendingMeasurement;
-                pending?.TrySetResult(new CieXyz(x, y, z));
+                if (!TryAcceptMeasuredXyz(new CieXyz(x, y, z), out string? error))
+                {
+                    pending.TrySetException(new InvalidOperationException(error));
+                    return;
+                }
+
+                pending.TrySetResult(new CieXyz(x, y, z));
                 return;
             }
 
@@ -412,22 +525,34 @@ namespace HDRGammaController.Core.Calibration
                 }
             }
 
-            // 5. Did something go wrong at the spotread level?
-            foreach (var fragment in FatalFragments)
+            // 5. Did something go wrong at the spotread level? Specific fragments match
+            //    anywhere; generic "error"-token lines must be anchored to the start of
+            //    the message (see FatalLinePrefixes) so instrument-info lines that merely
+            //    contain the word don't abort a healthy run.
+            bool fatal = IsFatalErrorLine(lower);
+            if (!fatal)
             {
-                if (lower.Contains(fragment))
+                foreach (var fragment in FatalFragments)
                 {
-                    _fatalError = _sharingViolationSeen
-                        ? BuildSharingViolationMessage(line)
-                        : line;
-                    var ex = new InvalidOperationException(
-                        _sharingViolationSeen
-                            ? _fatalError
-                            : $"spotread reported: {line.Trim()}");
-                    _readyTcs.TrySetException(ex);
-                    lock (_stateLock) _pendingMeasurement?.TrySetException(ex);
-                    return;
+                    if (lower.Contains(fragment))
+                    {
+                        fatal = true;
+                        break;
+                    }
                 }
+            }
+
+            if (fatal)
+            {
+                _fatalError = _sharingViolationSeen
+                    ? BuildSharingViolationMessage(line)
+                    : line;
+                var ex = new InvalidOperationException(
+                    _sharingViolationSeen
+                        ? _fatalError
+                        : $"spotread reported: {line.Trim()}");
+                _readyTcs.TrySetException(ex);
+                lock (_stateLock) _pendingMeasurement?.TrySetException(ex);
             }
         }
 
@@ -522,8 +647,7 @@ namespace HDRGammaController.Core.Calibration
         private void OnExited(object? sender, EventArgs e)
         {
             // Unblock anyone waiting — they need to know the process is gone.
-            int code;
-            try { code = _process.ExitCode; } catch { code = -1; }
+            int code = TryGetExitCode();
 
             // V3.3.0 silent-exit-after-HID-open bug: spotread attempted HID open, never
             // emitted a success OR failure message, and exited with 0. We can't tell from
@@ -584,6 +708,7 @@ namespace HDRGammaController.Core.Calibration
         {
             if (_disposed) return;
             _disposed = true;
+            if (_process == null) return; // test instance — nothing to tear down
 
             try
             {
