@@ -1442,7 +1442,8 @@ namespace HDRGammaController
 
         private sealed record PqTrackingSweepResult(
             string Summary,
-            IReadOnlyList<MeasurementResult> Readings);
+            IReadOnlyList<MeasurementResult> Readings,
+            int AttemptedRungs = 0);
 
         /// <summary>
         /// HDR PQ-tracking verify: FP16 wire patches through the applied profile, graded in
@@ -1507,7 +1508,8 @@ namespace HDRGammaController
                 Log.Info($"CalibrationReportWindow: PQ tracking sweep failed: {ex.Message}");
                 return new PqTrackingSweepResult(
                     $"HDR PQ tracking sweep failed ({ex.Message}).",
-                    Array.Empty<MeasurementResult>());
+                    Array.Empty<MeasurementResult>(),
+                    rungs.Count);
             }
             finally
             {
@@ -1517,7 +1519,8 @@ namespace HDRGammaController
             if (readings.Count == 0)
                 return new PqTrackingSweepResult(
                     "HDR PQ tracking sweep returned no valid readings.",
-                    Array.Empty<MeasurementResult>());
+                    Array.Empty<MeasurementResult>(),
+                    rungs.Count);
 
             double sumAbsErr = 0, worstErr = 0, worstNits = 0, itpSum = 0, itpMax = 0;
             int itpCount = 0, itpSkipped = 0;
@@ -1556,7 +1559,116 @@ namespace HDRGammaController
             string summary = $"HDR PQ tracking (FP16 through profile, {readings.Count} levels to {readings[^1].Requested:F0} nits): " +
                              $"avg luminance error {sumAbsErr / readings.Count:P1}, worst {worstErr:+0.0%;-0.0%} at {worstNits:F0} nits; " +
                              $"{itpSummary}.";
-            return new PqTrackingSweepResult(summary, readings.Select(r => r.M).ToList());
+            return new PqTrackingSweepResult(summary, readings.Select(r => r.M).ToList(), rungs.Count);
+        }
+
+        private sealed record ColoredHdrSweepResult(
+            string Summary,
+            IReadOnlyList<MeasurementResult> Readings);
+
+        /// <summary>
+        /// Colored HDR verification: Rec.2020-container R/G/B/C/M/Y stimuli at absolute PQ
+        /// luminance rungs, presented FP16 scRGB through the applied profile and graded
+        /// ABSOLUTELY — ΔE ITP (BT.2124) against the container reference XYZ plus
+        /// luminance error. Container-referred: the reference is what an ideal HDR10
+        /// mastering display would show for this wire signal, so a panel short of
+        /// Rec.2020 (or of the rung luminance on a saturated hue) shows its real gamut /
+        /// tone mapping here — exactly the above-SDR-white color error this sweep exists
+        /// to characterize. Runs on every HDR verify (the PQ tracking sweep exposes no
+        /// options, so this follows suit with no toggle); rungs above the panel's
+        /// reachable/reported peak are skipped inside the set builder. Results are
+        /// reported separately from the neutral metrics and never fold into the grade.
+        /// </summary>
+        private async Task<ColoredHdrSweepResult?> RunColoredHdrSweepAsync(
+            PatchDisplayWindow patchWindow, ColorimeterService colorimeter,
+            ApplyContext ctx, int sequenceOffset, System.Threading.CancellationToken token)
+        {
+            // Peak for rung capping: prefer the calibration's measured reachable wire
+            // peak (what the panel actually emitted), else the DXGI-reported panel peak.
+            double measuredPeak = _measurements?
+                .Where(m => m.IsValid && m.Patch.Nits is not null && m.Patch.Nits > 0)
+                .Select(m => m.Xyz.Y)
+                .DefaultIfEmpty(0)
+                .Max() ?? 0;
+            double peak = measuredPeak > 50 ? measuredPeak
+                : ctx.Monitor.HdrPeakNits > 50 ? ctx.Monitor.HdrPeakNits
+                : 0; // unknown peak -> the builder keeps only the 100-nit rung
+            var stimuli = ColoredHdrVerificationSet.Build(peak);
+            if (stimuli.Count == 0)
+                return null;
+
+            HdrPatchRenderer? wire = null;
+            var readings = new List<(ColoredHdrStimulus S, MeasurementResult M)>();
+            try
+            {
+                var rect = patchWindow.GetPatchPixelRect();
+                wire = new HdrPatchRenderer(rect.X, rect.Y, rect.Width, rect.Height);
+                patchWindow.SetColor(0, 0, 0);
+
+                for (int i = 0; i < stimuli.Count; i++)
+                {
+                    var s = stimuli[i];
+                    var p = new ColorPatch
+                    {
+                        Name = $"HDR {s.Name}",
+                        // Hue marker at half signal for the CSV: never all-high or
+                        // all-low, so the white/black patch heuristics cannot match it.
+                        DisplayRgb = s.UnitRgb.Scale(0.5),
+                        // Nits marks it as a wire patch: excluded from the SDR accuracy
+                        // metrics (and their peak normalization) by ComputeMetrics.
+                        Nits = s.RungNits,
+                        TargetXyz = s.ReferenceXyz, // absolute container reference (CSV)
+                        Category = s.IsPrimaryHue ? PatchCategory.Primary : PatchCategory.Secondary,
+                        Index = sequenceOffset + i,
+                    };
+                    Vm.VerifyButtonContent = $"Colored HDR {i + 1}/{stimuli.Count}…";
+                    patchWindow.SetProgress(i + 1, stimuli.Count, p.Name,
+                        i + 1 < stimuli.Count ? $"HDR {stimuli[i + 1].Name}" : null,
+                        phase: "Colored HDR");
+                    wire.PresentNits(s.ScRgbNits.R, s.ScRgbNits.G, s.ScRgbNits.B);
+                    await Task.Delay(i == 0 ? 1200 : 600, token); // settle (longer for the first patch)
+                    var m = WithSequenceIndex(await colorimeter.MeasureAsync(p, ctx.HdrMode, token), sequenceOffset + i);
+                    if (ctx.CaptureSounds)
+                        CalibrationSounds.PlayCapture();
+                    if (m.IsValid)
+                        readings.Add((s, m));
+                }
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                Log.Info($"CalibrationReportWindow: colored HDR sweep failed: {ex.Message}");
+                return new ColoredHdrSweepResult(
+                    $"Colored HDR sweep failed ({ex.Message}).",
+                    Array.Empty<MeasurementResult>());
+            }
+            finally
+            {
+                wire?.Dispose();
+            }
+
+            if (readings.Count == 0)
+                return new ColoredHdrSweepResult(
+                    "Colored HDR sweep returned no valid readings.",
+                    Array.Empty<MeasurementResult>());
+
+            var metrics = CalibrationVerifier.GradeColoredHdr(
+                readings.Select(r => (r.S, r.M.Xyz)));
+            foreach (var grade in metrics.Patches)
+            {
+                Log.Info($"CalibrationReportWindow: Colored HDR {grade.Name,-11} -> {grade.MeasuredY,7:F1} nits " +
+                         $"vs rung {grade.RungNits:F0} ({grade.LuminanceError:+0.0%;-0.0%}), ΔE ITP {grade.DeltaEItp:F1}");
+            }
+            if (metrics.ExcludedCount > 0)
+                Log.Info($"CalibrationReportWindow: colored HDR excluded {metrics.ExcludedCount} non-finite ΔE ITP value(s) from the aggregate.");
+
+            string summary = metrics.GradedCount > 0
+                ? $"Colored HDR (Rec.2020-container R/G/B/C/M/Y through profile, {metrics.GradedCount} patches, graded absolutely): " +
+                  $"avg ΔE ITP {metrics.AverageItpDeltaE:F1}, max {metrics.MaxItpDeltaE:F1} (worst: {metrics.WorstPatchName}); " +
+                  $"avg luminance error {metrics.AverageAbsLuminanceError:P1}" +
+                  (metrics.ExcludedCount > 0 ? $" ({metrics.ExcludedCount} non-physical reading(s) excluded)" : "") + "."
+                : "Colored HDR sweep: ΔE ITP unavailable (no physical readings).";
+            return new ColoredHdrSweepResult(summary, readings.Select(r => r.M).ToList());
         }
 
         private static MeasurementResult WithSequenceIndex(MeasurementResult source, int sequenceIndex) => new()
@@ -1876,9 +1988,19 @@ namespace HDRGammaController
                 var pqTracking = ctx.HdrMode
                     ? await RunPqTrackingSweepAsync(patchWindow, colorimeter, ctx, patches.Count, verifyCts.Token)
                     : null;
+                // COLORED HDR VERIFICATION: R/G/B/C/M/Y Rec.2020-container stimuli at
+                // absolute luminance rungs, graded with ΔE ITP against the container
+                // reference. Part of every HDR verify (the PQ sweep exposes no options,
+                // so neither does this); reported separately from the neutral metrics.
+                var coloredHdr = ctx.HdrMode
+                    ? await RunColoredHdrSweepAsync(patchWindow, colorimeter, ctx,
+                        patches.Count + (pqTracking?.AttemptedRungs ?? 0), verifyCts.Token)
+                    : null;
                 var persistedVerifyMeasurements = new List<MeasurementResult>(results);
                 if (pqTracking?.Readings.Count > 0)
                     persistedVerifyMeasurements.AddRange(pqTracking.Readings);
+                if (coloredHdr?.Readings.Count > 0)
+                    persistedVerifyMeasurements.AddRange(coloredHdr.Readings);
                 _verifyMeasurements = persistedVerifyMeasurements;
 
                 var after = CalibrationVerifier.ComputeMetrics(results, verificationTarget);
@@ -1913,6 +2035,8 @@ namespace HDRGammaController
                     $"ΔE ITP avg {after.AverageItpDeltaE:F1}, max {after.MaxItpDeltaE:F1} (BT.2124; ~3x ΔE2000 scale, 1 unit ≈ 1 JND).";
                 if (pqTracking != null)
                     Vm.VerifyDetailText += "\n" + pqTracking.Summary;
+                if (coloredHdr != null)
+                    Vm.VerifyDetailText += "\n" + coloredHdr.Summary;
                 if (activation != null)
                     Vm.VerifyDetailText += "\n" + activation.Message;
                 Vm.IsVerifyDetailVisible = true;
