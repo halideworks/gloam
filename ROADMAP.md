@@ -34,30 +34,33 @@ regressions.
 
 ## Tier 1 — Calibration: to instrument-grade
 
-**1.1 Adaptive patch placement (the DisplayCAL/Argyll OFPS gap).** Fixed grids spend samples where
+> **Status (v1.4.0 development):** 1.2, 1.3, 1.4 done; 1.1 and 1.5 in progress.
+> Statuses are updated in place as items land.
+
+**1.1 Adaptive patch placement (the DisplayCAL/Argyll OFPS gap).** `[QUEUED — v1.4.0]` Fixed grids spend samples where
 the display is well-behaved. Instead: fit the display model after an initial coarse pass, compute
 model uncertainty across the signal cube (Gaussian-process residual model or simple leave-one-out
 error), and place the next batch of patches where predicted error is highest. Iterate until the
 predicted worst-case model error is below target or the patch budget is spent. This typically
 halves patch counts at equal accuracy — or doubles accuracy at equal time.
 
-**1.2 Spectrometer support and CCSS *generation*.** Today we consume CCSS; a spectrometer
+**1.2 Spectrometer support and CCSS *generation*.** `[DONE — v1.4.0; needs hardware validation with a real i1 Pro/ColorMunki]` Today we consume CCSS; a spectrometer
 (i1Pro 2/3, ColorMunki) via spotread's spectral mode lets Gloam *create* the colorimeter
 correction for the user's exact panel: measure R/G/B/W spectra, write a CCSS, auto-pair it with
 the colorimeter. This removes the single largest accuracy variable for colorimeter owners and is
 something only DisplayCAL does today — clumsily.
 
-**1.3 Instrument uncertainty budgets.** Every report number should carry an honest error bar:
+**1.3 Instrument uncertainty budgets.** `[DONE — v1.4.0]` Every report number should carry an honest error bar:
 combine instrument repeatability (measured live from the median-read spreads we already collect),
 CCSS/observer uncertainty, and drift-fit residual into a per-metric confidence interval.
 "Grayscale avg ΔE 0.4 ± 0.2" is a fundamentally more trustworthy claim than "0.4" — and no
 consumer tool does it.
 
-**1.4 Adaptive integration/settle from live variance.** We scale settle time by luminance step;
+**1.4 Adaptive integration/settle from live variance.** `[DONE — v1.4.0]` We scale settle time by luminance step;
 next: watch the reading-to-reading variance the median logic already computes and extend
 integration only when the data is actually noisy (dark VA panels) instead of by fixed rules.
 
-**1.5 Meter-offset workflows.** Four-color matrix correction between a reference spectro and the
+**1.5 Meter-offset workflows.** `[QUEUED — v1.4.0]` Four-color matrix correction between a reference spectro and the
 user's colorimeter (classic Wyszecki/ASTM E1455 style), stored per display, for labs with two
 instruments.
 
