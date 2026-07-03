@@ -306,10 +306,17 @@ namespace HDRGammaController.ViewModels
 
         private CalibrationPreset _preset = CalibrationPreset.Standard;
 
+        public bool IsPresetAdaptive { get => _preset == CalibrationPreset.Adaptive; set { if (value) SetPreset(CalibrationPreset.Adaptive); } }
         public bool IsPresetQuick { get => _preset == CalibrationPreset.Quick; set { if (value) SetPreset(CalibrationPreset.Quick); } }
         public bool IsPresetStandard { get => _preset == CalibrationPreset.Standard; set { if (value) SetPreset(CalibrationPreset.Standard); } }
         public bool IsPresetThorough { get => _preset == CalibrationPreset.Thorough; set { if (value) SetPreset(CalibrationPreset.Thorough); } }
 
+        // Adaptive measures a small seed, then spends patches only where the fitted model
+        // is least certain, so it reaches the same accuracy as a fixed grid in far fewer
+        // patches. The time is a budget-based UPPER bound — it usually stops early.
+        public string AdaptivePresetLabel => $"Adaptive (recommended)";
+        public string AdaptivePresetDetail =>
+            $"up to {FormatEstimatedTime(PatchSetGenerator.GetApproximatePatchCount(CalibrationPreset.Adaptive))}, usually finishes early - excellent accuracy";
         public string QuickPresetLabel => PresetLabel("Quick", CalibrationPreset.Quick);
         public string QuickPresetDetail => PresetDetail(CalibrationPreset.Quick, "Good accuracy");
         public string StandardPresetLabel => PresetLabel("Standard", CalibrationPreset.Standard);
@@ -321,6 +328,7 @@ namespace HDRGammaController.ViewModels
         {
             if (_preset == preset) return;
             _preset = preset;
+            OnPropertyChanged(nameof(IsPresetAdaptive));
             OnPropertyChanged(nameof(IsPresetQuick));
             OnPropertyChanged(nameof(IsPresetStandard));
             OnPropertyChanged(nameof(IsPresetThorough));
@@ -348,6 +356,8 @@ namespace HDRGammaController.ViewModels
 
         private void RefreshPresetLabels()
         {
+            OnPropertyChanged(nameof(AdaptivePresetLabel));
+            OnPropertyChanged(nameof(AdaptivePresetDetail));
             OnPropertyChanged(nameof(QuickPresetLabel));
             OnPropertyChanged(nameof(QuickPresetDetail));
             OnPropertyChanged(nameof(StandardPresetLabel));

@@ -664,6 +664,214 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public CalibrationMetrics CalculateMetrics() =>
             CalibrationVerifier.ComputeMetrics(_measurements, _target);
+
+        #region Adaptive placement: model residuals (1.1, ADDITIVE)
+
+        /// <summary>
+        /// Minimum measured normalized luminance (fraction of white) for a color residual
+        /// to be computed. Below this (~5% of white, L*≈27) chroma measurement is
+        /// noise-dominated and CIELAB's a*/b* amplify tiny luminance/fit differences into
+        /// large spurious ΔE — the same near-black chroma regime the ramp fit's signal
+        /// floor and the multi-read logic already avoid. Those patches still drive the
+        /// tone term (which is bounded and meaningful at any level).
+        /// </summary>
+        private const double ColorResidualMinNormLuminance = 0.05;
+
+        /// <summary>
+        /// Exposes where the fitted display model is most uncertain, for
+        /// <see cref="AdaptivePatchPlanner"/> (roadmap 1.1). ADDITIVE — it neither
+        /// changes the LUT/characterization output nor is called by the existing paths.
+        ///
+        /// Two residual families, each tagged with its signal-domain location and
+        /// manifold:
+        /// <list type="bullet">
+        /// <item><b>Tone (leave-one-out)</b> — for the gray axis and each single-channel
+        /// ramp: the point is removed, the 1D curve is refit from the rest, and the
+        /// held-out point is predicted. The recorded magnitude is the luminance error as a
+        /// fraction of the display's luminance range, |ΔY|/(white−black) — a bounded,
+        /// well-behaved tone-accuracy criterion (a raw |ΔY|/Y would explode near black and
+        /// swamp genuine mid-tone defects). LOO is what makes this an honest PREDICTIVE
+        /// error: a plain fit residual is ~0 at points the fit used.</item>
+        /// <item><b>Color (interpolation, chroma-only)</b> — every accuracy patch is
+        /// predicted through the current forward model (per-channel tone curves + measured
+        /// RGB→XYZ matrix) and compared to its measurement in ΔE2000 at MATCHED lightness,
+        /// so only the chromatic (a*/b*) disagreement counts. The lightness/tone error is
+        /// already the Tone term; isolating chroma keeps the two families independent and
+        /// avoids the CIELAB near-black amplification that a full ΔE would suffer. On the
+        /// gray axis and ramps this is the cast error; on cube patches it is the genuine
+        /// chroma interpolation error of the shared-matrix model.</item>
+        /// </list>
+        /// </summary>
+        public IReadOnlyList<ModelResidual> ComputeModelResiduals()
+        {
+            var characterization = _characterization ??= BuildCharacterization();
+
+            double whiteY = FindMeasurementByRgb(1, 1, 1)?.Xyz.Y ?? characterization.PeakLuminance;
+            double blackY = FindMeasurementByRgb(0, 0, 0)?.Xyz.Y ?? characterization.BlackLevel;
+            if (!(whiteY > 0)) whiteY = 1.0;
+            double range = Math.Max(whiteY - blackY, 1e-6);
+
+            var labWhite = _target.WhitePoint.Equals(Chromaticity.D65)
+                ? ColorMath.D65White
+                : _target.WhitePoint.ToXyz(1.0);
+
+            var residuals = new List<ModelResidual>();
+
+            AddToneResiduals(residuals, SignalManifold.Gray, blackY, range,
+                m => IsNeutralSignal(m.Patch.DisplayRgb), m => m.Patch.DisplayRgb.R);
+            AddToneResiduals(residuals, SignalManifold.RedRamp, blackY, range,
+                m => IsSingleChannelSignal(m.Patch.DisplayRgb, 0), m => m.Patch.DisplayRgb.R);
+            AddToneResiduals(residuals, SignalManifold.GreenRamp, blackY, range,
+                m => IsSingleChannelSignal(m.Patch.DisplayRgb, 1), m => m.Patch.DisplayRgb.G);
+            AddToneResiduals(residuals, SignalManifold.BlueRamp, blackY, range,
+                m => IsSingleChannelSignal(m.Patch.DisplayRgb, 2), m => m.Patch.DisplayRgb.B);
+
+            AddColorResiduals(residuals, characterization, whiteY, labWhite);
+
+            return residuals;
+        }
+
+        /// <summary>
+        /// Leave-one-out tone residuals for one 1D manifold. The lowest and highest
+        /// samples are treated as anchors and never held out: predicting an endpoint means
+        /// EXTRAPOLATING from one side, which always reports a large error that no amount
+        /// of interior sampling can reduce (for the gray axis these endpoints are black and
+        /// white; for a channel ramp they are its dimmest and full-drive samples). Each
+        /// remaining interior point is held out in turn, the curve is refit from the rest,
+        /// and the held-out point is predicted; the magnitude is |ΔY| as a fraction of the
+        /// luminance range.
+        /// </summary>
+        private void AddToneResiduals(
+            List<ModelResidual> residuals, SignalManifold manifold, double blackY, double range,
+            Func<MeasurementResult, bool> belongs, Func<MeasurementResult, double> signalOf)
+        {
+            var samples = _measurements
+                .Where(m => m.IsValid && m.Patch.Nits is null && belongs(m))
+                .Select(m => (signal: signalOf(m), norm: Clamp01((m.Xyz.Y - blackY) / range)))
+                .GroupBy(s => Math.Round(s.signal, 6))
+                .Select(g => (signal: g.Key, norm: g.Average(s => s.norm)))
+                .OrderBy(s => s.signal)
+                .ToList();
+
+            if (samples.Count < 4)
+                return; // too few to refit a curve without a point
+
+            for (int i = 0; i < samples.Count; i++)
+            {
+                // The dimmest and brightest samples of each manifold are extrapolation
+                // anchors (see remarks) — never left out.
+                if (i == 0 || i == samples.Count - 1)
+                    continue;
+                double signal = samples[i].signal;
+                if (signal <= 1e-6 || signal >= 1.0 - 1e-6)
+                    continue;
+
+                var fitPoints = new List<(double input, double output)>(samples.Count - 1);
+                for (int j = 0; j < samples.Count; j++)
+                    if (j != i)
+                        fitPoints.Add((samples[j].signal, samples[j].norm));
+
+                var curve = ToneCurve.CreateFromPoints(fitPoints);
+                double predicted = curve.Lookup(signal);
+                double measured = samples[i].norm;
+                // Luminance error as a fraction of the display range (both are already
+                // normalized to [0,1] over white−black), so 0.01 == 1% of range.
+                double relError = Math.Abs(predicted - measured);
+
+                double s = signal;
+                var location = manifold switch
+                {
+                    SignalManifold.Gray => new SignalPoint(s, s, s, manifold),
+                    SignalManifold.RedRamp => new SignalPoint(s, 0, 0, manifold),
+                    SignalManifold.GreenRamp => new SignalPoint(0, s, 0, manifold),
+                    _ => new SignalPoint(0, 0, s, manifold),
+                };
+                residuals.Add(new ModelResidual(location, ResidualKind.Tone, relError));
+            }
+        }
+
+        /// <summary>
+        /// Forward-model interpolation residuals: predict each accuracy patch through the
+        /// characterization (per-channel tone curves then RGB→XYZ matrix) and compare to
+        /// the measurement in ΔE2000, both normalized to measured white.
+        /// </summary>
+        private void AddColorResiduals(
+            List<ModelResidual> residuals, DisplayCharacterization characterization,
+            double whiteY, CieXyz labWhite)
+        {
+            foreach (var m in _measurements)
+            {
+                if (!m.IsValid || m.Patch.Nits is not null)
+                    continue;
+
+                var rgb = m.Patch.DisplayRgb;
+                if (IsNeutralSignal(rgb) && rgb.R <= 1e-6)
+                    continue; // pure black: Lab unstable, no useful color residual
+
+                double measuredNormY = m.Xyz.Y / whiteY;
+                if (!(measuredNormY >= ColorResidualMinNormLuminance))
+                    continue;
+
+                var predicted = ForwardPredictNormalizedXyz(characterization, rgb);
+                var measuredNorm = new CieXyz(m.Xyz.X / whiteY, m.Xyz.Y / whiteY, m.Xyz.Z / whiteY);
+
+                // Chroma-only: compare at the MEASURED lightness so only the a*/b*
+                // disagreement contributes. The lightness/tone error is the Tone residual;
+                // this keeps the families independent and avoids CIELAB's near-black ΔE
+                // blow-up (where a tiny luminance error reads as a large ΔL*).
+                var measuredLab = ColorMath.XyzToLab(measuredNorm, labWhite);
+                var predictedLab = ColorMath.XyzToLab(predicted, labWhite);
+                double deltaE = measuredLab.DeltaE2000(
+                    new CieLab(measuredLab.L, predictedLab.A, predictedLab.B));
+                if (!double.IsFinite(deltaE))
+                    continue;
+
+                residuals.Add(new ModelResidual(
+                    AdaptivePatchPlanner.ClassifySignal(rgb), ResidualKind.Color, deltaE));
+            }
+        }
+
+        /// <summary>
+        /// Forward display model for the CHROMA residual: signal RGB → normalized XYZ
+        /// (white ≈ Y=1) using the SHARED NEUTRAL tone curve on every channel, combined
+        /// through the measured RGB→XYZ matrix (which maps full-drive [1,1,1] to the
+        /// measured white). Using the neutral curve (not the per-channel curves) is
+        /// deliberate: it makes the prediction the base "neutral-tone + 3×3-matrix" model,
+        /// so the chroma residual measures exactly the deviation that base model CANNOT
+        /// represent — a level-dependent gray cast or a gamut-interpolation error — which
+        /// is what extra sampling addresses. It also avoids a spurious near-black cast that
+        /// independently-fitted per-channel curves would inject on a truly neutral panel
+        /// (they disagree slightly at a shared gray, and CIELAB amplifies that near black).
+        /// </summary>
+        private static CieXyz ForwardPredictNormalizedXyz(DisplayCharacterization c, LinearRgb signal)
+        {
+            var tone = c.NeutralToneCurve ?? c.RedToneCurve;
+            double lr = tone.Lookup(Clamp01(signal.R));
+            double lg = tone.Lookup(Clamp01(signal.G));
+            double lb = tone.Lookup(Clamp01(signal.B));
+            var m = c.RgbToXyzMatrix;
+            return new CieXyz(
+                m[0, 0] * lr + m[0, 1] * lg + m[0, 2] * lb,
+                m[1, 0] * lr + m[1, 1] * lg + m[1, 2] * lb,
+                m[2, 0] * lr + m[2, 1] * lg + m[2, 2] * lb);
+        }
+
+        private static bool IsNeutralSignal(LinearRgb rgb) =>
+            Math.Abs(rgb.R - rgb.G) < 1e-6 && Math.Abs(rgb.G - rgb.B) < 1e-6;
+
+        private static bool IsSingleChannelSignal(LinearRgb rgb, int channel)
+        {
+            double driven = channel switch { 0 => rgb.R, 1 => rgb.G, _ => rgb.B };
+            double others = channel switch
+            {
+                0 => Math.Max(rgb.G, rgb.B),
+                1 => Math.Max(rgb.R, rgb.B),
+                _ => Math.Max(rgb.R, rgb.G),
+            };
+            return driven > 1e-6 && others <= 1e-6;
+        }
+
+        #endregion
     }
 
     /// <summary>

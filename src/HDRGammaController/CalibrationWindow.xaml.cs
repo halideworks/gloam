@@ -239,13 +239,24 @@ namespace HDRGammaController
             _calibrationTarget = target;
             _calibrationPreset = preset;
 
-            // Generate patches
+            // Generate patches. For the Adaptive preset this is only the coarse SEED; the
+            // orchestrator grows the run round-by-round up to the patch budget, so the
+            // labels use the budget as an upper bound ("usually finishes early").
             _patches = PatchSetGenerator.GeneratePatchSet(target, preset);
             _totalPatches = _patches.Count;
 
             // Update UI
-            Vm.PatchCountText = $"{_totalPatches} patches";
-            Vm.EstimatedTimeText = FormatEstimatedTime(_totalPatches);
+            if (preset == CalibrationPreset.Adaptive)
+            {
+                int budget = PatchSetGenerator.GetApproximatePatchCount(CalibrationPreset.Adaptive);
+                Vm.PatchCountText = $"adaptive (up to {budget} patches)";
+                Vm.EstimatedTimeText = $"up to {FormatEstimatedTime(budget)}, usually less";
+            }
+            else
+            {
+                Vm.PatchCountText = $"{_totalPatches} patches";
+                Vm.EstimatedTimeText = FormatEstimatedTime(_totalPatches);
+            }
         }
 
         /// <summary>

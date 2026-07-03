@@ -69,7 +69,16 @@ namespace HDRGammaController.Core.Calibration
             GrayscaleOnly,
 
             /// <summary>Custom patch count</summary>
-            Custom
+            Custom,
+
+            /// <summary>
+            /// Adaptive placement (roadmap 1.1): a small coarse seed set is measured
+            /// first, then <see cref="AdaptivePatchPlanner"/> keeps requesting batches
+            /// where the fitted model is most uncertain until the accuracy targets or
+            /// the patch budget are hit. <see cref="GeneratePatchSet"/> returns only the
+            /// SEED for this preset; the extra rounds are produced during the run.
+            /// </summary>
+            Adaptive
         }
 
         /// <summary>
@@ -86,6 +95,7 @@ namespace HDRGammaController.Core.Calibration
                 CalibrationPreset.Thorough => GenerateThoroughSet(target),
                 CalibrationPreset.Full => GenerateFullSet(target),
                 CalibrationPreset.GrayscaleOnly => GenerateGrayscaleSet(target, 21),
+                CalibrationPreset.Adaptive => GenerateAdaptiveSeedSet(target),
                 _ => GenerateStandardSet(target)
             };
         }
@@ -272,6 +282,222 @@ namespace HDRGammaController.Core.Calibration
             var deduped = DeduplicateBySnappedSignal(patches);
             Reindex(deduped);
             return deduped;
+        }
+
+        #endregion
+
+        #region Adaptive placement (1.1)
+
+        // ------- Adaptive seed + candidate pool (roadmap 1.1) -------
+        // The adaptive preset measures a small coarse SEED first, fits the display model,
+        // finds where the model predicts worst, and measures there next. The seed must
+        // pin every anchor the model builder and validator need (black, white, full-drive
+        // primaries/secondaries) and give each 1D manifold enough spread that the FIRST
+        // leave-one-out residual is meaningful, while staying small (~30 patches) so the
+        // savings come from the adaptive rounds, not the seed.
+
+        /// <summary>Grayscale seed levels (9 points incl. black/white), spanning shadow to highlight.</summary>
+        internal static readonly double[] AdaptiveSeedGrayLevels =
+            { 0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0 };
+
+        /// <summary>Per-channel seed ramp levels (4 interior points; full drive is the primary anchor).</summary>
+        internal static readonly double[] AdaptiveSeedRampLevels = { 0.25, 0.5, 0.75 };
+
+        /// <summary>
+        /// Coarse seed set for the adaptive preset (~30 patches, 8-bit snapped): black +
+        /// white + a 9-point grayscale, R/G/B ramps at 3 interior levels each, and the
+        /// full-drive primaries and secondaries. Drift anchors are interleaved (an
+        /// adaptive run can grow long across rounds, so it follows the Thorough/Full drift
+        /// rule).
+        /// </summary>
+        internal static IReadOnlyList<ColorPatch> GenerateAdaptiveSeedSet(CalibrationTarget target)
+        {
+            var patches = new List<ColorPatch>();
+            int index = 0;
+
+            // Grayscale seed (includes black and white).
+            foreach (double level in AdaptiveSeedGrayLevels)
+            {
+                string name = level <= 0 ? "Black" : level >= 1 ? "White" : $"Gray {level * 100:F0}%";
+                bool critical = level <= 0 || level >= 1;
+                patches.Add(CreatePatch(name, new LinearRgb(level, level, level),
+                    PatchCategory.Grayscale, index++, critical, target));
+            }
+
+            // Single-channel ramps so the per-channel curves have real seed shape.
+            foreach (double level in AdaptiveSeedRampLevels)
+            {
+                string levelStr = $"{level * 100:F0}%";
+                patches.Add(CreatePatch($"Red Ramp {levelStr}", new LinearRgb(level, 0, 0),
+                    PatchCategory.Saturated, index++, false, target));
+                patches.Add(CreatePatch($"Green Ramp {levelStr}", new LinearRgb(0, level, 0),
+                    PatchCategory.Saturated, index++, false, target));
+                patches.Add(CreatePatch($"Blue Ramp {levelStr}", new LinearRgb(0, 0, level),
+                    PatchCategory.Saturated, index++, false, target));
+            }
+
+            // Full-drive primaries and secondaries (model matrix anchors).
+            AddPrimariesAndSecondaries(patches, ref index, target);
+
+            return FinalizePatchSet(patches, target, insertDriftAnchors: true);
+        }
+
+        /// <summary>
+        /// Bounded candidate pool for <see cref="AdaptivePatchPlanner"/> in the adaptive
+        /// preset's signal domain. The pool is deliberately restricted so scoring stays
+        /// fast and every candidate is a place the 1D/near-neutral model can actually be
+        /// refined:
+        /// <list type="bullet">
+        /// <item><b>Grayscale axis</b> — a dense 1/255-step-family lattice (every 4th
+        /// 8-bit code, ~64 levels) where tone-curve curvature is highest and cheapest to
+        /// resolve.</item>
+        /// <item><b>Per-channel ramps</b> — the same dense lattice on each of R/G/B (from
+        /// the 0.2 fit floor up) so a level-dependent single-channel cast can be localized.</item>
+        /// <item><b>Near-neutral + primary/secondary cube planes</b> — a coarse lattice of
+        /// slightly-tinted neutrals and reduced-saturation primaries/secondaries, the
+        /// color regions a shared-matrix model most often mispredicts. The full color cube
+        /// is NOT enumerated: it would explode the pool and the SDR correction model is
+        /// 1D-tone + 3×3-matrix, so off-neutral interior nodes add little the matrix can
+        /// use.</item>
+        /// </list>
+        /// All candidates are 8-bit snapped and de-duplicated; each is tagged with its
+        /// <see cref="SignalManifold"/> via <see cref="AdaptivePatchPlanner.ClassifySignal"/>.
+        /// </summary>
+        internal static IReadOnlyList<SignalPoint> BuildAdaptiveCandidatePool()
+        {
+            var pool = new List<SignalPoint>();
+            var seen = new HashSet<(int, int, int, SignalManifold)>();
+
+            void Add(double r, double g, double b)
+            {
+                double rs = Snap8Bit(r), gs = Snap8Bit(g), bs = Snap8Bit(b);
+                var point = AdaptivePatchPlanner.ClassifySignal(new LinearRgb(rs, gs, bs));
+                var key = ((int)Math.Round(rs * 255), (int)Math.Round(gs * 255),
+                           (int)Math.Round(bs * 255), point.Manifold);
+                if (seen.Add(key))
+                    pool.Add(point);
+            }
+
+            // Dense grayscale + per-channel ramp lattice: every 4th 8-bit code.
+            for (int code = 0; code <= 255; code += AdaptivePoolGrayStep)
+            {
+                double v = code / 255.0;
+                Add(v, v, v);                 // gray axis
+                if (v >= AdaptivePoolRampFloor)
+                {
+                    Add(v, 0, 0);             // red ramp
+                    Add(0, v, 0);             // green ramp
+                    Add(0, 0, v);             // blue ramp
+                }
+            }
+
+            // Near-neutral tinted planes: small tints around a coarse level grid.
+            foreach (double level in AdaptivePoolNeutralLevels)
+            {
+                Add(level + AdaptivePoolTint, level, level - AdaptivePoolTint); // warm
+                Add(level - AdaptivePoolTint, level, level + AdaptivePoolTint); // cool
+                Add(level - AdaptivePoolTint, level + AdaptivePoolTint, level - AdaptivePoolTint); // green
+            }
+
+            // Reduced-saturation primary/secondary planes (mixed toward white).
+            foreach (double sat in AdaptivePoolSaturations)
+            {
+                double bg = 1.0 - sat;
+                Add(1, bg, bg); Add(bg, 1, bg); Add(bg, bg, 1);   // primaries
+                Add(bg, 1, 1); Add(1, bg, 1); Add(1, 1, bg);      // secondaries
+            }
+
+            return pool;
+        }
+
+        /// <summary>Grayscale/ramp candidate spacing in 8-bit codes (every 4th code ≈ 1.6% signal).</summary>
+        internal const int AdaptivePoolGrayStep = 4;
+
+        /// <summary>Lowest signal admitted to the per-channel ramp candidates (matches the fit floor).</summary>
+        internal const double AdaptivePoolRampFloor = 0.2;
+
+        /// <summary>Coarse levels for the near-neutral tinted candidate planes.</summary>
+        internal static readonly double[] AdaptivePoolNeutralLevels = { 0.2, 0.35, 0.5, 0.65, 0.8 };
+
+        /// <summary>Tint magnitude for the near-neutral candidate planes.</summary>
+        internal const double AdaptivePoolTint = 0.03;
+
+        /// <summary>Saturations for the reduced-saturation primary/secondary candidate planes.</summary>
+        internal static readonly double[] AdaptivePoolSaturations = { 0.25, 0.5, 0.75 };
+
+        /// <summary>
+        /// Wraps planner-chosen signal points as measurable <see cref="ColorPatch"/>es for
+        /// the next adaptive round, computing each patch's target XYZ/Lab through the same
+        /// path as the preset generators. Names carry the round number for progress/report.
+        /// </summary>
+        internal static IReadOnlyList<ColorPatch> BuildAdaptiveRoundPatches(
+            IReadOnlyList<SignalPoint> points, CalibrationTarget target, int round, int startIndex)
+        {
+            var patches = new List<ColorPatch>(points.Count);
+            int index = startIndex;
+            foreach (var p in points)
+            {
+                var rgb = new LinearRgb(p.R, p.G, p.B);
+                var category = ClassifyAdaptiveCategory(p);
+                patches.Add(CreatePatch($"Adaptive R{round} {p.Manifold} {index}", rgb, category, index++, false, target));
+            }
+            return patches;
+        }
+
+        private static PatchCategory ClassifyAdaptiveCategory(SignalPoint p) => p.Manifold switch
+        {
+            SignalManifold.Gray => PatchCategory.Grayscale,
+            SignalManifold.Cube => PatchCategory.General,
+            _ => PatchCategory.Saturated // single-channel ramps: sub-Primary to dodge the near-black validator gate
+        };
+
+        /// <summary>
+        /// Running drift-anchor cadence state for adaptive rounds. Held across rounds by
+        /// the orchestrator so drift white/black re-reads keep their fixed periodic spacing
+        /// over the whole adaptive tail (same intervals as the preset sequences).
+        /// </summary>
+        internal sealed class AdaptiveDriftState
+        {
+            public int SinceWhite;
+            public int SinceBlack;
+            public int WhiteCount;
+            public int BlackCount;
+        }
+
+        /// <summary>
+        /// Builds one adaptive round's measurable sequence: the planner's chosen points as
+        /// patches, with drift-check white/black anchors interleaved at the same cadence
+        /// (<see cref="DriftWhiteIntervalPatches"/> / <see cref="DriftBlackIntervalPatches"/>)
+        /// as the preset sequences, continued across rounds via <paramref name="drift"/>.
+        /// </summary>
+        internal static IReadOnlyList<ColorPatch> BuildAdaptiveRoundSequence(
+            IReadOnlyList<SignalPoint> points, CalibrationTarget target, int round,
+            int startIndex, AdaptiveDriftState drift)
+        {
+            var seq = new List<ColorPatch>(points.Count + 2);
+            int index = startIndex;
+            foreach (var p in points)
+            {
+                var rgb = new LinearRgb(p.R, p.G, p.B);
+                seq.Add(CreatePatch($"Adaptive R{round} {p.Manifold} {index}", rgb,
+                    ClassifyAdaptiveCategory(p), index++, false, target));
+
+                drift.SinceWhite++;
+                drift.SinceBlack++;
+                if (drift.SinceWhite >= DriftWhiteIntervalPatches)
+                {
+                    seq.Add(CreatePatch($"Drift White A{++drift.WhiteCount}", new LinearRgb(1, 1, 1),
+                        PatchCategory.DriftCheck, index++, false, target));
+                    drift.SinceWhite = 0;
+                }
+                if (drift.SinceBlack >= DriftBlackIntervalPatches)
+                {
+                    seq.Add(CreatePatch($"Drift Black A{++drift.BlackCount}", new LinearRgb(0, 0, 0),
+                        PatchCategory.DriftCheck, index++, false, target));
+                    drift.SinceBlack = 0;
+                }
+            }
+            return seq;
         }
 
         #endregion
@@ -688,6 +914,8 @@ namespace HDRGammaController.Core.Calibration
                 CalibrationPreset.Thorough => TimeSpan.FromMinutes(35),
                 CalibrationPreset.Full => TimeSpan.FromMinutes(60),
                 CalibrationPreset.GrayscaleOnly => TimeSpan.FromMinutes(2),
+                // Adaptive: budget-based UPPER bound (usually finishes well before this).
+                CalibrationPreset.Adaptive => TimeSpan.FromSeconds(AdaptivePatchPlanner.DefaultPatchBudget * 3),
                 _ => TimeSpan.FromMinutes(15)
             };
         }
@@ -704,6 +932,7 @@ namespace HDRGammaController.Core.Calibration
                 CalibrationPreset.Thorough => 500,
                 CalibrationPreset.Full => 1000,
                 CalibrationPreset.GrayscaleOnly => 21,
+                CalibrationPreset.Adaptive => AdaptivePatchPlanner.DefaultPatchBudget,
                 _ => 200
             };
         }

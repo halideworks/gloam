@@ -134,6 +134,24 @@ namespace HDRGammaController.Core.Calibration
         /// <summary>Drift analysis from the last completed run (M7), if any.</summary>
         public DriftCompensator.DriftAnalysis? LastDriftAnalysis { get; private set; }
 
+        // ------- Adaptive patch placement (roadmap 1.1) -------
+        // The Adaptive preset measures a coarse seed (round 0), fits the display model,
+        // asks AdaptivePatchPlanner where the model is most uncertain, measures that batch,
+        // refits, and repeats until the accuracy targets or the patch budget are hit. Only
+        // the seed comes from GeneratePatchSet; the rounds are produced here at run time.
+
+        /// <summary>Total ordinary-patch budget for an adaptive run. Internal so tests can shrink it.</summary>
+        internal int AdaptivePatchBudget { get; set; } = AdaptivePatchPlanner.DefaultPatchBudget;
+
+        /// <summary>Patches requested per adaptive round. Internal so tests can shrink it.</summary>
+        internal int AdaptiveBatchSize { get; set; } = AdaptivePatchPlanner.DefaultBatchSize;
+
+        /// <summary>Number of adaptive rounds actually measured beyond the seed (0 if not adaptive).</summary>
+        public int AdaptiveRoundsCompleted { get; private set; }
+
+        /// <summary>Worst target-normalized model residual after the final adaptive refit (0 if not adaptive).</summary>
+        public double AdaptiveFinalMaxNormalizedResidual { get; private set; }
+
         /// <summary>
         /// When set, the orchestrator runs an in-session apply→verify→refine loop after the
         /// native measurement pass: it builds a correction, loads it on the display, and
@@ -344,6 +362,16 @@ namespace HDRGammaController.Core.Calibration
                 {
                     SetState(CalibrationState.Running);
                     await RunMeasurementLoopAsync(_cancellationTokenSource.Token);
+
+                    // Adaptive preset (1.1): the loop above measured only the coarse seed.
+                    // Now iterate model-uncertainty-driven rounds until the accuracy targets
+                    // or the patch budget are hit. Runs BEFORE drift compensation and the
+                    // closed loop so those operate on the complete measurement set.
+                    if (_preset == PatchSetGenerator.CalibrationPreset.Adaptive &&
+                        _state != CalibrationState.Cancelled)
+                    {
+                        await RunAdaptiveRoundsAsync(_cancellationTokenSource.Token);
+                    }
 
                     // M7: fit the drift curve from the interleaved DriftCheck whites and
                     // normalize every measurement to the run's initial state BEFORE the
@@ -580,6 +608,146 @@ namespace HDRGammaController.Core.Calibration
                 MeasurementTaken?.Invoke(this, new MeasurementEventArgs(measurement));
 
                 // Update progress
+                RaiseProgressChanged();
+            }
+        }
+
+        // ------- Adaptive rounds (1.1) -------
+
+        /// <summary>
+        /// Runs the model-uncertainty-driven rounds after the coarse seed. Each round:
+        /// fit the display model from everything measured so far, compute where it is most
+        /// uncertain (<see cref="Lut3DGenerator.ComputeModelResiduals"/>), decide whether to
+        /// continue (<see cref="AdaptivePatchPlanner.EvaluateStopping"/>), and if so measure
+        /// the planner's next batch (drift anchors keep their cadence, median rules apply).
+        /// Progress is reported per round. Cancellation between/within rounds propagates
+        /// cleanly as an <see cref="OperationCanceledException"/>.
+        /// </summary>
+        private async Task RunAdaptiveRoundsAsync(CancellationToken cancellationToken)
+        {
+            if (_patches == null || _measurements == null) return;
+
+            var pool = PatchSetGenerator.BuildAdaptiveCandidatePool();
+            var driftState = new PatchSetGenerator.AdaptiveDriftState();
+            double? previousMax = null;
+
+            for (int round = 1; ; round++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var accuracy = AdaptiveAccuracyMeasurements();
+                var residuals = TryComputeResiduals();
+                if (residuals == null)
+                {
+                    // Model not fittable yet (shouldn't happen past the seed) — stop cleanly.
+                    break;
+                }
+
+                double currentMax = AdaptivePatchPlanner.MaxNormalizedResidual(residuals);
+                AdaptiveFinalMaxNormalizedResidual = currentMax;
+
+                var decision = AdaptivePatchPlanner.EvaluateStopping(
+                    currentMax, previousMax, accuracy.Count, AdaptivePatchBudget);
+                if (decision.ShouldStop)
+                {
+                    PhaseChanged?.Invoke(this, $"Adaptive placement complete — {decision.Reason}.");
+                    break;
+                }
+
+                int remaining = AdaptivePatchBudget - accuracy.Count;
+                if (remaining <= 0) break;
+                int batchSize = Math.Min(AdaptiveBatchSize, remaining);
+
+                var measuredPoints = accuracy
+                    .Select(m => AdaptivePatchPlanner.ClassifySignal(m.Patch.DisplayRgb))
+                    .ToList();
+                var batch = AdaptivePatchPlanner.PlanNextBatch(pool, measuredPoints, residuals, batchSize);
+                if (batch.Count == 0) break;
+
+                PhaseChanged?.Invoke(this,
+                    $"Round {round}: {batch.Count} patches — predicted max error {FormatWorstResidual(residuals)}");
+
+                var sequence = PatchSetGenerator.BuildAdaptiveRoundSequence(
+                    batch, _target, round, _patches.Count, driftState);
+                await MeasureAdaptiveRoundAsync(sequence, cancellationToken);
+
+                AdaptiveRoundsCompleted = round;
+                previousMax = currentMax;
+            }
+        }
+
+        /// <summary>Valid, non-anchor, non-wire (accuracy) measurements taken so far.</summary>
+        private List<MeasurementResult> AdaptiveAccuracyMeasurements() =>
+            _measurements!
+                .Where(m => m.IsValid && m.Patch.Nits is null && m.Patch.Category != PatchCategory.DriftCheck)
+                .ToList();
+
+        /// <summary>
+        /// Fits the model from all measurements so far and returns its residuals, or null
+        /// if a model can't be built yet (too few points / degenerate set).
+        /// </summary>
+        private IReadOnlyList<ModelResidual>? TryComputeResiduals()
+        {
+            try
+            {
+                var generator = new Lut3DGenerator(_target, _measurements!, lutSize: 17);
+                return generator.ComputeModelResiduals();
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"CalibrationOrchestrator: adaptive residual fit failed ({ex.Message}); stopping rounds.");
+                return null;
+            }
+        }
+
+        /// <summary>Human-readable worst residual for the per-round progress line.</summary>
+        private static string FormatWorstResidual(IReadOnlyList<ModelResidual> residuals)
+        {
+            ModelResidual worst = default;
+            double worstNorm = -1;
+            foreach (var r in residuals)
+            {
+                double n = AdaptivePatchPlanner.NormalizedResidual(r);
+                if (double.IsFinite(n) && n > worstNorm) { worstNorm = n; worst = r; }
+            }
+            if (worstNorm < 0) return "n/a";
+            return worst.Kind == ResidualKind.Color
+                ? $"{worst.Magnitude:F1} ΔE"
+                : $"{worst.Magnitude * 100:F1}% ΔY";
+        }
+
+        /// <summary>
+        /// Measures one adaptive round's patch sequence (planner picks + interleaved drift
+        /// anchors), appending to the run's patch list and measurements and firing the same
+        /// display/progress/measurement events as the main loop. Honors pause and cancel.
+        /// </summary>
+        private async Task MeasureAdaptiveRoundAsync(IReadOnlyList<ColorPatch> sequence, CancellationToken cancellationToken)
+        {
+            var combined = new List<ColorPatch>(_patches!);
+            int start = combined.Count;
+            combined.AddRange(sequence);
+            _patches = combined;
+
+            for (int i = start; i < combined.Count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                while (_isPaused)
+                    await Task.Delay(100, cancellationToken);
+
+                _currentPatchIndex = i;
+                var patch = combined[i];
+
+                DisplayPatchRequested?.Invoke(this, new DisplayPatchEventArgs(patch, i, combined.Count));
+                RaiseProgressChanged();
+
+                var measurement = await MeasurePatchAsync(patch, cancellationToken);
+
+                // Same pause-mid-flight discipline as the main loop: discard and re-measure.
+                if (_isPaused) { i--; continue; }
+
+                _measurements!.Add(measurement);
+                MeasurementTaken?.Invoke(this, new MeasurementEventArgs(measurement));
                 RaiseProgressChanged();
             }
         }
