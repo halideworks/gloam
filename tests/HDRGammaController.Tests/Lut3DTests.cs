@@ -1264,19 +1264,122 @@ namespace HDRGammaController.Tests
             Assert.True(double.IsFinite(compressed.B));
         }
 
+        // Reformulated from the previous linear-RGB ratio assertion: the compressor now
+        // works in Oklab, whose whole point is that the OKLAB HUE ANGLE — not a linear
+        // signal-space ratio — is what stays constant. The actual claim is therefore
+        // asserted directly: compressed hue matches source hue within 0.5 degrees.
         [Fact]
-        public void CompressToGamut_PreservesHueDirectionBetterThanClipping()
+        public void CompressToGamut_PreservesOklabHue()
         {
             var source = new LinearRgb(1.4, 0.35, -0.1);
             var compressed = Lut3DGenerator.CompressToGamut(source);
-            var clipped = source.Clamp();
 
-            double gray = Math.Clamp(0.2126 * source.R + 0.7152 * source.G + 0.0722 * source.B, 0, 1);
-            double compressedRatioRg = (compressed.R - gray) / (compressed.G - gray);
-            double sourceRatioRg = (source.R - gray) / (source.G - gray);
-            double clippedRatioRg = (clipped.R - gray) / (clipped.G - gray);
+            Assert.True(compressed.IsInGamut);
+            Assert.True(OklabHueDeltaDegrees(source, compressed) < 0.5,
+                $"Hue delta {OklabHueDeltaDegrees(source, compressed)} degrees");
+        }
 
-            Assert.True(Math.Abs(compressedRatioRg - sourceRatioRg) < Math.Abs(clippedRatioRg - sourceRatioRg));
+        [Fact]
+        public void CompressToGamut_HueSweep_PreservesHueAndIsMonotoneInChroma()
+        {
+            // Sweep out-of-gamut colors: scaled/offset versions of saturated colors all
+            // around the hue circle, plus lightness overshoots.
+            var sources = new List<LinearRgb>();
+            for (int hueStep = 0; hueStep < 24; hueStep++)
+            {
+                double angle = hueStep * Math.PI * 2 / 24;
+                // Build an out-of-gamut color by pushing chroma in Oklab from mid gray.
+                var pushed = ColorMath.OklabToLinearSrgb(
+                    0.6, 0.5 * Math.Cos(angle), 0.5 * Math.Sin(angle));
+                sources.Add(pushed);
+            }
+            sources.Add(new LinearRgb(1.4, 0.35, -0.1));
+            sources.Add(new LinearRgb(-0.2, 1.3, 0.1));
+            sources.Add(new LinearRgb(0.2, -0.15, 1.6));
+            sources.Add(new LinearRgb(2.0, 1.5, 1.2)); // HDR overshoot (L above white)
+
+            foreach (var source in sources)
+            {
+                if (source.IsInGamut)
+                    continue; // only out-of-gamut inputs exercise compression
+
+                var compressed = Lut3DGenerator.CompressToGamut(source);
+
+                // Result strictly in gamut.
+                Assert.True(compressed.IsInGamut, $"Not in gamut for source {source.R},{source.G},{source.B}");
+
+                var (_, srcA, srcB) = ColorMath.LinearSrgbToOklab(source.R, source.G, source.B);
+                var (_, cmpA, cmpB) = ColorMath.LinearSrgbToOklab(compressed.R, compressed.G, compressed.B);
+
+                double sourceChroma = Math.Sqrt(srcA * srcA + srcB * srcB);
+                double compressedChroma = Math.Sqrt(cmpA * cmpA + cmpB * cmpB);
+
+                // Monotone chroma: compression never increases chroma.
+                Assert.True(compressedChroma <= sourceChroma + 1e-9,
+                    $"Chroma grew: {sourceChroma} -> {compressedChroma}");
+
+                // Hue preserved within 0.5 degrees (skip near-achromatic results where
+                // the hue angle is numerically meaningless).
+                if (sourceChroma > 1e-6 && compressedChroma > 1e-6)
+                {
+                    double delta = OklabHueDeltaDegrees(source, compressed);
+                    Assert.True(delta < 0.5,
+                        $"Hue delta {delta} degrees for source {source.R},{source.G},{source.B}");
+                }
+            }
+        }
+
+        [Fact]
+        public void CompressToGamut_InGamutInput_ReturnsBitExact()
+        {
+            var input = new LinearRgb(0.123456789, 0.987654321, 0.5);
+            var result = Lut3DGenerator.CompressToGamut(input);
+
+            Assert.Equal(input.R, result.R);
+            Assert.Equal(input.G, result.G);
+            Assert.Equal(input.B, result.B);
+        }
+
+        [Fact]
+        public void CompressToGamut_GrayInputs_Untouched()
+        {
+            foreach (double v in new[] { 0.0, 0.18, 0.5, 0.75, 1.0 })
+            {
+                var gray = new LinearRgb(v, v, v);
+                var result = Lut3DGenerator.CompressToGamut(gray);
+
+                Assert.Equal(v, result.R);
+                Assert.Equal(v, result.G);
+                Assert.Equal(v, result.B);
+            }
+        }
+
+        [Fact]
+        public void CompressToGamut_LightnessOvershoot_ClampsThenCompresses()
+        {
+            // Brighter than display white in every channel: after the documented step-1
+            // lightness clamp, the result should sit at (or extremely near) the white end
+            // of the gamut rather than skewing hue.
+            var overshoot = new LinearRgb(3.0, 3.0, 3.0);
+            var result = Lut3DGenerator.CompressToGamut(overshoot);
+
+            Assert.True(result.IsInGamut);
+            Assert.True(result.R > 0.999 && result.G > 0.999 && result.B > 0.999,
+                $"Expected ~white, got {result.R},{result.G},{result.B}");
+        }
+
+        private static double OklabHueDeltaDegrees(LinearRgb source, LinearRgb compressed)
+        {
+            var (_, sa, sb) = ColorMath.LinearSrgbToOklab(source.R, source.G, source.B);
+            var (_, ca, cb) = ColorMath.LinearSrgbToOklab(compressed.R, compressed.G, compressed.B);
+
+            double sourceHue = Math.Atan2(sb, sa);
+            double compressedHue = Math.Atan2(cb, ca);
+            double delta = Math.Abs(sourceHue - compressedHue);
+            if (delta > Math.PI)
+                delta = 2 * Math.PI - delta;
+
+            return delta * 180.0 / Math.PI;
         }
 
         #endregion

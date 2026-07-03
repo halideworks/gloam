@@ -405,6 +405,88 @@ namespace HDRGammaController.Core.Calibration
 
         #endregion
 
+        #region Oklab Conversions
+
+        // Oklab (Björn Ottosson, 2020, https://bottosson.github.io/posts/oklab/) is a
+        // hue-linear perceptual space: holding the hue angle atan2(b, a) constant while
+        // scaling chroma keeps perceived hue stable, which is exactly what gamut
+        // compression needs. The forward matrices below are Ottosson's published
+        // coefficients; the inverses are DERIVED via Invert3x3 rather than copied from
+        // the published (rounded) inverse literals, so forward∘inverse round-trips to
+        // machine precision.
+
+        /// <summary>M1: linear sRGB (D65) to approximate cone response (LMS).</summary>
+        public static readonly double[,] OklabM1 = {
+            { 0.4122214708, 0.5363325363, 0.0514459929 },
+            { 0.2119034982, 0.6806995451, 0.1073969566 },
+            { 0.0883024619, 0.2817188376, 0.6299787005 }
+        };
+
+        /// <summary>M2: nonlinear (cube-rooted) LMS' to Oklab.</summary>
+        public static readonly double[,] OklabM2 = {
+            {  0.2104542553,  0.7936177850, -0.0040720468 },
+            {  1.9779984951, -2.4285922050,  0.4505937099 },
+            {  0.0259040371,  0.7827717662, -0.8086757660 }
+        };
+
+        /// <summary>Exact inverse of <see cref="OklabM1"/>.</summary>
+        public static readonly double[,] OklabM1Inverse = Invert3x3(OklabM1);
+
+        /// <summary>Exact inverse of <see cref="OklabM2"/>.</summary>
+        public static readonly double[,] OklabM2Inverse = Invert3x3(OklabM2);
+
+        /// <summary>
+        /// Converts linear sRGB to Oklab. Inputs may lie outside [0, 1] (out-of-gamut or
+        /// HDR overshoot); the signed cube root keeps the transform well-defined for
+        /// negative pseudo-cone responses. Non-finite inputs are treated as 0.
+        /// </summary>
+        public static (double L, double A, double B) LinearSrgbToOklab(double r, double g, double b)
+        {
+            r = double.IsFinite(r) ? r : 0.0;
+            g = double.IsFinite(g) ? g : 0.0;
+            b = double.IsFinite(b) ? b : 0.0;
+
+            double l = OklabM1[0, 0] * r + OklabM1[0, 1] * g + OklabM1[0, 2] * b;
+            double m = OklabM1[1, 0] * r + OklabM1[1, 1] * g + OklabM1[1, 2] * b;
+            double s = OklabM1[2, 0] * r + OklabM1[2, 1] * g + OklabM1[2, 2] * b;
+
+            double lp = Math.Cbrt(l);
+            double mp = Math.Cbrt(m);
+            double sp = Math.Cbrt(s);
+
+            return (
+                OklabM2[0, 0] * lp + OklabM2[0, 1] * mp + OklabM2[0, 2] * sp,
+                OklabM2[1, 0] * lp + OklabM2[1, 1] * mp + OklabM2[1, 2] * sp,
+                OklabM2[2, 0] * lp + OklabM2[2, 1] * mp + OklabM2[2, 2] * sp);
+        }
+
+        /// <summary>
+        /// Converts Oklab to linear sRGB. The result is NOT clamped: components outside
+        /// [0, 1] signal an out-of-gamut color, which gamut mapping relies on to probe
+        /// the gamut boundary. Non-finite inputs are treated as 0.
+        /// </summary>
+        public static LinearRgb OklabToLinearSrgb(double lightness, double a, double b)
+        {
+            lightness = double.IsFinite(lightness) ? lightness : 0.0;
+            a = double.IsFinite(a) ? a : 0.0;
+            b = double.IsFinite(b) ? b : 0.0;
+
+            double lp = OklabM2Inverse[0, 0] * lightness + OklabM2Inverse[0, 1] * a + OklabM2Inverse[0, 2] * b;
+            double mp = OklabM2Inverse[1, 0] * lightness + OklabM2Inverse[1, 1] * a + OklabM2Inverse[1, 2] * b;
+            double sp = OklabM2Inverse[2, 0] * lightness + OklabM2Inverse[2, 1] * a + OklabM2Inverse[2, 2] * b;
+
+            double l = lp * lp * lp;
+            double m = mp * mp * mp;
+            double s = sp * sp * sp;
+
+            return new LinearRgb(
+                OklabM1Inverse[0, 0] * l + OklabM1Inverse[0, 1] * m + OklabM1Inverse[0, 2] * s,
+                OklabM1Inverse[1, 0] * l + OklabM1Inverse[1, 1] * m + OklabM1Inverse[1, 2] * s,
+                OklabM1Inverse[2, 0] * l + OklabM1Inverse[2, 1] * m + OklabM1Inverse[2, 2] * s);
+        }
+
+        #endregion
+
         #region Transfer Functions
 
         /// <summary>

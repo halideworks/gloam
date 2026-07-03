@@ -464,34 +464,101 @@ namespace HDRGammaController.Core.Calibration
             return CompressToGamut(rgb);
         }
 
+        /// <summary>Oklab lightness of sRGB white (1,1,1); the top of the representable L range.</summary>
+        private static readonly double OklabWhiteLightness = ColorMath.LinearSrgbToOklab(1.0, 1.0, 1.0).L;
+
         /// <summary>
-        /// Hue-preserving gamut compression: keep the corrected color on the same line from
-        /// neutral gray to the requested RGB and reduce saturation until every channel fits.
-        /// This avoids the hue skews caused by independent channel clipping.
+        /// Hue-preserving gamut compression in Oklab (a hue-linear perceptual space).
+        ///
+        /// Two-step policy:
+        ///  1. Lightness: if the color's Oklab L falls outside the representable range
+        ///     [0, L(white)] (e.g. HDR overshoot brighter than display white, or inputs
+        ///     darker than black), L is clamped into that range first. A lightness error
+        ///     cannot be absorbed by reducing chroma at the original L (no chroma at an
+        ///     unrepresentable L is in gamut), so it is resolved by clamping alone.
+        ///  2. Chroma: holding the (possibly clamped) L and the hue angle h = atan2(b, a)
+        ///     fixed, bisect on chroma C = hypot(a, b) toward 0 for the largest C whose
+        ///     linear-sRGB image lands inside [0, 1]^3. This walks straight to the gamut
+        ///     boundary along a line of constant perceived hue and lightness, avoiding
+        ///     both the hue skews of per-channel clipping and the merely approximate hue
+        ///     stability of the previous signal-space (Rec.709-luma-anchored) compression.
+        ///
+        /// In-gamut inputs are returned unchanged (bit-exact), so grays and already-valid
+        /// colors pass through untouched. Non-finite components are sanitized first
+        /// (NaN → 0, ±Inf → a wide finite bound) so the result is always finite and in gamut.
         /// </summary>
         internal static LinearRgb CompressToGamut(LinearRgb rgb)
         {
             if (rgb.IsInGamut)
                 return rgb;
 
-            double gray = Clamp01(0.2126 * rgb.R + 0.7152 * rgb.G + 0.0722 * rgb.B);
-            var neutral = new LinearRgb(gray, gray, gray);
-            double lo = 0;
-            double hi = 1;
+            // Sanitize non-finite channels: NaN carries no direction (treat as 0), while
+            // ±Inf is "very far out in this channel" (clamp to a wide finite bound so the
+            // Oklab math stays finite but the compression direction survives).
+            double r = SanitizeChannel(rgb.R);
+            double g = SanitizeChannel(rgb.G);
+            double b = SanitizeChannel(rgb.B);
 
-            for (int i = 0; i < 32; i++)
+            var sanitized = new LinearRgb(r, g, b);
+            if (sanitized.IsInGamut)
+                return sanitized;
+
+            var (lightness, labA, labB) = ColorMath.LinearSrgbToOklab(r, g, b);
+
+            // Step 1: clamp lightness into the representable range.
+            lightness = Math.Clamp(lightness, 0.0, OklabWhiteLightness);
+
+            double chroma = Math.Sqrt(labA * labA + labB * labB);
+            if (chroma <= 0)
+                return ColorMath.OklabToLinearSrgb(lightness, 0.0, 0.0).Clamp();
+
+            // Unit hue direction, held fixed throughout the search.
+            double dirA = labA / chroma;
+            double dirB = labB / chroma;
+
+            // Full chroma may fit once L has been clamped (the color was out of gamut on
+            // lightness alone).
+            var atFullChroma = ColorMath.OklabToLinearSrgb(lightness, labA, labB);
+            if (atFullChroma.IsInGamut)
+                return atFullChroma;
+
+            // Step 2: bisect on chroma. The achromatic axis at a representable L is inside
+            // the cube (up to rounding, handled by the Clamp fallback), so [lo, hi]
+            // brackets the gamut boundary. 40 halvings resolve chroma to ~1e-12.
+            var best = ColorMath.OklabToLinearSrgb(lightness, 0.0, 0.0);
+            if (!best.IsInGamut)
+                best = best.Clamp();
+
+            double lo = 0.0;
+            double hi = 1.0;
+            for (int i = 0; i < 40; i++)
             {
                 double mid = (lo + hi) * 0.5;
-                var candidate = neutral + (rgb - neutral) * mid;
+                var candidate = ColorMath.OklabToLinearSrgb(
+                    lightness, dirA * chroma * mid, dirB * chroma * mid);
                 if (candidate.IsInGamut)
+                {
                     lo = mid;
+                    best = candidate;
+                }
                 else
+                {
                     hi = mid;
+                }
             }
 
-            var compressed = neutral + (rgb - neutral) * lo;
-            return compressed.Clamp();
+            return best;
         }
+
+        /// <summary>
+        /// Maximum magnitude a sanitized channel may take. Wide enough that ±Inf inputs
+        /// still compress from far outside the gamut, small enough to keep the cube roots
+        /// and matrix products well-conditioned.
+        /// </summary>
+        private const double SanitizedChannelBound = 65504.0;
+
+        private static double SanitizeChannel(double value) =>
+            double.IsNaN(value) ? 0.0 : Math.Clamp(value, -SanitizedChannelBound, SanitizedChannelBound);
 
         private static double Clamp01(double value) =>
             double.IsFinite(value) ? Math.Clamp(value, 0.0, 1.0) : 0.0;

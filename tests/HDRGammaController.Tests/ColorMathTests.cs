@@ -494,6 +494,68 @@ namespace HDRGammaController.Tests
 
         #endregion
 
+        #region Oklab Conversion Tests
+
+        [Fact]
+        public void LinearSrgbToOklab_White_IsAchromaticUnitLightness()
+        {
+            var (l, a, b) = ColorMath.LinearSrgbToOklab(1.0, 1.0, 1.0);
+
+            // Ottosson's published forward matrices map white to L = 1 up to the rounding
+            // of the coefficients themselves (~4e-9).
+            Assert.True(Math.Abs(l - 1.0) < 1e-6, $"L(white) = {l}");
+            Assert.True(Math.Abs(a) < 1e-6, $"a(white) = {a}");
+            Assert.True(Math.Abs(b) < 1e-6, $"b(white) = {b}");
+        }
+
+        [Fact]
+        public void LinearSrgbToOklab_SrgbRed_MatchesPublishedReference()
+        {
+            // Reference values from Ottosson's Oklab post (table of sRGB primaries).
+            var (l, a, b) = ColorMath.LinearSrgbToOklab(1.0, 0.0, 0.0);
+
+            Assert.True(Math.Abs(l - 0.6279) < 2e-3, $"L(red) = {l}");
+            Assert.True(Math.Abs(a - 0.2249) < 2e-3, $"a(red) = {a}");
+            Assert.True(Math.Abs(b - 0.1258) < 2e-3, $"b(red) = {b}");
+        }
+
+        [Fact]
+        public void Oklab_RoundTrip_InGamutColors_MachinePrecision()
+        {
+            // The inverse matrices are derived (Invert3x3), not the published rounded
+            // literals, so forward∘inverse must round-trip to near machine precision.
+            var random = new Random(20260703);
+            for (int i = 0; i < 500; i++)
+            {
+                double r = random.NextDouble();
+                double g = random.NextDouble();
+                double b = random.NextDouble();
+
+                var (okL, okA, okB) = ColorMath.LinearSrgbToOklab(r, g, b);
+                var back = ColorMath.OklabToLinearSrgb(okL, okA, okB);
+
+                Assert.True(Math.Abs(back.R - r) < 1e-9, $"R round-trip {r} -> {back.R}");
+                Assert.True(Math.Abs(back.G - g) < 1e-9, $"G round-trip {g} -> {back.G}");
+                Assert.True(Math.Abs(back.B - b) < 1e-9, $"B round-trip {b} -> {back.B}");
+            }
+        }
+
+        [Fact]
+        public void Oklab_Conversions_NonFiniteInputs_ReturnFinite()
+        {
+            var (l, a, b) = ColorMath.LinearSrgbToOklab(double.NaN, double.PositiveInfinity, double.NegativeInfinity);
+            Assert.True(double.IsFinite(l));
+            Assert.True(double.IsFinite(a));
+            Assert.True(double.IsFinite(b));
+
+            var rgb = ColorMath.OklabToLinearSrgb(double.NaN, double.PositiveInfinity, double.NegativeInfinity);
+            Assert.True(double.IsFinite(rgb.R));
+            Assert.True(double.IsFinite(rgb.G));
+            Assert.True(double.IsFinite(rgb.B));
+        }
+
+        #endregion
+
         #region Transfer Function Tests
 
         [Fact]
