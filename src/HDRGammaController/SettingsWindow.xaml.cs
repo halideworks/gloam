@@ -30,7 +30,9 @@ namespace HDRGammaController
             _viewModel.CloseRequested += Close;
             DataContext = _viewModel;
 
-            // A debounced preview must not fire into a dead window.
+            // A debounced preview must not fire into a dead window. Cleanup also reverts
+            // any live-previewed but unsaved edits back to the persisted profile when the
+            // window is closed without Save & Close (X / Alt+F4).
             Closed += (s, e) => _viewModel.Cleanup();
         }
 

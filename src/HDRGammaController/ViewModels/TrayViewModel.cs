@@ -465,6 +465,12 @@ namespace HDRGammaController.ViewModels
                 // dedupe skip the re-apply.
                 _applyService.InvalidateAppliedState();
                 RefreshMonitors();
+                // Re-evaluate the night-mode schedule for 'now' BEFORE re-applying: after a
+                // suspend/resume (or a display-change burst that straddled a trigger) the
+                // service's cached kelvin can be hours stale, and ApplyAll would re-assert
+                // that stale warmth until the next timer tick. Feeding the persisted
+                // settings back in forces an immediate state update + timer reschedule.
+                _nightModeService.UpdateSettings(_settingsManager.NightMode);
                 ApplyAll();
             }
             catch (Exception ex)

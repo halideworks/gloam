@@ -39,6 +39,13 @@ namespace HDRGammaController.ViewModels
         private readonly Dictionary<string, MonitorProfileData> _pendingChanges = new();
         private bool _isLoading;
 
+        // True once any unsaved edit has been pushed to the GPU ramp (live preview,
+        // Apply button, or compare-end re-apply). Drives the revert on close-without-save.
+        private bool _livePreviewApplied;
+
+        // Set by SaveAndClose so the Closed handler's Cleanup skips the revert.
+        private bool _savedAndClosed;
+
         // Debounce timer for live preview - reused to avoid GC pressure
         private DispatcherTimer? _previewTimer;
         private const int PreviewDebounceMs = 100; // Faster response for UI
@@ -342,6 +349,7 @@ namespace HDRGammaController.ViewModels
 
         private void ApplyCurrent()
         {
+            _livePreviewApplied = true;
             _applyCallback?.Invoke(_currentMonitor, _profile.GammaMode, _profile.ToCalibrationSettings(), null);
         }
 
@@ -368,6 +376,8 @@ namespace HDRGammaController.ViewModels
 
         private void SaveAndClose()
         {
+            _savedAndClosed = true; // the live state is about to become the saved state
+
             // Save current monitor to pending
             SaveCurrentToPending();
 
@@ -390,7 +400,31 @@ namespace HDRGammaController.ViewModels
             CloseRequested?.Invoke();
         }
 
-        /// <summary>Stop the debounce timer so a pending preview can't fire after the window closes.</summary>
-        public void Cleanup() => _previewTimer?.Stop();
+        /// <summary>
+        /// Window Closed hook. Stops the debounce timer so a pending preview can't fire
+        /// after the window closes, and - when the window closed WITHOUT Save &amp; Close
+        /// (title-bar X / Alt+F4) - re-applies the persisted profile for every monitor
+        /// whose unsaved edits were live-previewed. Without this, the last previewed
+        /// state stayed on the GPU ramp until something else happened to refresh it.
+        /// Mirrors the CompareStart path, which already re-applies the saved profile.
+        /// </summary>
+        public void Cleanup()
+        {
+            _previewTimer?.Stop();
+            if (_savedAndClosed || !_livePreviewApplied) return;
+
+            // Include the monitor currently being edited alongside any switched-away-from
+            // monitors that accumulated pending (previewed but unsaved) changes.
+            SaveCurrentToPending();
+            foreach (var kvp in _pendingChanges)
+            {
+                var monitor = _monitors.Find(m => m.MonitorDevicePath == kvp.Key);
+                if (monitor == null) continue;
+
+                var saved = _settingsManager.GetMonitorProfile(kvp.Key)
+                    ?? new MonitorProfileData { GammaMode = monitor.CurrentGamma };
+                _applyCallback?.Invoke(monitor, saved.GammaMode, saved.ToCalibrationSettings(), null);
+            }
+        }
     }
 }

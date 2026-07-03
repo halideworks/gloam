@@ -41,9 +41,17 @@ namespace HDRGammaController
             ScheduleEditor.PreviewTemperatureRequested += async (kelvin) => await _viewModel.PreviewTemperatureAsync(kelvin);
             _viewModel.NightRenderingEdited += ScheduleEditor.SyncRenderingSettings;
 
+            // Refresh() may swap EditingNightMode for a freshly read snapshot (header
+            // Off/Auto/Manual toggle, tray edits). Re-Initialize the editor with the new
+            // instance; otherwise it keeps mutating the orphaned old clone and the next
+            // save silently discards those graph edits.
+            Action rebindScheduleEditor = () => ScheduleEditor.Initialize(_viewModel.EditingNightMode);
+            _viewModel.EditingNightModeReplaced += rebindScheduleEditor;
+
             // The view model subscribes to NightModeService, which outlives this window.
             Closed += (s, e) =>
             {
+                _viewModel.EditingNightModeReplaced -= rebindScheduleEditor;
                 _viewModel.NightRenderingEdited -= ScheduleEditor.SyncRenderingSettings;
                 _viewModel.Dispose();
             };

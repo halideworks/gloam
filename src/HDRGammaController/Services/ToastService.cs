@@ -55,15 +55,18 @@ namespace HDRGammaController.Services
             {
                 ShowCore(title, message, kind, null, null);
                 // Toasts auto-dismiss; resolve the task when the current toast closes.
-                if (_current != null)
+                // Capture the window instance: by the time Closed fires, _current may
+                // already point at a NEWER toast (or be null), so unsubscribing via
+                // _current was a no-op that leaked the handler on the closed window.
+                var window = _current;
+                if (window != null)
                 {
                     void OnClosed(object? s, EventArgs e)
                     {
-                        if (_current != null)
-                            _current.Closed -= OnClosed;
+                        window.Closed -= OnClosed;
                         tcs.TrySetResult(null);
                     }
-                    _current.Closed += OnClosed;
+                    window.Closed += OnClosed;
                 }
                 else
                 {
