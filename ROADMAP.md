@@ -38,12 +38,26 @@ regressions.
 > (985 tests green). Hardware validation with real instruments remains the gate before any
 > public release (see Tier 0). Statuses are updated in place as items land.
 
-**1.1 Adaptive patch placement (the DisplayCAL/Argyll OFPS gap).** `[DONE — v1.4.0; 2.53× lower worst-case model error vs equal-count fixed grid in simulation]` Fixed grids spend samples where
+**1.1 Adaptive patch placement (the DisplayCAL/Argyll OFPS gap).** `[DONE — v1.4.0]` Fixed grids spend samples where
 the display is well-behaved. Instead: fit the display model after an initial coarse pass, compute
-model uncertainty across the signal cube (Gaussian-process residual model or simple leave-one-out
-error), and place the next batch of patches where predicted error is highest. Iterate until the
-predicted worst-case model error is below target or the patch budget is spent. This typically
-halves patch counts at equal accuracy — or doubles accuracy at equal time.
+model uncertainty across the signal cube (simple leave-one-out error), and place the next batch of
+patches where predicted error is highest. Iterate until the predicted worst-case model error is
+below target or the patch budget is spent.
+
+*Honest benchmark (held-out, not the planner's own objective).* Both methods fit their model from
+their own measurements and predict a common dense reference set of 256 gray samples that NEITHER
+measured; error is scored in perceptual ΔL*, at equal patch count. The earlier "2.53× lower
+worst-case error" figure was **circular** — it scored each method on its own leave-one-out
+residuals (the exact quantity the planner minimizes) — and has been withdrawn. The honest result:
+adaptive's advantage is concentrated on **localized defects** a uniform grid under-samples — on a
+narrow tone step it cut held-out RMS ~1.4× and 95th-percentile error ~2.8×, and on a narrow
+*shadow* defect it cut shadow-region RMS ~3.5× (the perceptual ΔL* target, item 1.4-adjacent,
+steers samples into the visually-critical shadows). On smooth or broadband-curvature panels, where
+a uniform grid's even coverage is already near-optimal, adaptive is at **parity** (no perceptible
+regression), not a win. So the honest claim is "meaningfully better where the display actually
+misbehaves, no worse where it doesn't," not a blanket multiplier. Runs that stop before reaching
+the accuracy target (budget exhausted, or a genuine plateau) are now reported as a **degraded**
+outcome rather than unqualified success.
 
 **1.2 Spectrometer support and CCSS *generation*.** `[DONE — v1.4.0; needs hardware validation with a real i1 Pro/ColorMunki]` Today we consume CCSS; a spectrometer
 (i1Pro 2/3, ColorMunki) via spotread's spectral mode lets Gloam *create* the colorimeter

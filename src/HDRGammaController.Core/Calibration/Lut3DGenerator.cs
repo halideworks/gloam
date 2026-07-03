@@ -674,6 +674,15 @@ namespace HDRGammaController.Core.Calibration
         /// large spurious ΔE — the same near-black chroma regime the ramp fit's signal
         /// floor and the multi-read logic already avoid. Those patches still drive the
         /// tone term (which is bounded and meaningful at any level).
+        ///
+        /// KNOWN BLIND SPOT: gating chroma here means a genuine shadow gray-CAST below ~5%
+        /// of white (L*≈27) does not raise a color residual, so the adaptive planner will
+        /// not spend extra samples chasing it. This is a deliberate noise trade-off — below
+        /// this level the meter's own chroma noise would fabricate larger spurious ΔE than
+        /// any real cast — and the shadow TONE (luminance) error is still scored via the
+        /// perceptual |ΔL*| tone term (FIX 4), which is now up-weighted exactly where it
+        /// matters. Lowering this floor would need noise-safe shadow chroma data the current
+        /// single/median reads do not guarantee, so it is left conservative.
         /// </summary>
         private const double ColorResidualMinNormLuminance = 0.05;
 
@@ -687,11 +696,14 @@ namespace HDRGammaController.Core.Calibration
         /// <list type="bullet">
         /// <item><b>Tone (leave-one-out)</b> — for the gray axis and each single-channel
         /// ramp: the point is removed, the 1D curve is refit from the rest, and the
-        /// held-out point is predicted. The recorded magnitude is the luminance error as a
-        /// fraction of the display's luminance range, |ΔY|/(white−black) — a bounded,
-        /// well-behaved tone-accuracy criterion (a raw |ΔY|/Y would explode near black and
-        /// swamp genuine mid-tone defects). LOO is what makes this an honest PREDICTIVE
-        /// error: a plain fit residual is ~0 at points the fit used.</item>
+        /// held-out point is predicted. The recorded magnitude is the PERCEPTUAL tone error
+        /// |ΔL*| (CIE 1976 lightness) between the predicted and measured relative luminance
+        /// (FIX 4) — a bounded criterion that up-weights shadow errors by visibility (the
+        /// eye's near-constant ΔL*/contrast sensitivity), unlike the old photometric-linear
+        /// |ΔY|/(white−black) which penalized equal-ΔY shadow and highlight errors equally.
+        /// L*'s linear toe bounds it near black (a raw |ΔY|/Y would explode there). LOO is
+        /// what makes this an honest PREDICTIVE error: a plain fit residual is ~0 at points
+        /// the fit used.</item>
         /// <item><b>Color (interpolation, chroma-only)</b> — every accuracy patch is
         /// predicted through the current forward model (per-channel tone curves + measured
         /// RGB→XYZ matrix) and compared to its measurement in ΔE2000 at MATCHED lightness,
@@ -738,8 +750,8 @@ namespace HDRGammaController.Core.Calibration
         /// of interior sampling can reduce (for the gray axis these endpoints are black and
         /// white; for a channel ramp they are its dimmest and full-drive samples). Each
         /// remaining interior point is held out in turn, the curve is refit from the rest,
-        /// and the held-out point is predicted; the magnitude is |ΔY| as a fraction of the
-        /// luminance range.
+        /// and the held-out point is predicted; the magnitude is the perceptual tone error
+        /// |ΔL*| between the predicted and measured relative luminance (FIX 4).
         /// </summary>
         private void AddToneResiduals(
             List<ModelResidual> residuals, SignalManifold manifold, double blackY, double range,
@@ -774,9 +786,14 @@ namespace HDRGammaController.Core.Calibration
                 var curve = ToneCurve.CreateFromPoints(fitPoints);
                 double predicted = curve.Lookup(signal);
                 double measured = samples[i].norm;
-                // Luminance error as a fraction of the display range (both are already
-                // normalized to [0,1] over white−black), so 0.01 == 1% of range.
-                double relError = Math.Abs(predicted - measured);
+                // FIX 4 (perceptual tone target): score the tone error in CIE L*, not in
+                // photometric-linear |ΔY|. Both predicted and measured are relative
+                // luminance (Y/Yn over white−black, so white = 1); |ΔL*| between them weights
+                // shadow errors more than highlight errors in proportion to visibility, and
+                // L*'s linear toe keeps it bounded near black. The planner target is
+                // AdaptivePatchPlanner.ToneTargetDeltaLstar (≈ 1 L*).
+                double toneError = Math.Abs(
+                    RelativeLuminanceToLstar(predicted) - RelativeLuminanceToLstar(measured));
 
                 double s = signal;
                 var location = manifold switch
@@ -786,7 +803,7 @@ namespace HDRGammaController.Core.Calibration
                     SignalManifold.GreenRamp => new SignalPoint(0, s, 0, manifold),
                     _ => new SignalPoint(0, 0, s, manifold),
                 };
-                residuals.Add(new ModelResidual(location, ResidualKind.Tone, relError));
+                residuals.Add(new ModelResidual(location, ResidualKind.Tone, toneError));
             }
         }
 
@@ -854,6 +871,38 @@ namespace HDRGammaController.Core.Calibration
                 m[0, 0] * lr + m[0, 1] * lg + m[0, 2] * lb,
                 m[1, 0] * lr + m[1, 1] * lg + m[1, 2] * lb,
                 m[2, 0] * lr + m[2, 1] * lg + m[2, 2] * lb);
+        }
+
+        /// <summary>
+        /// Signal-luminance below which the perceptual-lightness weight is CAPPED. Above it
+        /// the metric is exact CIE L*; below it the curve continues LINEARLY with the L*
+        /// slope evaluated here, so the shadow up-weighting saturates at dL*/dY(0.05) ≈ 2.4×
+        /// the mid-gray (Y=0.18) slope instead of the ≈7× the pure toe would reach at black.
+        /// This keeps the desired perceptual emphasis on shadow tone error while preventing
+        /// the deep-black region — where a colorimeter is noise-dominated and finite sampling
+        /// leaves interpolation gaps — from dominating the planner's acquisition and forcing
+        /// endless near-black over-sampling on even a well-behaved panel.
+        /// </summary>
+        private const double ToneLstarShadowCapY = 0.05;
+
+        /// <summary>
+        /// Bounded perceptual lightness of a neutral at relative luminance <paramref name="yr"/>
+        /// (Y/Yn, white = 1), feeding the FIX 4 tone residual as |ΔL*|. Exact CIE 1976 L*
+        /// (L* = 116·yr^⅓ − 16) at and above <see cref="ToneLstarShadowCapY"/>; a linear
+        /// extension of matched slope below it. Monotone and continuous, so |ΔL*| is a valid
+        /// bounded tone-error metric that up-weights shadow errors by visibility (the eye's
+        /// near-constant ΔL*/contrast sensitivity) without the unbounded near-black gain of
+        /// the raw toe. Only differences are used, so the linear part's offset is irrelevant.
+        /// </summary>
+        private static double RelativeLuminanceToLstar(double yr)
+        {
+            yr = Clamp01(yr);
+            const double cap = ToneLstarShadowCapY;
+            if (yr >= cap)
+                return 116.0 * Math.Cbrt(yr) - 16.0;
+            double lCap = 116.0 * Math.Cbrt(cap) - 16.0;
+            double slopeCap = (116.0 / 3.0) * Math.Pow(cap, -2.0 / 3.0);
+            return lCap + slopeCap * (yr - cap);
         }
 
         private static bool IsNeutralSignal(LinearRgb rgb) =>
