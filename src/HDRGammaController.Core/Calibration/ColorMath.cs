@@ -217,6 +217,84 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public static CieXyz AdaptD65ToD50(CieXyz xyz) => ChromaticAdaptation(xyz, D65White, D50White);
 
+        /// <summary>
+        /// CAT16 forward matrix M16: XYZ → sharpened cone response (RGB_c).
+        /// Published values from Li et al. (2017), "Comprehensive color solutions:
+        /// CAM16, CAT16, and CAM16-UCS"; standardized in CIE 248:2022.
+        /// </summary>
+        public static readonly double[,] Cat16Matrix = {
+            {  0.401288, 0.650173, -0.051461 },
+            { -0.250268, 1.204414,  0.045854 },
+            { -0.002079, 0.048952,  0.953127 }
+        };
+
+        /// <summary>
+        /// Inverse CAT16 matrix (cone response → XYZ). Computed from
+        /// <see cref="Cat16Matrix"/> rather than hard-coding the published rounded
+        /// inverse so the forward/inverse pair round-trips at double precision.
+        /// </summary>
+        public static readonly double[,] Cat16InverseMatrix = Invert3x3(Cat16Matrix);
+
+        /// <summary>
+        /// CAT16 corresponding-colour transform with an explicit degree of adaptation D
+        /// (Li et al. 2017; CIE 248:2022). Maps <paramref name="source"/> (viewed under
+        /// <paramref name="sourceWhite"/>) to its corresponding colour under
+        /// <paramref name="destWhite"/>, with adaptation completeness
+        /// <paramref name="degree"/> ∈ [0, 1].
+        /// </summary>
+        /// <remarks>
+        /// Incomplete adaptation is applied as an ILLUMINANT BLEND in CAT16 cone space:
+        /// the effective adopted white is
+        ///
+        ///     adoptedWhite_c = D · destWhite_c + (1 − D) · sourceWhite_c
+        ///
+        /// and the transform is a von Kries scaling by adoptedWhite_c / sourceWhite_c.
+        /// The resulting per-channel gains are D · (destWhite_c / sourceWhite_c) + (1 − D),
+        /// i.e. the D-interpolation between the full CAT16 von Kries factors and unity —
+        /// the same convention CAM16 uses for its degree-of-adaptation factors
+        /// (D_c = D · Yw / RGB_wc + 1 − D) applied to a two-illuminant corresponding-colour
+        /// pair at equal white luminance, which is exactly the night-mode case here (both
+        /// whites at Y = 1; only chromaticity moves). D = 1 reproduces the full CAT16
+        /// transform (source white maps exactly onto destination white); D = 0 is the
+        /// identity.
+        /// </remarks>
+        public static CieXyz Cat16Adapt(CieXyz source, CieXyz sourceWhite, CieXyz destWhite, double degree)
+        {
+            source = SafeXyz(source);
+            sourceWhite = SafeReferenceWhite(sourceWhite);
+            destWhite = SafeReferenceWhite(destWhite);
+            degree = double.IsFinite(degree) ? Math.Clamp(degree, 0.0, 1.0) : 1.0;
+
+            double[] srcCone = MatrixMultiply(Cat16Matrix, new[] { sourceWhite.X, sourceWhite.Y, sourceWhite.Z });
+            double[] dstCone = MatrixMultiply(Cat16Matrix, new[] { destWhite.X, destWhite.Y, destWhite.Z });
+            if (!IsUsableCone(srcCone) || !IsUsableCone(dstCone))
+                return source;
+
+            // Effective adopted white: degree-of-adaptation blend of the destination and
+            // source whites in sharpened cone space (see remarks).
+            double[] adoptedCone = {
+                degree * dstCone[0] + (1.0 - degree) * srcCone[0],
+                degree * dstCone[1] + (1.0 - degree) * srcCone[1],
+                degree * dstCone[2] + (1.0 - degree) * srcCone[2]
+            };
+
+            double scaleR = adoptedCone[0] / srcCone[0];
+            double scaleG = adoptedCone[1] / srcCone[1];
+            double scaleB = adoptedCone[2] / srcCone[2];
+            if (!double.IsFinite(scaleR) || !double.IsFinite(scaleG) || !double.IsFinite(scaleB))
+                return source;
+
+            double[] inputCone = MatrixMultiply(Cat16Matrix, new[] { source.X, source.Y, source.Z });
+            double[] adaptedCone = {
+                inputCone[0] * scaleR,
+                inputCone[1] * scaleG,
+                inputCone[2] * scaleB
+            };
+
+            double[] result = MatrixMultiply(Cat16InverseMatrix, adaptedCone);
+            return SafeXyz(new CieXyz(result[0], result[1], result[2]));
+        }
+
         #endregion
 
         #region RGB ↔ XYZ Conversions

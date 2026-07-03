@@ -260,17 +260,29 @@ namespace HDRGammaController.Core
 
             var target = GetRawKelvinLinearRgb_Accurate(kelvin, basis);
             var ref6500 = GetRawKelvinLinearRgb_Accurate(6500, basis);
-            if (!IsUsableRgb(target) || !IsUsableRgb(ref6500)) return (1.0, 1.0, 1.0);
+            return NormalizedRatioMultipliers(target, ref6500);
+        }
 
-            // Normalize each to its own max (so the brightest channel = 1), then express the
-            // target as a ratio against the reference. At 6500K the ratio is exactly (1,1,1).
+        /// <summary>
+        /// Normalizes target and reference linear RGB each to its own max (so the brightest
+        /// channel = 1), then expresses the target as a per-channel ratio against the
+        /// reference. When target and reference are identical the ratio is exactly (1,1,1) —
+        /// this same-path normalization is what keeps 6500K an exact identity. Target and
+        /// reference must be expressed in the SAME wire basis.
+        /// </summary>
+        private static (double R, double G, double B) NormalizedRatioMultipliers(
+            (double r, double g, double b) target,
+            (double r, double g, double b) reference)
+        {
+            if (!IsUsableRgb(target) || !IsUsableRgb(reference)) return (1.0, 1.0, 1.0);
+
             double targetMax = MaxChannel(target);
-            double refMax = MaxChannel(ref6500);
+            double refMax = MaxChannel(reference);
             if (targetMax <= 0 || refMax <= 0) return (1.0, 1.0, 1.0);
 
-            double r = (target.r / targetMax) / (ref6500.r / refMax);
-            double g = (target.g / targetMax) / (ref6500.g / refMax);
-            double b = (target.b / targetMax) / (ref6500.b / refMax);
+            double r = (target.r / targetMax) / (reference.r / refMax);
+            double g = (target.g / targetMax) / (reference.g / refMax);
+            double b = (target.b / targetMax) / (reference.b / refMax);
 
             return ClampMultipliers(r, g, b);
         }
@@ -286,14 +298,20 @@ namespace HDRGammaController.Core
             kelvin = ClampNightModeKelvin(kelvin);
 
             var xy = ColorMath.CctToChromaticity(kelvin);
-            var xyz = xy.ToXyz(1.0);
+            return XyzToUsableLinearRgb(xy.ToXyz(1.0), basis);
+        }
+
+        /// <summary>
+        /// Converts a white-point XYZ to linear RGB in the requested wire basis, clipping only
+        /// negative out-of-gamut values. High channels are normalized by
+        /// <see cref="NormalizedRatioMultipliers"/>; clipping them here would change
+        /// chromaticity before the white-balance ratio is formed.
+        /// </summary>
+        private static (double r, double g, double b) XyzToUsableLinearRgb(CieXyz xyz, NightBasis basis)
+        {
             var rgb = basis == NightBasis.Rec2020
                 ? ColorMath.XyzToLinearRec2020(xyz)
                 : ColorMath.XyzToLinearSrgb(xyz);
-
-            // Clip only negative out-of-gamut values. High channels are normalized by
-            // GetAccurateMultipliers; clipping them here would change chromaticity before
-            // the white-balance ratio is formed.
             return (PositiveFiniteOrZero(rgb.R), PositiveFiniteOrZero(rgb.G), PositiveFiniteOrZero(rgb.B));
         }
 
@@ -321,21 +339,25 @@ namespace HDRGammaController.Core
         }
 
         /// <summary>
-        /// Perceptual night-mode white point: the colorimetric Planckian multipliers
-        /// (<see cref="GetAccurateMultipliers"/>) eased toward neutral by an incomplete degree
-        /// of chromatic adaptation (<see cref="PerceptualAdaptationDegree"/>). Returns
-        /// linear-light per-channel multipliers.
+        /// Perceptual night-mode white point: incomplete chromatic adaptation modelled in
+        /// CAT16 sharpened cone space (Li et al. 2017; CIE 248:2022) via the illuminant-blend
+        /// formulation of <see cref="ColorMath.Cat16Adapt"/> — NOT an RGB-space lerp of the
+        /// finished multipliers. Returns linear-light per-channel multipliers.
         /// </summary>
         /// <remarks>
-        /// The display correction is a 1D per-channel LUT, so only a diagonal scale in the
-        /// wire's RGB basis reaches real content faithfully — a full 3×3 chromatic adaptation
-        /// (LMS or otherwise) cannot be baked in. Within that constraint the lever that best
-        /// preserves colour is the *degree* of adaptation: a full colorimetric shift crushes
-        /// blue/green and looks "extremely orange", while a partial shift keeps the brightest
-        /// channel at 1.0 (no clipping / colour cast) and retains far more chroma. At 6500K
-        /// this returns (1, 1, 1); at D = 1 it equals <see cref="GetAccurateMultipliers"/>.
-        /// The degree-of-adaptation blend is applied to the multipliers in the wire basis, so
-        /// <paramref name="basis"/> follows the same rule as the accurate path.
+        /// The display correction is a 1D per-channel LUT, so only per-channel transforms reach
+        /// real content faithfully — a full 3×3 chromatic adaptation cannot be baked in. Within
+        /// that constraint the lever that best preserves colour is the *degree* of adaptation D
+        /// (<paramref name="strength"/>): the D-adapted white is computed as the D-blend of the
+        /// target-Kelvin white and the 6500K reference white in CAT16 cone space, converted
+        /// back to XYZ, and only THEN reduced to per-channel display ratios — through the exact
+        /// same path <see cref="GetAccurateMultipliers"/> uses (same-path reference
+        /// normalization, same wire <paramref name="basis"/> rule: sRGB for the SDR ramp,
+        /// Rec.2020 for the HDR10 LUT path), so 6500K stays an exact identity in every basis.
+        /// This replaces the previous SoftenToNeutral display-RGB lerp (1 + D·(m − 1)), which
+        /// was incomplete von Kries in the display-RGB basis rather than a sharpened cone
+        /// space. At D = 1 this equals <see cref="GetAccurateMultipliers"/>; at D = 0 it is
+        /// (1, 1, 1); the brightest channel stays at 1.0 (no clipping / colour cast).
         /// </remarks>
         public static (double R, double G, double B) GetPerceptualMultipliers(
             int kelvin,
@@ -343,12 +365,27 @@ namespace HDRGammaController.Core
             NightBasis basis = NightBasis.Srgb)
         {
             strength = double.IsFinite(strength) ? Math.Clamp(strength, 0.0, 1.0) : DefaultPerceptualStrength;
-            var (r, g, b) = GetAccurateMultipliers(kelvin, basis);
-            return (SoftenToNeutral(r, strength), SoftenToNeutral(g, strength), SoftenToNeutral(b, strength));
-        }
+            kelvin = ClampNightModeKelvin(kelvin);
 
-        private static double SoftenToNeutral(double multiplier, double strength) =>
-            1.0 + strength * (multiplier - 1.0);
+            // Source and target whites on the same Kang CCT locus the Accurate algorithm uses,
+            // both at Y = 1: night mode only moves chromaticity, and the equal-luminance case
+            // is what makes the illuminant-blend formulation of D exact (see Cat16Adapt).
+            var sourceWhite = ColorMath.CctToChromaticity(6500).ToXyz(1.0);
+            var targetWhite = ColorMath.CctToChromaticity(kelvin).ToXyz(1.0);
+
+            // D-adapted white: blend of target and source whites in CAT16 cone space.
+            var adaptedTarget = ColorMath.Cat16Adapt(sourceWhite, sourceWhite, targetWhite, strength);
+
+            // Same-path reference: push the 6500K white through the identical CAT16 round
+            // trip so that at 6500K target and reference are bit-identical and the ratio is
+            // exactly (1, 1, 1). This invariant is load-bearing: the neutral point must not
+            // shift when the user switches temperature algorithm.
+            var adaptedReference = ColorMath.Cat16Adapt(sourceWhite, sourceWhite, sourceWhite, strength);
+
+            return NormalizedRatioMultipliers(
+                XyzToUsableLinearRgb(adaptedTarget, basis),
+                XyzToUsableLinearRgb(adaptedReference, basis));
+        }
 
         /// <summary>
         /// Maximum-protection "Ultra Night" (amber): drives toward a red/amber white point,
