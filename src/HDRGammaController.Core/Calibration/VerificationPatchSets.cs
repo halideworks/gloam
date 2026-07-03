@@ -83,19 +83,17 @@ namespace HDRGammaController.Core.Calibration
             foreach (var m in memory)
                 defs.Add((m.Name, m.R / 255.0, m.G / 255.0, m.B / 255.0, PatchCategory.MemoryColor));
 
-            // Expected color for each patch: the same content curve the grading uses (sRGB
-            // for PQ targets / HDR mode, where SDR patches ride the sRGB curve at SDR white).
-            // NOTE: CalibrationVerifier.ComputeMetrics is the authoritative grader - it
-            // re-derives the expectation from DisplayRgb with the PQ-target rule. The two
-            // rules agree in every reachable combination because target selection enforces
-            // hdrMode <=> PQ target (HDR-only/SDR-only targets in the setup window).
-            bool srgbContent = hdrMode || target.TransferFunction == TransferFunctionType.Pq;
-            double Linearize(double s) => srgbContent ? ColorMath.SrgbEotf(s) : target.ApplyEotf(s);
-
+            // Expected color for each patch: delegated to the ONE authoritative rule in
+            // CalibrationVerifier.LinearizePatchSignal, which ComputeMetrics (the grader)
+            // also uses — the expectation and the grade cannot drift apart. (hdrMode is
+            // retained as a parameter for the docs above; target selection already enforces
+            // hdrMode <=> PQ target, and the rule keys off the target.)
             return defs.Select((p, i) =>
             {
                 var targetXyz = target.LinearRgbToXyz(new LinearRgb(
-                    Linearize(p.R), Linearize(p.G), Linearize(p.B)));
+                    CalibrationVerifier.LinearizePatchSignal(target, p.R),
+                    CalibrationVerifier.LinearizePatchSignal(target, p.G),
+                    CalibrationVerifier.LinearizePatchSignal(target, p.B)));
                 return new ColorPatch
                 {
                     Name = p.Name,

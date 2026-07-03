@@ -182,7 +182,10 @@ namespace HDRGammaController.Core
                     lutR[i] = Math.Pow(r, 1.0 / 2.2);
                     lutG[i] = Math.Pow(g, 1.0 / 2.2);
                     lutB[i] = Math.Pow(b, 1.0 / 2.2);
-                    lutGrey[i] = (lutR[i] + lutG[i] + lutB[i]) / 3.0;
+                    // Grey = encode-of-mean-LINEAR (E6): the physically meaningful neutral
+                    // signal, consistent with the HDR branch's PQ-of-mean-nits. A mean of
+                    // gamma-encoded signals is not the signal for the mean light.
+                    lutGrey[i] = Math.Pow((r + g + b) / 3.0, 1.0 / 2.2);
                 }
                 return (lutR, lutG, lutB, lutGrey);
             }
@@ -331,7 +334,12 @@ namespace HDRGammaController.Core
         }
 
         /// <summary>
-        /// Generates per-channel 1D LUTs using measured display characteristics.
+        /// Generates per-channel 1D LUTs using measured display characteristics, with the
+        /// desired tone response given as a bare power-law gamma. This overload serves the
+        /// USER-PREFERENCE regrade path (GammaMode → 2.2/2.4); calibration-target flows must
+        /// use the <see cref="CalibrationTarget"/> overload so the tone target is the target's
+        /// actual EOTF (BT.1886 with measured black, piecewise sRGB, ...) and every stage of
+        /// the calibration pipeline linearizes the SAME curve.
         /// </summary>
         public static (double[] R, double[] G, double[] B, double[] Grey) GenerateCalibratedLut(
             double targetGamma,
@@ -341,6 +349,48 @@ namespace HDRGammaController.Core
             bool isHdr = true)
         {
             ValidateTargetGamma(targetGamma);
+            return GenerateCalibratedLutCore(
+                v => Math.Pow(v, targetGamma),
+                isLinearTarget: Math.Abs(targetGamma - 1.0) < 0.01,
+                characterization, calibration, sdrWhiteLevel, isHdr);
+        }
+
+        /// <summary>
+        /// Generates per-channel 1D LUTs using measured display characteristics, driving the
+        /// tone correction toward the CALIBRATION TARGET's EOTF. This is the authoritative
+        /// linearization for the calibration flow: the closed-loop corrector, the verifier and
+        /// the installed LUT all route the target through <see cref="CalibrationTarget.ApplyEotf"/>
+        /// so they agree on what "on target" means at every signal level.
+        /// The EOTF is treated as SDR-signal → relative linear (0..1 of white); do not pass an
+        /// HDR PQ/HLG target here — HDR corrections are synthesized separately (MHC2 PQ LUTs).
+        /// </summary>
+        public static (double[] R, double[] G, double[] B, double[] Grey) GenerateCalibratedLut(
+            CalibrationTarget target,
+            DisplayCharacterization characterization,
+            CalibrationSettings calibration,
+            double sdrWhiteLevel,
+            bool isHdr = true)
+        {
+            if (target == null)
+                throw new ArgumentNullException(nameof(target));
+            return GenerateCalibratedLutCore(
+                target.ApplyEotf,
+                isLinearTarget: target.TransferFunction == TransferFunctionType.Linear,
+                characterization, calibration, sdrWhiteLevel, isHdr);
+        }
+
+        /// <summary>
+        /// Shared implementation: <paramref name="targetEotf"/> maps an SDR signal level
+        /// [0,1] to the desired relative linear output [0,1].
+        /// </summary>
+        private static (double[] R, double[] G, double[] B, double[] Grey) GenerateCalibratedLutCore(
+            Func<double, double> targetEotf,
+            bool isLinearTarget,
+            DisplayCharacterization characterization,
+            CalibrationSettings calibration,
+            double sdrWhiteLevel,
+            bool isHdr)
+        {
             ValidateSdrWhiteLevel(sdrWhiteLevel);
             if (characterization == null)
                 throw new ArgumentNullException(nameof(characterization));
@@ -377,8 +427,8 @@ namespace HDRGammaController.Core
                     double input = i / 1023.0;
 
                     // What linear light level do we WANT for this input?
-                    // (Input represents the encoded signal, target gamma defines the desired decoding)
-                    double targetLinear = Math.Pow(input, targetGamma);
+                    // (Input represents the encoded signal, the target EOTF defines the desired decoding)
+                    double targetLinear = Clamp01(targetEotf(input));
 
                     // Apply calibration adjustments to the target
                     var (adjR, adjG, adjB) = ColorAdjustments.ApplyUserAdjustmentsLinear(
@@ -392,7 +442,11 @@ namespace HDRGammaController.Core
                     lutR[i] = measuredR.InverseLookup(fitR);
                     lutG[i] = measuredG.InverseLookup(fitG);
                     lutB[i] = measuredB.InverseLookup(fitB);
-                    lutGrey[i] = (lutR[i] + lutG[i] + lutB[i]) / 3.0;
+                    // Grey = signal-for-mean-linear, matching the HDR branch's PQ-of-mean-nits
+                    // (E6): the grey channel must be the signal that produces the MEAN linear
+                    // light of the three channels, not the mean of three encoded signals.
+                    double fitGrey = Clamp01(((adjR + adjG + adjB) / 3.0 - sdrBlackFrac) / sdrNormRange);
+                    lutGrey[i] = measuredG.InverseLookup(fitGrey);
                 }
                 return (lutR, lutG, lutB, lutGrey);
             }
@@ -410,16 +464,16 @@ namespace HDRGammaController.Core
 
                 double outputR, outputG, outputB;
 
-                if (Math.Abs(targetGamma - 1.0) < 0.01)
+                if (isLinearTarget)
                 {
                     // Linear mode (no gamma correction, just calibration)
                     outputR = outputG = outputB = linear;
                 }
                 else
                 {
-                    // 2. Compute what linear output we want based on target gamma
+                    // 2. Compute what linear output we want based on the target EOTF
                     double srgbNormalized = TransferFunctions.SrgbInverseEotf(linear, sdrWhiteLevel, blackLevel);
-                    double gammaApplied = Math.Pow(srgbNormalized, targetGamma);
+                    double gammaApplied = Clamp01(targetEotf(srgbNormalized));
                     double targetLinear = blackLevel + (sdrWhiteLevel - blackLevel) * gammaApplied;
                     outputR = outputG = outputB = targetLinear;
                 }

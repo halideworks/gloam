@@ -131,6 +131,29 @@ namespace HDRGammaController.Core.Calibration
         };
 
         /// <summary>
+        /// Clone of this target with a different black level (in the same cd/m² domain as
+        /// <see cref="PeakLuminance"/>/<see cref="ReferenceWhite"/>). Used to wire the
+        /// MEASURED black into a BT.1886 target: the standard's a/b coefficients are a
+        /// function of the actual display's Lw/Lb, so a target with BlackLevel = 0
+        /// degenerates to pure 2.4 and never uses the measured contrast.
+        /// </summary>
+        public CalibrationTarget WithBlackLevel(double blackLevel) => new()
+        {
+            Name = Name,
+            Description = Description,
+            RedPrimary = RedPrimary,
+            GreenPrimary = GreenPrimary,
+            BluePrimary = BluePrimary,
+            WhitePoint = WhitePoint,
+            Gamma = Gamma,
+            TransferFunction = TransferFunction,
+            PeakLuminance = PeakLuminance,
+            BlackLevel = double.IsFinite(blackLevel) && blackLevel > 0.0 ? blackLevel : 0.0,
+            ReferenceWhite = ReferenceWhite,
+            WhitePointOnly = WhitePointOnly,
+        };
+
+        /// <summary>
         /// Gets the RGB to XYZ matrix for this color space.
         /// JsonIgnore: derived from the serialized primaries, and System.Text.Json
         /// cannot serialize double[,] (it broke report-snapshot persistence).
@@ -238,25 +261,47 @@ namespace HDRGammaController.Core.Calibration
         }
 
         /// <summary>
-        /// HLG OETF (Hybrid Log-Gamma).
+        /// HLG system gamma per BT.2100-2 Note 5f: γ = 1.2 + 0.42·log10(L_W / 1000),
+        /// with L_W = nominal display peak luminance (<see cref="PeakLuminance"/>).
+        /// At the 1000 cd/m² reference display γ is exactly 1.2.
         /// </summary>
-        private static double ApplyHlgOetf(double linear)
+        private double HlgSystemGamma()
         {
-            linear = Clamp01(linear);
-            return linear <= 1.0 / 12.0
-                ? Math.Sqrt(3.0 * linear)
-                : HlgA * Math.Log(12.0 * linear - HlgB) + HlgC;
+            double lw = SafePositive(PeakLuminance, 1000.0); // HLG reference display is 1000 cd/m²
+            double gamma = 1.2 + 0.42 * Math.Log10(lw / 1000.0);
+            return double.IsFinite(gamma) ? Math.Max(gamma, 1.0) : 1.2;
         }
 
         /// <summary>
-        /// HLG EOTF (Hybrid Log-Gamma).
+        /// HLG inverse EOTF (display linear → signal), per ITU-R BT.2100-2:
+        /// EOTF = OOTF[OETF⁻¹], so the inverse is OETF[OOTF⁻¹]. On the neutral axis the
+        /// OOTF is F_D/L_W = Y_S^(γ−1)·E_S = E_S^γ, so OOTF⁻¹ is the 1/γ root.
         /// </summary>
-        private static double ApplyHlgEotf(double signal)
+        private double ApplyHlgOetf(double displayLinear)
+        {
+            displayLinear = Clamp01(displayLinear);
+            double sceneLinear = Math.Pow(displayLinear, 1.0 / HlgSystemGamma()); // inverse OOTF
+            // Clamp: the spec's rounded a/b/c constants leave ~2e-8 of overshoot at the top.
+            return Clamp01(sceneLinear <= 1.0 / 12.0
+                ? Math.Sqrt(3.0 * sceneLinear)
+                : HlgA * Math.Log(12.0 * sceneLinear - HlgB) + HlgC);
+        }
+
+        /// <summary>
+        /// HLG EOTF (signal → display linear, normalized to L_W = 1) per ITU-R BT.2100-2:
+        /// F_D = OOTF[OETF⁻¹(signal)] = α·Y_S^(γ−1)·E_S with α = L_W. For a per-channel
+        /// scalar on the neutral axis Y_S = E_S, so F_D/L_W = E_S^γ. The previous
+        /// implementation returned SCENE linear (inverse OETF only), silently omitting the
+        /// system-gamma OOTF that is part of the HLG EOTF by definition.
+        /// </summary>
+        private double ApplyHlgEotf(double signal)
         {
             signal = Clamp01(signal);
-            return signal <= 0.5
+            double sceneLinear = signal <= 0.5
                 ? (signal * signal) / 3.0
                 : (Math.Exp((signal - HlgC) / HlgA) + HlgB) / 12.0;
+            // Clamp: the spec's rounded a/b/c constants put OETF^-1(1) at 1 + ~2.4e-8.
+            return Clamp01(Math.Pow(sceneLinear, HlgSystemGamma())); // OOTF
         }
 
         private double SafePeakLuminance() => SafePositive(PeakLuminance, 10000.0);
@@ -308,18 +353,42 @@ namespace HDRGammaController.Core.Calibration
     public static class StandardTargets
     {
         /// <summary>
-        /// sRGB / Rec.709 with sRGB transfer function (standard PC/web content).
+        /// sRGB / Rec.709 primaries with a PURE POWER 2.2 EOTF (standard PC/web content).
+        /// A display-calibration target named "Gamma 2.2" means pure power 2.2: the sRGB
+        /// piecewise curve (linear toe) is an ENCODING function; consumer displays that
+        /// sRGB content is mastered on decode with a plain 2.2 power law. Grading pure-2.2
+        /// tracking against the piecewise curve builds in a permanent ~1.5-2 ΔE2000 shadow
+        /// penalty below 10% signal. A true piecewise-sRGB EOTF target exists separately as
+        /// <see cref="SrgbPiecewise"/>, deliberately outside the default flow.
         /// </summary>
         public static CalibrationTarget SrgbGamma22 { get; } = new()
         {
             Name = "sRGB (Gamma 2.2)",
-            Description = "Standard sRGB color space with 2.2 gamma. Best for general PC use and web content.",
+            Description = "Standard sRGB color space with pure 2.2 gamma. Best for general PC use and web content.",
+            RedPrimary = Chromaticity.Rec709Red,
+            GreenPrimary = Chromaticity.Rec709Green,
+            BluePrimary = Chromaticity.Rec709Blue,
+            WhitePoint = Chromaticity.D65,
+            TransferFunction = TransferFunctionType.Gamma,
+            Gamma = 2.2,
+            ReferenceWhite = 80
+        };
+
+        /// <summary>
+        /// sRGB with the TRUE IEC 61966-2-1 piecewise EOTF (linear toe below ~0.04 signal).
+        /// Kept for users who explicitly want piecewise-sRGB tracking; NOT in
+        /// <see cref="All"/> (the default flow) — see the <see cref="SrgbGamma22"/> remarks.
+        /// </summary>
+        public static CalibrationTarget SrgbPiecewise { get; } = new()
+        {
+            Name = "sRGB (piecewise)",
+            Description = "sRGB color space with the exact IEC 61966-2-1 piecewise transfer function. " +
+                          "Only for workflows that specifically require the linear-toe sRGB EOTF.",
             RedPrimary = Chromaticity.Rec709Red,
             GreenPrimary = Chromaticity.Rec709Green,
             BluePrimary = Chromaticity.Rec709Blue,
             WhitePoint = Chromaticity.D65,
             TransferFunction = TransferFunctionType.Srgb,
-            Gamma = 2.2,
             ReferenceWhite = 80
         };
 

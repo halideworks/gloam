@@ -204,6 +204,158 @@ namespace HDRGammaController.Tests
             AssertFiniteMonotonic(refined.B);
         }
 
+        // ------------------------------------------------------------------ M1: residual objective
+
+        [Fact]
+        public void GrayscaleResidualDeltaE_WhitePointOnlyImprovement_StrictlyImprovesScore()
+        {
+            // M1 regression: the residual used the MEASURED white as its Lab reference, so
+            // white always scored dE = 0 and a uniform cast was invisible — keep-best could
+            // then revert a round that only improved the white point. Grading against the
+            // TARGET white makes a white-only improvement strictly lower the score.
+            var corrector = new ClosedLoopCorrector(StandardTargets.SrgbGamma22, 120, isHdr: false);
+
+            var heavyCast = NeutralRamp(blueGain: 1.15);   // tone perfect, white 15% blue
+            var lightCast = NeutralRamp(blueGain: 1.05);   // SAME tone, white improved only
+            var onTarget = NeutralRamp(blueGain: 1.00);
+
+            double heavy = corrector.GrayscaleResidualDeltaE(heavyCast);
+            double light = corrector.GrayscaleResidualDeltaE(lightCast);
+            double perfect = corrector.GrayscaleResidualDeltaE(onTarget);
+
+            Assert.True(perfect < 0.3, $"on-target ramp should score ~0, got {perfect:F2}");
+            Assert.True(light > perfect, "any cast must score worse than on-target");
+            Assert.True(heavy > light + 0.3,
+                $"an iteration that ONLY improves the white point must strictly improve the " +
+                $"residual: 15% cast {heavy:F2} vs 5% cast {light:F2}");
+        }
+
+        // Neutral gamma-2.2 ramp on the target (D65) white, with an optional uniform blue
+        // cast; tone tracking is exact so any score difference is white-point only.
+        private static List<MeasurementResult> NeutralRamp(double blueGain, int steps = 16)
+        {
+            var list = new List<MeasurementResult>();
+            for (int i = 0; i <= steps; i++)
+            {
+                double v = i / (double)steps;
+                double lin = Math.Pow(v, 2.2);
+                list.Add(new MeasurementResult
+                {
+                    Patch = new ColorPatch
+                    {
+                        Name = $"grey{i}",
+                        DisplayRgb = new LinearRgb(v, v, v),
+                        Category = PatchCategory.Grayscale
+                    },
+                    Xyz = new CieXyz(
+                        0.95047 * lin * 120.0,
+                        1.0 * lin * 120.0,
+                        1.08883 * lin * blueGain * 120.0),
+                    IsValid = true
+                });
+            }
+            return list;
+        }
+
+        // ------------------------------------------------------------------ M2: gain domain
+
+        [Fact]
+        public void RefineCorrection_AppliesWhiteGainInLinearLight_NotOnEncodedSignal()
+        {
+            // The VCGT output is a gamma-encoded panel signal. A requested linear gain g must
+            // therefore become OETF(g * EOTF(signal)); multiplying the encoded value directly
+            // (the old bug) applies g^gamma of linear change (~11% for a 5% request at 2.2).
+            var neutralPanel = new SimDisplay { GammaR = 2.2, GammaG = 2.2, GammaB = 2.2, GainR = 1, GainG = 1, GainB = 1 };
+            var corrector = new ClosedLoopCorrector(StandardTargets.SrgbGamma22, 120, isHdr: false, damping: 1.0);
+            corrector.BuildInitialCorrection(MeasureRamp(neutralPanel, null)); // captures the native tone curve
+
+            // Achieved pass: perfect gamma-2.2 tone, red channel 5% low in LINEAR light. The
+            // white balance (gains renormalized so max = 1) requests a 1/1.05 linear step on
+            // green and blue.
+            var redDeficient = new SimDisplay { GammaR = 2.2, GammaG = 2.2, GammaB = 2.2, GainR = 1.0 / 1.05, GainG = 1, GainB = 1 };
+            var identity = IdentityCorrection();
+            var refined = corrector.RefineCorrection(MeasureRamp(redDeficient, identity), identity);
+
+            double v = 0.6;
+            double signalRatio = SampleLut(refined.G, v) / v;
+            double linearRatio = Math.Pow(signalRatio, 2.2);
+            double requested = 1.0 / 1.05;
+
+            Assert.InRange(linearRatio, requested - 0.012, requested + 0.012);
+            Assert.True(linearRatio > 0.925,
+                $"linear change {1 - linearRatio:P1} looks like the encoded-domain bug " +
+                $"(would be ~{1 - Math.Pow(requested, 2.2):P1}), requested {1 - requested:P1}");
+        }
+
+        // ------------------------------------------------------------------ M4: decomposition
+
+        [Fact]
+        public void DecomposeCorrection_SplitsNeutralToneAndWhiteGains_AndRecomposes()
+        {
+            var tone = ToneCurve.CreateGamma(2.2);
+            var neutralIn = new double[1024];
+            for (int i = 0; i < neutralIn.Length; i++)
+                neutralIn[i] = Math.Pow(i / 1023.0, 0.9);
+
+            // Realistic post-white-balance gains (max = 1: channels are only pulled DOWN).
+            double gR = 1.0, gG = 0.97, gB = 0.93;
+            var correction = (
+                R: ClosedLoopCorrector.RecomposeChannel(neutralIn, gR, tone),
+                G: ClosedLoopCorrector.RecomposeChannel(neutralIn, gG, tone),
+                B: ClosedLoopCorrector.RecomposeChannel(neutralIn, gB, tone));
+
+            var (neutralOut, outR, outG, outB) = ClosedLoopCorrector.DecomposeCorrection(correction, tone);
+
+            // Gains recovered up to the mean-1 normalization: ratios preserved.
+            Assert.Equal(gR / gG, outR / outG, 6);
+            Assert.Equal(gB / gG, outB / outG, 6);
+
+            // Neutral tone x white gains must recompose to the original channels.
+            var rebuilt = (
+                R: ClosedLoopCorrector.RecomposeChannel(neutralOut, outR, tone),
+                G: ClosedLoopCorrector.RecomposeChannel(neutralOut, outG, tone),
+                B: ClosedLoopCorrector.RecomposeChannel(neutralOut, outB, tone));
+            for (int i = 0; i < neutralIn.Length; i++)
+            {
+                Assert.True(Math.Abs(rebuilt.R[i] - correction.R[i]) < 1e-6, $"R diverged at {i}");
+                Assert.True(Math.Abs(rebuilt.G[i] - correction.G[i]) < 1e-6, $"G diverged at {i}");
+                Assert.True(Math.Abs(rebuilt.B[i] - correction.B[i]) < 1e-6, $"B diverged at {i}");
+            }
+
+            // The neutral component is monotonic and spans the full range.
+            Assert.Equal(0.0, neutralOut[0], 9);
+            for (int i = 1; i < neutralOut.Length; i++)
+                Assert.True(neutralOut[i] >= neutralOut[i - 1] - 1e-12);
+        }
+
+        // ------------------------------------------------------------------ m4: BT.1886 wiring
+
+        [Fact]
+        public void MakeEffectiveTarget_WiresMeasuredContrastIntoBt1886_Only()
+        {
+            var characterization = new DisplayCharacterization
+            {
+                BlackLevel = 0.2,
+                PeakLuminance = 200.0
+            };
+
+            var effective = ClosedLoopCorrector.MakeEffectiveTarget(
+                StandardTargets.Rec709Gamma24, characterization);
+
+            // Measured contrast 1000:1 scaled into the target's 100-nit white domain.
+            Assert.Equal(0.1, effective.BlackLevel, 10);
+            Assert.NotEqual(Math.Pow(0.5, 2.4), effective.ApplyEotf(0.5), 4);
+
+            // Non-BT.1886 targets pass through untouched.
+            Assert.Same(StandardTargets.SrgbGamma22,
+                ClosedLoopCorrector.MakeEffectiveTarget(StandardTargets.SrgbGamma22, characterization));
+
+            // A zero/implausible measured black leaves the target alone.
+            var zeroBlack = new DisplayCharacterization { BlackLevel = 0.0, PeakLuminance = 200.0 };
+            Assert.Same(StandardTargets.Rec709Gamma24,
+                ClosedLoopCorrector.MakeEffectiveTarget(StandardTargets.Rec709Gamma24, zeroBlack));
+        }
+
         private static MeasurementResult Gray(double signal, double y)
         {
             return new MeasurementResult
