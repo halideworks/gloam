@@ -1,3 +1,4 @@
+using System;
 using Xunit;
 using HDRGammaController.Core.Calibration;
 
@@ -94,6 +95,77 @@ namespace HDRGammaController.Tests
             // since sRGB sits fully inside P3. Shoelace: sRGB = 0.11205, P3 = 0.1520.
             double coverage = ColorMath.GamutCoverage(SrgbR, SrgbG, SrgbB, P3R, P3G, P3B);
             Assert.Equal(0.11205 / 0.1520, coverage, 6);
+        }
+
+        // --- Gamut reachability guard (negative-drive rejection) ---
+        // The content→display matrix maps a target primary to display-channel drives. A target
+        // primary OUTSIDE the display gamut forces a negative drive (light the panel cannot
+        // subtract); the guard must reject it, not silently clip it as MaxPrimaryDrive's old
+        // Math.Max(0, drive) did.
+
+        private static double[,] ContentToDisplay(
+            Chromaticity tR, Chromaticity tG, Chromaticity tB,
+            Chromaticity dR, Chromaticity dG, Chromaticity dB, Chromaticity white)
+        {
+            var target = ColorMath.CalculateRgbToXyzMatrix(tR, tG, tB, white);
+            var display = ColorMath.CalculateRgbToXyzMatrix(dR, dG, dB, white);
+            return ColorMath.MultiplyMatrices(ColorMath.Invert3x3(display), target);
+        }
+
+        [Fact]
+        public void Reachability_Rec2020TargetOnSrgbDisplay_IsUnreachable()
+        {
+            var m = ContentToDisplay(
+                Chromaticity.Rec2020Red, Chromaticity.Rec2020Green, Chromaticity.Rec2020Blue,
+                SrgbR, SrgbG, SrgbB, Chromaticity.D65);
+
+            var (min, max) = GamutReachability.PrimaryDriveExtent(m);
+            // Rec.2020 is far wider than sRGB, so at least one channel drive goes strongly negative.
+            Assert.True(min < GamutReachability.MinReachablePrimaryDrive);
+            Assert.False(GamutReachability.IsReachable(max, min));
+        }
+
+        [Fact]
+        public void Reachability_SrgbTargetOnP3Display_IsReachable()
+        {
+            var m = ContentToDisplay(
+                SrgbR, SrgbG, SrgbB,
+                P3R, P3G, P3B, Chromaticity.D65);
+
+            var (min, max) = GamutReachability.PrimaryDriveExtent(m);
+            // sRGB sits fully inside P3: no negative drive, no channel far above full scale.
+            Assert.True(min >= GamutReachability.MinReachablePrimaryDrive);
+            Assert.True(GamutReachability.IsReachable(max, min));
+        }
+
+        [Fact]
+        public void Reachability_NegativeDriveWithinSlack_StillReachable()
+        {
+            // The small negative tolerance absorbs EDID/measurement noise.
+            Assert.True(GamutReachability.IsReachable(1.0, -0.04));
+            Assert.False(GamutReachability.IsReachable(1.0, -0.06));
+        }
+
+        [Fact]
+        public void GamutCoverageUv_SrgbInsideP3_DiffersFromXyAndIsInUnitInterval()
+        {
+            double xy = ColorMath.GamutCoverage(SrgbR, SrgbG, SrgbB, P3R, P3G, P3B);
+            double uv = ColorMath.GamutCoverageUv(SrgbR, SrgbG, SrgbB, P3R, P3G, P3B);
+
+            // Both are valid coverage fractions in (0, 1].
+            Assert.InRange(xy, 0.0 + 1e-9, 1.0);
+            Assert.InRange(uv, 0.0 + 1e-9, 1.0);
+
+            // sRGB sits inside P3 in both planes, but the perceptual (u'v') ratio is not the
+            // same number as the xy ratio.
+            Assert.True(Math.Abs(uv - xy) > 1e-3,
+                $"u'v' coverage {uv:F4} should differ from xy coverage {xy:F4}");
+        }
+
+        [Fact]
+        public void GamutCoverageUv_IdenticalPrimaries_Returns100Percent()
+        {
+            Assert.Equal(1.0, ColorMath.GamutCoverageUv(SrgbR, SrgbG, SrgbB), 9);
         }
     }
 }

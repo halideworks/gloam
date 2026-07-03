@@ -71,8 +71,13 @@ namespace HDRGammaController.Core.Calibration
 
         // Standard illuminants and color space primaries
 
-        /// <summary>CIE Standard Illuminant D65 (daylight, ~6500K)</summary>
-        public static readonly Chromaticity D65 = new(0.31272, 0.32903);
+        /// <summary>
+        /// CIE Standard Illuminant D65 (daylight, ~6500K).
+        /// xy = (0.3127, 0.3290) per IEC 61966-2-1 (sRGB) / ITU-R BT.709 / BT.2020 / BT.2100.
+        /// This 4-decimal definition is the one the display-standard RGB↔XYZ matrices are built
+        /// from, so all app color math shares a single, standards-consistent white point.
+        /// </summary>
+        public static readonly Chromaticity D65 = new(0.3127, 0.3290);
 
         /// <summary>CIE Standard Illuminant D50 (horizon light, ~5000K)</summary>
         public static readonly Chromaticity D50 = new(0.34567, 0.35850);
@@ -104,8 +109,21 @@ namespace HDRGammaController.Core.Calibration
         /// <summary>DCI-P3 Blue primary</summary>
         public static readonly Chromaticity P3Blue = new(0.150, 0.060);
 
-        public bool Equals(Chromaticity other) =>
-            Math.Abs(X - other.X) < 1e-10 && Math.Abs(Y - other.Y) < 1e-10;
+        /// <summary>
+        /// Exact field equality. This matches <see cref="GetHashCode"/> so the type honours the
+        /// equality/hash contract and is safe as a dictionary/set key. For tolerant colour
+        /// comparisons use <see cref="ApproximatelyEquals"/>.
+        /// </summary>
+        public bool Equals(Chromaticity other) => X.Equals(other.X) && Y.Equals(other.Y);
+
+        /// <summary>
+        /// True when both coordinates agree within <paramref name="tolerance"/>. Use this for
+        /// perceptual/measurement comparisons; <see cref="Equals"/> is exact.
+        /// </summary>
+        public bool ApproximatelyEquals(Chromaticity other, double tolerance = 1e-10) =>
+            double.IsFinite(X) && double.IsFinite(Y) &&
+            double.IsFinite(other.X) && double.IsFinite(other.Y) &&
+            Math.Abs(X - other.X) <= tolerance && Math.Abs(Y - other.Y) <= tolerance;
 
         public override bool Equals(object? obj) => obj is Chromaticity other && Equals(other);
         public override int GetHashCode() => HashCode.Combine(X, Y);
@@ -200,10 +218,20 @@ namespace HDRGammaController.Core.Calibration
         public static CieXyz operator *(CieXyz a, double s) => new(a.X * s, a.Y * s, a.Z * s);
         public static CieXyz operator *(double s, CieXyz a) => a * s;
 
+        /// <summary>
+        /// Exact field equality, consistent with <see cref="GetHashCode"/>. For tolerant
+        /// comparisons use <see cref="ApproximatelyEquals"/>.
+        /// </summary>
         public bool Equals(CieXyz other) =>
-            Math.Abs(X - other.X) < 1e-10 &&
-            Math.Abs(Y - other.Y) < 1e-10 &&
-            Math.Abs(Z - other.Z) < 1e-10;
+            X.Equals(other.X) && Y.Equals(other.Y) && Z.Equals(other.Z);
+
+        /// <summary>True when all three components agree within <paramref name="tolerance"/>.</summary>
+        public bool ApproximatelyEquals(CieXyz other, double tolerance = 1e-10) =>
+            double.IsFinite(X) && double.IsFinite(Y) && double.IsFinite(Z) &&
+            double.IsFinite(other.X) && double.IsFinite(other.Y) && double.IsFinite(other.Z) &&
+            Math.Abs(X - other.X) <= tolerance &&
+            Math.Abs(Y - other.Y) <= tolerance &&
+            Math.Abs(Z - other.Z) <= tolerance;
 
         public override bool Equals(object? obj) => obj is CieXyz other && Equals(other);
         public override int GetHashCode() => HashCode.Combine(X, Y, Z);
@@ -432,10 +460,20 @@ namespace HDRGammaController.Core.Calibration
         private static double SafeDeltaE(double value) =>
             double.IsNaN(value) || value < 0.0 ? double.PositiveInfinity : value;
 
+        /// <summary>
+        /// Exact field equality, consistent with <see cref="GetHashCode"/>. For tolerant
+        /// comparisons use <see cref="ApproximatelyEquals"/> (or a ΔE metric for perceptual work).
+        /// </summary>
         public bool Equals(CieLab other) =>
-            Math.Abs(L - other.L) < 1e-10 &&
-            Math.Abs(A - other.A) < 1e-10 &&
-            Math.Abs(B - other.B) < 1e-10;
+            L.Equals(other.L) && A.Equals(other.A) && B.Equals(other.B);
+
+        /// <summary>True when all three components agree within <paramref name="tolerance"/>.</summary>
+        public bool ApproximatelyEquals(CieLab other, double tolerance = 1e-10) =>
+            double.IsFinite(L) && double.IsFinite(A) && double.IsFinite(B) &&
+            double.IsFinite(other.L) && double.IsFinite(other.A) && double.IsFinite(other.B) &&
+            Math.Abs(L - other.L) <= tolerance &&
+            Math.Abs(A - other.A) <= tolerance &&
+            Math.Abs(B - other.B) <= tolerance;
 
         public override bool Equals(object? obj) => obj is CieLab other && Equals(other);
         public override int GetHashCode() => HashCode.Combine(L, A, B);

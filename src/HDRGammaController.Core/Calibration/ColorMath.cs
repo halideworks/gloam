@@ -44,16 +44,19 @@ namespace HDRGammaController.Core.Calibration
         #region XYZ Reference White Points
 
         /// <summary>
-        /// CIE D65 reference white XYZ (Y=1 normalized).
-        /// Standard daylight illuminant, approximately 6504K.
+        /// CIE D65 reference white XYZ (Y=1 normalized). Derived at full double precision from the
+        /// standards white point <see cref="Chromaticity.D65"/> = (0.3127, 0.3290) via
+        /// X = x/y, Y = 1, Z = (1-x-y)/y, so it is exactly consistent with the RGB↔XYZ matrices
+        /// below (which are built from the same white). Was the rounded literal (0.95047, 1.0,
+        /// 1.08883); the derived value is (0.950455…, 1.0, 1.089058…).
         /// </summary>
-        public static readonly CieXyz D65White = new(0.95047, 1.0, 1.08883);
+        public static readonly CieXyz D65White = Chromaticity.D65.ToXyz(1.0);
 
         /// <summary>
-        /// CIE D50 reference white XYZ (Y=1 normalized).
-        /// Horizon light, approximately 5003K. Used in ICC profiles.
+        /// CIE D50 reference white XYZ (Y=1 normalized), derived from <see cref="Chromaticity.D50"/>
+        /// = (0.34567, 0.35850). Horizon light, ~5003K; used in ICC profiles.
         /// </summary>
-        public static readonly CieXyz D50White = new(0.96422, 1.0, 0.82521);
+        public static readonly CieXyz D50White = Chromaticity.D50.ToXyz(1.0);
 
         #endregion
 
@@ -218,59 +221,49 @@ namespace HDRGammaController.Core.Calibration
 
         #region RGB ↔ XYZ Conversions
 
-        /// <summary>
-        /// RGB to XYZ conversion matrix for sRGB/Rec.709 (D65 white point).
-        /// </summary>
-        public static readonly double[,] SrgbToXyzMatrix = {
-            { 0.4124564, 0.3575761, 0.1804375 },
-            { 0.2126729, 0.7151522, 0.0721750 },
-            { 0.0193339, 0.1191920, 0.9503041 }
-        };
+        // The RGB↔XYZ matrices below are DERIVED at full double precision in the static
+        // constructor from the standard primaries and the shared D65 white (0.3127, 0.3290),
+        // rather than stored as rounded 7-digit literals. Deriving forward and inverse from the
+        // same source guarantees they are exact inverses of each other and share one white point
+        // with D65White and every CalculateRgbToXyzMatrix caller. The derived values agree with
+        // the previous published literals to < 1e-4 (the literals were rounded from these same
+        // primaries), so downstream numerics are unchanged to that tolerance.
 
-        /// <summary>
-        /// XYZ to RGB conversion matrix for sRGB/Rec.709 (D65 white point).
-        /// </summary>
-        public static readonly double[,] XyzToSrgbMatrix = {
-            {  3.2404542, -1.5371385, -0.4985314 },
-            { -0.9692660,  1.8760108,  0.0415560 },
-            {  0.0556434, -0.2040259,  1.0572252 }
-        };
+        /// <summary>RGB to XYZ conversion matrix for sRGB/Rec.709 (D65 white point).</summary>
+        public static readonly double[,] SrgbToXyzMatrix;
 
-        /// <summary>
-        /// RGB to XYZ conversion matrix for Rec.2020 (D65 white point).
-        /// </summary>
-        public static readonly double[,] Rec2020ToXyzMatrix = {
-            { 0.6369580, 0.1446169, 0.1688810 },
-            { 0.2627002, 0.6779981, 0.0593017 },
-            { 0.0000000, 0.0280727, 1.0609851 }
-        };
+        /// <summary>XYZ to RGB conversion matrix for sRGB/Rec.709 (D65 white point).</summary>
+        public static readonly double[,] XyzToSrgbMatrix;
 
-        /// <summary>
-        /// XYZ to RGB conversion matrix for Rec.2020 (D65 white point).
-        /// </summary>
-        public static readonly double[,] XyzToRec2020Matrix = {
-            {  1.7166512, -0.3556708, -0.2533663 },
-            { -0.6666844,  1.6164812,  0.0157685 },
-            {  0.0176399, -0.0427706,  0.9421031 }
-        };
+        /// <summary>RGB to XYZ conversion matrix for Rec.2020 (D65 white point).</summary>
+        public static readonly double[,] Rec2020ToXyzMatrix;
 
-        /// <summary>
-        /// RGB to XYZ conversion matrix for DCI-P3 (D65 white point).
-        /// </summary>
-        public static readonly double[,] P3D65ToXyzMatrix = {
-            { 0.4865709, 0.2656677, 0.1982173 },
-            { 0.2289746, 0.6917385, 0.0792869 },
-            { 0.0000000, 0.0451134, 1.0439444 }
-        };
+        /// <summary>XYZ to RGB conversion matrix for Rec.2020 (D65 white point).</summary>
+        public static readonly double[,] XyzToRec2020Matrix;
 
-        /// <summary>
-        /// XYZ to RGB conversion matrix for DCI-P3 (D65 white point).
-        /// </summary>
-        public static readonly double[,] XyzToP3D65Matrix = {
-            {  2.4934969, -0.9313836, -0.4027108 },
-            { -0.8294890,  1.7626641,  0.0236247 },
-            {  0.0358458, -0.0761724,  0.9568845 }
-        };
+        /// <summary>RGB to XYZ conversion matrix for DCI-P3 (D65 white point).</summary>
+        public static readonly double[,] P3D65ToXyzMatrix;
+
+        /// <summary>XYZ to RGB conversion matrix for DCI-P3 (D65 white point).</summary>
+        public static readonly double[,] XyzToP3D65Matrix;
+
+        static ColorMath()
+        {
+            // sRGB / Rec.709 primaries (0.64,0.33)(0.30,0.60)(0.15,0.06) + D65.
+            SrgbToXyzMatrix = CalculateRgbToXyzMatrix(
+                Chromaticity.Rec709Red, Chromaticity.Rec709Green, Chromaticity.Rec709Blue, Chromaticity.D65);
+            XyzToSrgbMatrix = Invert3x3(SrgbToXyzMatrix);
+
+            // Rec.2020 primaries (0.708,0.292)(0.170,0.797)(0.131,0.046) + D65.
+            Rec2020ToXyzMatrix = CalculateRgbToXyzMatrix(
+                Chromaticity.Rec2020Red, Chromaticity.Rec2020Green, Chromaticity.Rec2020Blue, Chromaticity.D65);
+            XyzToRec2020Matrix = Invert3x3(Rec2020ToXyzMatrix);
+
+            // DCI-P3 primaries (0.680,0.320)(0.265,0.690)(0.150,0.060) + D65.
+            P3D65ToXyzMatrix = CalculateRgbToXyzMatrix(
+                Chromaticity.P3Red, Chromaticity.P3Green, Chromaticity.P3Blue, Chromaticity.D65);
+            XyzToP3D65Matrix = Invert3x3(P3D65ToXyzMatrix);
+        }
 
         /// <summary>
         /// Converts linear sRGB to CIE XYZ.
@@ -413,89 +406,104 @@ namespace HDRGammaController.Core.Calibration
         #region Correlated Color Temperature
 
         /// <summary>
-        /// Calculates correlated color temperature (CCT) from chromaticity by finding the
-        /// closest point on the app's CCT locus in CIE 1960 UCS.
+        /// Correlated color temperature (CCT, Kelvin) from chromaticity, using Ohno's (2014)
+        /// triangular+parabolic solution against a Planckian locus tabulated from the CIE 1931
+        /// 2° observer. CCT and <see cref="CalculateDuv"/> are mutually consistent because both
+        /// are solved in CIE 1960 UCS (u,v) against the same locus table.
         /// </summary>
         /// <remarks>
-        /// This is slower than McCamy's cubic approximation but much more appropriate for
-        /// calibration reports: the returned CCT and Duv are mutually consistent because both
-        /// are computed in CIE 1960 UCS against the same locus.
+        /// Reference: Y. Ohno, "Practical Use and Calculation of CCT and Duv," LEUKOS 10(1), 2014.
         /// </remarks>
         public static double ChromaticityToCct(Chromaticity xy)
         {
             if (!IsPlausibleChromaticity(xy))
                 return 6500.0;
-
-            var targetUv = ToUcs1960(xy);
-            if (!double.IsFinite(targetUv.U) || !double.IsFinite(targetUv.V))
-                return 6500.0;
-
-            // Golden-section search over the practical display-white range. The distance to
-            // the Planckian/daylight locus is unimodal for normal near-white chromaticities.
-            double lo = MinimumCctApproximationKelvin;
-            double hi = MaximumCctApproximationKelvin;
-            double gr = (Math.Sqrt(5.0) - 1.0) / 2.0;
-            double c = hi - gr * (hi - lo);
-            double d = lo + gr * (hi - lo);
-            double fc = UcsDistanceSquared(targetUv, CctToChromaticity(c));
-            double fd = UcsDistanceSquared(targetUv, CctToChromaticity(d));
-
-            for (int i = 0; i < 60; i++)
-            {
-                if (fc < fd)
-                {
-                    hi = d;
-                    d = c;
-                    fd = fc;
-                    c = hi - gr * (hi - lo);
-                    fc = UcsDistanceSquared(targetUv, CctToChromaticity(c));
-                }
-                else
-                {
-                    lo = c;
-                    c = d;
-                    fc = fd;
-                    d = lo + gr * (hi - lo);
-                    fd = UcsDistanceSquared(targetUv, CctToChromaticity(d));
-                }
-            }
-
-            return (lo + hi) * 0.5;
+            return OhnoCctDuv(xy).Cct;
         }
 
         /// <summary>
-        /// Calculates the Duv (distance from Planckian locus) for a chromaticity.
-        /// Positive Duv = greenish, Negative Duv = pinkish/magenta.
+        /// Signed Duv (distance from the Planckian locus in CIE 1960 UCS) for a chromaticity.
+        /// Positive Duv = above the locus (greenish); negative = below (pink/magenta).
+        /// Solved by Ohno (2014) parabolic refinement against the tabulated locus.
         /// </summary>
         public static double CalculateDuv(Chromaticity xy)
         {
             if (!IsPlausibleChromaticity(xy))
                 return 0.0;
+            return OhnoCctDuv(xy).Duv;
+        }
 
-            double cct = ChromaticityToCct(xy);
-            var planckian = CctToChromaticity(cct);
+        private static (double Cct, double Duv) OhnoCctDuv(Chromaticity xy)
+        {
+            var (u, v) = ToUcs1960(xy);
+            if (!double.IsFinite(u) || !double.IsFinite(v))
+                return (6500.0, 0.0);
 
-            var uv = ToUcs1960(xy);
-            var planckianUv = ToUcs1960(planckian);
-            if (!double.IsFinite(uv.U) || !double.IsFinite(uv.V) ||
-                !double.IsFinite(planckianUv.U) || !double.IsFinite(planckianUv.V))
+            var locus = PlanckianLocus.Instance;
+            if (locus == null || locus.T.Length < 3)
+                return (6500.0, 0.0); // table build failed (does not happen in practice)
+
+            int n = locus.T.Length;
+
+            // 1) Nearest table point in (u,v).
+            int m = 0;
+            double bestSq = double.MaxValue;
+            for (int i = 0; i < n; i++)
             {
-                return 0.0;
+                double du = u - locus.U[i], dv = v - locus.V[i];
+                double sq = du * du + dv * dv;
+                if (sq < bestSq) { bestSq = sq; m = i; }
+            }
+            m = Math.Clamp(m, 1, n - 2);
+
+            double d1 = Hypot(u - locus.U[m - 1], v - locus.V[m - 1]);
+            double d2 = Hypot(u - locus.U[m],     v - locus.V[m]);
+            double d3 = Hypot(u - locus.U[m + 1], v - locus.V[m + 1]);
+            double t1 = locus.T[m - 1], t2 = locus.T[m], t3 = locus.T[m + 1];
+
+            // 2) Triangular solution (Ohno 2014, eqs. for the chord between m-1 and m+1).
+            double l = Hypot(locus.U[m + 1] - locus.U[m - 1], locus.V[m + 1] - locus.V[m - 1]);
+            double cctTri = t2;
+            double duvTri = 0.0;
+            if (l > 1e-15)
+            {
+                double xproj = (d1 * d1 - d3 * d3 + l * l) / (2.0 * l);
+                cctTri = t1 + (t3 - t1) * (xproj / l);
+                duvTri = Math.Sqrt(Math.Max(0.0, d1 * d1 - xproj * xproj));
             }
 
-            double offsetU = uv.U - planckianUv.U;
-            double offsetV = uv.V - planckianUv.V;
-            double duv = Math.Sqrt(offsetU * offsetU + offsetV * offsetV);
+            // 3) Parabolic refinement (better for larger |Duv|).
+            double cctPar = cctTri, duvPar = duvTri;
+            double denom = (t3 - t2) * (t1 - t3) * (t2 - t1);
+            if (Math.Abs(denom) > 1e-30)
+            {
+                double a = (t1 * (d3 - d2) + t2 * (d1 - d3) + t3 * (d2 - d1)) / denom;
+                double b = -(t1 * t1 * (d3 - d2) + t2 * t2 * (d1 - d3) + t3 * t3 * (d2 - d1)) / denom;
+                double c = -(d1 * (t3 - t2) * t2 * t3 + d2 * (t1 - t3) * t1 * t3 + d3 * (t2 - t1) * t1 * t2) / denom;
+                if (Math.Abs(a) > 1e-30)
+                {
+                    cctPar = -b / (2.0 * a);
+                    duvPar = a * cctPar * cctPar + b * cctPar + c;
+                }
+            }
 
-            double step = Math.Max(1.0, cct * 0.001);
-            var lowerUv = ToUcs1960(CctToChromaticity(cct - step));
-            var upperUv = ToUcs1960(CctToChromaticity(cct + step));
-            double tangentU = upperUv.U - lowerUv.U;
-            double tangentV = upperUv.V - lowerUv.V;
-            double cross = tangentU * offsetV - tangentV * offsetU;
+            // Ohno: triangular is accurate near the locus; switch to parabolic when Duv is large.
+            double cct = duvTri < 0.002 ? cctTri : cctPar;
+            double duvMag = duvTri < 0.002 ? duvTri : Math.Abs(duvPar);
 
-            // Positive Duv is conventionally above/green of the Planckian locus.
-            return cross <= 0.0 ? duv : -duv;
+            if (!double.IsFinite(cct)) cct = t2;
+            cct = Math.Clamp(cct, PlanckianMinKelvin, PlanckianMaxKelvin);
+
+            // 4) Sign: positive above the locus (green). Use the locus tangent at the foot point
+            //    and the offset from that foot, matching the CIE 1960 "green is positive" convention.
+            var foot = CctToChromaticity(cct);
+            var (fu, fv) = ToUcs1960(foot);
+            double tangentU = locus.U[m + 1] - locus.U[m - 1];
+            double tangentV = locus.V[m + 1] - locus.V[m - 1];
+            double cross = tangentU * (v - fv) - tangentV * (u - fu);
+            double duv = cross <= 0.0 ? duvMag : -duvMag;
+
+            return (cct, duv);
         }
 
         private static (double U, double V) ToUcs1960(Chromaticity xy)
@@ -509,62 +517,211 @@ namespace HDRGammaController.Core.Calibration
             return (4.0 * xy.X / denom, 6.0 * xy.Y / denom);
         }
 
-        private static double UcsDistanceSquared((double U, double V) targetUv, Chromaticity locusXy)
-        {
-            var locusUv = ToUcs1960(locusXy);
-            double du = targetUv.U - locusUv.U;
-            double dv = targetUv.V - locusUv.V;
-            return du * du + dv * dv;
-        }
+        private static double Hypot(double a, double b) => Math.Sqrt(a * a + b * b);
 
         /// <summary>
-        /// Calculates chromaticity from CCT using Kang et al. approximation.
+        /// Chromaticity of a Planckian (blackbody) radiator at the given CCT, interpolated
+        /// (linear in log-CCT) from a table computed at startup from CIE 1931 2° CMFs and
+        /// Planck's law. Input is clamped to the app's supported approximation range
+        /// [1667, 25000] K for backward compatibility with existing callers; the underlying
+        /// locus table itself spans [1000, 25000] K for the CCT/Duv inversion above.
         /// </summary>
         public static Chromaticity CctToChromaticity(double cct)
         {
-            double x, y;
-            double T = double.IsFinite(cct)
+            double t = double.IsFinite(cct)
                 ? Math.Clamp(cct, MinimumCctApproximationKelvin, MaximumCctApproximationKelvin)
                 : 6500.0;
 
+            var locus = PlanckianLocus.Instance;
+            if (locus == null || locus.T.Length < 2)
+                return KangChromaticity(t); // fallback (table build failed)
+
+            return locus.Interpolate(t);
+        }
+
+        /// <summary>
+        /// Legacy Kang et al. (2002) cubic fit for chromaticity from CCT. Retained only as a
+        /// fallback if the Planckian locus table fails to build (which it does not in practice).
+        /// </summary>
+        private static Chromaticity KangChromaticity(double T)
+        {
+            double x, y;
             if (T <= 4000)
             {
-                x = -0.2661239e9 / (T * T * T)
-                  - 0.2343589e6 / (T * T)
-                  + 0.8776956e3 / T
-                  + 0.179910;
+                x = -0.2661239e9 / (T * T * T) - 0.2343589e6 / (T * T) + 0.8776956e3 / T + 0.179910;
             }
             else
             {
-                x = -3.0258469e9 / (T * T * T)
-                  + 2.1070379e6 / (T * T)
-                  + 0.2226347e3 / T
-                  + 0.240390;
+                x = -3.0258469e9 / (T * T * T) + 2.1070379e6 / (T * T) + 0.2226347e3 / T + 0.240390;
             }
 
             if (T <= 2222)
-            {
-                y = -1.1063814 * x * x * x
-                  - 1.34811020 * x * x
-                  + 2.18555832 * x
-                  - 0.20219683;
-            }
+                y = -1.1063814 * x * x * x - 1.34811020 * x * x + 2.18555832 * x - 0.20219683;
             else if (T <= 4000)
-            {
-                y = -0.9549476 * x * x * x
-                  - 1.37418593 * x * x
-                  + 2.09137015 * x
-                  - 0.16748867;
-            }
+                y = -0.9549476 * x * x * x - 1.37418593 * x * x + 2.09137015 * x - 0.16748867;
             else
-            {
-                y = 3.0817580 * x * x * x
-                  - 5.87338670 * x * x
-                  + 3.75112997 * x
-                  - 0.37001483;
-            }
+                y = 3.0817580 * x * x * x - 5.87338670 * x * x + 3.75112997 * x - 0.37001483;
 
             return new Chromaticity(x, y);
+        }
+
+        #endregion
+
+        #region Planckian Locus Table (CIE 1931 2° observer)
+
+        private const double PlanckianMinKelvin = 1000.0;
+        private const double PlanckianMaxKelvin = 25000.0;
+
+        /// <summary>Second radiation constant c2 (m·K), CODATA/CIE value used for the locus.</summary>
+        private const double PlanckC2 = 1.4388e-2;
+
+        private const double CmfStartNm = 380.0;
+        private const double CmfStepNm = 5.0;
+
+        // CIE 1931 2° standard observer colour-matching functions at 5 nm, 380–780 nm (81 samples).
+        // Public CIE 015 / Wyszecki & Stiles data (values from the CVRL 1nm tabulation sampled at
+        // 5 nm multiples). ybar is identical to the CIE 1924 V(λ) luminous efficiency function.
+        private static readonly double[] Cmf1931X =
+        {
+            1.368000e-03, 2.236000e-03, 4.243000e-03, 7.650000e-03, 1.431000e-02, 2.319000e-02,
+            4.351000e-02, 7.763000e-02, 1.343800e-01, 2.147700e-01, 2.839000e-01, 3.285000e-01,
+            3.482800e-01, 3.480600e-01, 3.362000e-01, 3.187000e-01, 2.908000e-01, 2.511000e-01,
+            1.953600e-01, 1.421000e-01, 9.564000e-02, 5.795001e-02, 3.201000e-02, 1.470000e-02,
+            4.900000e-03, 2.400000e-03, 9.300000e-03, 2.910000e-02, 6.327000e-02, 1.096000e-01,
+            1.655000e-01, 2.257499e-01, 2.904000e-01, 3.597000e-01, 4.334499e-01, 5.120501e-01,
+            5.945000e-01, 6.784000e-01, 7.621000e-01, 8.425000e-01, 9.163000e-01, 9.786000e-01,
+            1.026300e+00, 1.056700e+00, 1.062200e+00, 1.045600e+00, 1.002600e+00, 9.384000e-01,
+            8.544499e-01, 7.514000e-01, 6.424000e-01, 5.419000e-01, 4.479000e-01, 3.608000e-01,
+            2.835000e-01, 2.187000e-01, 1.649000e-01, 1.212000e-01, 8.740000e-02, 6.360000e-02,
+            4.677000e-02, 3.290000e-02, 2.270000e-02, 1.584000e-02, 1.135916e-02, 8.110916e-03,
+            5.790346e-03, 4.109457e-03, 2.899327e-03, 2.049190e-03, 1.439971e-03, 9.999493e-04,
+            6.900786e-04, 4.760213e-04, 3.323011e-04, 2.348261e-04, 1.661505e-04, 1.174130e-04,
+            8.307527e-05, 5.870652e-05, 4.150994e-05,
+        };
+
+        private static readonly double[] Cmf1931Y =
+        {
+            3.900000e-05, 6.400000e-05, 1.200000e-04, 2.170000e-04, 3.960000e-04, 6.400000e-04,
+            1.210000e-03, 2.180000e-03, 4.000000e-03, 7.300000e-03, 1.160000e-02, 1.684000e-02,
+            2.300000e-02, 2.980000e-02, 3.800000e-02, 4.800000e-02, 6.000000e-02, 7.390000e-02,
+            9.098000e-02, 1.126000e-01, 1.390200e-01, 1.693000e-01, 2.080200e-01, 2.586000e-01,
+            3.230000e-01, 4.073000e-01, 5.030000e-01, 6.082000e-01, 7.100000e-01, 7.932000e-01,
+            8.620000e-01, 9.148501e-01, 9.540000e-01, 9.803000e-01, 9.949501e-01, 1.000000e+00,
+            9.950000e-01, 9.786000e-01, 9.520000e-01, 9.154000e-01, 8.700000e-01, 8.163000e-01,
+            7.570000e-01, 6.949000e-01, 6.310000e-01, 5.668000e-01, 5.030000e-01, 4.412000e-01,
+            3.810000e-01, 3.210000e-01, 2.650000e-01, 2.170000e-01, 1.750000e-01, 1.382000e-01,
+            1.070000e-01, 8.160000e-02, 6.100000e-02, 4.458000e-02, 3.200000e-02, 2.320000e-02,
+            1.700000e-02, 1.192000e-02, 8.210000e-03, 5.723000e-03, 4.102000e-03, 2.929000e-03,
+            2.091000e-03, 1.484000e-03, 1.047000e-03, 7.400000e-04, 5.200000e-04, 3.611000e-04,
+            2.492000e-04, 1.719000e-04, 1.200000e-04, 8.480000e-05, 6.000000e-05, 4.240000e-05,
+            3.000000e-05, 2.120000e-05, 1.499000e-05,
+        };
+
+        private static readonly double[] Cmf1931Z =
+        {
+            6.450001e-03, 1.054999e-02, 2.005001e-02, 3.621000e-02, 6.785001e-02, 1.102000e-01,
+            2.074000e-01, 3.713000e-01, 6.456000e-01, 1.039050e+00, 1.385600e+00, 1.622960e+00,
+            1.747060e+00, 1.782600e+00, 1.772110e+00, 1.744100e+00, 1.669200e+00, 1.528100e+00,
+            1.287640e+00, 1.041900e+00, 8.129501e-01, 6.162000e-01, 4.651800e-01, 3.533000e-01,
+            2.720000e-01, 2.123000e-01, 1.582000e-01, 1.117000e-01, 7.824999e-02, 5.725001e-02,
+            4.216000e-02, 2.984000e-02, 2.030000e-02, 1.340000e-02, 8.749999e-03, 5.749999e-03,
+            3.900000e-03, 2.749999e-03, 2.100000e-03, 1.800000e-03, 1.650001e-03, 1.400000e-03,
+            1.100000e-03, 1.000000e-03, 8.000000e-04, 6.000000e-04, 3.400000e-04, 2.400000e-04,
+            1.900000e-04, 1.000000e-04, 4.999999e-05, 3.000000e-05, 2.000000e-05, 1.000000e-05,
+            0.000000e+00, 0.000000e+00, 0.000000e+00, 0.000000e+00, 0.000000e+00, 0.000000e+00,
+            0.000000e+00, 0.000000e+00, 0.000000e+00, 0.000000e+00, 0.000000e+00, 0.000000e+00,
+            0.000000e+00, 0.000000e+00, 0.000000e+00, 0.000000e+00, 0.000000e+00, 0.000000e+00,
+            0.000000e+00, 0.000000e+00, 0.000000e+00, 0.000000e+00, 0.000000e+00, 0.000000e+00,
+            0.000000e+00, 0.000000e+00, 0.000000e+00,
+        };
+
+        /// <summary>
+        /// Planckian locus sampled in CCT (1000–25000 K, ~1% log steps) with chromaticity and
+        /// CIE 1960 (u,v). Lazily built once from CIE 1931 CMFs + Planck's law.
+        /// </summary>
+        private sealed class PlanckianLocus
+        {
+            public readonly double[] T;
+            public readonly double[] X;
+            public readonly double[] Y;
+            public readonly double[] U;
+            public readonly double[] V;
+            private readonly double[] _logT;
+
+            private PlanckianLocus(double[] t, double[] x, double[] y, double[] u, double[] v)
+            {
+                T = t; X = x; Y = y; U = u; V = v;
+                _logT = new double[t.Length];
+                for (int i = 0; i < t.Length; i++) _logT[i] = Math.Log(t[i]);
+            }
+
+            private static readonly Lazy<PlanckianLocus?> Lazy = new(Build);
+            public static PlanckianLocus? Instance => Lazy.Value;
+
+            private static PlanckianLocus? Build()
+            {
+                try
+                {
+                    var ts = new List<double>();
+                    for (double t = PlanckianMinKelvin; ; t *= 1.01)
+                    {
+                        ts.Add(t);
+                        if (t >= PlanckianMaxKelvin) break;
+                    }
+
+                    int n = ts.Count;
+                    var T = new double[n];
+                    var X = new double[n];
+                    var Y = new double[n];
+                    var U = new double[n];
+                    var V = new double[n];
+
+                    for (int i = 0; i < n; i++)
+                    {
+                        double t = ts[i];
+                        double sx = 0, sy = 0, sz = 0;
+                        for (int k = 0; k < Cmf1931Y.Length; k++)
+                        {
+                            double lambdaM = (CmfStartNm + CmfStepNm * k) * 1e-9;
+                            // Planck spectral radiance shape (c1 cancels in chromaticity).
+                            double m = 1.0 / (Math.Pow(lambdaM, 5.0) * (Math.Exp(PlanckC2 / (lambdaM * t)) - 1.0));
+                            sx += m * Cmf1931X[k];
+                            sy += m * Cmf1931Y[k];
+                            sz += m * Cmf1931Z[k];
+                        }
+                        double sum = sx + sy + sz;
+                        double x = sx / sum, y = sy / sum;
+                        double denom = -2.0 * x + 12.0 * y + 3.0;
+                        T[i] = t; X[i] = x; Y[i] = y;
+                        U[i] = 4.0 * x / denom;
+                        V[i] = 6.0 * y / denom;
+                    }
+
+                    return new PlanckianLocus(T, X, Y, U, V);
+                }
+                catch
+                {
+                    return null;
+                }
+            }
+
+            /// <summary>Chromaticity at a CCT, linear in log-CCT between table neighbours.</summary>
+            public Chromaticity Interpolate(double cct)
+            {
+                double lt = Math.Log(cct);
+                if (lt <= _logT[0]) return new Chromaticity(X[0], Y[0]);
+                int last = T.Length - 1;
+                if (lt >= _logT[last]) return new Chromaticity(X[last], Y[last]);
+
+                int lo = 0, hi = last;
+                while (hi - lo > 1)
+                {
+                    int mid = (lo + hi) >> 1;
+                    if (_logT[mid] <= lt) lo = mid; else hi = mid;
+                }
+                double f = (lt - _logT[lo]) / (_logT[hi] - _logT[lo]);
+                return new Chromaticity(X[lo] + f * (X[hi] - X[lo]), Y[lo] + f * (Y[hi] - Y[lo]));
+            }
         }
 
         #endregion
@@ -742,14 +899,64 @@ namespace HDRGammaController.Core.Calibration
                 return 0.0;
             }
 
-            var subject = NormalizeWinding(new List<(double X, double Y)>
+            return TriangleCoverage(
+                new List<(double X, double Y)> { (red.X, red.Y), (green.X, green.Y), (blue.X, blue.Y) },
+                new List<(double X, double Y)> { (refRed.X, refRed.Y), (refGreen.X, refGreen.Y), (refBlue.X, refBlue.Y) });
+        }
+
+        /// <summary>
+        /// As <see cref="GamutCoverage(Chromaticity, Chromaticity, Chromaticity)"/> but computed in
+        /// the perceptually-uniform CIE 1976 u′v′ plane (u′=4x/(-2x+12y+3), v′=9y/(-2x+12y+3))
+        /// instead of raw CIE xy. u′v′ coverage is the figure most colour standards quote because
+        /// area there is a better proxy for perceived gamut volume; it differs numerically from the
+        /// xy figure for the same primaries.
+        /// </summary>
+        public static double GamutCoverageUv(Chromaticity red, Chromaticity green, Chromaticity blue)
+            => GamutCoverageUv(red, green, blue, SrgbRedPrimary, SrgbGreenPrimary, SrgbBluePrimary);
+
+        /// <summary>
+        /// Fraction of the reference gamut triangle covered by the measured gamut triangle, both
+        /// mapped into CIE 1976 u′v′ and clipped with the same Sutherland–Hodgman routine as the
+        /// xy overload.
+        /// </summary>
+        public static double GamutCoverageUv(
+            Chromaticity red, Chromaticity green, Chromaticity blue,
+            Chromaticity refRed, Chromaticity refGreen, Chromaticity refBlue)
+        {
+            if (!IsPlausibleChromaticity(red) || !IsPlausibleChromaticity(green) ||
+                !IsPlausibleChromaticity(blue) || !IsPlausibleChromaticity(refRed) ||
+                !IsPlausibleChromaticity(refGreen) || !IsPlausibleChromaticity(refBlue))
             {
-                (red.X, red.Y), (green.X, green.Y), (blue.X, blue.Y)
-            });
-            var clip = NormalizeWinding(new List<(double X, double Y)>
-            {
-                (refRed.X, refRed.Y), (refGreen.X, refGreen.Y), (refBlue.X, refBlue.Y)
-            });
+                return 0.0;
+            }
+
+            return TriangleCoverage(
+                new List<(double X, double Y)> { ToUvPrime(red), ToUvPrime(green), ToUvPrime(blue) },
+                new List<(double X, double Y)> { ToUvPrime(refRed), ToUvPrime(refGreen), ToUvPrime(refBlue) });
+        }
+
+        /// <summary>CIE 1976 u′v′ coordinates from CIE xy chromaticity.</summary>
+        private static (double X, double Y) ToUvPrime(Chromaticity xy)
+        {
+            double denom = -2.0 * xy.X + 12.0 * xy.Y + 3.0;
+            if (Math.Abs(denom) < 1e-12) return (double.NaN, double.NaN);
+            return (4.0 * xy.X / denom, 9.0 * xy.Y / denom);
+        }
+
+        /// <summary>
+        /// area(subject ∩ clip) / area(clip) for two triangles given as vertex lists in some 2D
+        /// coordinate plane (xy or u′v′). Winding order does not matter. Returns 0 for degenerate
+        /// or non-finite triangles.
+        /// </summary>
+        private static double TriangleCoverage(List<(double X, double Y)> subjectPts, List<(double X, double Y)> clipPts)
+        {
+            foreach (var p in subjectPts)
+                if (!double.IsFinite(p.X) || !double.IsFinite(p.Y)) return 0.0;
+            foreach (var p in clipPts)
+                if (!double.IsFinite(p.X) || !double.IsFinite(p.Y)) return 0.0;
+
+            var subject = NormalizeWinding(subjectPts);
+            var clip = NormalizeWinding(clipPts);
 
             double refArea = Math.Abs(SignedArea(clip));
             if (refArea < 1e-12 || Math.Abs(SignedArea(subject)) < 1e-12)

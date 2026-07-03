@@ -522,13 +522,20 @@ namespace HDRGammaController.Core.Calibration
             if (sortedPoints.Count < 2)
                 return CreateGamma(2.2);
 
-            // Build interpolated LUT
+            // Build interpolated LUT. Measured tone data is monotone (PAVA below repairs any
+            // meter-noise inversions), so we fit a monotone cubic Hermite (Fritsch–Carlson PCHIP)
+            // through the measured points instead of piecewise-linear: it tracks a smooth power-law
+            // response far more accurately while never overshooting between samples. With too few
+            // points to define curvature we fall back to linear interpolation.
             var lut = new double[LutSize];
+            double[]? pchipSlopes = sortedPoints.Count >= 4 ? ComputePchipSlopes(sortedPoints) : null;
 
             for (int i = 0; i < LutSize; i++)
             {
                 double x = i / (double)(LutSize - 1);
-                lut[i] = InterpolatePoints(sortedPoints, x);
+                lut[i] = pchipSlopes != null
+                    ? EvaluatePchip(sortedPoints, pchipSlopes, x)
+                    : InterpolatePoints(sortedPoints, x);
             }
 
             // Check and optionally fix monotonicity
@@ -700,6 +707,90 @@ namespace HDRGammaController.Core.Calibration
 
             double t = (x - p0.input) / (p1.input - p0.input);
             return p0.output + t * (p1.output - p0.output);
+        }
+
+        /// <summary>
+        /// Fritsch–Carlson monotone-cubic (PCHIP) tangents at each sample. Where the secant slope
+        /// changes sign (a local extremum) the tangent is set to zero and interior tangents are a
+        /// weighted harmonic mean of neighbouring secants, which is what guarantees no overshoot
+        /// between samples. Endpoints use the standard non-centred (Fritsch–Carlson) formula.
+        /// Assumes strictly increasing inputs (caller sorts and, for the tone curve, PAVA-repairs).
+        /// </summary>
+        private static double[] ComputePchipSlopes(List<(double input, double output)> pts)
+        {
+            int n = pts.Count;
+            var h = new double[n - 1];
+            var delta = new double[n - 1];
+            for (int k = 0; k < n - 1; k++)
+            {
+                h[k] = pts[k + 1].input - pts[k].input;
+                delta[k] = h[k] > 1e-12 ? (pts[k + 1].output - pts[k].output) / h[k] : 0.0;
+            }
+
+            var m = new double[n];
+
+            // Interior tangents: weighted harmonic mean, zeroed at sign changes / flats.
+            for (int k = 1; k < n - 1; k++)
+            {
+                if (delta[k - 1] * delta[k] <= 0.0)
+                {
+                    m[k] = 0.0;
+                }
+                else
+                {
+                    double w1 = 2.0 * h[k] + h[k - 1];
+                    double w2 = h[k] + 2.0 * h[k - 1];
+                    m[k] = (w1 + w2) / (w1 / delta[k - 1] + w2 / delta[k]);
+                }
+            }
+
+            // Endpoint tangents (Fritsch–Carlson non-centred, with monotonicity guards).
+            m[0] = PchipEndpointSlope(h[0], h.Length > 1 ? h[1] : h[0], delta[0], n > 2 ? delta[1] : delta[0]);
+            m[n - 1] = PchipEndpointSlope(h[n - 2], n > 2 ? h[n - 3] : h[n - 2], delta[n - 2], n > 2 ? delta[n - 3] : delta[n - 2]);
+
+            return m;
+        }
+
+        private static double PchipEndpointSlope(double hEdge, double hInner, double dEdge, double dInner)
+        {
+            double slope = ((2.0 * hEdge + hInner) * dEdge - hEdge * dInner) / (hEdge + hInner);
+            if (Math.Sign(slope) != Math.Sign(dEdge))
+                slope = 0.0;
+            else if (Math.Sign(dEdge) != Math.Sign(dInner) && Math.Abs(slope) > 3.0 * Math.Abs(dEdge))
+                slope = 3.0 * dEdge;
+            return slope;
+        }
+
+        /// <summary>
+        /// Evaluates the PCHIP curve defined by <paramref name="pts"/> and tangents
+        /// <paramref name="m"/> at x, via the cubic Hermite basis. Inputs at or beyond the sample
+        /// range clamp to the endpoint outputs, so the endpoints reproduce exactly.
+        /// </summary>
+        private static double EvaluatePchip(List<(double input, double output)> pts, double[] m, double x)
+        {
+            int n = pts.Count;
+            if (x <= pts[0].input) return pts[0].output;
+            if (x >= pts[n - 1].input) return pts[n - 1].output;
+
+            int lo = 0, hi = n - 1;
+            while (hi - lo > 1)
+            {
+                int mid = (lo + hi) >> 1;
+                if (pts[mid].input <= x) lo = mid; else hi = mid;
+            }
+
+            double h = pts[hi].input - pts[lo].input;
+            if (h <= 1e-12) return pts[lo].output;
+
+            double t = (x - pts[lo].input) / h;
+            double t2 = t * t;
+            double t3 = t2 * t;
+            double h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+            double h10 = t3 - 2.0 * t2 + t;
+            double h01 = -2.0 * t3 + 3.0 * t2;
+            double h11 = t3 - t2;
+            return h00 * pts[lo].output + h10 * h * m[lo]
+                 + h01 * pts[hi].output + h11 * h * m[hi];
         }
 
         #region Serialization

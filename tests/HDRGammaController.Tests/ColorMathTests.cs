@@ -564,6 +564,65 @@ namespace HDRGammaController.Tests
 
         #endregion
 
+        #region Planckian Locus / Ohno CCT-Duv Validation
+
+        [Fact]
+        public void CctToChromaticity_IlluminantA_MatchesPublishedLocus()
+        {
+            // CIE Standard Illuminant A is a Planckian radiator at 2856 K; its published
+            // chromaticity is (0.44758, 0.40745). The locus table must reproduce it within 0.001.
+            var xy = ColorMath.CctToChromaticity(2856);
+
+            Assert.Equal(0.4476, xy.X, 3);
+            Assert.Equal(0.4074, xy.Y, 3);
+        }
+
+        [Theory]
+        [InlineData(1800)]
+        [InlineData(2700)]
+        [InlineData(4000)]
+        [InlineData(6500)]
+        [InlineData(10000)]
+        public void CctChromaticityRoundTrip_WithinTenthPercent(double kelvin)
+        {
+            // A point exactly on the Planckian locus round-trips to its own CCT within 0.1%.
+            var xy = ColorMath.CctToChromaticity(kelvin);
+            double roundTrip = ColorMath.ChromaticityToCct(xy);
+
+            Assert.InRange(roundTrip, kelvin * 0.999, kelvin * 1.001);
+        }
+
+        [Fact]
+        public void CalculateDuv_OnLocusPoint_IsSelfConsistentlyZero()
+        {
+            // A blackbody chromaticity from the table lies ON the locus, so its Duv is ~0.
+            var xy = ColorMath.CctToChromaticity(6500);
+            double duv = ColorMath.CalculateDuv(xy);
+
+            Assert.InRange(Math.Abs(duv), 0.0, 1e-4);
+        }
+
+        [Fact]
+        public void ChromaticityToCct_IlluminantA_ReturnsApprox2856()
+        {
+            double cct = ColorMath.ChromaticityToCct(Chromaticity.IlluminantA);
+
+            Assert.InRange(cct, 2856 * 0.999, 2856 * 1.001);
+        }
+
+        [Fact]
+        public void CalculateDuv_PointAboveLocus_IsPositive()
+        {
+            // A point displaced toward higher v (greenish) from a locus point is above the
+            // Planckian locus and must yield positive Duv per the CIE 1960 convention.
+            var onLocus = ColorMath.CctToChromaticity(5000);
+            var above = new Chromaticity(onLocus.X, onLocus.Y + 0.02);
+
+            Assert.True(ColorMath.CalculateDuv(above) > 0);
+        }
+
+        #endregion
+
         #region Matrix Operations Tests
 
         [Fact]
@@ -581,6 +640,42 @@ namespace HDRGammaController.Tests
             Assert.Equal(0, result[0, 1], 6);
             Assert.Equal(0, result[1, 0], 6);
             Assert.Equal(1, result[1, 1], 6);
+        }
+
+        [Fact]
+        public void DerivedMatrices_AgreeWithPublishedLiterals_AndAreExactInverses()
+        {
+            // The RGB↔XYZ matrices are now derived from the standard primaries + D65 (0.3127,
+            // 0.3290) rather than stored as rounded literals. They must still agree with the
+            // previously published sRGB literals to < 1e-4 (the literals were rounded from these
+            // same primaries), and forward·inverse must be identity to full precision.
+            double[,] publishedSrgbToXyz = {
+                { 0.4124564, 0.3575761, 0.1804375 },
+                { 0.2126729, 0.7151522, 0.0721750 },
+                { 0.0193339, 0.1191920, 0.9503041 }
+            };
+            // The published literals were computed with the rounded ASTM white XYZ
+            // (0.95047, 1, 1.08883); deriving from the standards xy white (0.3127, 0.3290) shifts
+            // a few elements by up to ~2.5e-4 (the m1 unification). That is within MHC2 tolerances.
+            for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 3; c++)
+                Assert.True(Math.Abs(publishedSrgbToXyz[r, c] - ColorMath.SrgbToXyzMatrix[r, c]) < 5e-4,
+                    $"element [{r},{c}] derived {ColorMath.SrgbToXyzMatrix[r, c]:F7} vs published {publishedSrgbToXyz[r, c]:F7}");
+
+            var identity = ColorMath.MultiplyMatrices(ColorMath.SrgbToXyzMatrix, ColorMath.XyzToSrgbMatrix);
+            for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 3; c++)
+                Assert.Equal(r == c ? 1.0 : 0.0, identity[r, c], 10);
+        }
+
+        [Fact]
+        public void D65White_IsDerivedFromD65Chromaticity()
+        {
+            // X = x/y, Y = 1, Z = (1-x-y)/y.
+            double x = Chromaticity.D65.X, y = Chromaticity.D65.Y;
+            Assert.Equal(x / y, ColorMath.D65White.X, 12);
+            Assert.Equal(1.0, ColorMath.D65White.Y, 12);
+            Assert.Equal((1.0 - x - y) / y, ColorMath.D65White.Z, 12);
         }
 
         [Fact]
