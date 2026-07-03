@@ -108,6 +108,97 @@ namespace HDRGammaController.Core.Calibration
         }
     }
 
+    /// <summary>
+    /// One colored HDR verification stimulus: a Rec.2020-container hue at an absolute PQ
+    /// luminance rung. Stimuli are CONTAINER-REFERRED — the reference is what an ideal
+    /// HDR10 (Rec.2020 + ST.2084) mastering display would emit for this wire signal — and
+    /// they are graded ABSOLUTELY against <see cref="ReferenceXyz"/>. A real panel that
+    /// falls short of Rec.2020 (or cannot reach the rung luminance on a saturated hue)
+    /// shows its actual gamut mapping / tone mapping here; that shortfall is exactly the
+    /// above-SDR-white color error this set characterizes.
+    /// </summary>
+    /// <param name="Name">Display name, e.g. "Red 203".</param>
+    /// <param name="Hue">Hue name only ("Red" … "Yellow").</param>
+    /// <param name="RungNits">The stimulus luminance in cd/m²; ReferenceXyz.Y equals this.</param>
+    /// <param name="UnitRgb">The unit hue in the Rec.2020 container (active channels = 1).</param>
+    /// <param name="Rec2020ChannelNits">Per-channel drive in the Rec.2020 container,
+    /// expressed in white-equivalent nits (a channel value of n contributes what that
+    /// channel contributes to an n-nit D65 white). Active channels carry
+    /// RungNits / Y(unit hue); inactive channels are 0.</param>
+    /// <param name="ReferenceXyz">Absolute reference XYZ in cd/m² from the Rec.2020
+    /// primaries; Y == RungNits exactly.</param>
+    /// <param name="ScRgbNits">The same color converted to scRGB (linear Rec.709/sRGB
+    /// primaries) per-channel absolute nits — the triple to hand to the FP16 renderer's
+    /// PresentNits, whose surface is scRGB (value = nits / 80). Wide-gamut hues carry
+    /// NEGATIVE inactive components here; scRGB FP16 encodes them and the compositor's
+    /// 709→2020 wire conversion restores the in-container positive color.</param>
+    public sealed record ColoredHdrStimulus(
+        string Name,
+        string Hue,
+        double RungNits,
+        LinearRgb UnitRgb,
+        LinearRgb Rec2020ChannelNits,
+        CieXyz ReferenceXyz,
+        LinearRgb ScRgbNits)
+    {
+        /// <summary>True for R/G/B (one active channel); false for C/M/Y.</summary>
+        public bool IsPrimaryHue =>
+            (UnitRgb.R > 0 ? 1 : 0) + (UnitRgb.G > 0 ? 1 : 0) + (UnitRgb.B > 0 ? 1 : 0) == 1;
+    }
+
+    /// <summary>
+    /// Builds the colored HDR verification set: R, G, B, C, M, Y at absolute PQ luminance
+    /// rungs {100, 203, 400} nits (each stimulus's LUMINANCE equals its rung — "Red 203"
+    /// is linear Rec.2020 red scaled so Y = 203 cd/m²). Rungs above the display's
+    /// reachable/reported peak are skipped; the 100-nit rung is always kept so every HDR
+    /// verify grades at least one colored rung.
+    /// </summary>
+    public static class ColoredHdrVerificationSet
+    {
+        /// <summary>Absolute luminance rungs in cd/m²: diffuse-white-ish anchors 100 and
+        /// 203 (BT.2408 reference white) plus a 400-nit highlight rung.</summary>
+        public static readonly IReadOnlyList<double> RungNits = new[] { 100.0, 203.0, 400.0 };
+
+        private static readonly (string Name, double R, double G, double B)[] Hues =
+        {
+            ("Red", 1, 0, 0), ("Green", 0, 1, 0), ("Blue", 0, 0, 1),
+            ("Cyan", 0, 1, 1), ("Magenta", 1, 0, 1), ("Yellow", 1, 1, 0),
+        };
+
+        /// <summary>
+        /// Builds the stimuli for a display whose peak luminance is
+        /// <paramref name="displayPeakNits"/> (measured wire peak when available, else the
+        /// DXGI-reported panel peak). Rungs above the peak are skipped — grading a 400-nit
+        /// stimulus on a 300-nit panel would grade the panel's clip, not its color — but
+        /// the 100-nit rung always survives (and when the peak is unknown or non-physical
+        /// only the 100-nit rung is emitted).
+        /// </summary>
+        public static IReadOnlyList<ColoredHdrStimulus> Build(double displayPeakNits)
+        {
+            bool peakKnown = double.IsFinite(displayPeakNits) && displayPeakNits > 0;
+            var stimuli = new List<ColoredHdrStimulus>();
+            foreach (double rung in RungNits)
+            {
+                if (rung > 100.0 && (!peakKnown || rung > displayPeakNits))
+                    continue;
+                foreach (var (name, r, g, b) in Hues)
+                {
+                    var unit = new LinearRgb(r, g, b);
+                    // Luminance of the unit hue in the container: the Y row of the
+                    // Rec.2020 RGB→XYZ matrix (matrix is D65-normalized: (1,1,1) → Y=1).
+                    var unitXyz = ColorMath.LinearRec2020ToXyz(unit);
+                    double scale = rung / unitXyz.Y; // white-equivalent nits per channel
+                    var referenceXyz = unitXyz * scale; // Y == rung exactly
+                    var scRgb = ColorMath.XyzToLinearSrgb(referenceXyz);
+                    stimuli.Add(new ColoredHdrStimulus(
+                        $"{name} {rung:F0}", name, rung, unit,
+                        unit.Scale(scale), referenceXyz, scRgb));
+                }
+            }
+            return stimuli;
+        }
+    }
+
     /// <summary>One verified patch: its name, analysis category and measured ΔE2000.</summary>
     public readonly record struct PatchDeltaE(string Name, PatchCategory Category, double DeltaE);
 

@@ -185,6 +185,88 @@ namespace HDRGammaController.Core.Calibration
             return 720.0 * Math.Sqrt(di * di + dt * dt + dp * dp);
         }
 
+        /// <summary>
+        /// Grade of one colored HDR stimulus: ΔE ITP (BT.2124, absolute) between the
+        /// measured XYZ and the Rec.2020-container reference, plus the luminance error as
+        /// a fraction of the rung. Both are NaN for non-physical readings, following the
+        /// NaN-not-sentinel convention of <see cref="DeltaEItp"/>.
+        /// </summary>
+        public sealed record ColoredHdrPatchGrade(
+            string Name,
+            double RungNits,
+            double MeasuredY,
+            double LuminanceError,
+            double DeltaEItp);
+
+        /// <summary>
+        /// Aggregate for the colored HDR verification set. Reported SEPARATELY from the
+        /// neutral sweep metrics: these stimuli are container-referred wide-gamut colors,
+        /// so their errors describe the panel's HDR color rendering above SDR white and
+        /// must not dilute (or be diluted by) the neutral grade and its thresholds.
+        /// Averages/max cover finite ΔE ITP values only; non-physical readings are
+        /// excluded and counted in <see cref="ExcludedCount"/>.
+        /// </summary>
+        public sealed record ColoredHdrMetrics(
+            IReadOnlyList<ColoredHdrPatchGrade> Patches,
+            double AverageItpDeltaE,
+            double MaxItpDeltaE,
+            string? WorstPatchName,
+            double AverageAbsLuminanceError,
+            int GradedCount,
+            int ExcludedCount);
+
+        /// <summary>
+        /// Grades colored HDR stimuli against their container references. Pure function:
+        /// pairs of (stimulus, measured absolute XYZ) in, per-patch grades and the
+        /// ΔE ITP average/max (plus worst patch) out. When no reading is physical the
+        /// aggregates are NaN and <see cref="ColoredHdrMetrics.WorstPatchName"/> is null.
+        /// </summary>
+        public static ColoredHdrMetrics GradeColoredHdr(
+            IEnumerable<(ColoredHdrStimulus Stimulus, CieXyz MeasuredXyz)> readings)
+        {
+            var patches = new List<ColoredHdrPatchGrade>();
+            var finiteItps = new List<(string Name, double Itp)>();
+            var finiteLumErrors = new List<double>();
+            int excluded = 0;
+
+            foreach (var (stimulus, measured) in readings)
+            {
+                double itp = DeltaEItp(measured, stimulus.ReferenceXyz);
+                double lumError = IsPhysicalXyz(measured)
+                    ? (measured.Y - stimulus.RungNits) / stimulus.RungNits
+                    : double.NaN;
+                patches.Add(new ColoredHdrPatchGrade(
+                    stimulus.Name, stimulus.RungNits, measured.Y, lumError, itp));
+
+                if (double.IsFinite(itp))
+                {
+                    finiteItps.Add((stimulus.Name, itp));
+                    if (double.IsFinite(lumError))
+                        finiteLumErrors.Add(System.Math.Abs(lumError));
+                }
+                else
+                {
+                    excluded++;
+                }
+            }
+
+            if (finiteItps.Count == 0)
+            {
+                return new ColoredHdrMetrics(
+                    patches, double.NaN, double.NaN, null, double.NaN, 0, excluded);
+            }
+
+            var worst = finiteItps.OrderByDescending(p => p.Itp).First();
+            return new ColoredHdrMetrics(
+                patches,
+                finiteItps.Average(p => p.Itp),
+                worst.Itp,
+                worst.Name,
+                finiteLumErrors.Count > 0 ? finiteLumErrors.Average() : double.NaN,
+                finiteItps.Count,
+                excluded);
+        }
+
         private static bool IsAccuracyMeasurement(MeasurementResult measurement) =>
             measurement.IsValid &&
             measurement.Patch.Nits is null &&
