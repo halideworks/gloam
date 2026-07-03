@@ -566,7 +566,9 @@ namespace HDRGammaController.Tests
 
             // sRGB's piecewise EOTF can't be a single gamma value: it must round-trip as a
             // 1024-point sampled 'curv' matching the target EOTF at arbitrary probe points.
-            var target = StandardTargets.SrgbGamma22;
+            // (SrgbGamma22 is a pure power-2.2 calibration target and gets a gamma 'curv';
+            // the piecewise encoding curve lives on SrgbPiecewise.)
+            var target = StandardTargets.SrgbPiecewise;
             var identity = new double[,] { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } };
             var lut = IdentityLut();
 
