@@ -229,7 +229,9 @@ namespace HDRGammaController.ViewModels
             if (string.IsNullOrWhiteSpace(version)) return;
             if (!_updateService.ShouldNotifyUpdateAvailable(version)) return;
 
-            if (ShowNotification("Update available", $"Version {version} is available. Downloading in the background.", ToastKind.Info))
+            // Warning kind: "you are on an outdated version" is an address-me notice in the
+            // toast design language (amber stripe), not a neutral status blip.
+            if (ShowNotification("Update available", $"Version {version} is available. Downloading in the background.", ToastKind.Warning))
                 _updateService.MarkUpdateAvailableNotified(version);
         }
 

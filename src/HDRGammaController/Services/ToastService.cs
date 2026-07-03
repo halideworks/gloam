@@ -96,7 +96,7 @@ namespace HDRGammaController.Services
                 ActionCommand = actionCommand
             };
 
-            var window = new ToastWindow(vm, actionCommand == null ? null : TimeSpan.FromSeconds(8));
+            var window = new ToastWindow(vm, ComputeDuration(title, message, actionCommand != null));
             // Keep a weak handle so a window that closed on its own (timer) isn't replaced
             // against a stale reference.
             window.Closed += (_, _) =>
@@ -116,6 +116,19 @@ namespace HDRGammaController.Services
                 Log.Error($"ToastService: failed to show toast: {ex.Message}");
                 _current = null;
             }
+        }
+
+        /// <summary>
+        /// Reading-time-based display duration: short status blips stay snappy while
+        /// multi-sentence notices stay up long enough to actually read (~180 wpm plus
+        /// orientation time). Action toasts never fall below 8s so the button is reachable.
+        /// </summary>
+        internal static TimeSpan ComputeDuration(string title, string message, bool hasAction)
+        {
+            int chars = (title?.Length ?? 0) + (message?.Length ?? 0);
+            double seconds = Math.Clamp(1.5 + chars * 0.045, 2.5, 12.0);
+            if (hasAction && seconds < 8.0) seconds = 8.0;
+            return TimeSpan.FromSeconds(seconds);
         }
 
         private static void Post(Action action)
