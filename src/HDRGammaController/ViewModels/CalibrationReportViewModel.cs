@@ -99,8 +99,41 @@ namespace HDRGammaController.ViewModels
 
         #region Accuracy table
 
+        // The headline average is set as a single "value ± uncertainty" string (kept whole
+        // for the print export), but the window renders it as two Runs so the ± tail can be
+        // dim and small instead of inheriting the grade color at headline size. Setting the
+        // full string splits it into the value head and the " ± …" tail automatically.
         private string _avgDeltaEText = "-";
-        public string AvgDeltaEText { get => _avgDeltaEText; set => SetProperty(ref _avgDeltaEText, value); }
+        public string AvgDeltaEText
+        {
+            get => _avgDeltaEText;
+            set
+            {
+                if (!SetProperty(ref _avgDeltaEText, value)) return;
+                var (head, tail) = SplitUncertainty(value);
+                AvgDeltaEValueText = head;
+                AvgDeltaEUncertaintyText = tail;
+            }
+        }
+
+        private string _avgDeltaEValueText = "-";
+        public string AvgDeltaEValueText { get => _avgDeltaEValueText; private set => SetProperty(ref _avgDeltaEValueText, value); }
+
+        private string _avgDeltaEUncertaintyText = "";
+        public string AvgDeltaEUncertaintyText { get => _avgDeltaEUncertaintyText; private set => SetProperty(ref _avgDeltaEUncertaintyText, value); }
+
+        /// <summary>
+        /// Splits "1.23 ± 0.45" into ("1.23", " ± 0.45"); returns (text, "") when there is
+        /// no uncertainty tail. The tail keeps a leading space so the two Runs read as one
+        /// phrase without the XAML needing to inject whitespace between them.
+        /// </summary>
+        internal static (string Value, string Uncertainty) SplitUncertainty(string? text)
+        {
+            if (string.IsNullOrEmpty(text)) return (text ?? "", "");
+            int i = text.IndexOf('±'); // ±
+            if (i < 0) return (text, "");
+            return (text.Substring(0, i).TrimEnd(), " " + text.Substring(i).Trim());
+        }
 
         private Brush _avgDeltaEBrush = DefaultValueBrush;
         public Brush AvgDeltaEBrush { get => _avgDeltaEBrush; set => SetProperty(ref _avgDeltaEBrush, value); }
@@ -132,7 +165,23 @@ namespace HDRGammaController.ViewModels
         public Brush PrimaryDeltaEBrush { get => _primaryDeltaEBrush; set => SetProperty(ref _primaryDeltaEBrush, value); }
 
         private string _afterAvgText = "-";
-        public string AfterAvgText { get => _afterAvgText; set => SetProperty(ref _afterAvgText, value); }
+        public string AfterAvgText
+        {
+            get => _afterAvgText;
+            set
+            {
+                if (!SetProperty(ref _afterAvgText, value)) return;
+                var (head, tail) = SplitUncertainty(value);
+                AfterAvgValueText = head;
+                AfterAvgUncertaintyText = tail;
+            }
+        }
+
+        private string _afterAvgValueText = "-";
+        public string AfterAvgValueText { get => _afterAvgValueText; private set => SetProperty(ref _afterAvgValueText, value); }
+
+        private string _afterAvgUncertaintyText = "";
+        public string AfterAvgUncertaintyText { get => _afterAvgUncertaintyText; private set => SetProperty(ref _afterAvgUncertaintyText, value); }
 
         private Brush _afterAvgBrush = DefaultValueBrush;
         public Brush AfterAvgBrush { get => _afterAvgBrush; set => SetProperty(ref _afterAvgBrush, value); }
@@ -160,6 +209,21 @@ namespace HDRGammaController.ViewModels
 
         private bool _isVerifyDetailVisible;
         public bool IsVerifyDetailVisible { get => _isVerifyDetailVisible; set => SetProperty(ref _isVerifyDetailVisible, value); }
+
+        // HDR verification passes broken out of the verify-detail prose so each can carry a
+        // kicker label (visual hierarchy): the PQ luminance/ITP tracking sweep and the
+        // colored-HDR (Rec.2020 container) sweep.
+        private string _pqTrackingDetailText = "";
+        public string PqTrackingDetailText { get => _pqTrackingDetailText; set => SetProperty(ref _pqTrackingDetailText, value); }
+
+        private bool _isPqTrackingDetailVisible;
+        public bool IsPqTrackingDetailVisible { get => _isPqTrackingDetailVisible; set => SetProperty(ref _isPqTrackingDetailVisible, value); }
+
+        private string _coloredHdrDetailText = "";
+        public string ColoredHdrDetailText { get => _coloredHdrDetailText; set => SetProperty(ref _coloredHdrDetailText, value); }
+
+        private bool _isColoredHdrDetailVisible;
+        public bool IsColoredHdrDetailVisible { get => _isColoredHdrDetailVisible; set => SetProperty(ref _isColoredHdrDetailVisible, value); }
 
         private string _beforeAfterNoteText = "";
         public string BeforeAfterNoteText { get => _beforeAfterNoteText; set => SetProperty(ref _beforeAfterNoteText, value); }

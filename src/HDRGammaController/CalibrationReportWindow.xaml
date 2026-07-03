@@ -96,30 +96,28 @@
                     <TextBlock Text="{Binding CalibrationDateText}" FontSize="12" Foreground="{DynamicResource ThemeTextDim}" Opacity="0.75" Margin="0,2,0,0"/>
                 </StackPanel>
 
-                <!-- Grade Display (the letter in a colored disc is self-evidently a grade) -->
-                <StackPanel Grid.Column="1" Margin="0,0,8,0">
-                    <Border Width="84" Height="84" CornerRadius="42" Background="{Binding GradeBackground}">
-                        <TextBlock Text="{Binding GradeText}" Style="{StaticResource GradeText}" Foreground="{Binding GradeBrush}"/>
-                    </Border>
-                    <TextBlock Text="{Binding GradeScopeText}" FontSize="10" Foreground="{DynamicResource ThemeTextDim}"
-                               HorizontalAlignment="Center" Margin="0,4,0,0"/>
-                </StackPanel>
+                <!-- Grade display + standard window controls (theme toggle + close). The
+                     controls sit above the grade disc so they never overlap it, and the
+                     close button honors the verify-time close gate declaratively via
+                     IsCloseEnabled (replacing the old bespoke ✕ glyph's manual check). -->
+                <StackPanel Grid.Column="1">
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,-6,-6,6">
+                        <Button x:Name="ThemeToggleButton" Content="&#x25D0;" Width="30" Height="30" FontSize="15"
+                                Style="{StaticResource BrutIconButton}" ToolTip="Toggle light / dark" Click="ThemeToggle_Click"/>
+                        <Button Content="&#x2715;" Width="30" Height="30" FontSize="13"
+                                Style="{StaticResource BrutIconButton}"
+                                IsEnabled="{Binding IsCloseEnabled}" Click="CloseButton_Click"/>
+                    </StackPanel>
 
-                <!-- Window close (custom chrome) -->
-                <TextBlock Grid.Column="1" Text="&#x2715;" FontSize="15" Cursor="Hand"
-                           HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-6,-6,0"
-                           MouseLeftButtonDown="CloseGlyph_Click">
-                    <TextBlock.Style>
-                        <Style TargetType="TextBlock">
-                            <Setter Property="Foreground" Value="{DynamicResource ThemeTextDim}"/>
-                            <Style.Triggers>
-                                <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter Property="Foreground" Value="{DynamicResource ThemeAccent}"/>
-                                </Trigger>
-                            </Style.Triggers>
-                        </Style>
-                    </TextBlock.Style>
-                </TextBlock>
+                    <!-- Grade Display (the letter in a colored disc is self-evidently a grade) -->
+                    <StackPanel Margin="0,0,8,0">
+                        <Border Width="84" Height="84" CornerRadius="42" Background="{Binding GradeBackground}">
+                            <TextBlock Text="{Binding GradeText}" Style="{StaticResource GradeText}" Foreground="{Binding GradeBrush}"/>
+                        </Border>
+                        <TextBlock Text="{Binding GradeScopeText}" FontSize="10" Foreground="{DynamicResource ThemeTextDim}"
+                                   HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </StackPanel>
             </Grid>
         </Border>
 
@@ -157,14 +155,16 @@
 
                             <!-- Before: native panel -->
                             <TextBlock Grid.Row="1" Grid.Column="0" Text="Native (before)" Style="{StaticResource MetricLabel}" FontSize="13" VerticalAlignment="Center"/>
-                            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding AvgDeltaEText}" Foreground="{Binding AvgDeltaEBrush}" Style="{StaticResource MetricValue}" FontSize="22" HorizontalAlignment="Center" ToolTip="{Binding AvgDeltaEToolTip}"/>
+                            <!-- Value (grade color, headline size) + uncertainty tail (dim, small):
+                                 the ± must not read as an alarm color or compete with the headline. -->
+                            <TextBlock Grid.Row="1" Grid.Column="1" Style="{StaticResource MetricValue}" HorizontalAlignment="Center" ToolTip="{Binding AvgDeltaEToolTip}"><Run Text="{Binding AvgDeltaEValueText}" FontSize="22" Foreground="{Binding AvgDeltaEBrush}"/><Run Text="{Binding AvgDeltaEUncertaintyText}" FontSize="13" Foreground="{DynamicResource ThemeTextDim}"/></TextBlock>
                             <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding MaxDeltaEText}" Foreground="{Binding MaxDeltaEBrush}" Style="{StaticResource MetricValue}" FontSize="22" HorizontalAlignment="Center"/>
                             <TextBlock Grid.Row="1" Grid.Column="3" Text="{Binding GrayscaleDeltaEText}" Foreground="{Binding GrayscaleDeltaEBrush}" Style="{StaticResource MetricValue}" FontSize="22" HorizontalAlignment="Center"/>
                             <TextBlock Grid.Row="1" Grid.Column="4" Text="{Binding PrimaryDeltaEText}" Foreground="{Binding PrimaryDeltaEBrush}" Style="{StaticResource MetricValue}" FontSize="22" HorizontalAlignment="Center"/>
 
                             <!-- After: re-measured through the applied correction -->
                             <TextBlock Grid.Row="2" Grid.Column="0" Text="Calibrated (after)" Style="{StaticResource MetricLabel}" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding AfterAvgText}" Foreground="{Binding AfterAvgBrush}" Style="{StaticResource MetricValue}" FontSize="22" FontWeight="Bold" HorizontalAlignment="Center" ToolTip="{Binding AfterAvgToolTip}"/>
+                            <TextBlock Grid.Row="2" Grid.Column="1" Style="{StaticResource MetricValue}" FontWeight="Bold" HorizontalAlignment="Center" ToolTip="{Binding AfterAvgToolTip}"><Run Text="{Binding AfterAvgValueText}" FontSize="22" Foreground="{Binding AfterAvgBrush}"/><Run Text="{Binding AfterAvgUncertaintyText}" FontSize="13" FontWeight="Normal" Foreground="{DynamicResource ThemeTextDim}"/></TextBlock>
                             <TextBlock Grid.Row="2" Grid.Column="2" Text="{Binding AfterMaxText}" Foreground="{Binding AfterMaxBrush}" Style="{StaticResource MetricValue}" FontSize="22" FontWeight="Bold" HorizontalAlignment="Center"/>
                             <TextBlock Grid.Row="2" Grid.Column="3" Text="{Binding AfterGrayscaleText}" Foreground="{Binding AfterGrayscaleBrush}" Style="{StaticResource MetricValue}" FontSize="22" FontWeight="Bold" HorizontalAlignment="Center"/>
                             <TextBlock Grid.Row="2" Grid.Column="4" Text="{Binding AfterPrimaryText}" Foreground="{Binding AfterPrimaryBrush}" Style="{StaticResource MetricValue}" FontSize="22" FontWeight="Bold" HorizontalAlignment="Center"/>
@@ -173,23 +173,37 @@
                         <!-- Verify detail: grayscale tone/color decomposition + dE ITP -->
                         <TextBlock Text="{Binding VerifyDetailText}"
                                    Visibility="{Binding IsVerifyDetailVisible, Converter={StaticResource BoolToVis}}"
-                                   FontSize="12" Foreground="#a0a0a0" TextWrapping="Wrap" Margin="0,10,0,0"/>
+                                   FontSize="12" Foreground="{DynamicResource ThemeTextDim}" TextWrapping="Wrap" Margin="0,10,0,0"/>
+
+                        <!-- HDR verification passes, each kicker-labeled so the diagnostics read as
+                             distinct results rather than one prose wall. -->
+                        <StackPanel Visibility="{Binding IsPqTrackingDetailVisible, Converter={StaticResource BoolToVis}}" Margin="0,10,0,0">
+                            <TextBlock Text="HDR PQ TRACKING" Style="{StaticResource FieldLabel}" Margin="0,0,0,3"/>
+                            <TextBlock Text="{Binding PqTrackingDetailText}"
+                                       FontSize="12" Foreground="{DynamicResource ThemeTextDim}" TextWrapping="Wrap"/>
+                        </StackPanel>
+
+                        <StackPanel Visibility="{Binding IsColoredHdrDetailVisible, Converter={StaticResource BoolToVis}}" Margin="0,10,0,0">
+                            <TextBlock Text="COLORED HDR" Style="{StaticResource FieldLabel}" Margin="0,0,0,3"/>
+                            <TextBlock Text="{Binding ColoredHdrDetailText}"
+                                       FontSize="12" Foreground="{DynamicResource ThemeTextDim}" TextWrapping="Wrap"/>
+                        </StackPanel>
 
                         <!-- Closed-loop grey-ramp refinement note (a different, narrower metric than
                              the table: 1D grey-axis tracking only, measured during calibration) -->
                         <TextBlock Text="{Binding BeforeAfterNoteText}"
                                    Visibility="{Binding IsBeforeAfterNoteVisible, Converter={StaticResource BoolToVis}}"
-                                   FontSize="12" Foreground="#909090" TextWrapping="Wrap" Margin="0,10,0,0"/>
+                                   FontSize="12" Foreground="{DynamicResource ThemeTextDim}" TextWrapping="Wrap" Margin="0,10,0,0"/>
 
                         <TextBlock Text="{Binding SummaryText}"
                                    FontSize="13"
-                                   Foreground="#a0a0a0"
+                                   Foreground="{DynamicResource ThemeTextDim}"
                                    TextWrapping="Wrap"
                                    Margin="0,16,0,0"/>
 
                         <Border Visibility="{Binding IsPerceptualNoteVisible, Converter={StaticResource BoolToVis}}"
-                                Background="#22303a" CornerRadius="0" Padding="12,10" Margin="0,12,0,0">
-                            <TextBlock FontSize="12" Foreground="#a8c5d8" TextWrapping="Wrap"
+                                Background="{DynamicResource ThemeHover}" CornerRadius="0" Padding="12,10" Margin="0,12,0,0">
+                            <TextBlock FontSize="12" Foreground="{DynamicResource ThemeText}" TextWrapping="Wrap"
                                        Text="Final step: trust your eyes. Instruments and eyes weigh light spectra differently, so two display technologies can measure identical yet look slightly different side by side (observer metamerism). If this display does not quite match your reference, nudge the Tint/Temperature trims in the monitor dashboard while comparing a gray image. Small trims are a normal part of professional workflows; they ride on top of this profile and never affect the measurements above."/>
                         </Border>
                     </StackPanel>
@@ -281,33 +295,33 @@
 
                             <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,4,8,12">
                                 <TextBlock Text="Per-channel tone response (measured vs target)" Style="{StaticResource MetricLabel}"/>
-                                <Border Background="#181818" CornerRadius="0" Height="200">
+                                <Border Background="{DynamicResource ThemeSurface}" CornerRadius="0" Height="200">
                                     <Canvas x:Name="ToneCanvas"/>
                                 </Border>
                             </StackPanel>
 
                             <StackPanel Grid.Row="0" Grid.Column="1" Margin="8,4,0,12">
                                 <TextBlock Text="Gamma tracking" Style="{StaticResource MetricLabel}"/>
-                                <Border Background="#181818" CornerRadius="0" Height="200">
+                                <Border Background="{DynamicResource ThemeSurface}" CornerRadius="0" Height="200">
                                     <Canvas x:Name="GammaCanvas"/>
                                 </Border>
                             </StackPanel>
 
                             <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,4,8,0">
                                 <TextBlock Text="Grayscale RGB balance" Style="{StaticResource MetricLabel}"/>
-                                <Border Background="#181818" CornerRadius="0" Height="200">
+                                <Border Background="{DynamicResource ThemeSurface}" CornerRadius="0" Height="200">
                                     <Canvas x:Name="BalanceCanvas"/>
                                 </Border>
                             </StackPanel>
 
                             <StackPanel Grid.Row="1" Grid.Column="1" Margin="8,4,0,0">
                                 <TextBlock Text="Gamut + white point (CIE xy)" Style="{StaticResource MetricLabel}"/>
-                                <Border Background="#181818" CornerRadius="0" Height="200">
+                                <Border Background="{DynamicResource ThemeSurface}" CornerRadius="0" Height="200">
                                     <Canvas x:Name="GamutCanvas"/>
                                 </Border>
                             </StackPanel>
                         </Grid>
-                        <TextBlock FontSize="11" Foreground="#707070" Margin="0,8,0,0" TextWrapping="Wrap"
+                        <TextBlock FontSize="11" Foreground="{DynamicResource ThemeTextDim}" Margin="0,8,0,0" TextWrapping="Wrap"
                                    Text="Dashed = target · orange = native (before) · green = corrected, re-measured through the applied profile. Orange dot = measured white, gray dot = target white."/>
                     </StackPanel>
                 </Border>
@@ -318,7 +332,7 @@
                     <StackPanel>
                         <TextBlock Text="Tone Response &amp; Gamut" Style="{StaticResource SectionHeader}"/>
                         <TextBlock Text="Charts are generated at calibration time and aren't stored in saved reports."
-                                   FontSize="12" Foreground="#808080" TextWrapping="Wrap"/>
+                                   FontSize="12" Foreground="{DynamicResource ThemeTextDim}" TextWrapping="Wrap"/>
                     </StackPanel>
                 </Border>
 
@@ -336,21 +350,21 @@
 
                             <StackPanel Grid.Column="0" Margin="0,4,8,12">
                                 <TextBlock Text="ΔE distribution" Style="{StaticResource MetricLabel}"/>
-                                <Border Background="#181818" CornerRadius="0" Height="200">
+                                <Border Background="{DynamicResource ThemeSurface}" CornerRadius="0" Height="200">
                                     <Canvas x:Name="HistogramCanvas"/>
                                 </Border>
                             </StackPanel>
 
                             <StackPanel Grid.Column="1" Margin="8,4,0,12">
                                 <TextBlock Text="Per-patch ΔE (measurement order, hover for names)" Style="{StaticResource MetricLabel}"/>
-                                <Border Background="#181818" CornerRadius="0" Height="200">
+                                <Border Background="{DynamicResource ThemeSurface}" CornerRadius="0" Height="200">
                                     <Canvas x:Name="PerPatchCanvas"/>
                                 </Border>
                             </StackPanel>
                         </Grid>
 
                         <TextBlock Text="{Binding CategoryBreakdownText}"
-                                   FontSize="12" Foreground="#a0a0a0" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                                   FontSize="12" Foreground="{DynamicResource ThemeTextDim}" TextWrapping="Wrap" Margin="0,0,0,12"/>
 
                         <Grid>
                             <Grid.Resources>
@@ -362,8 +376,8 @@
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="48"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="{Binding Rank}" FontSize="12" Foreground="#707070"/>
-                                        <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="12" Foreground="#e0e0e0" TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock Grid.Column="0" Text="{Binding Rank}" FontSize="12" Foreground="{DynamicResource ThemeTextDim}"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="12" Foreground="{DynamicResource ThemeText}" TextTrimming="CharacterEllipsis"/>
                                         <TextBlock Grid.Column="2" Text="{Binding DeltaEText}" FontSize="12" FontWeight="SemiBold"
                                                    Foreground="{Binding DeltaEBrush}"/>
                                     </Grid>
@@ -520,19 +534,20 @@
             </StackPanel>
         </ScrollViewer>
 
-        <!-- Footer with Actions. The Detailed verification checkbox is pinned left in its
-             own flexible "*" column and the action buttons are right-aligned in an "Auto"
-             column, with the gap between them absorbing the slack. Previously every control
-             sat in its own Auto column with no flexible column, so at MinWidth the row had
-             nowhere to give and the leftmost button was pushed off the left edge and clipped. -->
-        <Border Grid.Row="2" Background="{DynamicResource ThemeSurface}" BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="0,1,0,0" Padding="20,16">
+        <!-- Footer with Actions. The Detailed-verification toggle sits on its own line ABOVE
+             the action bar rather than sharing the row: with the HDR layout (7 buttons) the
+             single row could not fit both at MinWidth (the buttons alone need ~735px and the
+             checkbox label another ~145px, a ~922px window), so the checkbox label clipped.
+             Stacking the toggle above keeps every action button beside its neighbours
+             (Refine HDR stays next to Verify) and never clips at any width. -->
+        <Border Grid.Row="2" Background="{DynamicResource ThemeSurface}" BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="0,1,0,0" Padding="20,14">
             <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
 
-                <CheckBox Grid.Column="0"
+                <CheckBox Grid.Row="0"
                           x:Name="DetailedVerifyCheck"
                           Content="Detailed verification"
                           IsChecked="{Binding IsDetailedVerifyChecked}"
@@ -540,9 +555,9 @@
                           ToolTip="Extends the verify sweep to a 21-step grayscale, R/G/B saturation ramps and the ColorChecker memory colors (39 patches), adding a ΔE distribution, per-patch chart, worst/best patch lists and a category breakdown to the report. Takes several times longer than the standard verify."
                           Foreground="{DynamicResource ThemeText}"
                           VerticalAlignment="Center" HorizontalAlignment="Left"
-                          Margin="0,0,16,0"/>
+                          Margin="0,0,0,10"/>
 
-                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+                <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right">
                     <Button x:Name="ExportReportButton"
                             Content="Export Report"
                             ToolTip="Print or save as PDF via Microsoft Print to PDF"
