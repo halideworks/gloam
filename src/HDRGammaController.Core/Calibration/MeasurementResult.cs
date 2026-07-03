@@ -85,6 +85,21 @@ namespace HDRGammaController.Core.Calibration
         public int SequenceIndex { get; init; }
 
         /// <summary>
+        /// Number of instrument readings combined into this result (1 = single read;
+        /// &gt;1 = per-component median of a multi-read burst). Settable (not init-only)
+        /// so the orchestrator can restore the read metadata onto the copies
+        /// DriftCompensator rebuilds during drift normalization.
+        /// </summary>
+        public int ReadingCount { get; set; } = 1;
+
+        /// <summary>
+        /// Observed max−min luminance (Y) spread across the readings of the burst, in
+        /// cd/m². Null for single reads. Feeds the per-luminance-decade noise model and
+        /// the measurement uncertainty budget (repeatability term).
+        /// </summary>
+        public double? ReadingSpreadY { get; set; }
+
+        /// <summary>
         /// Calculates Delta E 2000 between the measured color and a target XYZ.
         /// </summary>
         public double DeltaE2000To(CieXyz targetXyz)

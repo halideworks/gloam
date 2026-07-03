@@ -55,6 +55,26 @@ namespace HDRGammaController.Core.Calibration
         public static CalibrationMetrics ComputeMetrics(
             IEnumerable<MeasurementResult> measurements, CalibrationTarget target)
         {
+            return ComputeMetrics(measurements, target, uncertaintyContext: null, out _);
+        }
+
+        /// <summary>
+        /// Same grading as <see cref="ComputeMetrics(IEnumerable{MeasurementResult}, CalibrationTarget)"/>,
+        /// optionally producing a measurement-uncertainty budget for the average-ΔE
+        /// metric (roadmap 1.3). When <paramref name="uncertaintyContext"/> is supplied,
+        /// each patch's Y repeatability (recorded read spread, or the luminance-decade
+        /// noise-model estimate for single reads) is propagated to ΔE by a numeric
+        /// two-point sensitivity — the ΔE re-evaluated with the measurement scaled to
+        /// Y±σ — and combined with the instrument and drift terms per GUM quadrature.
+        /// </summary>
+        public static CalibrationMetrics ComputeMetrics(
+            IEnumerable<MeasurementResult> measurements,
+            CalibrationTarget target,
+            UncertaintyBudget.Context? uncertaintyContext,
+            out UncertaintyBudget.Result? uncertainty)
+        {
+            uncertainty = null;
+            var patchTerms = uncertaintyContext != null ? new List<UncertaintyBudget.PatchTerm>() : null;
             var metrics = new CalibrationMetrics();
             var deltaEs = new List<double>();
 
@@ -104,6 +124,12 @@ namespace HDRGammaController.Core.Calibration
                 metrics.PatchResults.Add(new PatchDeltaE(
                     measurement.Patch.Name, measurement.Patch.Category, deltaE));
 
+                if (patchTerms != null)
+                {
+                    patchTerms.Add(ComputePatchUncertaintyTerm(
+                        measurement, uncertaintyContext!, normalized, targetLab, labWhite, peakY, deltaE));
+                }
+
                 if (measurement.Patch.Category == PatchCategory.Grayscale)
                 {
                     metrics.GrayscaleDeltaEs.Add(deltaE);
@@ -142,7 +168,69 @@ namespace HDRGammaController.Core.Calibration
                 metrics.MedianDeltaE = sorted.Count % 2 == 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
             }
 
+            if (patchTerms is { Count: > 0 })
+            {
+                uncertainty = UncertaintyBudget.Combine(
+                    patchTerms,
+                    uncertaintyContext!.Instrument,
+                    uncertaintyContext.PeakWhiteDriftFraction,
+                    uncertaintyContext.DriftCompensated);
+            }
+
             return metrics;
+        }
+
+        /// <summary>
+        /// One patch's uncertainty contribution: the Y repeatability std-u (recorded
+        /// spread, or the noise-model estimate for single reads) propagated to ΔE by a
+        /// two-point numeric sensitivity. The perturbation scales the whole normalized
+        /// XYZ by (1 ± σ/Y) — photometric read noise is dominantly luminance-common-mode,
+        /// so chromaticity is preserved and only the tone axis moves, matching what the
+        /// repeatability term physically represents. At Y ≈ 0 (black, where a relative
+        /// scale is undefined) the perturbation is additive on Y alone and one-sided
+        /// (readings cannot go below zero).
+        /// </summary>
+        private static UncertaintyBudget.PatchTerm ComputePatchUncertaintyTerm(
+            MeasurementResult measurement,
+            UncertaintyBudget.Context context,
+            CieXyz normalized,
+            CieLab targetLab,
+            CieXyz labWhite,
+            double peakY,
+            double baseDeltaE)
+        {
+            double y = measurement.Xyz.Y;
+            double yStdU = UncertaintyBudget.RepeatabilityYStdU(
+                y, measurement.ReadingCount, measurement.ReadingSpreadY, context.NoiseModel);
+
+            double deltaEStdU = 0;
+            if (yStdU > 0)
+            {
+                if (y > 1e-9)
+                {
+                    // Clamp the relative sigma at 100% so a pathological near-black spread
+                    // cannot push the minus-side evaluation to negative luminance.
+                    double rel = Math.Min(yStdU / y, 1.0);
+                    double dEPlus = ColorMath.XyzToLab(new CieXyz(
+                            normalized.X * (1 + rel), normalized.Y * (1 + rel), normalized.Z * (1 + rel)), labWhite)
+                        .DeltaE2000(targetLab);
+                    double dEMinus = ColorMath.XyzToLab(new CieXyz(
+                            normalized.X * (1 - rel), normalized.Y * (1 - rel), normalized.Z * (1 - rel)), labWhite)
+                        .DeltaE2000(targetLab);
+                    if (double.IsFinite(dEPlus) && double.IsFinite(dEMinus))
+                        deltaEStdU = Math.Abs(dEPlus - dEMinus) / 2.0;
+                }
+                else
+                {
+                    double dEPlus = ColorMath.XyzToLab(new CieXyz(
+                            normalized.X, normalized.Y + yStdU / peakY, normalized.Z), labWhite)
+                        .DeltaE2000(targetLab);
+                    if (double.IsFinite(dEPlus))
+                        deltaEStdU = Math.Abs(dEPlus - baseDeltaE);
+                }
+            }
+
+            return new UncertaintyBudget.PatchTerm(measurement.Patch.Name, y, yStdU, deltaEStdU);
         }
 
         /// <summary>
