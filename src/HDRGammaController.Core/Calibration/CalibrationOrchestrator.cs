@@ -99,6 +99,38 @@ namespace HDRGammaController.Core.Calibration
         /// <summary>Pause between repeated reads of the same patch (no display change to settle).</summary>
         internal int InterReadDelayMs { get; set; } = 150;
 
+        // ------- Variance-adaptive integration (1.4) -------
+        // The M8 multi-read set is fixed a priori (near-black/white/primaries). This
+        // extends it with a LIVE noise model: every multi-read burst records its observed
+        // Y spread into a per-luminance-decade EWMA (LuminanceNoiseModel). Once a decade
+        // proves noisy (relative spread > LuminanceNoiseModel.NoisyRelativeSpread),
+        // subsequent SINGLE-read patches landing there are escalated to median-of-3 and
+        // their settle is lengthened (bounded below); quiet decades keep fast single
+        // reads. Dark-panel VA/OLED runs therefore slow down only where the data is
+        // actually noisy.
+
+        /// <summary>
+        /// Live per-luminance-decade noise model for this run. Fed by every multi-read
+        /// burst; drives single-read escalation and noisy-regime settle lengthening.
+        /// </summary>
+        public LuminanceNoiseModel NoiseModel { get; } = new();
+
+        /// <summary>
+        /// Settle multiplier for patches predicted to land in a noisy luminance decade
+        /// (up to 2×, applied on top of the adaptive settle and bounded at
+        /// <see cref="NoisySettleMultiplier"/> × <see cref="SettleMaxMs"/>).
+        /// </summary>
+        internal const int NoisySettleMultiplier = 2;
+
+        /// <summary>Assumed peak white (cd/m²) for bin prediction before any reading exists.</summary>
+        internal const double DefaultAssumedPeakY = 100.0;
+
+        /// <summary>Display gamma assumed when predicting a patch's absolute Y for bin lookup only.</summary>
+        internal const double PredictionGamma = 2.2;
+
+        /// <summary>Highest Y measured so far (non-wire patches); prediction scale for bin lookup.</summary>
+        private double? _observedPeakY;
+
         /// <summary>Drift analysis from the last completed run (M7), if any.</summary>
         public DriftCompensator.DriftAnalysis? LastDriftAnalysis { get; private set; }
 
@@ -324,7 +356,19 @@ namespace HDRGammaController.Core.Calibration
                         LastDriftAnalysis = DriftCompensator.Compensate(_measurements);
                         PhaseChanged?.Invoke(this, LastDriftAnalysis.Summary);
                         if (LastDriftAnalysis.Applied)
-                            _measurements = new List<MeasurementResult>(LastDriftAnalysis.Measurements);
+                        {
+                            var compensated = new List<MeasurementResult>(LastDriftAnalysis.Measurements);
+                            // DriftCompensator rebuilds MeasurementResult instances and
+                            // (deliberately — it owns no knowledge of read bursts) drops the
+                            // multi-read metadata. Order is preserved, so restore
+                            // ReadingCount/ReadingSpreadY for the uncertainty budget (1.3).
+                            for (int i = 0; i < compensated.Count && i < _measurements.Count; i++)
+                            {
+                                compensated[i].ReadingCount = _measurements[i].ReadingCount;
+                                compensated[i].ReadingSpreadY = _measurements[i].ReadingSpreadY;
+                            }
+                            _measurements = compensated;
+                        }
                     }
 
                     // In-session apply → verify → refine, while spotread is still connected.
@@ -552,7 +596,16 @@ namespace HDRGammaController.Core.Calibration
             await Task.Delay(ComputeSettleDelayMs(patch), cancellationToken);
 
             var first = await MeasurePatchWithRetryAsync(patch, cancellationToken);
-            if (!NeedsMultiRead(patch))
+            TrackObservedPeak(patch, first);
+
+            // 1.4: escalate an ordinary single-read patch to a multi-read burst when the
+            // luminance decade its FIRST reading landed in has proven noisy this run.
+            // Wire-ladder patches stay single-read regardless (own validation, tight
+            // time budget — same exclusion as NeedsMultiRead).
+            bool escalated = patch.Nits is null &&
+                             !NeedsMultiRead(patch) &&
+                             NoiseModel.IsNoisy(first.Xyz.Y);
+            if (!NeedsMultiRead(patch) && !escalated)
                 return first;
 
             var reads = new List<MeasurementResult>(MaxReadsPerPatch) { first };
@@ -576,7 +629,22 @@ namespace HDRGammaController.Core.Calibration
                 reads.Add(await MeasurePatchWithRetryAsync(patch, cancellationToken));
             }
 
+            // 1.4: feed the noise model with the burst's final spread so later patches
+            // in this luminance decade adapt (escalation + settle).
+            NoiseModel.Record(
+                reads.Average(r => r.Xyz.Y),
+                reads.Max(r => r.Xyz.Y) - reads.Min(r => r.Xyz.Y));
+
             return MedianMeasurement(patch, reads);
+        }
+
+        /// <summary>Tracks the run's peak measured luminance for bin PREDICTION only (settle heuristic).</summary>
+        private void TrackObservedPeak(ColorPatch patch, MeasurementResult measurement)
+        {
+            if (patch.Nits is not null) return; // wire ladder exceeds SDR white by design
+            double y = measurement.Xyz.Y;
+            if (double.IsFinite(y) && y > (_observedPeakY ?? 0))
+                _observedPeakY = y;
         }
 
         /// <summary>
@@ -624,7 +692,12 @@ namespace HDRGammaController.Core.Calibration
                     Median(reads.Select(r => r.Xyz.Y)),
                     Median(reads.Select(r => r.Xyz.Z))),
                 IsValid = true,
-                SequenceIndex = reads[0].SequenceIndex
+                SequenceIndex = reads[0].SequenceIndex,
+                // 1.3/1.4: record the burst size and its observed Y spread so the noise
+                // model can be rebuilt offline and the uncertainty budget can derive the
+                // per-patch repeatability term.
+                ReadingCount = reads.Count,
+                ReadingSpreadY = reads.Max(r => r.Xyz.Y) - reads.Min(r => r.Xyz.Y)
             };
         }
 
@@ -637,7 +710,7 @@ namespace HDRGammaController.Core.Calibration
         /// The luminance key is the gamma-encoded Rec.709-weighted signal — ordinal only,
         /// which is all a settle heuristic needs.
         /// </summary>
-        private int ComputeSettleDelayMs(ColorPatch patch)
+        internal int ComputeSettleDelayMs(ColorPatch patch)
         {
             double key = PatchKeyLuminance(patch);
             // Before the first patch assume a bright screen (setup UI), which conservatively
@@ -650,7 +723,31 @@ namespace HDRGammaController.Core.Calibration
             if (prev - key > LargeFallThresholdFraction)
                 settle = Math.Max(settle, LargeFallSettleFloorMs);
             settle = Math.Max(settle, Math.Min(_settleTimeMs, SettleMaxMs));
-            return Math.Min(settle, SettleMaxMs);
+            settle = Math.Min(settle, SettleMaxMs);
+
+            // 1.4: when this patch is predicted to land in a luminance decade the run has
+            // proven noisy, lengthen the settle up to NoisySettleMultiplier× (residual
+            // panel transients matter most exactly where the meter is already fighting
+            // noise), bounded at NoisySettleMultiplier × SettleMaxMs.
+            if (NoiseModel.IsNoisy(PredictPatchY(patch, key)))
+                settle = Math.Min(settle * NoisySettleMultiplier, SettleMaxMs * NoisySettleMultiplier);
+
+            return settle;
+        }
+
+        /// <summary>
+        /// Coarse absolute-luminance prediction for the incoming patch, used ONLY to pick
+        /// the noise-model decade before the patch is measured: wire patches use their
+        /// requested nits; SDR patches assume gamma-<see cref="PredictionGamma"/> output
+        /// scaled by the run's observed peak (or <see cref="DefaultAssumedPeakY"/> before
+        /// any reading exists).
+        /// </summary>
+        private double PredictPatchY(ColorPatch patch, double keyLuminance)
+        {
+            if (patch.Nits is double nits && double.IsFinite(nits))
+                return Math.Max(nits, 0.0);
+            double peak = _observedPeakY ?? DefaultAssumedPeakY;
+            return Math.Pow(Math.Clamp(keyLuminance, 0.0, 1.0), PredictionGamma) * peak;
         }
 
         private static double PatchKeyLuminance(ColorPatch patch)

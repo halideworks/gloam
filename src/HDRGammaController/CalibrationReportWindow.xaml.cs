@@ -50,6 +50,11 @@ namespace HDRGammaController
         // updates the same file instead of creating a sibling.
         private string? _reportSavePath;
 
+        // SummaryText without the appended measurement-uncertainty line, so the line can
+        // be recomputed (e.g. once the apply context reveals the CCSS state) without
+        // stacking duplicates.
+        private string? _summaryBaseText;
+
         // White tools state: re-anchoring replaces the characterization's white (drift fix);
         // the visual trim shifts the TARGET white (metameric fix). Both rebuild the profile.
         private DisplayCharacterization? _activeCharacterization;
@@ -83,6 +88,16 @@ namespace HDRGammaController
             WindowBoundsPersistence.Attach(this, context.SettingsManager, "CalibrationReport");
             RefreshMeasurementValidation();
             UpdateRefineButtonState();
+
+            // The apply context tells us whether a spectral correction is loaded for this
+            // monitor, which changes the uncertainty budget's instrument term — recompute
+            // (PopulateReport ran before the context existed) and re-snapshot so the saved
+            // summary carries the corrected numbers.
+            RefreshNativeUncertainty();
+            // Guarded on "no verify has run yet" so a late SetApplyContext could never
+            // wipe persisted after-verification numbers with an after:null snapshot.
+            if (_metrics != null && !_isHistorical && _verifyMeasurements == null)
+                PersistReportSummary(after: null);
         }
 
         /// <summary>
@@ -211,6 +226,11 @@ namespace HDRGammaController
 
             // Summary text
             Vm.SummaryText = GetSummaryText(grade);
+            _summaryBaseText = Vm.SummaryText;
+
+            // Measurement uncertainty (1.3): "avg ± expanded" on the headline average,
+            // breakdown in the tooltip, and a summary line so it persists into history.
+            RefreshNativeUncertainty();
 
             // Display characteristics
             PopulateDisplayCharacteristics();
@@ -309,6 +329,62 @@ namespace HDRGammaController
         /// and again after a successful verification sweep (same file). A persistence
         /// failure must never break the report, so everything is swallowed into the log.
         /// </summary>
+        /// <summary>
+        /// Measurement-uncertainty budget (roadmap 1.3) for a metric computed from
+        /// <paramref name="gradedMeasurements"/>. The repeatability inputs (per-patch
+        /// read spreads and the luminance-decade noise model) always come from the
+        /// CALIBRATION run's measurements — the verify sweep takes single reads, which
+        /// by design inherit the run's noise model. Never allowed to break the report:
+        /// any failure returns null (no ± shown).
+        /// </summary>
+        private UncertaintyBudget.Result? ComputeUncertainty(
+            IEnumerable<MeasurementResult> gradedMeasurements, CalibrationTarget target)
+        {
+            if (_measurements == null || _measurements.Count == 0) return null;
+            try
+            {
+                var noiseModel = LuminanceNoiseModel.FromMeasurements(_measurements);
+
+                // Drift term: re-analyze the stored measurements. If the orchestrator
+                // already compensated them, the re-analysis sees ~zero residual drift
+                // (correct: compensation ran); if drift was observed but NOT correctable,
+                // the full drift fraction lands in the budget.
+                var drift = DriftCompensator.Compensate(_measurements);
+
+                bool hasCorrection = !string.IsNullOrEmpty(_applyContext?.SettingsManager?
+                    .GetMonitorProfile(_applyContext.Monitor.MonitorDevicePath)?.MeterCorrectionPath);
+                var instrument = UncertaintyBudget.ClassifyInstrument(_profile?.ColorimeterModel, hasCorrection);
+
+                var context = new UncertaintyBudget.Context(
+                    instrument, noiseModel, drift.MaxWhiteDriftFraction, drift.Applied);
+                CalibrationVerifier.ComputeMetrics(gradedMeasurements, target, context, out var uncertainty);
+                return uncertainty;
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"CalibrationReportWindow: uncertainty budget failed (report continues without it): {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Shows the native (before) headline average as "x.xx ± y.yy" with the budget
+        /// breakdown in the tooltip, and appends the uncertainty line to the summary so
+        /// it persists into the saved report. Recomputed when the apply context arrives
+        /// (the CCSS state changes the instrument term).
+        /// </summary>
+        private void RefreshNativeUncertainty()
+        {
+            if (_isHistorical || _metrics == null || _profile == null) return;
+            var uncertainty = ComputeUncertainty(_measurements ?? Enumerable.Empty<MeasurementResult>(), _profile.Target);
+            if (uncertainty == null) return;
+
+            Vm.AvgDeltaEText = $"{_metrics.AverageDeltaE:F2} ± {uncertainty.ExpandedU:F2}";
+            Vm.AvgDeltaEToolTip = "Expanded measurement uncertainty: " + uncertainty.Describe();
+            if (_summaryBaseText != null)
+                Vm.SummaryText = _summaryBaseText + $"\nMeasurement uncertainty on the average ΔE: {uncertainty.Describe()}.";
+        }
+
         private void PersistReportSummary(CalibrationMetrics? after)
         {
             if (_profile == null) return;
@@ -2316,7 +2392,19 @@ namespace HDRGammaController
                 SetGradeDisplay(afterGrade);
                 Vm.GradeScopeText = "after correction";
                 Vm.SummaryText = GetSummaryText(afterGrade);
+                _summaryBaseText = Vm.SummaryText;
                 Vm.IsPerceptualNoteVisible = true;
+
+                // Uncertainty on the verified average (1.3): the sweep's single reads
+                // inherit the calibration run's noise model for their repeatability term.
+                var afterUncertainty = ComputeUncertainty(results, verificationTarget);
+                if (afterUncertainty != null)
+                {
+                    Vm.AfterAvgText = $"{after.AverageDeltaE:F2} ± {afterUncertainty.ExpandedU:F2}";
+                    Vm.AfterAvgToolTip = "Expanded measurement uncertainty: " + afterUncertainty.Describe();
+                    Vm.SummaryText = _summaryBaseText +
+                        $"\nMeasurement uncertainty on the verified average ΔE: {afterUncertainty.Describe()}.";
+                }
 
                 // Diagnostics line: tone/color decomposition answers "is the residual real?",
                 // and ΔE ITP is the HDR-native metric for cross-tool comparison.

@@ -105,6 +105,14 @@ namespace HDRGammaController.ViewModels
         private Brush _avgDeltaEBrush = DefaultValueBrush;
         public Brush AvgDeltaEBrush { get => _avgDeltaEBrush; set => SetProperty(ref _avgDeltaEBrush, value); }
 
+        // Measurement-uncertainty breakdowns (roadmap 1.3) shown as tooltips on the
+        // headline averages; null (no tooltip) when no uncertainty budget is available.
+        private string? _avgDeltaEToolTip;
+        public string? AvgDeltaEToolTip { get => _avgDeltaEToolTip; set => SetProperty(ref _avgDeltaEToolTip, value); }
+
+        private string? _afterAvgToolTip;
+        public string? AfterAvgToolTip { get => _afterAvgToolTip; set => SetProperty(ref _afterAvgToolTip, value); }
+
         private string _maxDeltaEText = "-";
         public string MaxDeltaEText { get => _maxDeltaEText; set => SetProperty(ref _maxDeltaEText, value); }
 
