@@ -296,12 +296,18 @@ namespace HDRGammaController
                 (int)Math.Round(bottomRight.X - topLeft.X), (int)Math.Round(bottomRight.Y - topLeft.Y));
         }
 
+        /// <summary>
+        /// Shared 0..1 → 8-bit conversion for patch surfaces. Math.Round, NOT a cast:
+        /// truncation biases every code downward by up to a full 1/255 (~6% relative at
+        /// 5% gray). Calibration (CalibrationWindow) and verification (this window) must
+        /// render IDENTICAL codes for the same patch or before/after comparisons drift.
+        /// </summary>
+        internal static byte ToPatchByte(double v) => (byte)Math.Round(Math.Clamp(v, 0, 1) * 255);
+
         public void SetColor(double r, double g, double b)
         {
             _patch.Background = new SolidColorBrush(Color.FromRgb(
-                (byte)Math.Round(Math.Clamp(r, 0, 1) * 255),
-                (byte)Math.Round(Math.Clamp(g, 0, 1) * 255),
-                (byte)Math.Round(Math.Clamp(b, 0, 1) * 255)));
+                ToPatchByte(r), ToPatchByte(g), ToPatchByte(b)));
         }
 
         public void SetProgress(int current, int total, string patchName)

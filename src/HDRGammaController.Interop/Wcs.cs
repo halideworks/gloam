@@ -95,6 +95,17 @@ namespace HDRGammaController.Interop
             uint sourceID,
             [MarshalAs(UnmanagedType.Bool)] bool dissociateAdvancedColor);
 
+        /// <summary>
+        /// Resolves the Windows color store directory (normally
+        /// %SystemRoot%\System32\spool\drivers\color) so profile filenames from the
+        /// association lists can be opened for read-only inspection. pdwSize is in BYTES.
+        /// </summary>
+        [DllImport("mscms.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern bool GetColorDirectory(
+            string? pMachineName,
+            System.Text.StringBuilder? pBuffer,
+            ref uint pdwSize);
+
         public const int CPT_ICC = 0;
         public const int CPST_PERCEPTUAL = 0;
         public const int CPST_RELATIVE_COLORIMETRIC = 1;

@@ -145,10 +145,22 @@ namespace HDRGammaController
             Loaded += async (_, _) =>
             {
                 if (!AutoApplyOnLoad || _applyContext == null || _measurementInstallBlocked) return;
-                // Let the tray's window-closed re-apply land first; the verify bypass then
-                // clears it cleanly instead of racing it.
-                await Task.Delay(600);
-                await ApplyAndVerifyAsync();
+                // async void (event handler): an installer/verify exception escaping here
+                // goes straight to the global crash dialog — surface it in the report's
+                // status strip instead.
+                try
+                {
+                    // Let the tray's window-closed re-apply land first; the verify bypass then
+                    // clears it cleanly instead of racing it.
+                    await Task.Delay(600);
+                    await ApplyAndVerifyAsync();
+                }
+                catch (Exception ex)
+                {
+                    Log.Error($"CalibrationReportWindow: auto apply+verify failed: {ex}");
+                    Vm.StatusText = $"Automatic apply failed: {ex.Message}";
+                    Vm.StatusBrush = CalibrationReportViewModel.AmberBrush;
+                }
             };
 
             // Escape aborts a running verification from this window too, and closing the
@@ -1508,6 +1520,7 @@ namespace HDRGammaController
                     Array.Empty<MeasurementResult>());
 
             double sumAbsErr = 0, worstErr = 0, worstNits = 0, itpSum = 0, itpMax = 0;
+            int itpCount = 0, itpSkipped = 0;
             foreach (var (requested, m) in readings)
             {
                 double err = (m.Xyz.Y - requested) / requested;
@@ -1518,15 +1531,31 @@ namespace HDRGammaController
                 var target = new CieXyz(
                     requested * 0.3127 / 0.3290, requested, requested * (1 - 0.3127 - 0.3290) / 0.3290);
                 double itp = CalibrationVerifier.DeltaEItp(m.Xyz, target);
-                itpSum += itp;
-                itpMax = Math.Max(itpMax, itp);
+                // DeltaEItp can be non-finite for non-physical readings; one NaN would
+                // poison the whole average, so exclude and count instead.
+                if (double.IsFinite(itp))
+                {
+                    itpSum += itp;
+                    itpMax = Math.Max(itpMax, itp);
+                    itpCount++;
+                }
+                else
+                {
+                    itpSkipped++;
+                }
                 Log.Info($"CalibrationReportWindow: PQ verify {requested,6:F0} nits -> {m.Xyz.Y,7:F1} " +
                          $"({err:+0.0%;-0.0%}), xy ({m.Xyz.ToChromaticity().X:F4},{m.Xyz.ToChromaticity().Y:F4}), ITP {itp:F1}");
             }
+            if (itpSkipped > 0)
+                Log.Info($"CalibrationReportWindow: PQ tracking excluded {itpSkipped} non-finite ΔE ITP value(s) from the aggregate.");
 
+            string itpSummary = itpCount > 0
+                ? $"ΔE ITP avg {itpSum / itpCount:F1}, max {itpMax:F1} vs D65 gray" +
+                  (itpSkipped > 0 ? $" ({itpSkipped} non-physical reading(s) excluded)" : "")
+                : "ΔE ITP unavailable (no physical readings)";
             string summary = $"HDR PQ tracking (FP16 through profile, {readings.Count} levels to {readings[^1].Requested:F0} nits): " +
                              $"avg luminance error {sumAbsErr / readings.Count:P1}, worst {worstErr:+0.0%;-0.0%} at {worstNits:F0} nits; " +
-                             $"ΔE ITP avg {itpSum / readings.Count:F1}, max {itpMax:F1} vs D65 gray.";
+                             $"{itpSummary}.";
             return new PqTrackingSweepResult(summary, readings.Select(r => r.M).ToList());
         }
 
@@ -1642,7 +1671,21 @@ namespace HDRGammaController
 
             var baseWhite = EffectiveTarget(ctx).WhitePoint;
             var editor = new WhiteTrimWindow { Owner = this };
-            editor.TrimChanged += async (dx, dy) => await InstallTrimPreviewAsync(ctx, baseWhite, dx, dy);
+            editor.TrimChanged += async (dx, dy) =>
+            {
+                // async void (event handler): an installer exception escaping here would
+                // hit the global crash dialog mid-trim. Report it in the status strip.
+                try
+                {
+                    await InstallTrimPreviewAsync(ctx, baseWhite, dx, dy);
+                }
+                catch (Exception ex)
+                {
+                    Log.Error($"CalibrationReportWindow: white-trim preview install failed: {ex}");
+                    Vm.StatusText = $"White-trim preview failed: {ex.Message}";
+                    Vm.StatusBrush = CalibrationReportViewModel.AmberBrush;
+                }
+            };
 
             bool? accepted = editor.ShowDialog();
 
@@ -1713,6 +1756,9 @@ namespace HDRGammaController
         private void CloseGlyph_Click(object sender, MouseButtonEventArgs e)
         {
             e.Handled = true;
+            // The Close button is disabled during a verify sweep (IsCloseEnabled); the X
+            // glyph must honor the same gate instead of closing mid-sweep.
+            if (!Vm.IsCloseEnabled) return;
             Close();
         }
 
@@ -1926,7 +1972,19 @@ namespace HDRGammaController
             }
             catch (Exception ex)
             {
-                ConfirmDialog.Info(this, "Verify Calibration", $"Verification failed:\n\n{ex.Message}");
+                // The window may already be closed (Closing cancels the CTS, but a failure
+                // can surface after teardown) — showing a dialog owned by a closed window
+                // throws InvalidOperationException from ShowDialog.
+                if (IsLoaded)
+                {
+                    ConfirmDialog.Info(this, "Verify Calibration", $"Verification failed:\n\n{ex.Message}");
+                }
+                else
+                {
+                    Log.Error($"CalibrationReportWindow: verification failed after the window closed: {ex.Message}");
+                }
+                Vm.StatusText = $"Verification failed: {ex.Message}";
+                Vm.StatusBrush = CalibrationReportViewModel.AmberBrush;
             }
             finally
             {

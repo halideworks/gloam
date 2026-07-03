@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -64,6 +66,30 @@ namespace HDRGammaController
             public int Bottom;
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        private struct POINT
+        {
+            public int X;
+            public int Y;
+        }
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
+
+        // Raw-pixel placement: WPF Left/Top/Width/Height are DIPs, so assigning monitor
+        // PIXEL bounds to them mis-sizes the window at any scale other than 100% (and can
+        // land it on the wrong monitor entirely). Same approach as PatchDisplayWindow.
+        [DllImport("user32.dll")]
+        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter,
+            int x, int y, int cx, int cy, uint uFlags);
+        private const uint SWP_NOZORDER = 0x0004;
+        private const uint SWP_NOACTIVATE = 0x0010;
+
+        // Effective DPI of a monitor (MDT_EFFECTIVE_DPI = 0), for converting the DIP size
+        // of the windowed-mode chrome into pixels on the TARGET monitor before centering.
+        [DllImport("shcore.dll")]
+        private static extern int GetDpiForMonitor(IntPtr hmonitor, int dpiType, out uint dpiX, out uint dpiY);
+
         #endregion
 
         #region Private Fields
@@ -82,6 +108,12 @@ namespace HDRGammaController
         private bool _measuredInHdr;
         private string? _disabledProfileForMeasurement;
         private bool _disabledProfileForMeasurementHdrMode;
+
+        // Non-Gloam MHC2 default profiles the user chose to disable for the measurement
+        // run. Restored on EVERY exit path (cancel, failure, close, driver dialog) via
+        // RestoreProfileDisabledForMeasurement; a persisted intent file additionally lets
+        // the next launch restore them if the app crashes mid-run.
+        private List<CalibrationInstallPreflight.ForeignDefaultProfile>? _foreignProfilesDisabledForMeasurement;
 
         private int _patchSize = 600;
         // FP16 scRGB renderer for HDR wire-ladder patches (ColorPatch.Nits). Created lazily
@@ -254,6 +286,10 @@ namespace HDRGammaController
 
         private void Window_Loaded(object sender, RoutedEventArgs e)
         {
+            // If a previous run crashed after disabling a foreign color profile for
+            // measurement, restore it before this session measures anything.
+            RecoverStaleForeignRestoreIntent();
+
             // Start blocking screen saver
             PreventScreenSaver(true);
 
@@ -351,6 +387,8 @@ namespace HDRGammaController
 
         private void RestoreProfileDisabledForMeasurement()
         {
+            RestoreForeignProfilesDisabledForMeasurement();
+
             if (_targetMonitor == null || string.IsNullOrEmpty(_disabledProfileForMeasurement))
                 return;
 
@@ -366,6 +404,145 @@ namespace HDRGammaController
                 Log.Info($"CalibrationWindow: Could not restore calibration profile disabled for measurement: {profileName}");
             }
         }
+
+        /// <summary>
+        /// Restores any NON-Gloam MHC2 profiles that were temporarily disabled for the
+        /// measurement run. Called from every exit path (cancel, failure, window close,
+        /// driver dialog) via <see cref="RestoreProfileDisabledForMeasurement"/>; idempotent.
+        /// </summary>
+        private void RestoreForeignProfilesDisabledForMeasurement()
+        {
+            var foreign = _foreignProfilesDisabledForMeasurement;
+            _foreignProfilesDisabledForMeasurement = null;
+            if (_targetMonitor == null || foreign is not { Count: > 0 })
+                return;
+
+            foreach (var f in foreign)
+            {
+                bool restored = CalibrationProfileInstaller.RestoreDefaultProfile(
+                    _targetMonitor, f.ProfileName, f.IsAdvancedColor);
+                Log.Info(restored
+                    ? $"CalibrationWindow: restored foreign profile disabled for measurement: {f.ProfileName}"
+                    : $"CalibrationWindow: could not restore foreign profile disabled for measurement: {f.ProfileName}");
+            }
+            ClearForeignRestoreIntent();
+        }
+
+        #region Foreign-profile restore intent (crash recovery)
+
+        // If the app dies mid-measurement the in-memory restore list is gone; this file
+        // records what was disabled so the NEXT calibration window can put it back —
+        // the same "remember what to restore" idea as MonitorProfileData.PreviousColorProfileName.
+        private static string ForeignRestoreIntentPath =>
+            Path.Combine(AppPaths.DataDir, "pending-foreign-profile-restore.json");
+
+        private sealed class ForeignRestoreIntentFile
+        {
+            public string? MonitorDevicePath { get; set; }
+            public string? DeviceName { get; set; }
+            public List<ForeignRestoreEntry> Profiles { get; set; } = new();
+        }
+
+        private sealed class ForeignRestoreEntry
+        {
+            public string ProfileName { get; set; } = "";
+            public bool IsAdvancedColor { get; set; }
+        }
+
+        private static void PersistForeignRestoreIntent(
+            MonitorInfo monitor, IReadOnlyList<CalibrationInstallPreflight.ForeignDefaultProfile> profiles)
+        {
+            try
+            {
+                var intent = new ForeignRestoreIntentFile
+                {
+                    MonitorDevicePath = monitor.MonitorDevicePath,
+                    DeviceName = monitor.DeviceName,
+                    Profiles = profiles.Select(p => new ForeignRestoreEntry
+                    {
+                        ProfileName = p.ProfileName,
+                        IsAdvancedColor = p.IsAdvancedColor
+                    }).ToList()
+                };
+                Directory.CreateDirectory(AppPaths.DataDir);
+                File.WriteAllText(ForeignRestoreIntentPath,
+                    System.Text.Json.JsonSerializer.Serialize(intent));
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"CalibrationWindow: could not persist foreign-profile restore intent: {ex.Message}");
+            }
+        }
+
+        private static void ClearForeignRestoreIntent()
+        {
+            try
+            {
+                if (File.Exists(ForeignRestoreIntentPath))
+                    File.Delete(ForeignRestoreIntentPath);
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"CalibrationWindow: could not clear foreign-profile restore intent: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Crash recovery: if a previous run disabled a foreign profile and never restored
+        /// it (app crash mid-measurement), put it back now. Best-effort; never throws.
+        /// </summary>
+        private void RecoverStaleForeignRestoreIntent()
+        {
+            try
+            {
+                if (!File.Exists(ForeignRestoreIntentPath)) return;
+                var intent = System.Text.Json.JsonSerializer.Deserialize<ForeignRestoreIntentFile>(
+                    File.ReadAllText(ForeignRestoreIntentPath));
+                if (intent?.Profiles is not { Count: > 0 })
+                {
+                    ClearForeignRestoreIntent();
+                    return;
+                }
+
+                // Resolve the monitor the intent refers to: the current target if it
+                // matches, otherwise a fresh enumeration.
+                MonitorInfo? monitor = null;
+                if (_targetMonitor != null && string.Equals(
+                        _targetMonitor.MonitorDevicePath, intent.MonitorDevicePath,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    monitor = _targetMonitor;
+                }
+                else
+                {
+                    monitor = new MonitorManager().EnumerateMonitors().FirstOrDefault(m =>
+                        string.Equals(m.MonitorDevicePath, intent.MonitorDevicePath, StringComparison.OrdinalIgnoreCase));
+                }
+                if (monitor == null)
+                {
+                    // Display not attached right now; keep the intent for a later launch.
+                    Log.Info("CalibrationWindow: stale foreign-profile restore intent found but its display is not attached; keeping it.");
+                    return;
+                }
+
+                foreach (var p in intent.Profiles)
+                {
+                    if (string.IsNullOrWhiteSpace(p.ProfileName)) continue;
+                    bool restored = CalibrationProfileInstaller.RestoreDefaultProfile(
+                        monitor, p.ProfileName, p.IsAdvancedColor);
+                    Log.Info(restored
+                        ? $"CalibrationWindow: recovered foreign profile from a previous crashed run: {p.ProfileName}"
+                        : $"CalibrationWindow: could not recover foreign profile from a previous run: {p.ProfileName}");
+                }
+                ClearForeignRestoreIntent();
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"CalibrationWindow: foreign-profile crash recovery failed: {ex.Message}");
+            }
+        }
+
+        #endregion
 
         #endregion
 
@@ -418,55 +595,21 @@ namespace HDRGammaController
                 // calibrate — NOT wherever this window happens to sit. On a multi-monitor
                 // setup these differ, and getting it wrong puts the patches on one screen
                 // while the probe sits on another, silently measuring the wrong display.
-                bool positioned = false;
-                if (_targetMonitor != null)
+                // The move is done in RAW PIXELS via SetWindowPos (see MoveWindowToPixelRect):
+                // monitor bounds are physical pixels, and pushing them through WPF's
+                // DIP-based Left/Width mis-sized the patch surface at any scale other than
+                // 100% — and could even land the window on the WRONG monitor.
+                if (TryGetTargetMonitorPixelBounds(out RECT px, out _))
                 {
-                    // Prefer the target's HMONITOR (most reliable across DPI/topologies).
-                    IntPtr targetHmon = _targetMonitor.HMonitor;
-                    var mi = new MONITORINFO { cbSize = Marshal.SizeOf(typeof(MONITORINFO)) };
-                    if (targetHmon != IntPtr.Zero && GetMonitorInfo(targetHmon, ref mi))
-                    {
-                        Left = mi.rcMonitor.Left;
-                        Top = mi.rcMonitor.Top;
-                        Width = mi.rcMonitor.Right - mi.rcMonitor.Left;
-                        Height = mi.rcMonitor.Bottom - mi.rcMonitor.Top;
-                        positioned = true;
-                    }
-                    else
-                    {
-                        // Fall back to the DXGI desktop bounds captured at enumeration.
-                        var b = _targetMonitor.MonitorBounds;
-                        if (b.Right > b.Left && b.Bottom > b.Top)
-                        {
-                            Left = b.Left;
-                            Top = b.Top;
-                            Width = b.Right - b.Left;
-                            Height = b.Bottom - b.Top;
-                            positioned = true;
-                        }
-                    }
+                    MoveWindowToPixelRect(px);
                 }
-
-                if (!positioned)
+                else
                 {
-                    // Last resort: the monitor this window is on, then the primary.
-                    var helper = new WindowInteropHelper(this);
-                    IntPtr hMonitor = MonitorFromWindow(helper.Handle, MONITOR_DEFAULTTONEAREST);
-                    var monitorInfo = new MONITORINFO { cbSize = Marshal.SizeOf(typeof(MONITORINFO)) };
-                    if (GetMonitorInfo(hMonitor, ref monitorInfo))
-                    {
-                        Left = monitorInfo.rcMonitor.Left;
-                        Top = monitorInfo.rcMonitor.Top;
-                        Width = monitorInfo.rcMonitor.Right - monitorInfo.rcMonitor.Left;
-                        Height = monitorInfo.rcMonitor.Bottom - monitorInfo.rcMonitor.Top;
-                    }
-                    else
-                    {
-                        Left = 0;
-                        Top = 0;
-                        Width = SystemParameters.PrimaryScreenWidth;
-                        Height = SystemParameters.PrimaryScreenHeight;
-                    }
+                    // Last resort (no target, no HWND): primary in DIPs, as before.
+                    Left = 0;
+                    Top = 0;
+                    Width = SystemParameters.PrimaryScreenWidth;
+                    Height = SystemParameters.PrimaryScreenHeight;
                 }
 
                 Vm.ShowWindowedModeBanner = false;
@@ -477,13 +620,10 @@ namespace HDRGammaController
                 // Windowed mode - keep chromeless style but allow resizing
                 ResizeMode = ResizeMode.CanResizeWithGrip;
 
-                // Set reasonable window size for windowed mode
-                Width = 600;
-                Height = 500;
-
-                // Center on screen using SystemParameters
-                Left = (SystemParameters.PrimaryScreenWidth - Width) / 2;
-                Top = (SystemParameters.PrimaryScreenHeight - Height) / 2;
+                // Reasonable window size, centered on the TARGET monitor (not the primary:
+                // when calibrating a secondary display the windowed patch must sit on the
+                // panel being measured).
+                CenterOnTargetMonitor(600, 500);
 
                 Vm.ShowWindowedModeBanner = true;
                 Topmost = Vm.AlwaysOnTop;
@@ -491,6 +631,140 @@ namespace HDRGammaController
 
             // Update patch size
             UpdatePatchSize();
+        }
+
+        /// <summary>
+        /// Physical-pixel bounds of the monitor being calibrated: the target's HMONITOR
+        /// first (most reliable across DPI/topologies), the DXGI desktop bounds captured
+        /// at enumeration second, and the monitor this window currently sits on last.
+        /// </summary>
+        private bool TryGetTargetMonitorPixelBounds(out RECT bounds, out IntPtr hMonitor)
+        {
+            bounds = default;
+            hMonitor = IntPtr.Zero;
+
+            if (_targetMonitor != null)
+            {
+                IntPtr targetHmon = _targetMonitor.HMonitor;
+                var mi = new MONITORINFO { cbSize = Marshal.SizeOf(typeof(MONITORINFO)) };
+                if (targetHmon != IntPtr.Zero && GetMonitorInfo(targetHmon, ref mi))
+                {
+                    bounds = mi.rcMonitor;
+                    hMonitor = targetHmon;
+                    return true;
+                }
+
+                var b = _targetMonitor.MonitorBounds;
+                if (b.Right > b.Left && b.Bottom > b.Top)
+                {
+                    bounds = new RECT { Left = b.Left, Top = b.Top, Right = b.Right, Bottom = b.Bottom };
+                    hMonitor = MonitorFromPoint(new POINT
+                    {
+                        X = (b.Left + b.Right) / 2,
+                        Y = (b.Top + b.Bottom) / 2
+                    }, MONITOR_DEFAULTTONEAREST);
+                    return true;
+                }
+            }
+
+            var helper = new WindowInteropHelper(this);
+            if (helper.Handle != IntPtr.Zero)
+            {
+                IntPtr hMon = MonitorFromWindow(helper.Handle, MONITOR_DEFAULTTONEAREST);
+                var mi = new MONITORINFO { cbSize = Marshal.SizeOf(typeof(MONITORINFO)) };
+                if (GetMonitorInfo(hMon, ref mi))
+                {
+                    bounds = mi.rcMonitor;
+                    hMonitor = hMon;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Positions/sizes this window at an exact PHYSICAL-pixel rect via SetWindowPos —
+        /// the same approach PatchDisplayWindow uses, so calibration and verification render
+        /// the patch at the same physical size. Works whether or not the HWND exists yet
+        /// (initial show vs. later monitor/mode changes), and re-asserts the rect once WPF
+        /// has processed any WM_DPICHANGED from crossing into a different-DPI monitor.
+        /// </summary>
+        private void MoveWindowToPixelRect(RECT px)
+        {
+            void Apply()
+            {
+                IntPtr hwnd = new WindowInteropHelper(this).Handle;
+                if (hwnd == IntPtr.Zero) return;
+                SetWindowPos(hwnd, IntPtr.Zero, px.Left, px.Top,
+                    px.Right - px.Left, px.Bottom - px.Top, SWP_NOZORDER | SWP_NOACTIVATE);
+                // Crossing a DPI boundary makes WPF rescale the window after this call
+                // returns; re-assert the exact pixel rect once the dust settles.
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    IntPtr h = new WindowInteropHelper(this).Handle;
+                    if (h != IntPtr.Zero)
+                        SetWindowPos(h, IntPtr.Zero, px.Left, px.Top,
+                            px.Right - px.Left, px.Bottom - px.Top, SWP_NOZORDER | SWP_NOACTIVATE);
+                }), System.Windows.Threading.DispatcherPriority.Loaded);
+            }
+
+            if (new WindowInteropHelper(this).Handle != IntPtr.Zero)
+            {
+                Apply();
+            }
+            else
+            {
+                // Not shown yet: rough WPF placement so the window materializes near the
+                // right monitor (and DPI context), then pixel-exact once the HWND exists.
+                WindowStartupLocation = WindowStartupLocation.Manual;
+                Left = px.Left;
+                Top = px.Top;
+                void OnSourceInitialized(object? s, EventArgs e)
+                {
+                    SourceInitialized -= OnSourceInitialized;
+                    Apply();
+                }
+                SourceInitialized += OnSourceInitialized;
+            }
+        }
+
+        /// <summary>
+        /// Sizes the window to a DIP size and centers it on the TARGET monitor, converting
+        /// through that monitor's effective DPI. Falls back to primary-screen centering
+        /// only when no monitor can be resolved at all.
+        /// </summary>
+        private void CenterOnTargetMonitor(double dipWidth, double dipHeight)
+        {
+            Width = dipWidth;
+            Height = dipHeight;
+
+            if (TryGetTargetMonitorPixelBounds(out RECT px, out IntPtr hMonitor))
+            {
+                double scale = GetMonitorDpiScale(hMonitor);
+                int w = (int)Math.Round(dipWidth * scale);
+                int h = (int)Math.Round(dipHeight * scale);
+                int x = px.Left + (px.Right - px.Left - w) / 2;
+                int y = px.Top + (px.Bottom - px.Top - h) / 2;
+                MoveWindowToPixelRect(new RECT { Left = x, Top = y, Right = x + w, Bottom = y + h });
+            }
+            else
+            {
+                Left = (SystemParameters.PrimaryScreenWidth - dipWidth) / 2;
+                Top = (SystemParameters.PrimaryScreenHeight - dipHeight) / 2;
+            }
+        }
+
+        private static double GetMonitorDpiScale(IntPtr hMonitor)
+        {
+            try
+            {
+                if (hMonitor != IntPtr.Zero &&
+                    GetDpiForMonitor(hMonitor, 0 /* MDT_EFFECTIVE_DPI */, out uint dpiX, out _) == 0 &&
+                    dpiX > 0)
+                    return dpiX / 96.0;
+            }
+            catch { /* shcore unavailable -> assume 100% */ }
+            return 1.0;
         }
 
         private void RestoreWindowMode()
@@ -648,6 +922,22 @@ namespace HDRGammaController
                 return;
             }
 
+            // MEASUREMENT-START GATE: Windows Night Light warms the whole output at the
+            // compositor — every reading through it is corrupted. Detection is a heuristic
+            // over an undocumented registry blob, so only a confident "on" blocks here
+            // (unknown/off proceed silently; see CalibrationInstallPreflight).
+            if (CalibrationInstallPreflight.DetectNightLightActive() == true)
+            {
+                Log.Info("CalibrationWindow: Night Light detected active at measurement start.");
+                if (!ConfirmDialog.Confirm(this, "Night Light Is Active",
+                        CalibrationInstallPreflight.NightLightWarning +
+                        "\n\nSettings > System > Display > Night light.\n\nMeasure anyway?",
+                        confirmLabel: "Measure Anyway", cancelLabel: "Cancel"))
+                {
+                    return;
+                }
+            }
+
             // If THIS app already installed a calibration profile on the target monitor, Windows
             // is applying it at the compositor and we'd be measuring the display THROUGH our own
             // correction — a useless reading. DISABLE it (disassociate only) so we characterize
@@ -668,6 +958,60 @@ namespace HDRGammaController
                 // bug installed several in one session). If one became the fallback default,
                 // "native" would silently measure through it.
                 CalibrationProfileInstaller.DisableAllForMonitor(_targetMonitor);
+
+                // FOREIGN-CORRECTION PREFLIGHT: a default profile from ANOTHER tool
+                // (DisplayCAL, Windows HDR Calibration, vendor software) that carries an
+                // MHC2 tag is being applied by the compositor right now. Characterizing
+                // "native" through it would bake a double correction into this run. Check
+                // BOTH association lists (SDR ICMProfile and Advanced-Color ICMProfileAC)
+                // and offer to disable it for the measurement, restoring afterwards.
+                try
+                {
+                    string gloamPrefix = CalibrationProfileInstaller.BuildProfileNamePrefix(_targetMonitor);
+                    var foreignDefaults = CalibrationInstallPreflight.AssessForeignDefaults(
+                        CalibrationProfileInstaller.GetCurrentDefaultProfile(_targetMonitor, hdrMode: false),
+                        CalibrationProfileInstaller.GetCurrentDefaultProfile(_targetMonitor, hdrMode: true),
+                        gloamPrefix,
+                        CalibrationInstallPreflight.ProfileHasMhc2Tag);
+
+                    var mhc2Foreign = foreignDefaults.Where(f => f.HasMhc2Tag).ToList();
+                    if (mhc2Foreign.Count > 0 && _foreignProfilesDisabledForMeasurement == null)
+                    {
+                        string names = string.Join("\n", mhc2Foreign.Select(f =>
+                            $"  • {f.ProfileName} ({(f.IsAdvancedColor ? "Advanced Color" : "SDR")} default)"));
+                        Log.Info($"CalibrationWindow: foreign MHC2 default profile(s) detected before measurement:\n{names}");
+                        bool disable = ConfirmDialog.Confirm(this, "Another Correction Is Active",
+                            "Windows is applying a color correction from another tool on this display:\n\n" +
+                            names + "\n\n" +
+                            "Measuring through it would characterize an already-corrected panel and " +
+                            "bake a DOUBLE correction into this calibration.\n\n" +
+                            "Temporarily disable it during measurement and restore it afterwards?",
+                            confirmLabel: "Disable During Measurement",
+                            cancelLabel: "Keep It Active");
+                        if (disable)
+                        {
+                            // Persist the restore intent FIRST so a crash mid-run can
+                            // still restore on the next launch, then disassociate.
+                            _foreignProfilesDisabledForMeasurement = mhc2Foreign;
+                            PersistForeignRestoreIntent(_targetMonitor, mhc2Foreign);
+                            foreach (var f in mhc2Foreign)
+                            {
+                                CalibrationProfileInstaller.Disable(_targetMonitor, f.ProfileName);
+                                Log.Info($"CalibrationWindow: temporarily disabled foreign profile '{f.ProfileName}' for measurement.");
+                            }
+                            await Task.Delay(300); // let the compositor drop it
+                        }
+                        else
+                        {
+                            Log.Info("CalibrationWindow: user kept the foreign MHC2 profile active; measurements include it.");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Detection must never block calibration.
+                    Log.Info($"CalibrationWindow: foreign-profile preflight failed (continuing): {ex.Message}");
+                }
 
                 NativeGammaRamp.TryClear(_targetMonitor.DeviceName);
                 await Task.Delay(300); // let the compositor drop the profile
@@ -1096,21 +1440,55 @@ namespace HDRGammaController
             Vm.IsPauseEnabled = false;
         }
 
+        // Re-entrancy guard for Resume_Click: it's async void with a 3s countdown, and
+        // both the Resume button and the Space key route here — without the guard a
+        // second trigger stacks a second countdown (and a second Resume()).
+        private bool _isResumeCountdownRunning;
+
         private async void Resume_Click(object sender, RoutedEventArgs e)
         {
-            // Countdown before resuming
-            for (int i = 3; i > 0; i--)
-            {
-                Vm.ResumeCountdownText = $"Resuming in {i}...";
-                await Task.Delay(1000);
-            }
+            if (_isResumeCountdownRunning || !_isPaused) return;
+            _isResumeCountdownRunning = true;
 
-            _isPaused = false;
-            _orchestrator?.Resume();
-            Vm.IsPauseOverlayVisible = false;
-            Vm.PauseButtonText = "Pause";
-            Vm.IsPauseEnabled = true;
-            Vm.ResumeCountdownText = "Click Resume to continue";
+            // Disable the clicked button for the countdown (the Space path has no button;
+            // the guard flag covers it). SetCurrentValue, NOT a local set: IsEnabled is
+            // bound to IsCancelEnabled in XAML and a local value would kill the binding.
+            var resumeButton = sender as System.Windows.Controls.Button;
+            resumeButton?.SetCurrentValue(IsEnabledProperty, false);
+
+            try
+            {
+                // Countdown before resuming. Abort silently if the run is cancelled (or
+                // the pause state was torn down) mid-countdown.
+                for (int i = 3; i > 0; i--)
+                {
+                    Vm.ResumeCountdownText = $"Resuming in {i}...";
+                    await Task.Delay(1000);
+                    if (_isCancelled || !_isPaused || !_isCalibrationRunning)
+                    {
+                        Vm.ResumeCountdownText = "Click Resume to continue";
+                        return;
+                    }
+                }
+
+                _isPaused = false;
+                _orchestrator?.Resume();
+                Vm.IsPauseOverlayVisible = false;
+                Vm.PauseButtonText = "Pause";
+                Vm.IsPauseEnabled = true;
+                Vm.ResumeCountdownText = "Click Resume to continue";
+            }
+            finally
+            {
+                _isResumeCountdownRunning = false;
+                if (resumeButton != null)
+                {
+                    // Restore the XAML binding's value (or plain enabled if unbound).
+                    var binding = resumeButton.GetBindingExpression(IsEnabledProperty);
+                    if (binding != null) binding.UpdateTarget();
+                    else resumeButton.SetCurrentValue(IsEnabledProperty, true);
+                }
+            }
         }
 
         private void CancelMeasurement_Click(object sender, RoutedEventArgs e)
@@ -1170,14 +1548,13 @@ namespace HDRGammaController
             Vm.PauseButtonText = "Pause";
             Vm.ResumeCountdownText = "Click Resume to continue";
 
-            // Same window restore as PositioningBack_Click: original setup chrome.
+            // Same window restore as PositioningBack_Click: original setup chrome,
+            // centered on the TARGET monitor (a cancelled secondary-display calibration
+            // must not teleport the setup screen back to the primary).
             ResizeMode = ResizeMode.CanResizeWithGrip;
             WindowState = WindowState.Normal;
-            Width = 600;
-            Height = 700;
             Topmost = false;
-            Left = (SystemParameters.PrimaryScreenWidth - Width) / 2;
-            Top = (SystemParameters.PrimaryScreenHeight - Height) / 2;
+            CenterOnTargetMonitor(600, 700);
         }
 
         private void Cancel_Click(object sender, RoutedEventArgs e)
@@ -1470,10 +1847,12 @@ namespace HDRGammaController
 
             DisposeHdrWireRenderer();
 
-            // Convert patch RGB to WPF color
-            byte r = (byte)(Math.Clamp(patch.DisplayRgb.R, 0, 1) * 255);
-            byte g = (byte)(Math.Clamp(patch.DisplayRgb.G, 0, 1) * 255);
-            byte b = (byte)(Math.Clamp(patch.DisplayRgb.B, 0, 1) * 255);
+            // Convert patch RGB to WPF color. Shared with PatchDisplayWindow.SetColor so
+            // calibration and verification render IDENTICAL codes (Math.Round — a cast
+            // truncates, biasing every patch down by up to 1/255, ~6% relative at 5% gray).
+            byte r = PatchDisplayWindow.ToPatchByte(patch.DisplayRgb.R);
+            byte g = PatchDisplayWindow.ToPatchByte(patch.DisplayRgb.G);
+            byte b = PatchDisplayWindow.ToPatchByte(patch.DisplayRgb.B);
             ColorPatchBorder.Background = new SolidColorBrush(Color.FromRgb(r, g, b));
         }
 
