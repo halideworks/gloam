@@ -21,6 +21,7 @@ namespace HDRGammaController
         private readonly Button _searchButton;
         private readonly Button _downloadButton;
         private readonly Button _createButton;
+        private readonly Button _createMatrixButton;
         private readonly ListView _list;
         private readonly TextBlock _status;
         private readonly string _saveFolder;
@@ -82,6 +83,25 @@ namespace HDRGammaController
                                     "(i1 Pro, ColorMunki Photo/Design, i1 Studio) and generate a .ccss for it.";
             _createButton.Click += async (_, _) => await CreateFromSpectrometerAsync();
 
+            _createMatrixButton = MakeButton("Create correction matrix (two instruments)…");
+            _createMatrixButton.Background = new SolidColorBrush(Color.FromRgb(0x17, 0x1C, 0x23)); // secondary, not accent
+            _createMatrixButton.ToolTip = "Measure the same White/Red/Green/Blue patches with your reference spectrometer " +
+                                          "and your everyday colorimeter in turn, then generate a .ccmx correction matrix " +
+                                          "that maps the colorimeter's readings onto the spectrometer's for this exact panel.";
+            _createMatrixButton.Click += async (_, _) => await CreateCorrectionMatrixAsync();
+            if (_typeFilter == "ccss")
+            {
+                // A matrix correction is useless to callers that specifically want spectral
+                // samples (e.g. the Ultra Night melanopic estimator).
+                _createMatrixButton.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                // The extra button needs more horizontal room than the ccss-only browser.
+                Width = 940;
+                MinWidth = 940;
+            }
+
             var closeButton = MakeButton("Cancel");
             closeButton.Background = new SolidColorBrush(Color.FromRgb(0x17, 0x1C, 0x23)); // secondary, not accent
             closeButton.Click += (_, _) => { DialogResult = false; Close(); };
@@ -135,13 +155,17 @@ namespace HDRGammaController
             bottomRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             bottomRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             bottomRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            bottomRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             Grid.SetColumn(_createButton, 1);
-            Grid.SetColumn(_downloadButton, 2);
-            Grid.SetColumn(closeButton, 3);
+            Grid.SetColumn(_createMatrixButton, 2);
+            Grid.SetColumn(_downloadButton, 3);
+            Grid.SetColumn(closeButton, 4);
             _createButton.Margin = new Thickness(8, 0, 0, 0);
+            _createMatrixButton.Margin = new Thickness(8, 0, 0, 0);
             _downloadButton.Margin = new Thickness(8, 0, 8, 0);
             bottomRow.Children.Add(_status);
             bottomRow.Children.Add(_createButton);
+            bottomRow.Children.Add(_createMatrixButton);
             bottomRow.Children.Add(_downloadButton);
             bottomRow.Children.Add(closeButton);
 
@@ -341,6 +365,184 @@ namespace HDRGammaController
                 }
                 _createButton.IsEnabled = true;
             }
+        }
+
+        /// <summary>
+        /// Measures the same W/R/G/B patches with a reference spectrometer and an everyday
+        /// colorimeter in turn (either connected first) and writes a .ccmx correction
+        /// matrix into the corrections folder. On success the new file is selected as the
+        /// dialog result — it immediately becomes the active correction for the caller's
+        /// colorimeter, exactly like a downloaded entry (spotread's -X takes .ccmx and
+        /// .ccss alike).
+        /// </summary>
+        private async Task CreateCorrectionMatrixAsync()
+        {
+            _createMatrixButton.IsEnabled = false;
+            _createButton.IsEnabled = false;
+            _status.Text = "Looking for the first instrument…";
+
+            ColorimeterService? first = null;
+            ColorimeterService? second = null;
+            PatchDisplayWindow? patchWindow = null;
+            try
+            {
+                string? argyllBin = ArgyllPathFinder.FindArgyllBinPath();
+                if (argyllBin == null)
+                {
+                    _status.Text = "ArgyllCMS was not found. Start a calibration once so Gloam downloads it, then retry.";
+                    return;
+                }
+
+                first = new ColorimeterService(argyllBin);
+                if (!await first.InitializeAsync())
+                {
+                    _status.Text = "No instrument detected. Connect either instrument (the other one comes after the swap) and try again.";
+                    return;
+                }
+                var firstInfo = first.ConnectedColorimeter!;
+
+                var monitor = PickMonitorForCapture();
+                if (monitor == null)
+                {
+                    _status.Text = "No display found to show measurement patches on.";
+                    return;
+                }
+                Log.Info($"CcssBrowserWindow: two-instrument CCMX capture starting on '{monitor.FriendlyName}' " +
+                         $"with '{firstInfo.Model}' as the first instrument.");
+
+                // Positioning phase: white square, draggable, Enter/double-click to start.
+                patchWindow = new PatchDisplayWindow(monitor, patchSize: 400);
+                patchWindow.SetColor(1, 1, 1);
+                patchWindow.EnableDrag();
+
+                using var cts = new CancellationTokenSource();
+                var positioned = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                patchWindow.ContinueRequested += () => positioned.TrySetResult(true);
+                patchWindow.AbortRequested += () => { positioned.TrySetResult(false); cts.Cancel(); };
+                patchWindow.Closed += (_, _) => { positioned.TrySetResult(false); cts.Cancel(); };
+                patchWindow.Show();
+
+                var window = patchWindow; // non-null capture for the delegates
+                ColorimeterInfo? secondInfo = null;
+
+                var capture = new MeterOffsetCaptureService(
+                    rgb => { window.SetColor(rgb.R, rgb.G, rgb.B); return Task.CompletedTask; },
+                    ct => MeasureXyzOnceAsync(first!, ct),
+                    async ct =>
+                    {
+                        // Phase 1 done: release the first instrument's USB handle so the
+                        // second instrument can be attached and detected.
+                        await first!.EndMeasurementSessionAsync();
+                        first.Dispose();
+
+                        var proceed = MessageBox.Show(this,
+                            $"Phase 1 with '{firstInfo.Model}' is complete.\n\n" +
+                            "1. Remove it from the panel and unplug it.\n" +
+                            "2. Connect the OTHER instrument and place it over the same measurement square.\n" +
+                            "3. Click OK to start phase 2.\n\n" +
+                            "Do not change display settings or let the panel sleep in between.",
+                            "Swap instruments",
+                            MessageBoxButton.OKCancel, MessageBoxImage.Information);
+                        if (proceed != MessageBoxResult.OK) return false;
+
+                        _status.Text = "Looking for the second instrument…";
+                        second = new ColorimeterService(argyllBin);
+                        if (!await second.InitializeAsync(ct))
+                            throw new InvalidOperationException(
+                                "No instrument was detected after the swap. Check the USB connection and retry.");
+                        secondInfo = second.ConnectedColorimeter!;
+                        if (secondInfo.IsSpectrometer == firstInfo.IsSpectrometer)
+                            throw new InvalidOperationException(
+                                $"A correction matrix needs ONE reference spectrometer and ONE colorimeter, but " +
+                                $"'{firstInfo.Model}' and '{secondInfo.Model}' are both " +
+                                $"{(firstInfo.IsSpectrometer ? "spectrometers" : "colorimeters")}. " +
+                                "Swap in the other instrument type and retry.");
+
+                        _status.Text = $"Phase 2: measuring with {secondInfo.Model}… watch the patch window.";
+                        await second.BeginMeasurementSessionAsync(hdrMode: false, ct);
+                        return true;
+                    },
+                    ct => MeasureXyzOnceAsync(second!, ct))
+                {
+                    Progress = (done, total, name, phase) =>
+                        window.SetProgress(done, total, name, null, phase: $"{phase}: measuring {name}"),
+                };
+
+                patchWindow.SetProgress(0, capture.TotalReads, "White", "Red",
+                    phase: $"Drag the square under the {firstInfo.Model}, then press Enter");
+
+                if (!await positioned.Task)
+                {
+                    _status.Text = "Correction-matrix capture cancelled.";
+                    return;
+                }
+                patchWindow.DisableDrag();
+
+                _status.Text = $"Phase 1: measuring with {firstInfo.Model}… watch the patch window.";
+                await first.BeginMeasurementSessionAsync(hdrMode: false, cts.Token);
+
+                var readings = await capture.CaptureAsync(cts.Token);
+                await second!.EndMeasurementSessionAsync();
+
+                // The ccmx maps colorimeter XYZ -> spectrometer XYZ, whichever phase each
+                // instrument was measured in.
+                bool firstIsReference = firstInfo.IsSpectrometer;
+                var colorimeterReadings = firstIsReference ? readings.SecondInstrument : readings.FirstInstrument;
+                var referenceReadings = firstIsReference ? readings.FirstInstrument : readings.SecondInstrument;
+                string colorimeterName = (firstIsReference ? secondInfo : firstInfo)?.Model ?? "Colorimeter";
+                string referenceName = (firstIsReference ? firstInfo : secondInfo)?.Model ?? "Spectrometer";
+
+                var matrix = CcmxWriter.SolveCorrectionMatrix(colorimeterReadings, referenceReadings, whiteIndex: 0);
+
+                string displayName = !string.IsNullOrWhiteSpace(_displayName) ? _displayName : monitor.FriendlyName;
+                string path = CcmxWriter.SaveToFolder(displayName, colorimeterName, referenceName, matrix, _saveFolder);
+                Log.Info($"CcssBrowserWindow: CCMX capture finished, matrix saved to {path}.");
+
+                SavedPath = path;
+                DialogResult = true;
+                Close();
+            }
+            catch (OperationCanceledException)
+            {
+                _status.Text = "Correction-matrix capture cancelled.";
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"CcssBrowserWindow: CCMX capture failed: {ex.Message}");
+                _status.Text = $"Correction-matrix capture failed: {ex.Message}";
+            }
+            finally
+            {
+                try { patchWindow?.Close(); } catch { /* already closed */ }
+                if (first != null)
+                {
+                    try { await first.EndMeasurementSessionAsync(); } catch { /* session already gone */ }
+                    first.Dispose();
+                }
+                if (second != null)
+                {
+                    try { await second.EndMeasurementSessionAsync(); } catch { /* session already gone */ }
+                    second.Dispose();
+                }
+                _createMatrixButton.IsEnabled = true;
+                _createButton.IsEnabled = true;
+            }
+        }
+
+        /// <summary>
+        /// One raw XYZ reading on an open measurement session, surfacing failures as
+        /// exceptions (MeasureAsync's MeasurementResult swallows them otherwise).
+        /// </summary>
+        private static async Task<CieXyz> MeasureXyzOnceAsync(
+            ColorimeterService service, CancellationToken cancellationToken)
+        {
+            var result = await service.MeasureAsync(
+                new ColorPatch { Name = "ccmx patch", DisplayRgb = new LinearRgb(0, 0, 0) },
+                hdrMode: false,
+                cancellationToken: cancellationToken);
+            if (!result.IsValid)
+                throw new InvalidOperationException(result.ErrorMessage ?? "Measurement failed.");
+            return result.Xyz;
         }
 
         /// <summary>
