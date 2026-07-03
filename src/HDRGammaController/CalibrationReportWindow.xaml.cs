@@ -30,11 +30,45 @@ namespace HDRGammaController
         private IReadOnlyList<MeasurementResult>? _verifyMeasurements;
         private System.Threading.CancellationTokenSource? _verifyCts;
 
+        // Single probe-busy gate: set for the whole duration of every op that holds the one
+        // colorimeter (or actively re-installs profiles) — verify, HDR refine, white
+        // re-anchor, HDR-renderer validation and the visual white trim. It disables
+        // Apply/Verify/Refine/White-Tools/Close together so a second measurement session can
+        // never start on the single probe mid-op (and clobber _verifyCts). Not all of these
+        // ops set _verifyCts, so this is also what makes IsVerifyRunning honest for the tray.
+        private bool _probeBusy;
+
         /// <summary>
-        /// True while a verify sweep is measuring through the colorimeter. The tray uses
-        /// this to refuse a second calibration flow (only one probe exists).
+        /// True while any probe-holding op is running. The tray reads this to refuse a second
+        /// calibration flow (only one probe exists); re-anchor white and HDR-renderer
+        /// validation hold the probe without a verify CTS, so the busy gate covers them too.
         /// </summary>
-        internal bool IsVerifyRunning => _verifyCts is { IsCancellationRequested: false };
+        internal bool IsVerifyRunning => _probeBusy || _verifyCts is { IsCancellationRequested: false };
+
+        /// <summary>
+        /// Prologue for every probe-holding op: claim the probe and lock out the actions that
+        /// would start a competing measurement session or tear the window down mid-sweep.
+        /// </summary>
+        private void EnterProbeBusy()
+        {
+            _probeBusy = true;
+            Vm.IsApplyEnabled = false;
+            Vm.IsVerifyEnabled = false;
+            Vm.IsWhiteToolsEnabled = false;
+            Vm.IsCloseEnabled = false;
+            RefineHdrButton.IsEnabled = false;
+        }
+
+        /// <summary>Finally-clause counterpart to <see cref="EnterProbeBusy"/>.</summary>
+        private void ExitProbeBusy()
+        {
+            _probeBusy = false;
+            Vm.IsApplyEnabled = !_measurementInstallBlocked;
+            Vm.IsVerifyEnabled = true;
+            Vm.IsWhiteToolsEnabled = true;
+            Vm.IsCloseEnabled = true;
+            UpdateRefineButtonState();
+        }
 
         // Detailed-verification per-patch results (name, category, dE) in measurement order.
         // Set by a detailed sweep, or rebuilt from the persisted summary for historical
@@ -137,6 +171,13 @@ namespace HDRGammaController
         {
             InitializeComponent();
             DataContext = Vm;
+
+            // Standard chrome toggle glyph reflects the current theme; the charts are
+            // imperatively drawn, so they must be re-rendered (with the matching palette)
+            // whenever the app-wide brutalist palette flips.
+            ThemeToggleButton.Content = BrutalistTheme.IsDark ? "◐" : "◑";
+            BrutalistTheme.Changed += OnThemeChanged;
+            Closing += (_, _) => BrutalistTheme.Changed -= OnThemeChanged;
 
             _profile = profile;
             _metrics = metrics;
@@ -935,9 +976,23 @@ namespace HDRGammaController
         /// </summary>
         private void RenderCharts()
         {
-            RenderCharts(ToneCanvas, GammaCanvas, BalanceCanvas, GamutCanvas,
-                CalibrationCharts.ChartPalette.Dark);
+            RenderCharts(ToneCanvas, GammaCanvas, BalanceCanvas, GamutCanvas, OnScreenPalette);
             RenderDetailedCharts();
+        }
+
+        /// <summary>The chart palette matching the current app theme (light or dark).</summary>
+        private static CalibrationCharts.ChartPalette OnScreenPalette =>
+            BrutalistTheme.IsDark ? CalibrationCharts.ChartPalette.Dark : CalibrationCharts.ChartPalette.Light;
+
+        /// <summary>
+        /// App palette flipped: refresh the toggle glyph and re-draw the imperatively-rendered
+        /// charts with the matching palette (they otherwise keep the palette baked in at their
+        /// last draw).
+        /// </summary>
+        private void OnThemeChanged()
+        {
+            ThemeToggleButton.Content = BrutalistTheme.IsDark ? "◐" : "◑";
+            RenderCharts();
         }
 
         /// <summary>
@@ -1191,7 +1246,7 @@ namespace HDRGammaController
 
         /// <summary>Draws the on-screen detailed charts with the dark report theme.</summary>
         private void RenderDetailedCharts()
-            => RenderDetailedCharts(HistogramCanvas, PerPatchCanvas, CalibrationCharts.ChartPalette.Dark);
+            => RenderDetailedCharts(HistogramCanvas, PerPatchCanvas, OnScreenPalette);
 
         /// <summary>
         /// Draws the ΔE histogram and per-patch strip chart into the given canvases with the
@@ -1230,30 +1285,42 @@ namespace HDRGammaController
         /// </summary>
         private async void ApplyButton_Click(object sender, RoutedEventArgs e)
         {
-            if (_installedProfileName is { } profileName && _applyContext is { } ctx)
+            // async void (event handler): an installer/preflight/ConfirmDialog exception
+            // escaping here goes straight to the global crash dialog — route it to the
+            // status strip instead (mirrors RefineHdrButton_Click).
+            try
             {
-                if (_profileEnabled)
+                if (_installedProfileName is { } profileName && _applyContext is { } ctx)
                 {
-                    CalibrationProfileInstaller.Disable(ctx.Monitor, profileName);
-                    _profileEnabled = false;
-                    Vm.ApplyButtonContent = "Enable Profile";
-                    Vm.StatusText = "Profile disabled - showing the uncorrected panel for comparison.";
+                    if (_profileEnabled)
+                    {
+                        CalibrationProfileInstaller.Disable(ctx.Monitor, profileName);
+                        _profileEnabled = false;
+                        Vm.ApplyButtonContent = "Enable Profile";
+                        Vm.StatusText = "Profile disabled - showing the uncorrected panel for comparison.";
+                    }
+                    else if (CalibrationProfileInstaller.Reenable(ctx.Monitor, profileName, ctx.HdrMode))
+                    {
+                        _profileEnabled = true;
+                        Vm.ApplyButtonContent = "Disable Profile";
+                        Vm.StatusText = "Profile re-enabled.";
+                    }
+                    else
+                    {
+                        Vm.StatusText = "Could not re-enable the profile - close and re-run the calibration.";
+                    }
+                    UpdateRefineButtonState();
+                    return;
                 }
-                else if (CalibrationProfileInstaller.Reenable(ctx.Monitor, profileName, ctx.HdrMode))
-                {
-                    _profileEnabled = true;
-                    Vm.ApplyButtonContent = "Disable Profile";
-                    Vm.StatusText = "Profile re-enabled.";
-                }
-                else
-                {
-                    Vm.StatusText = "Could not re-enable the profile - close and re-run the calibration.";
-                }
-                UpdateRefineButtonState();
-                return;
-            }
 
-            await ApplyAndVerifyAsync();
+                await ApplyAndVerifyAsync();
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"CalibrationReportWindow: apply failed: {ex}");
+                Vm.StatusText = $"Apply failed: {ex.Message}";
+                Vm.StatusBrush = CalibrationReportViewModel.AmberBrush;
+            }
         }
 
         /// <summary>
@@ -1410,17 +1477,29 @@ namespace HDRGammaController
             };
             if (dialog.ShowDialog() != true) return;
 
-            switch (dialog.SelectedAction)
+            // async void (event handler): a failure in any white-tool path (each holds the
+            // probe and/or re-installs profiles) must land in the status strip, not the
+            // global crash dialog.
+            try
             {
-                case WhiteToolAction.ReanchorWhite:
-                    await ReanchorWhiteAsync();
-                    break;
-                case WhiteToolAction.VisualTrim:
-                    await RunVisualWhiteTrimAsync();
-                    break;
-                case WhiteToolAction.ValidateHdrRenderer:
-                    await ValidateHdrRendererAsync();
-                    break;
+                switch (dialog.SelectedAction)
+                {
+                    case WhiteToolAction.ReanchorWhite:
+                        await ReanchorWhiteAsync();
+                        break;
+                    case WhiteToolAction.VisualTrim:
+                        await RunVisualWhiteTrimAsync();
+                        break;
+                    case WhiteToolAction.ValidateHdrRenderer:
+                        await ValidateHdrRendererAsync();
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"CalibrationReportWindow: white tools failed: {ex}");
+                Vm.StatusText = $"White tools failed: {ex.Message}";
+                Vm.StatusBrush = CalibrationReportViewModel.AmberBrush;
             }
         }
 
@@ -1442,9 +1521,7 @@ namespace HDRGammaController
                     confirmLabel: "Yes", cancelLabel: "Cancel"))
                 return;
 
-            Vm.IsApplyEnabled = false;
-            Vm.IsVerifyEnabled = false;
-            RefineHdrButton.IsEnabled = false;
+            EnterProbeBusy();
             PatchDisplayWindow? surround = null;
             HdrPatchRenderer? renderer = null;
             bool bypassed = false;
@@ -1508,11 +1585,21 @@ namespace HDRGammaController
                         ? "The HDR-range patch path is trustworthy on this system. HDR-range calibration can be built on it."
                         : "Do NOT trust HDR-range measurements on this system yet - send the log for diagnosis.");
                 Log.Info($"HDR renderer validation:\n{report}");
+                // Tear the FP16 renderer + surround down BEFORE the modal result dialog:
+                // on a single monitor the dialog would otherwise render under them.
+                renderer?.Dispose();
+                renderer = null;
+                surround?.Close();
+                surround = null;
                 ConfirmDialog.Info(this, "HDR Renderer Validation", report);
             }
             catch (Exception ex)
             {
                 Log.Info($"HDR renderer validation failed: {ex}");
+                renderer?.Dispose();
+                renderer = null;
+                surround?.Close();
+                surround = null;
                 ConfirmDialog.Info(this, "HDR Renderer Validation",
                     $"HDR renderer validation failed:\n\n{ex.Message}");
             }
@@ -1522,9 +1609,7 @@ namespace HDRGammaController
                 renderer?.Dispose();
                 surround?.Close();
                 if (bypassed) { try { ctx.StateManager!.RestorePreviousState(); } catch { } }
-                Vm.IsApplyEnabled = true;
-                Vm.IsVerifyEnabled = true;
-                UpdateRefineButtonState();
+                ExitProbeBusy();
             }
         }
 
@@ -1807,9 +1892,7 @@ namespace HDRGammaController
                     confirmLabel: "Yes", cancelLabel: "Cancel"))
                 return;
 
-            Vm.IsApplyEnabled = false;
-            Vm.IsVerifyEnabled = false;
-            RefineHdrButton.IsEnabled = false;
+            EnterProbeBusy();
             PatchDisplayWindow? patchWindow = null;
             bool bypassed = false;
             try
@@ -1867,6 +1950,10 @@ namespace HDRGammaController
             }
             catch (Exception ex)
             {
+                // Close the patch window before the modal dialog (single-monitor: it would
+                // otherwise render under the topmost patch window).
+                patchWindow?.Close();
+                patchWindow = null;
                 ConfirmDialog.Info(this, "Re-anchor White", $"White re-anchor failed:\n\n{ex.Message}");
                 return;
             }
@@ -1875,9 +1962,7 @@ namespace HDRGammaController
                 try { await colorimeter.EndMeasurementSessionAsync(); } catch { }
                 patchWindow?.Close();
                 if (bypassed) { try { ctx.StateManager!.RestorePreviousState(); } catch { } }
-                Vm.IsApplyEnabled = true;
-                Vm.IsVerifyEnabled = true;
-                UpdateRefineButtonState();
+                ExitProbeBusy();
             }
 
             await ApplyAndVerifyAsync();
@@ -1967,10 +2052,7 @@ namespace HDRGammaController
                     confirmLabel: "Yes", cancelLabel: "Cancel"))
                 return;
 
-            Vm.IsVerifyEnabled = false;
-            Vm.IsApplyEnabled = false;
-            Vm.IsCloseEnabled = false;
-            RefineHdrButton.IsEnabled = false;
+            EnterProbeBusy();
             PatchDisplayWindow? patchWindow = null;
             using var refineCts = new System.Threading.CancellationTokenSource();
             _verifyCts = refineCts;
@@ -2099,6 +2181,10 @@ namespace HDRGammaController
             }
             catch (Exception ex)
             {
+                // Close the patch window before the modal error dialog so it can't render
+                // under the topmost patch window on a single monitor.
+                patchWindow?.Close();
+                patchWindow = null;
                 if (IsLoaded)
                     ConfirmDialog.Info(this, "Refine HDR Tracking", $"HDR refinement failed:\n\n{ex.Message}");
                 else
@@ -2117,10 +2203,7 @@ namespace HDRGammaController
                     catch (Exception ex) { Log.Info($"CalibrationReportWindow: refine bypass restore failed: {ex.Message}"); }
                 }
                 Vm.VerifyButtonContent = "Re-verify";
-                Vm.IsVerifyEnabled = true;
-                Vm.IsApplyEnabled = !_measurementInstallBlocked;
-                Vm.IsCloseEnabled = true;
-                UpdateRefineButtonState();
+                ExitProbeBusy();
             }
         }
 
@@ -2147,6 +2230,21 @@ namespace HDRGammaController
         {
             if (_applyContext is not { } ctx || _activeCharacterization == null) return;
 
+            // Claim the probe gate for the whole trim: it re-installs preview profiles and
+            // finishes with a re-apply, so a competing measurement/install must be locked out.
+            EnterProbeBusy();
+            try
+            {
+                await RunVisualWhiteTrimCoreAsync(ctx);
+            }
+            finally
+            {
+                ExitProbeBusy();
+            }
+        }
+
+        private async Task RunVisualWhiteTrimCoreAsync(ApplyContext ctx)
+        {
             var baseWhite = EffectiveTarget(ctx).WhitePoint;
             var editor = new WhiteTrimWindow { Owner = this };
             editor.TrimChanged += async (dx, dy) =>
@@ -2230,14 +2328,10 @@ namespace HDRGammaController
             if (e.ChangedButton == MouseButton.Left) DragMove();
         }
 
-        // MouseDown (not Up) + Handled so clicking the glyph never reaches the header's DragMove.
-        private void CloseGlyph_Click(object sender, MouseButtonEventArgs e)
+        private void ThemeToggle_Click(object sender, RoutedEventArgs e)
         {
-            e.Handled = true;
-            // The Close button is disabled during a verify sweep (IsCloseEnabled); the X
-            // glyph must honor the same gate instead of closing mid-sweep.
-            if (!Vm.IsCloseEnabled) return;
-            Close();
+            BrutalistTheme.Toggle();
+            ThemeToggleButton.Content = BrutalistTheme.IsDark ? "◐" : "◑";
         }
 
         /// <summary>
@@ -2282,10 +2376,7 @@ namespace HDRGammaController
             if (_applyContext?.Colorimeter is not { } colorimeter || _applyContext is not { } ctx)
                 return;
 
-            Vm.IsVerifyEnabled = false;
-            Vm.IsApplyEnabled = false;
-            Vm.IsCloseEnabled = false;
-            RefineHdrButton.IsEnabled = false;
+            EnterProbeBusy();
             PatchDisplayWindow? patchWindow = null;
             using var verifyCts = new System.Threading.CancellationTokenSource();
             _verifyCts = verifyCts;
@@ -2412,10 +2503,27 @@ namespace HDRGammaController
                     $"Grayscale residual split: tone {after.AverageGrayscaleToneDeltaE:F2} / color {after.AverageGrayscaleColorDeltaE:F2} ΔE2000 " +
                     $"(tone near black is mostly instrument noise; color is a visible cast). " +
                     $"ΔE ITP avg {after.AverageItpDeltaE:F1}, max {after.MaxItpDeltaE:F1} (BT.2124; ~3x ΔE2000 scale, 1 unit ≈ 1 JND).";
+                // The two HDR sweeps get their own kicker-labeled blocks (visual hierarchy)
+                // instead of being newline-joined into the prose. Cleared on an SDR re-verify
+                // so stale HDR results don't linger next to fresh SDR numbers.
                 if (pqTracking != null)
-                    Vm.VerifyDetailText += "\n" + pqTracking.Summary;
+                {
+                    Vm.PqTrackingDetailText = pqTracking.Summary;
+                    Vm.IsPqTrackingDetailVisible = true;
+                }
+                else
+                {
+                    Vm.IsPqTrackingDetailVisible = false;
+                }
                 if (coloredHdr != null)
-                    Vm.VerifyDetailText += "\n" + coloredHdr.Summary;
+                {
+                    Vm.ColoredHdrDetailText = coloredHdr.Summary;
+                    Vm.IsColoredHdrDetailVisible = true;
+                }
+                else
+                {
+                    Vm.IsColoredHdrDetailVisible = false;
+                }
                 if (activation != null)
                     Vm.VerifyDetailText += "\n" + activation.Message;
                 Vm.IsVerifyDetailVisible = true;
@@ -2475,6 +2583,10 @@ namespace HDRGammaController
             }
             catch (Exception ex)
             {
+                // Tear the patch window down BEFORE the modal dialog: on a single monitor the
+                // topmost patch window would otherwise render over (and hide) the error.
+                patchWindow?.Close();
+                patchWindow = null;
                 // The window may already be closed (Closing cancels the CTS, but a failure
                 // can surface after teardown) — showing a dialog owned by a closed window
                 // throws InvalidOperationException from ShowDialog.
@@ -2500,10 +2612,7 @@ namespace HDRGammaController
                     catch (Exception ex) { Log.Info($"CalibrationReportWindow: verify bypass restore failed: {ex.Message}"); }
                 }
                 Vm.VerifyButtonContent = "Re-verify";
-                Vm.IsVerifyEnabled = true;
-                Vm.IsApplyEnabled = true;
-                Vm.IsCloseEnabled = true;
-                UpdateRefineButtonState();
+                ExitProbeBusy();
             }
         }
     }
