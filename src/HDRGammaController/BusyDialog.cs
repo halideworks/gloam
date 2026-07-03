@@ -23,7 +23,7 @@ namespace HDRGammaController
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             ResizeMode = ResizeMode.NoResize;
             ShowInTaskbar = false;
-            Foreground = Brushes.White;
+            this.SetResourceReference(ForegroundProperty, "ThemeText");
 
             var text = new TextBlock
             {
@@ -42,33 +42,34 @@ namespace HDRGammaController
                 Width = runnerWidth,
                 Height = 4,
                 CornerRadius = new CornerRadius(0),
-                Background = new SolidColorBrush(Color.FromRgb(0xFF, 0x3C, 0x2F)),
                 HorizontalAlignment = HorizontalAlignment.Left,
                 RenderTransform = transform,
             };
+            runner.SetResourceReference(Border.BackgroundProperty, "ThemeAccent");
             var track = new Border
             {
                 Width = trackWidth,
                 Height = 4,
                 CornerRadius = new CornerRadius(0),
-                Background = new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33)),
                 Margin = new Thickness(0, 16, 0, 0),
                 ClipToBounds = true,
                 Child = runner,
             };
+            track.SetResourceReference(Border.BackgroundProperty, "ThemeTrack");
 
             var stack = new StackPanel { Margin = new Thickness(28, 24, 28, 24) };
             stack.Children.Add(text);
             stack.Children.Add(track);
 
-            Content = new Border
+            var frame = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(0x14, 0x14, 0x14)),
-                BorderBrush = Brushes.White,
                 BorderThickness = new Thickness(2),
                 CornerRadius = new CornerRadius(0),
                 Child = stack,
             };
+            frame.SetResourceReference(Border.BackgroundProperty, "ThemeBg");
+            frame.SetResourceReference(Border.BorderBrushProperty, "ThemeWindowFrame");
+            Content = frame;
 
             Loaded += (_, _) =>
             {
