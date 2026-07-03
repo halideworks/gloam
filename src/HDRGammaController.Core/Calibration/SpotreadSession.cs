@@ -10,6 +10,22 @@ using System.Threading.Tasks;
 namespace HDRGammaController.Core.Calibration
 {
     /// <summary>
+    /// A single emission spectrum as reported by a spectrometer: <see cref="Values"/>
+    /// evenly spaced from <see cref="StartNm"/> to <see cref="EndNm"/> inclusive.
+    /// </summary>
+    public sealed record SpectralSample(double StartNm, double EndNm, IReadOnlyList<double> Values)
+    {
+        public int Bands => Values.Count;
+
+        /// <summary>Wavelength of band <paramref name="index"/> in nm.</summary>
+        public double WavelengthAt(int index) =>
+            Bands <= 1 ? StartNm : StartNm + index * (EndNm - StartNm) / (Bands - 1);
+    }
+
+    /// <summary>One spectrometer reading: the integrated XYZ plus the raw spectrum.</summary>
+    public sealed record SpectralReading(CieXyz Xyz, SpectralSample Spectrum);
+
+    /// <summary>
     /// A long-running spotread.exe session used to drive a whole calibration from a single
     /// process. This replaces the old per-patch <c>spotread -O</c> pattern which spawned a
     /// fresh process for every measurement — that pattern was fragile (USB re-enumeration
@@ -28,6 +44,16 @@ namespace HDRGammaController.Core.Calibration
         // builds emit in non-interactive mode.
         private static readonly Regex XyzPattern = new(
             @"XYZ:\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s+([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s+([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        // Spectral header emitted by spotread -s with a spectrometer, e.g.
+        //   "Spectrum from 380.000000 to 730.000000 nm in 36 steps"
+        // Wording/precision varies slightly across Argyll versions, so this matches the
+        // announced start/end/count anywhere in the line; the values themselves follow on
+        // the same line (after the header) and/or on subsequent lines, comma or whitespace
+        // separated, possibly wrapped.
+        private static readonly Regex SpectrumHeaderPattern = new(
+            @"Spectrum\s+from\s+([+-]?\d+\.?\d*)\s+to\s+([+-]?\d+\.?\d*)\s+nm\s+in\s+(\d+)\s+steps",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         // Fragments that indicate spotread is ready to accept the next measurement trigger.
@@ -112,6 +138,18 @@ namespace HDRGammaController.Core.Calibration
         private readonly object _stateLock = new();
         private readonly StringBuilder _recentLog = new();
         private TaskCompletionSource<CieXyz>? _pendingMeasurement;
+
+        // Spectral measurement state (spectral mode only). A spectral reading completes
+        // when BOTH the XYZ line and the announced number of spectral values have arrived;
+        // Argyll versions differ on whether the spectrum precedes or follows the XYZ line,
+        // so arrival order is not assumed. Guarded by _stateLock.
+        private TaskCompletionSource<SpectralReading>? _pendingSpectral;
+        private CieXyz? _spectralXyz;
+        private double _spectralStartNm;
+        private double _spectralEndNm;
+        private int _spectralExpectedCount;
+        private System.Collections.Generic.List<double>? _spectralValues;
+
         private volatile string? _fatalError;
         private volatile bool _disposed;
         private volatile bool _attemptedHidOpen;
@@ -188,7 +226,8 @@ namespace HDRGammaController.Core.Calibration
             bool hdrMode,
             Action<string> log,
             CancellationToken cancellationToken,
-            string? correctionFilePath = null)
+            string? correctionFilePath = null,
+            bool spectralMode = false)
         {
             string displayFlag = displayType.ToSpotreadFlag();
             // -v (verbose): makes Argyll 3.x print the hid_open_port lines we need to
@@ -220,6 +259,15 @@ namespace HDRGammaController.Core.Calibration
             // its persistent session on it), so the instrument re-initializes across the
             // OS display-mode flip.
             _ = hdrMode;
+            // Spectral output mode (spectrometers only): -s makes spotread print the raw
+            // emission spectrum after each reading, and -H enables the instrument's
+            // high-resolution spectral mode (3.3 nm bins on an i1 Pro). -H was removed for
+            // colorimeters (where it is meaningless), but it IS the right flag here.
+            if (spectralMode)
+            {
+                args.Add("-s");
+                args.Add("-H");
+            }
             // Spectral correction sample (.ccss) or matrix (.ccmx): replaces the generic
             // display-type calibration with one matched to the actual panel spectrum.
             // Essential on narrow-primary panels (QD-OLED) where the generic corrections
@@ -325,7 +373,7 @@ namespace HDRGammaController.Core.Calibration
             var tcs = new TaskCompletionSource<CieXyz>(TaskCreationOptions.RunContinuationsAsynchronously);
             lock (_stateLock)
             {
-                if (_pendingMeasurement != null)
+                if (_pendingMeasurement != null || _pendingSpectral != null)
                     throw new InvalidOperationException("Another measurement is already in progress on this session.");
                 _pendingMeasurement = tcs;
             }
@@ -357,6 +405,68 @@ namespace HDRGammaController.Core.Calibration
             finally
             {
                 lock (_stateLock) _pendingMeasurement = null;
+            }
+        }
+
+        /// <summary>
+        /// Triggers a single spectral measurement (session must have been started in
+        /// spectral mode with a spectrometer) and returns the XYZ plus the raw spectrum.
+        /// Call serially — only one measurement may be in flight per session. Follows the
+        /// same timeout-poison protocol as <see cref="MeasureAsync"/>.
+        /// </summary>
+        public async Task<SpectralReading> MeasureSpectralAsync(CancellationToken cancellationToken)
+        {
+            if (_disposed) throw new ObjectDisposedException(nameof(SpotreadSession));
+            if (_poisoned)
+                throw new InvalidOperationException(
+                    "spotread session was poisoned by a measurement timeout and must be restarted. " +
+                    "The timed-out trigger is still queued inside spotread; reusing this session " +
+                    "would attribute its late reading to the wrong patch.");
+            if (_fatalError != null)
+                throw new InvalidOperationException($"spotread session failed: {_fatalError}");
+            if (_hasExited())
+                throw new InvalidOperationException(
+                    $"spotread exited unexpectedly (code {TryGetExitCode()}).\nRecent output:\n{SnapshotRecentLog()}");
+
+            var tcs = new TaskCompletionSource<SpectralReading>(TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (_stateLock)
+            {
+                if (_pendingMeasurement != null || _pendingSpectral != null)
+                    throw new InvalidOperationException("Another measurement is already in progress on this session.");
+                _pendingSpectral = tcs;
+                _spectralXyz = null;
+                _spectralValues = null;
+                _spectralExpectedCount = 0;
+            }
+
+            try
+            {
+                await _writeInput(" \r\n");
+
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                cts.CancelAfter(MeasureTimeout);
+                return await tcs.Task.WaitAsync(cts.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // Same stale-reading hazard as MeasureAsync: the trigger is still queued
+                // inside spotread, so this session may not be reused.
+                _poisoned = true;
+                _log($"Spectral measurement timed out after {MeasureTimeout.TotalSeconds:F0}s - poisoning session and killing spotread.");
+                _killProcess();
+                throw new TimeoutException(
+                    $"Spectral measurement timed out after {MeasureTimeout.TotalSeconds:F0}s. The spotread session will be " +
+                    $"restarted before the next measurement. Recent spotread output:\n{SnapshotRecentLog()}");
+            }
+            finally
+            {
+                lock (_stateLock)
+                {
+                    _pendingSpectral = null;
+                    _spectralXyz = null;
+                    _spectralValues = null;
+                    _spectralExpectedCount = 0;
+                }
             }
         }
 
@@ -466,7 +576,26 @@ namespace HDRGammaController.Core.Calibration
                 double.TryParse(xyzMatch.Groups[3].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double z))
             {
                 TaskCompletionSource<CieXyz>? pending;
-                lock (_stateLock) pending = _pendingMeasurement;
+                TaskCompletionSource<SpectralReading>? pendingSpectral;
+                lock (_stateLock)
+                {
+                    pending = _pendingMeasurement;
+                    pendingSpectral = _pendingSpectral;
+                }
+
+                // Spectral readings need both the XYZ line and the spectrum; stash the XYZ
+                // and complete once the announced number of spectral values has arrived.
+                if (pendingSpectral != null && !_poisoned)
+                {
+                    if (!TryAcceptMeasuredXyz(new CieXyz(x, y, z), out string? xyzError))
+                    {
+                        pendingSpectral.TrySetException(new InvalidOperationException(xyzError));
+                        return;
+                    }
+                    lock (_stateLock) _spectralXyz = new CieXyz(x, y, z);
+                    TryCompleteSpectral();
+                    return;
+                }
 
                 // Defense-in-depth against stale-reading attribution: an XYZ line with no
                 // measurement pending is a late arrival from a timed-out (or otherwise
@@ -487,6 +616,11 @@ namespace HDRGammaController.Core.Calibration
                 pending.TrySetResult(new CieXyz(x, y, z));
                 return;
             }
+
+            // 1b. Spectral output (spectral mode). Header announces the grid; values follow
+            //     (same line after the header and/or wrapped over subsequent lines).
+            if (HandleSpectralLine(line))
+                return;
 
             string lower = line.ToLowerInvariant();
 
@@ -552,8 +686,131 @@ namespace HDRGammaController.Core.Calibration
                         ? _fatalError
                         : $"spotread reported: {line.Trim()}");
                 _readyTcs.TrySetException(ex);
-                lock (_stateLock) _pendingMeasurement?.TrySetException(ex);
+                lock (_stateLock)
+                {
+                    _pendingMeasurement?.TrySetException(ex);
+                    _pendingSpectral?.TrySetException(ex);
+                }
             }
+        }
+
+        /// <summary>
+        /// Consumes spectral header/value lines. Returns true if the line was part of a
+        /// spectrum (so no further classification should run on it).
+        /// </summary>
+        private bool HandleSpectralLine(string line)
+        {
+            var header = SpectrumHeaderPattern.Match(line);
+            if (header.Success)
+            {
+                double endNm = 0;
+                int count = 0;
+                bool parsed =
+                    double.TryParse(header.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double startNm) &&
+                    double.TryParse(header.Groups[2].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out endNm) &&
+                    int.TryParse(header.Groups[3].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out count);
+
+                lock (_stateLock)
+                {
+                    if (_pendingSpectral == null || _poisoned)
+                    {
+                        _log($"Ignoring stale spotread spectrum line (no spectral measurement pending{(_poisoned ? ", session poisoned" : "")}): {line.Trim()}");
+                        return true;
+                    }
+
+                    // Sanity-cap the announced band count: a corrupt header must not make
+                    // the collector wait forever or allocate unboundedly.
+                    if (!parsed || count < 3 || count > 10000 || !(endNm > startNm))
+                    {
+                        _pendingSpectral.TrySetException(new InvalidOperationException(
+                            $"spotread emitted an unparseable spectrum header: {line.Trim()}"));
+                        return true;
+                    }
+
+                    _spectralStartNm = startNm;
+                    _spectralEndNm = endNm;
+                    _spectralExpectedCount = count;
+                    _spectralValues = new System.Collections.Generic.List<double>(count);
+                }
+
+                // Some builds put the first values on the header line itself.
+                string remainder = line.Substring(header.Index + header.Length).TrimStart(':', ' ', '\t');
+                if (remainder.Length > 0)
+                    AppendSpectralValues(remainder);
+                TryCompleteSpectral();
+                return true;
+            }
+
+            // Value continuation lines: only while a spectrum is being collected, and only
+            // if the whole line parses as numbers (comma and/or whitespace separated).
+            bool collecting;
+            lock (_stateLock)
+            {
+                collecting = _pendingSpectral != null &&
+                             _spectralValues != null &&
+                             _spectralValues.Count < _spectralExpectedCount;
+            }
+            if (!collecting) return false;
+
+            if (!AppendSpectralValues(line)) return false;
+            TryCompleteSpectral();
+            return true;
+        }
+
+        /// <summary>
+        /// Parses a line of comma/whitespace-separated spectral values and appends them to
+        /// the in-progress collection. Returns false (and appends nothing) if any token is
+        /// not a number — chatter lines mid-spectrum are ignored rather than corrupting it.
+        /// </summary>
+        private bool AppendSpectralValues(string line)
+        {
+            string[] tokens = line.Split(new[] { ',', ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            if (tokens.Length == 0) return false;
+
+            var parsed = new System.Collections.Generic.List<double>(tokens.Length);
+            foreach (string token in tokens)
+            {
+                if (!double.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out double value) ||
+                    !double.IsFinite(value))
+                {
+                    return false;
+                }
+                parsed.Add(value);
+            }
+
+            lock (_stateLock)
+            {
+                if (_spectralValues == null) return false;
+                _spectralValues.AddRange(parsed);
+                if (_spectralValues.Count > _spectralExpectedCount)
+                {
+                    _pendingSpectral?.TrySetException(new InvalidOperationException(
+                        $"spotread emitted more spectral values ({_spectralValues.Count}) than the header announced ({_spectralExpectedCount})."));
+                }
+            }
+            return true;
+        }
+
+        /// <summary>Completes the pending spectral reading once XYZ and all values are in.</summary>
+        private void TryCompleteSpectral()
+        {
+            TaskCompletionSource<SpectralReading>? pending;
+            SpectralReading? reading = null;
+            lock (_stateLock)
+            {
+                pending = _pendingSpectral;
+                if (pending == null) return;
+                if (_spectralXyz == null || _spectralValues == null ||
+                    _spectralValues.Count != _spectralExpectedCount)
+                {
+                    return; // still waiting for the other half
+                }
+
+                reading = new SpectralReading(
+                    _spectralXyz.Value,
+                    new SpectralSample(_spectralStartNm, _spectralEndNm, _spectralValues.ToArray()));
+            }
+            pending.TrySetResult(reading!);
         }
 
         private static string BuildSharingViolationMessage(string rawLine)
@@ -677,7 +934,11 @@ namespace HDRGammaController.Core.Calibration
 
             var ex = new InvalidOperationException(msg);
             _readyTcs.TrySetException(ex);
-            lock (_stateLock) _pendingMeasurement?.TrySetException(ex);
+            lock (_stateLock)
+            {
+                _pendingMeasurement?.TrySetException(ex);
+                _pendingSpectral?.TrySetException(ex);
+            }
         }
 
         private string SnapshotRecentLog()

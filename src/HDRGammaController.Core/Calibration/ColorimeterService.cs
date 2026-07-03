@@ -43,6 +43,11 @@ namespace HDRGammaController.Core.Calibration
         private SpotreadSession? _session;
         private bool _sessionHdrMode;
 
+        // Persistent spectral-mode spotread session (spectrometers only, spotread -s -H).
+        // Kept separate from _session: the two run different spotread flag sets and are
+        // never open at the same time in practice (spectral capture is its own flow).
+        private SpotreadSession? _spectralSession;
+
         // Log file for debugging spotread communication. Resolved dynamically so isolated
         // smoke/test data roots do not accidentally write to the user's real data folder.
         private static string LogFilePath => Path.Combine(AppPaths.DataDir, "colorimeter.log");
@@ -375,6 +380,123 @@ namespace HDRGammaController.Core.Calibration
         }
 
         /// <summary>
+        /// True when the connected instrument is a spectrometer (i1 Pro, ColorMunki
+        /// Photo/Design, i1 Studio, ...) and can therefore produce emission spectra.
+        /// Conservative: unknown instruments report false.
+        /// </summary>
+        public virtual bool ConnectedInstrumentIsSpectrometer => _connectedColorimeter?.IsSpectrometer == true;
+
+        /// <summary>
+        /// Classifies an instrument name/descriptor as spectrometer vs colorimeter.
+        /// Colorimeter markers win ("i1 DisplayPro", "ColorMunki Display", "ColorMunki
+        /// Smile" are all filter colorimeters despite their spectro-sounding families);
+        /// unknown names are conservatively NOT spectrometers.
+        /// </summary>
+        internal static bool IsSpectrometerName(string? name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return false;
+            string n = name.ToLowerInvariant();
+
+            // Known colorimeters that would otherwise match a spectro family token.
+            string[] colorimeterMarkers =
+            {
+                "display", "smile", "spyder", "huey", "dtp94", "k-10", "k10", "chroma"
+            };
+            foreach (string marker in colorimeterMarkers)
+            {
+                if (n.Contains(marker)) return false;
+            }
+
+            string[] spectroMarkers =
+            {
+                "i1 pro", "i1pro", "eye-one pro", "eyeone pro",
+                "colormunki", "munki", "i1 studio", "i1studio",
+                "spectrolino", "spectroscan", "dtp41", "dtp51", "dtp20", "dtp22",
+                "specbos", "spectraval"
+            };
+            foreach (string marker in spectroMarkers)
+            {
+                if (n.Contains(marker)) return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Opens a persistent spectral-mode spotread session (spotread -s -H). Only valid
+        /// when the connected instrument is a spectrometer. No .ccss/.ccmx correction is
+        /// passed — spectrometers measure the spectrum directly and need none.
+        /// </summary>
+        public virtual async Task BeginSpectralSessionAsync(CancellationToken cancellationToken = default)
+        {
+            if (!IsReady)
+                throw new InvalidOperationException("Instrument not initialized. Call InitializeAsync first.");
+            if (string.IsNullOrEmpty(_spotreadPath))
+                throw new InvalidOperationException("spotread path not configured.");
+            if (!ConnectedInstrumentIsSpectrometer)
+                throw new InvalidOperationException(
+                    $"Spectral capture needs a spectrometer (i1 Pro, ColorMunki Photo/Design, i1 Studio). " +
+                    $"The connected instrument ({_connectedColorimeter?.Model ?? "unknown"}) is a colorimeter or could not be identified.");
+            if (_spectralSession != null) return;
+
+            int instrumentIndex = _connectedColorimeter?.InstrumentIndex ?? 1;
+            Log($"Opening persistent SPECTRAL spotread session (instrument {instrumentIndex}, -s -H)");
+            try
+            {
+                _spectralSession = await SpotreadSession.StartAsync(
+                    _spotreadPath, instrumentIndex, _displayType, hdrMode: false, Log, cancellationToken,
+                    correctionFilePath: null, spectralMode: true);
+                RaiseStatusChanged(ColorimeterStatus.Ready, "Spectral spotread session ready");
+            }
+            catch (Exception ex)
+            {
+                Log($"Spectral session startup failed: {ex.Message}");
+                _spectralSession = null;
+                if (UsbDriverHelper.IsDriverError(ex.Message))
+                    throw new UsbDriverException(
+                        "Spectrometer communication failed - the ArgyllCMS USB driver may be missing or another application holds the device.\n" + ex.Message, ex);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Takes one spectral reading (XYZ + spectrum) on the open spectral session.
+        /// A poisoned session (measurement timeout) is transparently restarted first.
+        /// </summary>
+        public virtual async Task<SpectralReading> MeasureSpectralAsync(CancellationToken cancellationToken = default)
+        {
+            if (_spectralSession == null)
+                throw new InvalidOperationException("No spectral session is open. Call BeginSpectralSessionAsync first.");
+
+            if (_spectralSession.IsPoisoned)
+            {
+                Log("Spectral spotread session is poisoned (measurement timeout) - restarting it before the next reading");
+                await EndSpectralSessionAsync();
+                await BeginSpectralSessionAsync(cancellationToken);
+            }
+
+            try
+            {
+                return await _spectralSession!.MeasureSpectralAsync(cancellationToken);
+            }
+            catch (InvalidOperationException ex) when (UsbDriverHelper.IsDriverError(ex.Message))
+            {
+                throw new UsbDriverException(ex.Message, ex);
+            }
+        }
+
+        /// <summary>
+        /// Closes the spectral spotread session. Safe to call if no session is active.
+        /// </summary>
+        public virtual async Task EndSpectralSessionAsync()
+        {
+            if (_spectralSession == null) return;
+            Log("Closing spectral spotread session");
+            try { await _spectralSession.DisposeAsync(); }
+            catch (Exception ex) { Log($"Spectral session close error (non-fatal): {ex.Message}"); }
+            _spectralSession = null;
+        }
+
+        /// <summary>
         /// Takes a raw XYZ measurement. Uses the persistent session if one is open;
         /// otherwise opens a transient single-shot session for this one measurement
         /// (which still uses the session code path — no more broken <c>-O</c>).
@@ -577,7 +699,8 @@ namespace HDRGammaController.Core.Calibration
                             Model = match.Value.Trim(),
                             IsHdrCapable = isHdrCapable,
                             InstrumentIndex = index,
-                            InstrumentDescriptor = descriptor
+                            InstrumentDescriptor = descriptor,
+                            IsSpectrometer = IsSpectrometerName(descriptor)
                         };
                     }
                 }
@@ -594,7 +717,8 @@ namespace HDRGammaController.Core.Calibration
                         Model = "Colorimeter Detected",
                         IsHdrCapable = true,
                         InstrumentIndex = index,
-                        InstrumentDescriptor = descriptor
+                        InstrumentDescriptor = descriptor,
+                        IsSpectrometer = IsSpectrometerName(descriptor)
                     };
                 }
             }
@@ -607,7 +731,8 @@ namespace HDRGammaController.Core.Calibration
                     return new ColorimeterInfo
                     {
                         Model = match.Value.Trim(),
-                        IsHdrCapable = isHdrCapable
+                        IsHdrCapable = isHdrCapable,
+                        IsSpectrometer = IsSpectrometerName(match.Value)
                     };
                 }
             }
@@ -714,12 +839,22 @@ namespace HDRGammaController.Core.Calibration
             // a 3-second timeout so this won't block long in practice.
             var session = _session;
             _session = null;
-            if (session != null)
+            var spectralSession = _spectralSession;
+            _spectralSession = null;
+            if (session != null || spectralSession != null)
             {
                 _ = Task.Run(async () =>
                 {
-                    try { await session.DisposeAsync(); }
-                    catch { /* already disposed or process gone */ }
+                    if (session != null)
+                    {
+                        try { await session.DisposeAsync(); }
+                        catch { /* already disposed or process gone */ }
+                    }
+                    if (spectralSession != null)
+                    {
+                        try { await spectralSession.DisposeAsync(); }
+                        catch { /* already disposed or process gone */ }
+                    }
                 });
             }
         }
@@ -749,6 +884,12 @@ namespace HDRGammaController.Core.Calibration
         /// Whether this colorimeter supports HDR measurement modes.
         /// </summary>
         public bool IsHdrCapable { get; init; }
+
+        /// <summary>
+        /// True when the instrument is a spectrometer (emission spectra available).
+        /// Conservative default: unknown instruments are treated as colorimeters.
+        /// </summary>
+        public bool IsSpectrometer { get; init; }
 
         /// <summary>
         /// Serial number if available.

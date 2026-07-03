@@ -1,9 +1,11 @@
 using System;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using HDRGammaController.Core;
 using HDRGammaController.Core.Calibration;
 
 namespace HDRGammaController
@@ -18,10 +20,12 @@ namespace HDRGammaController
         private readonly TextBox _query;
         private readonly Button _searchButton;
         private readonly Button _downloadButton;
+        private readonly Button _createButton;
         private readonly ListView _list;
         private readonly TextBlock _status;
         private readonly string _saveFolder;
         private readonly string? _typeFilter;
+        private readonly string _displayName;
 
         /// <summary>Path of the downloaded correction file when the dialog returns true.</summary>
         public string? SavedPath { get; private set; }
@@ -34,6 +38,7 @@ namespace HDRGammaController
             string? introText = null)
         {
             _saveFolder = saveFolder;
+            _displayName = initialQuery?.Trim() ?? "";
             _typeFilter = string.IsNullOrWhiteSpace(typeFilter) ? null : typeFilter.Trim().ToLowerInvariant();
             Title = title ?? "Find Meter Correction - DisplayCAL Community Database";
             Width = 760;
@@ -70,6 +75,12 @@ namespace HDRGammaController
             _downloadButton = MakeButton("Download & Use");
             _downloadButton.IsEnabled = false;
             _downloadButton.Click += (_, _) => DownloadSelected();
+
+            _createButton = MakeButton("Create from spectrometer…");
+            _createButton.Background = new SolidColorBrush(Color.FromRgb(0x17, 0x1C, 0x23)); // secondary, not accent
+            _createButton.ToolTip = "Measure this panel's R/G/B/W emission spectra with a connected spectrometer " +
+                                    "(i1 Pro, ColorMunki Photo/Design, i1 Studio) and generate a .ccss for it.";
+            _createButton.Click += async (_, _) => await CreateFromSpectrometerAsync();
 
             var closeButton = MakeButton("Cancel");
             closeButton.Background = new SolidColorBrush(Color.FromRgb(0x17, 0x1C, 0x23)); // secondary, not accent
@@ -123,10 +134,14 @@ namespace HDRGammaController
             bottomRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             bottomRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             bottomRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            Grid.SetColumn(_downloadButton, 1);
-            Grid.SetColumn(closeButton, 2);
+            bottomRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            Grid.SetColumn(_createButton, 1);
+            Grid.SetColumn(_downloadButton, 2);
+            Grid.SetColumn(closeButton, 3);
+            _createButton.Margin = new Thickness(8, 0, 0, 0);
             _downloadButton.Margin = new Thickness(8, 0, 8, 0);
             bottomRow.Children.Add(_status);
+            bottomRow.Children.Add(_createButton);
             bottomRow.Children.Add(_downloadButton);
             bottomRow.Children.Add(closeButton);
 
@@ -213,6 +228,144 @@ namespace HDRGammaController
             {
                 _status.Text = $"Save failed: {ex.Message}";
             }
+        }
+
+        /// <summary>
+        /// Measures this panel's R/G/B/W emission spectra with a connected spectrometer
+        /// and writes a .ccss into the corrections folder. On success the new file is
+        /// selected as the dialog result — it immediately becomes the active correction
+        /// for the caller's colorimeter, exactly like a downloaded entry.
+        /// </summary>
+        private async Task CreateFromSpectrometerAsync()
+        {
+            _createButton.IsEnabled = false;
+            _status.Text = "Looking for a spectrometer…";
+
+            ColorimeterService? colorimeter = null;
+            PatchDisplayWindow? patchWindow = null;
+            try
+            {
+                string? argyllBin = ArgyllPathFinder.FindArgyllBinPath();
+                if (argyllBin == null)
+                {
+                    _status.Text = "ArgyllCMS was not found. Start a calibration once so Gloam downloads it, then retry.";
+                    return;
+                }
+
+                colorimeter = new ColorimeterService(argyllBin);
+                if (!await colorimeter.InitializeAsync())
+                {
+                    _status.Text = "No instrument detected. Connect the spectrometer and try again.";
+                    return;
+                }
+                if (!colorimeter.ConnectedInstrumentIsSpectrometer)
+                {
+                    _status.Text = $"'{colorimeter.ConnectedColorimeter?.Model ?? "The connected instrument"}' is not a spectrometer. " +
+                                   "Spectral capture needs an i1 Pro, ColorMunki Photo/Design or i1 Studio.";
+                    return;
+                }
+
+                var monitor = PickMonitorForCapture();
+                if (monitor == null)
+                {
+                    _status.Text = "No display found to show measurement patches on.";
+                    return;
+                }
+                Log.Info($"CcssBrowserWindow: spectral capture starting on '{monitor.FriendlyName}' " +
+                         $"with '{colorimeter.ConnectedColorimeter?.Model}'.");
+
+                // Positioning phase: white square, draggable, Enter/double-click to start.
+                patchWindow = new PatchDisplayWindow(monitor, patchSize: 400);
+                patchWindow.SetColor(1, 1, 1);
+                patchWindow.EnableDrag();
+                patchWindow.SetProgress(0, SpectralCaptureService.Patches.Count * 3, "White", "Red",
+                    phase: "Drag the square under the spectrometer, then press Enter");
+
+                using var cts = new CancellationTokenSource();
+                var positioned = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                patchWindow.ContinueRequested += () => positioned.TrySetResult(true);
+                patchWindow.AbortRequested += () => { positioned.TrySetResult(false); cts.Cancel(); };
+                patchWindow.Closed += (_, _) => { positioned.TrySetResult(false); cts.Cancel(); };
+                patchWindow.Show();
+
+                if (!await positioned.Task)
+                {
+                    _status.Text = "Spectral capture cancelled.";
+                    return;
+                }
+                patchWindow.DisableDrag();
+
+                _status.Text = "Measuring emission spectra… watch the patch window.";
+                await colorimeter.BeginSpectralSessionAsync(cts.Token);
+
+                var window = patchWindow; // non-null capture for the delegates
+                var capture = new SpectralCaptureService(
+                    rgb => { window.SetColor(rgb.R, rgb.G, rgb.B); return Task.CompletedTask; },
+                    ct => colorimeter.MeasureSpectralAsync(ct))
+                {
+                    Progress = (done, total, name) =>
+                        window.SetProgress(done, total, name, null, phase: $"Measuring {name} spectrum"),
+                };
+
+                var spectra = await capture.CaptureAsync(cts.Token);
+                await colorimeter.EndSpectralSessionAsync();
+
+                string displayName = !string.IsNullOrWhiteSpace(_displayName) ? _displayName : monitor.FriendlyName;
+                string path = CcssWriter.SaveToFolder(
+                    displayName,
+                    colorimeter.ConnectedColorimeter?.Model ?? "Spectrometer",
+                    spectra,
+                    _saveFolder);
+                Log.Info($"CcssBrowserWindow: spectral capture finished, CCSS saved to {path}.");
+
+                SavedPath = path;
+                DialogResult = true;
+                Close();
+            }
+            catch (OperationCanceledException)
+            {
+                _status.Text = "Spectral capture cancelled.";
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"CcssBrowserWindow: spectral capture failed: {ex.Message}");
+                _status.Text = $"Spectral capture failed: {ex.Message}";
+            }
+            finally
+            {
+                try { patchWindow?.Close(); } catch { /* already closed */ }
+                if (colorimeter != null)
+                {
+                    try { await colorimeter.EndSpectralSessionAsync(); } catch { /* session already gone */ }
+                    colorimeter.Dispose();
+                }
+                _createButton.IsEnabled = true;
+            }
+        }
+
+        /// <summary>
+        /// The monitor this browser window is on (patches show where the user already is);
+        /// falls back to the first enumerated display.
+        /// </summary>
+        private MonitorInfo? PickMonitorForCapture()
+        {
+            var monitors = new MonitorManager().EnumerateMonitors();
+            if (monitors.Count == 0) return null;
+            try
+            {
+                var center = PointToScreen(new Point(ActualWidth / 2, ActualHeight / 2));
+                foreach (var monitor in monitors)
+                {
+                    var b = monitor.MonitorBounds;
+                    if (center.X >= b.Left && center.X < b.Right && center.Y >= b.Top && center.Y < b.Bottom)
+                        return monitor;
+                }
+            }
+            catch
+            {
+                // PointToScreen can throw before the window is fully sourced; fall through.
+            }
+            return monitors[0];
         }
     }
 }
