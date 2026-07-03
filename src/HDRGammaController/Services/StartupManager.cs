@@ -81,6 +81,76 @@ namespace HDRGammaController.Services
         }
 
         /// <summary>
+        /// Self-heal for a stale Run value: if the registered "Gloam" startup path points
+        /// anywhere other than the current executable (e.g. a legacy pre-Velopack install
+        /// under Program Files, or a since-deleted exe), rewrite it to the current exe.
+        /// Only an INSTALLED build may do this — a portable/dev run must never steal the
+        /// startup registration from the real install (mirrors the isInstalled gate on
+        /// <see cref="EnableByDefaultForFreshInstall"/>).
+        /// </summary>
+        public static void RepairIfStale(bool isInstalled)
+        {
+            if (!isInstalled) return;
+
+            try
+            {
+                MigrateLegacyValue();
+                using var key = Registry.CurrentUser.OpenSubKey(RegistryPath, true);
+                if (key == null) return;
+
+                var registered = key.GetValue(AppName) as string;
+                if (registered == null) return; // startup not enabled; nothing to repair
+
+                string currentExePath = GetExePath();
+                if (!IsRegisteredPathStale(registered, currentExePath)) return;
+
+                key.SetValue(AppName, $"\"{currentExePath}\"");
+                Log.Info($"StartupManager: Repaired stale startup registration {registered} -> \"{currentExePath}\"");
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"StartupManager: Startup repair error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Pure decision function for <see cref="RepairIfStale"/> (registry access is not
+        /// unit-testable). True when the registered Run value does not resolve to the
+        /// current executable path. Comparison is case-insensitive and tolerates
+        /// surrounding quotes on either side.
+        /// </summary>
+        internal static bool IsRegisteredPathStale(string? registeredValue, string? currentExePath)
+        {
+            if (string.IsNullOrWhiteSpace(registeredValue)) return false;
+            if (string.IsNullOrWhiteSpace(currentExePath)) return false;
+
+            string registeredPath = ExtractExePath(registeredValue);
+            if (string.IsNullOrWhiteSpace(registeredPath)) return false;
+
+            string currentPath = ExtractExePath(currentExePath);
+            return !string.Equals(registeredPath, currentPath, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Extracts the executable path from a Run-key value: strips surrounding quotes
+        /// (returning only the quoted segment, so trailing arguments are ignored) and trims
+        /// whitespace. An unquoted value is returned trimmed as-is.
+        /// </summary>
+        internal static string ExtractExePath(string registryValue)
+        {
+            string trimmed = registryValue.Trim();
+            if (trimmed.Length >= 2 && trimmed[0] == '"')
+            {
+                int closing = trimmed.IndexOf('"', 1);
+                if (closing > 1)
+                    return trimmed.Substring(1, closing - 1).Trim();
+                return trimmed.Trim('"').Trim();
+            }
+
+            return trimmed;
+        }
+
+        /// <summary>
         /// One-time migration of the old HDRGammaController Run value: if present,
         /// remove it and (since it indicated startup was enabled) re-register the
         /// current executable under the Gloam name.

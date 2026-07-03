@@ -258,8 +258,56 @@ namespace HDRGammaController.Core
         }
     }
     
+    /// <summary>
+    /// Enum converter that never throws on unknown values: an unrecognized enum string in
+    /// settings.json (e.g. a NightModeAlgorithm added by a newer build) deserializes to the
+    /// enum's default value instead of failing the whole settings load. Writing matches
+    /// JsonStringEnumConverter (member name for defined values).
+    /// </summary>
+    internal sealed class TolerantJsonStringEnumConverter : JsonConverterFactory
+    {
+        public override bool CanConvert(Type typeToConvert) => typeToConvert.IsEnum;
+
+        public override JsonConverter CreateConverter(Type typeToConvert, JsonSerializerOptions options)
+            => (JsonConverter)Activator.CreateInstance(
+                typeof(TolerantEnumConverter<>).MakeGenericType(typeToConvert))!;
+
+        private sealed class TolerantEnumConverter<T> : JsonConverter<T> where T : struct, Enum
+        {
+            public override T Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+            {
+                if (reader.TokenType == JsonTokenType.String)
+                {
+                    string? text = reader.GetString();
+                    if (Enum.TryParse<T>(text, ignoreCase: true, out var parsed))
+                        return parsed;
+
+                    Log.Info($"SettingsManager: Unknown {typeof(T).Name} value '{text}'; using default '{default(T)}'.");
+                    return default;
+                }
+
+                if (reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out int numeric))
+                    return (T)Enum.ToObject(typeof(T), numeric);
+
+                Log.Info($"SettingsManager: Unexpected {reader.TokenType} token for {typeof(T).Name}; using default '{default(T)}'.");
+                return default;
+            }
+
+            public override void Write(Utf8JsonWriter writer, T value, JsonSerializerOptions options)
+                => writer.WriteStringValue(value.ToString());
+        }
+    }
+
     public class SettingsManager
     {
+        /// <summary>
+        /// Version of the on-disk settings schema this binary understands. Absent/0 in the
+        /// file means a v1 (pre-versioning) file. A file with a GREATER version was written
+        /// by a newer build: it is loaded best-effort but this manager refuses to Save so an
+        /// old binary can never clobber a newer file.
+        /// </summary>
+        public const int CurrentSchemaVersion = 2;
+
         // Use LocalApplicationData to avoid Resilio Sync corruption
         private static string AppDataPath => AppPaths.DataDir;
 
@@ -279,6 +327,25 @@ namespace HDRGammaController.Core
 
         private SettingsData _data = new SettingsData();
         public bool LoadedExistingSettingsFile { get; private set; }
+
+        /// <summary>
+        /// True when the settings file was written by a newer schema than this binary knows.
+        /// The file was loaded best-effort, but every Save() is refused so this (older)
+        /// binary can never clobber the newer file.
+        /// </summary>
+        public bool SettingsFileFromNewerVersion { get; private set; }
+
+        /// <summary>
+        /// True when the settings file existed but could not be parsed. The file is left
+        /// untouched on disk and in-memory defaults are used; Save() is suppressed until
+        /// something actually changes (_dataVersion advances), so the unreadable file is
+        /// never silently overwritten with defaults.
+        /// </summary>
+        public bool LoadFailedPreservingFile { get; private set; }
+
+        // _dataVersion at the moment Load() completed; used to detect "no change yet" for
+        // the post-parse-failure save suppression above.
+        private long _dataVersionAtLoad;
 
         public NightModeSettings NightMode
         {
@@ -305,6 +372,23 @@ namespace HDRGammaController.Core
             {
                 if (_data.StartupDefaultApplied) return;
                 _data.StartupDefaultApplied = true;
+                _dataVersion++;
+            }
+            Save();
+        }
+
+        /// <summary>True once the user has been told about a lingering legacy (pre-Velopack) install.</summary>
+        public bool LegacyInstallWarningShown
+        {
+            get { lock (_dataLock) { return _data.LegacyInstallWarningShown; } }
+        }
+
+        public void MarkLegacyInstallWarningShown()
+        {
+            lock (_dataLock)
+            {
+                if (_data.LegacyInstallWarningShown) return;
+                _data.LegacyInstallWarningShown = true;
                 _dataVersion++;
             }
             Save();
@@ -357,6 +441,8 @@ namespace HDRGammaController.Core
         {
             SettingsData? loaded = null;
             bool fileExists = false;
+            bool parseFailed = false;
+            bool newerSchema = false;
             try
             {
                 fileExists = File.Exists(SettingsFilePath);
@@ -365,7 +451,10 @@ namespace HDRGammaController.Core
                     string json = File.ReadAllText(SettingsFilePath);
                     var options = new JsonSerializerOptions
                     {
-                        Converters = { new JsonStringEnumConverter() },
+                        // Tolerant enum handling: an unknown enum string (e.g. written by a
+                        // newer build) maps to the enum default instead of throwing away the
+                        // whole file. Applies to ALL enums in the settings graph.
+                        Converters = { new TolerantJsonStringEnumConverter() },
                         PropertyNameCaseInsensitive = true
                     };
 
@@ -374,6 +463,17 @@ namespace HDRGammaController.Core
                         loaded = JsonSerializer.Deserialize<SettingsData>(json, options) ?? new SettingsData();
                         ValidateAndClampSettings(loaded);
                         Log.Info($"SettingsManager: Loaded {loaded.MonitorProfiles.Count} monitor profiles.");
+
+                        if (loaded.SchemaVersion > CurrentSchemaVersion)
+                        {
+                            // The file was written by a newer build. Loaded best-effort above;
+                            // mark read-only so this old binary can never clobber the newer file.
+                            newerSchema = true;
+                            Log.Error(
+                                $"SettingsManager: settings.json has SchemaVersion {loaded.SchemaVersion}, newer than this " +
+                                $"build's supported version {CurrentSchemaVersion}. Loading best-effort and REFUSING all saves " +
+                                "so the newer file is not overwritten by an older binary.");
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -397,17 +497,29 @@ namespace HDRGammaController.Core
                                 {
                                     _data = loaded;
                                     LoadedExistingSettingsFile = fileExists;
+                                    SettingsFileFromNewerVersion = false;
+                                    LoadFailedPreservingFile = false;
                                     _dataVersion++;
+                                    _dataVersionAtLoad = _dataVersion;
                                 }
                                 Save();
                                 return;
                             }
+
+                            parseFailed = true;
                         }
                         catch (Exception innerEx)
                         {
-                            Log.Info($"SettingsManager: Legacy migration failed ({innerEx.Message}). Using defaults.");
-                            // Backup corrupted file
+                            // NEVER reset-and-save here: leave the unreadable file untouched on
+                            // disk (a legacy binary destructively resetting settings on parse
+                            // failure is exactly the bug this guards against). Keep a .bak copy,
+                            // run on in-memory defaults, and suppress routine saves until a real
+                            // change happens (see Save()).
+                            Log.Error(
+                                $"SettingsManager: Legacy migration failed ({innerEx.Message}). settings.json is left " +
+                                "UNTOUCHED on disk; running with in-memory defaults and suppressing saves until a setting changes.");
                             try { File.Copy(SettingsFilePath, SettingsFilePath + $".bak-{DateTime.Now.Ticks}", true); } catch { }
+                            parseFailed = true;
                             loaded = new SettingsData();
                         }
                     }
@@ -416,6 +528,9 @@ namespace HDRGammaController.Core
             catch (Exception ex)
             {
                 Log.Info($"SettingsManager: Failed to load settings: {ex.Message}");
+                // If the file exists but could not even be read, treat it like a parse
+                // failure: keep it on disk and do not auto-overwrite it with defaults.
+                parseFailed = fileExists;
                 loaded = new SettingsData();
             }
 
@@ -423,7 +538,10 @@ namespace HDRGammaController.Core
             {
                 _data = loaded ?? new SettingsData();
                 LoadedExistingSettingsFile = fileExists;
+                SettingsFileFromNewerVersion = newerSchema;
+                LoadFailedPreservingFile = parseFailed;
                 _dataVersion++;
+                _dataVersionAtLoad = _dataVersion;
             }
         }
 
@@ -434,6 +552,24 @@ namespace HDRGammaController.Core
             long snapshotVersion;
             lock (_dataLock)
             {
+                if (SettingsFileFromNewerVersion)
+                {
+                    // A newer build wrote this file; an older binary must never clobber it.
+                    Log.Info($"SettingsManager: Save refused; settings.json schema is newer than this build supports (v{CurrentSchemaVersion}).");
+                    return;
+                }
+
+                if (LoadFailedPreservingFile && _dataVersion == _dataVersionAtLoad)
+                {
+                    // The file on disk could not be parsed and nothing has changed in memory
+                    // since: a save now would just overwrite the user's file with defaults.
+                    Log.Info("SettingsManager: Save suppressed; settings.json failed to parse at load and no setting has changed since.");
+                    return;
+                }
+
+                // Stamp the schema version we are about to write.
+                _data.SchemaVersion = CurrentSchemaVersion;
+
                 var options = CreateJsonOptions();
                 json = JsonSerializer.Serialize(_data, options);
                 profileCount = _data.MonitorProfiles.Count;
@@ -475,7 +611,9 @@ namespace HDRGammaController.Core
         private static JsonSerializerOptions CreateJsonOptions() => new()
         {
             WriteIndented = true,
-            Converters = { new JsonStringEnumConverter() }
+            // Tolerant on read (unknown enum -> default), JsonStringEnumConverter-compatible
+            // names on write. Shared by Save so round-trips stay symmetric.
+            Converters = { new TolerantJsonStringEnumConverter() }
         };
 
         public GammaMode? GetProfileForMonitor(string monitorDevicePath)
@@ -904,12 +1042,19 @@ namespace HDRGammaController.Core
 
         private class SettingsData
         {
+            /// <summary>
+            /// On-disk schema version (see <see cref="CurrentSchemaVersion"/>). Absent/0 in
+            /// older files means v1. Stamped to the current version on every save.
+            /// </summary>
+            public int SchemaVersion { get; set; }
+
             public Dictionary<string, MonitorProfileData> MonitorProfiles { get; set; } = new Dictionary<string, MonitorProfileData>();
             public NightModeSettingsData NightMode { get; set; } = new NightModeSettingsData();
             public List<AppExclusionRule> ExcludedApps { get; set; } = new List<AppExclusionRule>();
             // Brutalist UI theme: true = dark, false = light, null = follow OS.
             public bool? DarkTheme { get; set; } = null;
             public bool StartupDefaultApplied { get; set; }
+            public bool LegacyInstallWarningShown { get; set; }
             public Dictionary<string, WindowBoundsData> WindowBounds { get; set; } = new Dictionary<string, WindowBoundsData>();
         }
 
