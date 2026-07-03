@@ -90,6 +90,26 @@ namespace HDRGammaController.Tests
             return (F(s) - f0) / (f1 - f0);
         }
 
+        /// <summary>
+        /// A panel with a narrow localized tone defect IN THE SHADOWS: a rapid rise over a
+        /// ~2% window centered at 12% signal, on an otherwise smooth gamma-2.4 base. The
+        /// defect's ΔY is small (it is dark), so a photometric-linear tone target barely
+        /// notices it while a perceptual |ΔL*| target (FIX 4) sees it clearly and steers
+        /// samples into the shadow to resolve it — the canonical case the perceptual metric
+        /// exists for. Monotone, normalized f(0)=0, f(1)=1.
+        /// </summary>
+        internal static double ShadowBumpTone(double s)
+        {
+            s = Math.Clamp(s, 0, 1);
+            // Step centered BETWEEN the seed gray levels (0.125 and 0.25) so the seed's
+            // leave-one-out residual actually sees it; height is modest in ΔY (it is dark)
+            // but perceptually large, which is exactly what the |ΔL*| target is meant to catch.
+            const double h = 0.05, w = 0.01, center = 0.19;
+            double F(double x) => Math.Pow(x, 2.4) + h * 0.5 * (1 + Math.Tanh((x - center) / w));
+            double f0 = F(0.0), f1 = F(1.0);
+            return (F(s) - f0) / (f1 - f0);
+        }
+
         /// <summary>Panel forward model: signal RGB → measured absolute XYZ through sRGB primaries.</summary>
         internal static CieXyz PanelXyz(LinearRgb signal, Func<double, double> tone)
         {
@@ -135,7 +155,8 @@ namespace HDRGammaController.Tests
         {
             var pool = PatchSetGenerator.BuildAdaptiveCandidatePool();
             var measured = UniformGraySeed(9);
-            var residuals = new[] { GrayTone(0.30, 0.08), GrayTone(0.31, 0.07) };
+            // Magnitudes are ΔL* (tone target 1.0): sizeable defects at 30–31%.
+            var residuals = new[] { GrayTone(0.30, 8.0), GrayTone(0.31, 7.0) };
 
             var a = AdaptivePatchPlanner.PlanNextBatch(pool, measured, residuals, 12);
             var b = AdaptivePatchPlanner.PlanNextBatch(pool, measured, residuals, 12);
@@ -152,8 +173,8 @@ namespace HDRGammaController.Tests
         {
             var pool = PatchSetGenerator.BuildAdaptiveCandidatePool();
             var measured = UniformGraySeed(5);
-            // A single huge residual would otherwise pull every pick onto one spot.
-            var residuals = new[] { GrayTone(0.50, 0.5) };
+            // A single huge residual (ΔL*) would otherwise pull every pick onto one spot.
+            var residuals = new[] { GrayTone(0.50, 50.0) };
 
             var batch = AdaptivePatchPlanner.PlanNextBatch(pool, measured, residuals, 12);
 
@@ -175,14 +196,14 @@ namespace HDRGammaController.Tests
             var pool = PatchSetGenerator.BuildAdaptiveCandidatePool();
             var measured = UniformGraySeed(9);
 
-            // Kinked model: one large gray residual at 30% dwarfs the rest.
-            var kink = new List<ModelResidual> { GrayTone(0.30, 0.12) };
+            // Kinked model: one large gray residual (ΔL*) at 30% dwarfs the rest.
+            var kink = new List<ModelResidual> { GrayTone(0.30, 12.0) };
             for (double s = 0.1; s < 1.0; s += 0.1)
-                if (Math.Abs(s - 0.30) > 0.05) kink.Add(GrayTone(s, 0.002));
+                if (Math.Abs(s - 0.30) > 0.05) kink.Add(GrayTone(s, 0.2));
 
             // Smooth model: uniformly small residuals everywhere.
             var smooth = new List<ModelResidual>();
-            for (double s = 0.1; s < 1.0; s += 0.1) smooth.Add(GrayTone(s, 0.004));
+            for (double s = 0.1; s < 1.0; s += 0.1) smooth.Add(GrayTone(s, 0.4));
 
             var kinkBatch = AdaptivePatchPlanner.PlanNextBatch(pool, measured, kink, 12);
             var smoothBatch = AdaptivePatchPlanner.PlanNextBatch(pool, measured, smooth, 12);
@@ -201,37 +222,92 @@ namespace HDRGammaController.Tests
         [Fact]
         public void EvaluateStopping_StopsWhenTargetsMet()
         {
-            var d = AdaptivePatchPlanner.EvaluateStopping(0.9, previousMaxNormalizedResidual: 5.0,
-                measuredPatchCount: 30, patchBudget: 120);
+            // Target-met is on the MAX residual: worst point at/below target → clean success.
+            var d = AdaptivePatchPlanner.EvaluateStopping(0.9, currentRobustResidual: 0.5,
+                previousRobustResidual: 5.0, measuredPatchCount: 30, patchBudget: 120);
             Assert.True(d.ShouldStop);
+            Assert.True(d.AccuracyTargetsMet);
             Assert.Contains("target", d.Reason);
         }
 
         [Fact]
-        public void EvaluateStopping_StopsAtBudget()
+        public void EvaluateStopping_WorstPointAboveTarget_DoesNotDeclareSuccess()
         {
-            var d = AdaptivePatchPlanner.EvaluateStopping(3.0, previousMaxNormalizedResidual: 6.0,
-                measuredPatchCount: 120, patchBudget: 120);
+            // Even if the robust summary is below target, a worst point above it must NOT be
+            // reported as targets-met — the whole point of adaptive is to chase that point.
+            var d = AdaptivePatchPlanner.EvaluateStopping(3.0, currentRobustResidual: 0.4,
+                previousRobustResidual: 5.0, measuredPatchCount: 50, patchBudget: 120);
+            Assert.False(d.ShouldStop);
+        }
+
+        [Fact]
+        public void EvaluateStopping_StopsAtBudget_IsDegraded()
+        {
+            var d = AdaptivePatchPlanner.EvaluateStopping(3.0, currentRobustResidual: 2.0,
+                previousRobustResidual: 6.0, measuredPatchCount: 120, patchBudget: 120);
             Assert.True(d.ShouldStop);
+            // Budget-exhausted above target is a DEGRADED stop, not clean success (FIX 1).
+            Assert.False(d.AccuracyTargetsMet);
             Assert.Contains("budget", d.Reason);
         }
 
         [Fact]
-        public void EvaluateStopping_StopsOnPlateau()
+        public void EvaluateStopping_SingleFlatRound_DoesNotStop_StillImprovingRun()
         {
-            // 5% improvement < 10% plateau floor → stop even though above target and under budget.
-            var d = AdaptivePatchPlanner.EvaluateStopping(4.75, previousMaxNormalizedResidual: 5.0,
-                measuredPatchCount: 50, patchBudget: 120);
+            // FIX 1: one sub-threshold-improvement round must NOT terminate the run — it only
+            // increments the plateau streak. (Adaptive sampling resolving the current worst
+            // point and exposing a similar next-worst reads as a small single-round move.)
+            var d = AdaptivePatchPlanner.EvaluateStopping(4.9, currentRobustResidual: 4.75,
+                previousRobustResidual: 5.0, measuredPatchCount: 50, patchBudget: 120, plateauStreak: 0);
+            Assert.False(d.ShouldStop);
+            Assert.Equal(1, d.PlateauStreak);
+        }
+
+        [Fact]
+        public void EvaluateStopping_StopsOnPlateau_AfterPatienceConsecutiveFlatRounds_IsDegraded()
+        {
+            // FIX 1: PATIENCE consecutive flat rounds (on the robust summary) are required
+            // before a plateau stop, and the worst point stays above target throughout.
+            double robust = 5.0;
+            int streak = 0;
+            AdaptivePatchPlanner.StopDecision d = default;
+            for (int round = 0; round < AdaptivePatchPlanner.PlateauPatienceRounds; round++)
+            {
+                double previous = robust;
+                robust *= 0.97; // 3% improvement < 10% floor each round → keeps plateauing
+                d = AdaptivePatchPlanner.EvaluateStopping(6.0, robust, previous,
+                    measuredPatchCount: 50, patchBudget: 120, plateauStreak: streak);
+                streak = d.PlateauStreak;
+            }
             Assert.True(d.ShouldStop);
+            Assert.False(d.AccuracyTargetsMet); // plateaued above target → degraded
             Assert.Contains("plateau", d.Reason);
         }
 
         [Fact]
-        public void EvaluateStopping_ContinuesWhenImprovingAboveTargetUnderBudget()
+        public void EvaluateStopping_ProgressResetsPlateauStreak()
         {
-            var d = AdaptivePatchPlanner.EvaluateStopping(3.0, previousMaxNormalizedResidual: 5.0,
-                measuredPatchCount: 50, patchBudget: 120);
+            // A genuinely improving robust round after a flat one resets the streak to 0.
+            var d = AdaptivePatchPlanner.EvaluateStopping(4.0, currentRobustResidual: 3.0,
+                previousRobustResidual: 5.0, measuredPatchCount: 50, patchBudget: 120, plateauStreak: 1);
             Assert.False(d.ShouldStop);
+            Assert.Equal(0, d.PlateauStreak);
+        }
+
+        [Fact]
+        public void RobustNormalizedResidual_IgnoresSingleSpike()
+        {
+            // A distribution of near-target residuals with ONE large outlier: the max is
+            // dominated by the spike, the robust (90th-pct) summary is not.
+            var residuals = new List<ModelResidual>();
+            for (int i = 0; i < 19; i++) residuals.Add(GrayTone(0.1 + i * 0.04, 0.9)); // ~0.9 ΔL* each
+            residuals.Add(GrayTone(0.3, 8.0)); // one big spike
+
+            double max = AdaptivePatchPlanner.MaxNormalizedResidual(residuals);
+            double robust = AdaptivePatchPlanner.RobustNormalizedResidual(residuals);
+            _out.WriteLine($"max={max:F2} robust={robust:F2}");
+            Assert.True(max > 5.0, $"max should reflect the spike, got {max:F2}");
+            Assert.True(robust < 2.0, $"robust summary should ignore the single spike, got {robust:F2}");
         }
 
         // ---------------------------- Leave-one-out localization ----------------------------

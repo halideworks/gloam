@@ -43,7 +43,13 @@ namespace HDRGammaController.Core.Calibration
     /// <summary>Which error family a model residual belongs to (they have different units and targets).</summary>
     public enum ResidualKind
     {
-        /// <summary>Luminance error of a 1D tone-curve fit as a fraction of the display range |ΔY|/(white−black).</summary>
+        /// <summary>
+        /// Perceptual tone error of a 1D tone-curve fit, expressed as |ΔL*| (CIE 1976
+        /// lightness) between the predicted and measured relative luminance. This weights
+        /// shadow errors more than highlight errors in proportion to visibility (the eye's
+        /// near-constant contrast sensitivity), while L*'s linear toe keeps it bounded near
+        /// black. Target: <see cref="AdaptivePatchPlanner.ToneTargetDeltaLstar"/>.
+        /// </summary>
         Tone,
 
         /// <summary>ΔE2000 between the model's prediction and the measurement (color patches, gray cast).</summary>
@@ -71,11 +77,14 @@ namespace HDRGammaController.Core.Calibration
     /// has been measured, so early rounds also fill genuine coverage holes instead of
     /// only chasing the current worst residual.</item>
     /// </list>
-    /// Winners are then thinned greedily: candidates are visited in score order and one
-    /// is skipped when it lies closer than the manifold's minimum pick separation to an
-    /// already-accepted winner, which prevents a whole batch from piling onto a single
-    /// residual spike while still allowing round-over-round densification (separation is
-    /// enforced within a batch only; later rounds may interleave finer samples).
+    /// Winners are then thinned greedily by MINIMUM-SEPARATION suppression: candidates are
+    /// visited in score order and one is skipped when it lies closer than the manifold's
+    /// minimum pick separation to an already-accepted winner. This is a simple greedy
+    /// spacing filter (NOT a true farthest-point / OFPS "max-min spread" optimizer — it
+    /// does not maximize the minimum inter-pick distance, only enforce a floor on it), which
+    /// is all this stage needs: it prevents a whole batch from piling onto a single residual
+    /// spike while still allowing round-over-round densification (separation is enforced
+    /// within a batch only; later rounds may interleave finer samples).
     /// </remarks>
     public static class AdaptivePatchPlanner
     {
@@ -87,18 +96,50 @@ namespace HDRGammaController.Core.Calibration
         /// <summary>Default total ordinary-patch budget for an adaptive run (drift anchors excluded).</summary>
         public const int DefaultPatchBudget = 120;
 
-        /// <summary>Accuracy target for tone residuals: 1% of the display luminance range (white−black).</summary>
-        public const double ToneTargetRelativeError = 0.01;
+        /// <summary>
+        /// Accuracy target for tone residuals, in CIE L* units: |ΔL*| between the
+        /// tone-curve's prediction and the measurement. This replaces the old
+        /// photometric-linear |ΔY|/(white−black) ≤ 1% target, which penalized a shadow error
+        /// and a highlight error of equal ΔY equally even though the shadow error is far more
+        /// visible. Because dL*/dY grows toward black (capped by L*'s linear toe, so no
+        /// near-black blow-up), the same |ΔL*| budget now spends shadow samples in proportion
+        /// to their visibility. Set to 1.5 (≈1.5 lightness JND on the WORST predicted point)
+        /// after re-tuning: tight enough to keep chasing real localized defects, loose enough
+        /// that a well-behaved smooth panel converges from the seed in a round or two instead
+        /// of over-sampling its (perceptually amplified) deep-shadow LOO residuals. At
+        /// mid-gray |ΔY|≈1.5% maps to |ΔL*|≈1.5, so the mid-tone scale is close to the old
+        /// target while shadows tighten substantially.
+        /// </summary>
+        public const double ToneTargetDeltaLstar = 1.5;
 
         /// <summary>Accuracy target for color/gray-cast residuals: 0.8 ΔE2000.</summary>
         public const double ColorTargetDeltaE = 0.8;
 
         /// <summary>
-        /// Plateau guard: a round must improve the worst normalized residual by more
-        /// than this fraction, or the run stops (further patches are judged to be
-        /// chasing noise, not model error).
+        /// Plateau guard: a round must improve the ROBUST normalized residual summary
+        /// (<see cref="RobustNormalizedResidual"/>) by more than this fraction to count as
+        /// progress. A shortfall increments a plateau streak; the run only stops once the
+        /// streak reaches <see cref="PlateauPatienceRounds"/> (a single flat/noisy round no
+        /// longer terminates a still-improving run).
         /// </summary>
         public const double PlateauMinImprovementFraction = 0.10;
+
+        /// <summary>
+        /// Consecutive sub-threshold-improvement rounds required before the plateau guard
+        /// stops the run. Patience ≥ 2 stops the failure mode where resolving the current
+        /// worst point merely exposes a next-worst point of similar size (so the summary
+        /// barely moves for one round) from being read as convergence.
+        /// </summary>
+        public const int PlateauPatienceRounds = 2;
+
+        /// <summary>
+        /// Percentile of the target-normalized residual distribution used as the ROBUST
+        /// stopping/plateau summary, instead of the single worst point. A high percentile
+        /// (90th) tracks "almost everything is at target" while ignoring one transient
+        /// spike, so adaptive sampling resolving one point and exposing the next does not
+        /// read as a plateau.
+        /// </summary>
+        public const double RobustResidualPercentile = 0.90;
 
         /// <summary>
         /// Weight of the gap term relative to the normalized residual term. 0.5 means a
@@ -182,7 +223,7 @@ namespace HDRGammaController.Core.Calibration
 
         /// <summary>A residual expressed as a multiple of its accuracy target (1.0 = exactly at target).</summary>
         public static double NormalizedResidual(ModelResidual residual) =>
-            residual.Magnitude / (residual.Kind == ResidualKind.Tone ? ToneTargetRelativeError : ColorTargetDeltaE);
+            residual.Magnitude / (residual.Kind == ResidualKind.Tone ? ToneTargetDeltaLstar : ColorTargetDeltaE);
 
         /// <summary>Worst residual across the set, target-normalized. 0 for an empty set.</summary>
         public static double MaxNormalizedResidual(IReadOnlyList<ModelResidual> residuals)
@@ -196,41 +237,111 @@ namespace HDRGammaController.Core.Calibration
             return max;
         }
 
+        /// <summary>
+        /// A ROBUST summary of the target-normalized residuals: the
+        /// <see cref="RobustResidualPercentile"/> (90th) percentile, linearly interpolated.
+        /// Unlike the single worst point, this ignores one transient spike, so it is the
+        /// stable basis for the stopping and plateau decisions. 0 for an empty set.
+        /// </summary>
+        public static double RobustNormalizedResidual(
+            IReadOnlyList<ModelResidual> residuals, double percentile = RobustResidualPercentile)
+        {
+            var norms = new List<double>(residuals.Count);
+            foreach (var r in residuals)
+            {
+                double n = NormalizedResidual(r);
+                if (double.IsFinite(n)) norms.Add(n);
+            }
+            if (norms.Count == 0) return 0;
+            norms.Sort();
+            double rank = Math.Clamp(percentile, 0.0, 1.0) * (norms.Count - 1);
+            int lo = (int)Math.Floor(rank);
+            int hi = (int)Math.Ceiling(rank);
+            double frac = rank - lo;
+            return norms[lo] + frac * (norms[hi] - norms[lo]);
+        }
+
         /// <summary>Outcome of the stopping evaluation between rounds.</summary>
-        public readonly record struct StopDecision(bool ShouldStop, string Reason);
+        /// <param name="ShouldStop">Whether the adaptive loop should terminate.</param>
+        /// <param name="Reason">Human-readable reason for the decision.</param>
+        /// <param name="AccuracyTargetsMet">
+        /// True only when the run stopped because the robust residual reached target. False
+        /// for a budget-exhausted or plateaued stop, which is a DEGRADED outcome the caller
+        /// must surface rather than report as clean success.
+        /// </param>
+        /// <param name="PlateauStreak">
+        /// Updated count of consecutive sub-threshold-improvement rounds; the caller feeds it
+        /// back into the next call.
+        /// </param>
+        public readonly record struct StopDecision(
+            bool ShouldStop, string Reason, bool AccuracyTargetsMet, int PlateauStreak);
 
         /// <summary>
-        /// Decides whether another adaptive round is worthwhile. Rounds continue while
-        /// the worst target-normalized residual exceeds 1.0 AND the ordinary-patch
-        /// budget has headroom AND the last round improved the worst residual by more
-        /// than <see cref="PlateauMinImprovementFraction"/>.
+        /// Decides whether another adaptive round is worthwhile. Two summaries play distinct
+        /// roles, deliberately:
+        /// <list type="bullet">
+        /// <item><b>Target-met uses the MAX</b> normalized residual (<paramref name="currentMaxResidual"/>).
+        /// The whole point of adaptive placement is to chase the WORST point, so success is
+        /// only declared once every point — including a narrow defect the planner is crowding —
+        /// is at target. This is strict: it never reports clean success while the worst point
+        /// is still bad.</item>
+        /// <item><b>Plateau uses the ROBUST summary</b> (<paramref name="currentRobustResidual"/>,
+        /// a high percentile) with PATIENCE. Resolving the current worst point merely exposes
+        /// a next-worst point of similar size, so a max-based plateau check false-triggers; the
+        /// robust summary tracks the whole distribution shifting down as the planner fills in,
+        /// and <see cref="PlateauPatienceRounds"/> consecutive sub-threshold rounds are required
+        /// before stopping. This is what prevents premature stops on a still-improving run.</item>
+        /// </list>
+        /// Any stop that is NOT "targets met" (budget exhausted, or a genuine plateau above
+        /// target) is flagged degraded via <see cref="StopDecision.AccuracyTargetsMet"/> so the
+        /// caller surfaces a warning instead of unqualified success.
         /// </summary>
-        /// <param name="currentMaxNormalizedResidual">Worst residual now, target-normalized.</param>
-        /// <param name="previousMaxNormalizedResidual">Worst residual before the last round (null before any round).</param>
+        /// <param name="currentMaxResidual">Worst normalized residual now (drives target-met).</param>
+        /// <param name="currentRobustResidual">Robust (percentile) normalized residual now (drives plateau).</param>
+        /// <param name="previousRobustResidual">Robust normalized residual before the last round (null before any round).</param>
         /// <param name="measuredPatchCount">Ordinary (non-anchor, non-wire) patches measured so far.</param>
         /// <param name="patchBudget">Total ordinary-patch budget.</param>
+        /// <param name="plateauStreak">Consecutive sub-threshold rounds so far (0 before any round).</param>
         public static StopDecision EvaluateStopping(
-            double currentMaxNormalizedResidual,
-            double? previousMaxNormalizedResidual,
+            double currentMaxResidual,
+            double currentRobustResidual,
+            double? previousRobustResidual,
             int measuredPatchCount,
-            int patchBudget)
+            int patchBudget,
+            int plateauStreak = 0)
         {
-            if (currentMaxNormalizedResidual <= 1.0)
+            if (currentMaxResidual <= 1.0)
                 return new StopDecision(true,
-                    $"accuracy targets met (worst predicted error at {currentMaxNormalizedResidual:P0} of target)");
+                    $"accuracy targets met (worst predicted error at {currentMaxResidual:P0} of target)",
+                    AccuracyTargetsMet: true, PlateauStreak: 0);
 
             if (measuredPatchCount >= patchBudget)
-                return new StopDecision(true, $"patch budget of {patchBudget} reached");
+                return new StopDecision(true,
+                    $"patch budget of {patchBudget} reached with worst predicted error still at " +
+                    $"{currentMaxResidual:P0} of target",
+                    AccuracyTargetsMet: false, PlateauStreak: plateauStreak);
 
-            if (previousMaxNormalizedResidual is double previous && previous > 0)
+            if (previousRobustResidual is double previous && previous > 0)
             {
-                double improvement = (previous - currentMaxNormalizedResidual) / previous;
+                double improvement = (previous - currentRobustResidual) / previous;
                 if (improvement < PlateauMinImprovementFraction)
-                    return new StopDecision(true,
-                        $"improvement plateaued ({improvement:P0} last round, need > {PlateauMinImprovementFraction:P0})");
+                {
+                    int streak = plateauStreak + 1;
+                    if (streak >= PlateauPatienceRounds)
+                        return new StopDecision(true,
+                            $"improvement plateaued for {streak} consecutive rounds " +
+                            $"({improvement:P0} last round on the robust summary, need > " +
+                            $"{PlateauMinImprovementFraction:P0}); worst predicted error still " +
+                            $"{currentMaxResidual:P0} of target",
+                            AccuracyTargetsMet: false, PlateauStreak: streak);
+
+                    return new StopDecision(false,
+                        $"flat round {streak}/{PlateauPatienceRounds} before plateau stop", false, streak);
+                }
             }
 
-            return new StopDecision(false, "predicted error still above target");
+            // Progress (or no prior round): reset the plateau streak.
+            return new StopDecision(false, "predicted error still above target", false, 0);
         }
 
         /// <summary>

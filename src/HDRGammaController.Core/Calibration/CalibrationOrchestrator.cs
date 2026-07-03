@@ -153,6 +153,31 @@ namespace HDRGammaController.Core.Calibration
         public double AdaptiveFinalMaxNormalizedResidual { get; private set; }
 
         /// <summary>
+        /// Robust (90th-percentile) target-normalized model residual after the final adaptive
+        /// refit — the summary the stopping decision is actually made on (0 if not adaptive).
+        /// </summary>
+        public double AdaptiveFinalRobustNormalizedResidual { get; private set; }
+
+        /// <summary>
+        /// Whether the adaptive run stopped because the robust residual reached the accuracy
+        /// target. False when it stopped degraded (budget exhausted or plateaued still above
+        /// target). Only meaningful for the Adaptive preset; true by default so non-adaptive
+        /// runs are never flagged degraded.
+        /// </summary>
+        public bool AdaptiveAccuracyTargetsMet { get; private set; } = true;
+
+        /// <summary>Reason string from the final adaptive stopping decision (null if not adaptive).</summary>
+        public string? AdaptiveStopReason { get; private set; }
+
+        /// <summary>
+        /// FIX 5: a stable progress denominator for the adaptive tail. TotalPatches grows as
+        /// each round is appended, which would snap the progress bar/ETA backward; during the
+        /// adaptive rounds progress is instead driven off this fixed projected upper bound
+        /// (seed measured + remaining ordinary-patch budget). 0 disables the override.
+        /// </summary>
+        private int _adaptiveProgressTotal;
+
+        /// <summary>
         /// When set, the orchestrator runs an in-session apply→verify→refine loop after the
         /// native measurement pass: it builds a correction, loads it on the display, and
         /// re-measures to confirm (and optionally refine) the result. Left null for a plain
@@ -243,7 +268,7 @@ namespace HDRGammaController.Core.Calibration
         {
             get
             {
-                int total = TotalPatches;
+                int total = ProgressTotalPatches;
                 int current = _currentPatchIndex;
 
                 // Before any measurements complete, estimate ~3 sec per patch
@@ -265,10 +290,19 @@ namespace HDRGammaController.Core.Calibration
         {
             get
             {
-                int total = TotalPatches;
-                return total > 0 ? (_currentPatchIndex * 100.0 / total) : 0;
+                int total = ProgressTotalPatches;
+                return total > 0 ? Math.Min(100.0, _currentPatchIndex * 100.0 / total) : 0;
             }
         }
+
+        /// <summary>
+        /// FIX 5: the denominator used for progress/ETA. Normally the patch count, but during
+        /// the adaptive tail it is a fixed projected total (see <see cref="_adaptiveProgressTotal"/>)
+        /// so appending each round's patches cannot snap the bar backward. Never smaller than
+        /// the patches already queued, so it stays valid if a run exceeds the projection.
+        /// </summary>
+        private int ProgressTotalPatches =>
+            _adaptiveProgressTotal > 0 ? Math.Max(_adaptiveProgressTotal, TotalPatches) : TotalPatches;
 
         /// <summary>
         /// Gets the current patch being measured.
@@ -462,6 +496,22 @@ namespace HDRGammaController.Core.Calibration
                 if (closedLoop.HasValue)
                     msg += $" Grayscale dE {closedLoop.Value.NativeResidual:F2} → {closedLoop.Value.CorrectedResidual:F2} after {closedLoop.Value.Rounds} pass(es).";
 
+                // FIX 1: an adaptive run that stopped without reaching its accuracy target is a
+                // DEGRADED outcome — still a valid measurement pass, but flag it rather than
+                // report unqualified success.
+                bool adaptiveDegraded = _preset == PatchSetGenerator.CalibrationPreset.Adaptive
+                                        && !AdaptiveAccuracyTargetsMet;
+                string? adaptiveDegradedMessage = null;
+                if (adaptiveDegraded)
+                {
+                    adaptiveDegradedMessage =
+                        "Adaptive placement did not reach the accuracy target " +
+                        $"(worst predicted model error {AdaptiveFinalMaxNormalizedResidual:P0} of target" +
+                        (AdaptiveStopReason != null ? $"; {AdaptiveStopReason}" : "") +
+                        "). The profile is usable but may benefit from a longer preset or re-run.";
+                    msg += " WARNING: " + adaptiveDegradedMessage;
+                }
+
                 var result = new CalibrationResult
                 {
                     Success = true,
@@ -469,6 +519,8 @@ namespace HDRGammaController.Core.Calibration
                     Target = _target,
                     TotalTime = _elapsedTimer.Elapsed,
                     Message = msg,
+                    AdaptiveDegraded = adaptiveDegraded,
+                    AdaptiveDegradedMessage = adaptiveDegradedMessage,
                     ClosedLoopRan = closedLoop.HasValue,
                     CorrectedMeasurements = closedLoop?.AfterMeasurements,
                     FinalCorrection = closedLoop?.Correction,
@@ -628,8 +680,17 @@ namespace HDRGammaController.Core.Calibration
             if (_patches == null || _measurements == null) return;
 
             var pool = PatchSetGenerator.BuildAdaptiveCandidatePool();
-            var driftState = new PatchSetGenerator.AdaptiveDriftState();
-            double? previousMax = null;
+            // FIX 6: continue the seed's drift-anchor cadence instead of restarting it at 0
+            // (which forced a redundant phase reset after the seed's closing white anchor).
+            var driftState = BuildAdaptiveDriftStateFromSeed();
+            double? previousRobust = null;
+            int plateauStreak = 0;
+
+            // FIX 5: freeze a stable progress denominator for the adaptive tail so appending
+            // each round's patches cannot snap the bar backward. Projected upper bound =
+            // patches already queued + remaining ordinary-patch budget headroom.
+            _adaptiveProgressTotal = _patches.Count
+                + Math.Max(0, AdaptivePatchBudget - AdaptiveAccuracyMeasurements().Count);
 
             for (int round = 1; ; round++)
             {
@@ -644,25 +705,43 @@ namespace HDRGammaController.Core.Calibration
                 }
 
                 double currentMax = AdaptivePatchPlanner.MaxNormalizedResidual(residuals);
+                double currentRobust = AdaptivePatchPlanner.RobustNormalizedResidual(residuals);
                 AdaptiveFinalMaxNormalizedResidual = currentMax;
+                AdaptiveFinalRobustNormalizedResidual = currentRobust;
 
                 var decision = AdaptivePatchPlanner.EvaluateStopping(
-                    currentMax, previousMax, accuracy.Count, AdaptivePatchBudget);
+                    currentMax, currentRobust, previousRobust, accuracy.Count, AdaptivePatchBudget, plateauStreak);
+                plateauStreak = decision.PlateauStreak;
                 if (decision.ShouldStop)
                 {
-                    PhaseChanged?.Invoke(this, $"Adaptive placement complete — {decision.Reason}.");
+                    AdaptiveAccuracyTargetsMet = decision.AccuracyTargetsMet;
+                    AdaptiveStopReason = decision.Reason;
+                    string prefix = decision.AccuracyTargetsMet
+                        ? "Adaptive placement complete"
+                        : "Adaptive placement stopped (accuracy targets NOT met)";
+                    PhaseChanged?.Invoke(this, $"{prefix} — {decision.Reason}.");
                     break;
                 }
 
                 int remaining = AdaptivePatchBudget - accuracy.Count;
-                if (remaining <= 0) break;
+                if (remaining <= 0)
+                {
+                    AdaptiveAccuracyTargetsMet = false;
+                    AdaptiveStopReason = $"patch budget of {AdaptivePatchBudget} reached";
+                    break;
+                }
                 int batchSize = Math.Min(AdaptiveBatchSize, remaining);
 
                 var measuredPoints = accuracy
                     .Select(m => AdaptivePatchPlanner.ClassifySignal(m.Patch.DisplayRgb))
                     .ToList();
                 var batch = AdaptivePatchPlanner.PlanNextBatch(pool, measuredPoints, residuals, batchSize);
-                if (batch.Count == 0) break;
+                if (batch.Count == 0)
+                {
+                    AdaptiveAccuracyTargetsMet = false;
+                    AdaptiveStopReason = "no further candidate patches to measure";
+                    break;
+                }
 
                 PhaseChanged?.Invoke(this,
                     $"Round {round}: {batch.Count} patches — predicted max error {FormatWorstResidual(residuals)}");
@@ -672,8 +751,45 @@ namespace HDRGammaController.Core.Calibration
                 await MeasureAdaptiveRoundAsync(sequence, cancellationToken);
 
                 AdaptiveRoundsCompleted = round;
-                previousMax = currentMax;
+                previousRobust = currentRobust;
             }
+        }
+
+        /// <summary>
+        /// FIX 6: builds the adaptive-round drift-anchor state so its white/black re-read
+        /// cadence CONTINUES the seed sequence rather than restarting from zero. Scans the
+        /// already-measured seed patches counting ordinary (non-anchor, non-wire) patches
+        /// since the last drift-check white and black, mirroring
+        /// <see cref="PatchSetGenerator.BuildAdaptiveRoundSequence"/>'s counting rules
+        /// (anchors and wire patches do not advance the counters; a white/black anchor resets
+        /// only its own). Correctness-neutral — DriftCompensator interpolates by timestamp —
+        /// this only removes a redundant double-white and phase discontinuity at the boundary.
+        /// </summary>
+        private PatchSetGenerator.AdaptiveDriftState BuildAdaptiveDriftStateFromSeed()
+        {
+            var state = new PatchSetGenerator.AdaptiveDriftState();
+            if (_patches == null) return state;
+
+            int sinceWhite = 0, sinceBlack = 0;
+            foreach (var p in _patches)
+            {
+                if (p.Category == PatchCategory.DriftCheck)
+                {
+                    var rgb = p.DisplayRgb;
+                    if (rgb.R >= 0.99 && rgb.G >= 0.99 && rgb.B >= 0.99)
+                        sinceWhite = 0;
+                    else
+                        sinceBlack = 0;
+                }
+                else if (p.Nits is null)
+                {
+                    sinceWhite++;
+                    sinceBlack++;
+                }
+            }
+            state.SinceWhite = sinceWhite;
+            state.SinceBlack = sinceBlack;
+            return state;
         }
 
         /// <summary>Valid, non-anchor, non-wire (accuracy) measurements taken so far.</summary>
@@ -713,7 +829,7 @@ namespace HDRGammaController.Core.Calibration
             if (worstNorm < 0) return "n/a";
             return worst.Kind == ResidualKind.Color
                 ? $"{worst.Magnitude:F1} ΔE"
-                : $"{worst.Magnitude * 100:F1}% ΔY";
+                : $"{worst.Magnitude:F2} ΔL*";
         }
 
         /// <summary>
@@ -1108,7 +1224,7 @@ namespace HDRGammaController.Core.Calibration
 
             ProgressChanged?.Invoke(this, new CalibrationProgressEventArgs(
                 _currentPatchIndex,
-                TotalPatches,
+                ProgressTotalPatches,
                 CurrentPatch,
                 nextPatch,
                 _elapsedTimer.Elapsed,
@@ -1226,6 +1342,21 @@ namespace HDRGammaController.Core.Calibration
 
         /// <summary>Number of refinement rounds actually performed.</summary>
         public int RefinementRounds { get; init; }
+
+        // --- Adaptive placement (1.1), present when the Adaptive preset ran ---
+
+        /// <summary>
+        /// FIX 1: true when the adaptive run stopped DEGRADED — it exhausted its patch budget
+        /// or plateaued with its robust predicted model error still above the accuracy target.
+        /// The run still Succeeded as a measurement pass (a profile is produced), but the
+        /// result is not the clean convergence an unqualified success implies, so the UI/report
+        /// should surface <see cref="AdaptiveDegradedMessage"/> as a warning. Never set for
+        /// non-adaptive presets.
+        /// </summary>
+        public bool AdaptiveDegraded { get; init; }
+
+        /// <summary>Human-readable explanation of a degraded adaptive stop (null unless degraded).</summary>
+        public string? AdaptiveDegradedMessage { get; init; }
 
         // --- Drift compensation (M7), present when the patch set carried drift anchors ---
 
