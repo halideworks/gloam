@@ -18,7 +18,10 @@ namespace HDRGammaController.Core.Calibration
     {
         /// <summary>
         /// The four full-drive channel spectra of one panel, all on the same wavelength
-        /// grid, ordered per Argyll ccxxmake convention: white first, then R, G, B.
+        /// grid. We emit them white-first, then R, G, B. This row order is Gloam's own
+        /// convention — CCSS has no canonical channel order and consumers key on the SPEC_nnn
+        /// wavelength fields, not the row sequence — but a stable order keeps the files easy
+        /// to eyeball and diff.
         /// </summary>
         public sealed record SpectralSet(
             SpectralSample White,
@@ -69,7 +72,9 @@ namespace HDRGammaController.Core.Calibration
             sb.Append($"DESCRIPTOR \"{display} - Gloam spectral capture\"\n");
             sb.Append("ORIGINATOR \"Gloam\"\n");
             // ctime()-style date, matching Argyll's writer ("Fri Feb 21 18:52:31 2014").
-            sb.Append($"CREATED \"{stamp.ToString("ddd MMM d HH:mm:ss yyyy", inv)}\"\n");
+            // C's ctime() space-pads a single-digit day to two columns ("Fri Jul  3 ..."),
+            // so pad the day the same way rather than emitting a single digit.
+            sb.Append($"CREATED \"{FormatCtime(stamp, inv)}\"\n");
             AppendKeyword(sb, "DEVICE_CLASS", "DISPLAY");
             AppendKeyword(sb, "DISPLAY", display);
             if (!string.IsNullOrWhiteSpace(technology))
@@ -208,5 +213,12 @@ namespace HDRGammaController.Core.Calibration
             // emitted file stays a valid single-line keyword.
             return text.Replace("\"", "'").Replace('\r', ' ').Replace('\n', ' ').Trim();
         }
+
+        // C ctime() format: "Www Mmm dd HH:MM:SS yyyy" with the day space-padded to two
+        // columns (e.g. "Fri Jul  3 12:00:00 2026"), matching Argyll's CGATS writer.
+        private static string FormatCtime(DateTime stamp, CultureInfo inv) =>
+            stamp.ToString("ddd MMM", inv) + " " +
+            stamp.Day.ToString(inv).PadLeft(2) + " " +
+            stamp.ToString("HH:mm:ss yyyy", inv);
     }
 }

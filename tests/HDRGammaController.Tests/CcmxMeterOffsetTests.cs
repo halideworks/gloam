@@ -192,7 +192,8 @@ namespace HDRGammaController.Tests
 
             Assert.StartsWith("CCMX", content);
             Assert.Contains("ORIGINATOR \"Gloam\"", content);
-            Assert.Contains("CREATED \"Fri Jul 3 12:00:00 2026\"", content);
+            // ctime() space-pads a single-digit day to two columns: "Jul  3", not "Jul 3".
+            Assert.Contains("CREATED \"Fri Jul  3 12:00:00 2026\"", content);
             Assert.Contains("KEYWORD \"INSTRUMENT\"", content);
             Assert.Contains("INSTRUMENT \"i1 Display Plus\"", content);
             Assert.Contains("KEYWORD \"REFERENCE\"", content);
