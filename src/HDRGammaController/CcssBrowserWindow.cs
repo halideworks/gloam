@@ -22,14 +22,78 @@ namespace HDRGammaController
         private readonly Button _downloadButton;
         private readonly Button _createButton;
         private readonly Button _createMatrixButton;
+        private readonly Button _closeButton;
         private readonly ListView _list;
         private readonly TextBlock _status;
         private readonly string _saveFolder;
         private readonly string? _typeFilter;
         private readonly string _displayName;
 
+        // A spectral/ccmx capture owns the instrument and a Topmost patch window; while it
+        // runs, Search / Download-&-close / Cancel-close must not tear the window (or the
+        // instrument session) out from under it.
+        private bool _captureInProgress;
+
         /// <summary>Path of the downloaded correction file when the dialog returns true.</summary>
         public string? SavedPath { get; private set; }
+
+        // Accent style for the two primary actions (Search, Download & Use), built from the
+        // Theme* tokens so it follows the light/dark swap. The normal/secondary buttons are
+        // left to the reactive DarkControls implicit Button style. Its hover keeps the accent
+        // fill (unlike the implicit template's grey ThemeHover) and just adds a themed ring.
+        private static readonly Style PrimaryButtonStyle = (Style)System.Windows.Markup.XamlReader.Parse(
+            @"<Style xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'
+                     xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'
+                     TargetType='Button'>
+                <Setter Property='Background' Value='{DynamicResource ThemeAccent}'/>
+                <Setter Property='Foreground' Value='{DynamicResource ThemeOnAccent}'/>
+                <Setter Property='FontFamily' Value='{DynamicResource DisplayFont}'/>
+                <Setter Property='FontWeight' Value='Bold'/>
+                <Setter Property='FontSize' Value='12'/>
+                <Setter Property='Cursor' Value='Hand'/>
+                <Setter Property='Padding' Value='14,6'/>
+                <Setter Property='Template'>
+                  <Setter.Value>
+                    <ControlTemplate TargetType='Button'>
+                      <Border x:Name='Bd' Background='{TemplateBinding Background}'
+                              BorderBrush='{DynamicResource ThemeAccent}' BorderThickness='1'
+                              Padding='{TemplateBinding Padding}'>
+                        <ContentPresenter HorizontalAlignment='Center' VerticalAlignment='Center'/>
+                      </Border>
+                      <ControlTemplate.Triggers>
+                        <Trigger Property='IsMouseOver' Value='True'>
+                          <Setter TargetName='Bd' Property='Opacity' Value='0.88'/>
+                          <Setter TargetName='Bd' Property='BorderBrush' Value='{DynamicResource ThemeOnAccent}'/>
+                        </Trigger>
+                        <Trigger Property='IsEnabled' Value='False'>
+                          <Setter TargetName='Bd' Property='Opacity' Value='0.40'/>
+                        </Trigger>
+                      </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                  </Setter.Value>
+                </Setter>
+              </Style>");
+
+        // Type-column cell: a 1px chip so the decision-relevant .ccss/.ccmx distinction reads
+        // at a glance — accent for ccss (the preferred spectral sample), ThemeAmber for ccmx.
+        private static readonly DataTemplate TypeChipTemplate = (DataTemplate)System.Windows.Markup.XamlReader.Parse(
+            @"<DataTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'
+                            xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'>
+                <Border BorderThickness='1' Padding='6,1' HorizontalAlignment='Left' VerticalAlignment='Center'>
+                  <Border.Style>
+                    <Style TargetType='Border'>
+                      <Setter Property='BorderBrush' Value='{DynamicResource ThemeAccent}'/>
+                      <Style.Triggers>
+                        <DataTrigger Binding='{Binding Type}' Value='ccmx'>
+                          <Setter Property='BorderBrush' Value='{DynamicResource ThemeAmber}'/>
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </Border.Style>
+                  <TextBlock Text='{Binding Type}' FontSize='11' FontWeight='Bold'
+                             Foreground='{DynamicResource ThemeText}'/>
+                </Border>
+              </DataTemplate>");
 
         public CcssBrowserWindow(
             string initialQuery,
@@ -47,8 +111,8 @@ namespace HDRGammaController
             MinWidth = 760;
             MinHeight = 520;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
-            Background = new SolidColorBrush(Color.FromRgb(0x0E, 0x11, 0x16));
-            Foreground = new SolidColorBrush(Color.FromRgb(0xF4, 0xF7, 0xFA));
+            this.SetResourceReference(BackgroundProperty, "ThemeBg");
+            this.SetResourceReference(ForegroundProperty, "ThemeText");
             Resources.MergedDictionaries.Add(new ResourceDictionary
             {
                 Source = new Uri("pack://application:,,,/Gloam;component/Themes/DarkControls.xaml", UriKind.Absolute),
@@ -61,30 +125,30 @@ namespace HDRGammaController
                 FontSize = 13,
                 FontFamily = Application.Current?.Resources["BodyFont"] as FontFamily,
                 Padding = new Thickness(8, 6, 8, 6),
-                Background = new SolidColorBrush(Color.FromRgb(0x17, 0x1C, 0x23)),
-                Foreground = new SolidColorBrush(Color.FromRgb(0xF4, 0xF7, 0xFA)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(0x46, 0x55, 0x67)),
                 BorderThickness = new Thickness(1),
-                CaretBrush = new SolidColorBrush(Color.FromRgb(0xF4, 0xF7, 0xFA)),
                 VerticalContentAlignment = VerticalAlignment.Center,
             };
+            _query.SetResourceReference(BackgroundProperty, "ThemeSurface");
+            _query.SetResourceReference(ForegroundProperty, "ThemeText");
+            _query.SetResourceReference(Control.BorderBrushProperty, "ThemeBorder");
+            _query.SetResourceReference(TextBox.CaretBrushProperty, "ThemeText");
             _query.KeyDown += async (_, e) => { if (e.Key == System.Windows.Input.Key.Enter) await SearchAsync(); };
 
-            _searchButton = MakeButton("Search");
+            _searchButton = MakePrimaryButton("Search");
             _searchButton.Click += async (_, _) => await SearchAsync();
 
-            _downloadButton = MakeButton("Download & Use");
+            _downloadButton = MakePrimaryButton("Download & Use");
             _downloadButton.IsEnabled = false;
             _downloadButton.Click += (_, _) => DownloadSelected();
 
-            _createButton = MakeButton("Create from spectrometer…");
-            _createButton.Background = new SolidColorBrush(Color.FromRgb(0x17, 0x1C, 0x23)); // secondary, not accent
+            // Secondary actions — no inline colours; the reactive DarkControls implicit
+            // Button style drives their fill/border/hover so they follow light/dark.
+            _createButton = MakeButton("From spectrometer…");
             _createButton.ToolTip = "Measure this panel's R/G/B/W emission spectra with a connected spectrometer " +
                                     "(i1 Pro, ColorMunki Photo/Design, i1 Studio) and generate a .ccss for it.";
             _createButton.Click += async (_, _) => await CreateFromSpectrometerAsync();
 
-            _createMatrixButton = MakeButton("Create correction matrix (two instruments)…");
-            _createMatrixButton.Background = new SolidColorBrush(Color.FromRgb(0x17, 0x1C, 0x23)); // secondary, not accent
+            _createMatrixButton = MakeButton("Correction matrix…");
             _createMatrixButton.ToolTip = "Measure the same White/Red/Green/Blue patches with your reference spectrometer " +
                                           "and your everyday colorimeter in turn, then generate a .ccmx correction matrix " +
                                           "that maps the colorimeter's readings onto the spectrometer's for this exact panel.";
@@ -95,36 +159,29 @@ namespace HDRGammaController
                 // samples (e.g. the Ultra Night melanopic estimator).
                 _createMatrixButton.Visibility = Visibility.Collapsed;
             }
-            else
-            {
-                // The extra button needs more horizontal room than the ccss-only browser.
-                Width = 940;
-                MinWidth = 940;
-            }
 
-            var closeButton = MakeButton("Cancel");
-            closeButton.Background = new SolidColorBrush(Color.FromRgb(0x17, 0x1C, 0x23)); // secondary, not accent
-            closeButton.Click += (_, _) => { DialogResult = false; Close(); };
+            _closeButton = MakeButton("Cancel");
+            _closeButton.Click += (_, _) => { if (_captureInProgress) return; DialogResult = false; Close(); };
 
             _list = new ListView
             {
-                Background = new SolidColorBrush(Color.FromRgb(0x17, 0x1C, 0x23)),
-                Foreground = new SolidColorBrush(Color.FromRgb(0xF4, 0xF7, 0xFA)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(0x46, 0x55, 0x67)),
                 BorderThickness = new Thickness(1),
                 Margin = new Thickness(0, 10, 0, 10),
             };
+            _list.SetResourceReference(BackgroundProperty, "ThemeSurface");
+            _list.SetResourceReference(ForegroundProperty, "ThemeText");
+            _list.SetResourceReference(Control.BorderBrushProperty, "ThemeBorder");
             var grid = new GridView();
             grid.Columns.Add(Col("Source", nameof(CcssDatabaseClient.Entry.Source), 70));
             grid.Columns.Add(Col("Display", nameof(CcssDatabaseClient.Entry.Display), 250));
-            grid.Columns.Add(Col("Type", nameof(CcssDatabaseClient.Entry.Type), 55));
+            grid.Columns.Add(ChipCol("Type", 64));
             grid.Columns.Add(Col("Instrument", nameof(CcssDatabaseClient.Entry.Instrument), 130));
             grid.Columns.Add(Col("Measured with", nameof(CcssDatabaseClient.Entry.Reference), 150));
             grid.Columns.Add(Col("Created", nameof(CcssDatabaseClient.Entry.Created), 120));
             _list.View = grid;
             _list.SelectionChanged += (_, _) =>
             {
-                _downloadButton.IsEnabled = _list.SelectedItem != null;
+                _downloadButton.IsEnabled = !_captureInProgress && _list.SelectedItem != null;
                 _downloadButton.Content = _list.SelectedItem is CcssDatabaseClient.Entry { LocalPath: not null }
                     ? "Use Saved"
                     : "Download & Use";
@@ -133,7 +190,6 @@ namespace HDRGammaController
 
             _status = new TextBlock
             {
-                Foreground = new SolidColorBrush(Color.FromRgb(0xA8, 0xB0, 0xBC)),
                 FontSize = 12,
                 VerticalAlignment = VerticalAlignment.Center,
                 Text = introText ??
@@ -141,6 +197,7 @@ namespace HDRGammaController
                        "preferred for the i1 Display; ones measured with a spectro for YOUR panel model are best.",
                 TextWrapping = TextWrapping.Wrap,
             };
+            _status.SetResourceReference(ForegroundProperty, "ThemeTextDim");
 
             var topRow = new Grid { Margin = new Thickness(0, 0, 0, 0) };
             topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -150,24 +207,37 @@ namespace HDRGammaController
             topRow.Children.Add(_query);
             topRow.Children.Add(_searchButton);
 
+            // Bottom row: "make a new correction" (status + the two Create actions) reads on
+            // the left, distinct from "commit selection / leave" (Download & Use + Cancel) on
+            // the right. Grouping the Create actions lets the window drop back to its natural
+            // ~760px instead of the old five-across 940px.
+            _createMatrixButton.Margin = new Thickness(8, 0, 0, 0);
+            var createRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
+            createRow.Children.Add(_createButton);
+            createRow.Children.Add(_createMatrixButton);
+
+            var leftPanel = new StackPanel { Orientation = Orientation.Vertical, VerticalAlignment = VerticalAlignment.Bottom };
+            leftPanel.Children.Add(_status);
+            leftPanel.Children.Add(createRow);
+
+            _downloadButton.Margin = new Thickness(0, 0, 8, 0);
+            var rightPanel = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Bottom,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Margin = new Thickness(12, 0, 0, 0),
+            };
+            rightPanel.Children.Add(_downloadButton);
+            rightPanel.Children.Add(_closeButton);
+
             var bottomRow = new Grid();
             bottomRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             bottomRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            bottomRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            bottomRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            bottomRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            Grid.SetColumn(_createButton, 1);
-            Grid.SetColumn(_createMatrixButton, 2);
-            Grid.SetColumn(_downloadButton, 3);
-            Grid.SetColumn(closeButton, 4);
-            _createButton.Margin = new Thickness(8, 0, 0, 0);
-            _createMatrixButton.Margin = new Thickness(8, 0, 0, 0);
-            _downloadButton.Margin = new Thickness(8, 0, 8, 0);
-            bottomRow.Children.Add(_status);
-            bottomRow.Children.Add(_createButton);
-            bottomRow.Children.Add(_createMatrixButton);
-            bottomRow.Children.Add(_downloadButton);
-            bottomRow.Children.Add(closeButton);
+            Grid.SetColumn(leftPanel, 0);
+            Grid.SetColumn(rightPanel, 1);
+            bottomRow.Children.Add(leftPanel);
+            bottomRow.Children.Add(rightPanel);
 
             var root = new Grid { Margin = new Thickness(16) };
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -187,11 +257,13 @@ namespace HDRGammaController
         private static Button MakeButton(string content) => new()
         {
             Content = content,
-            Padding = new Thickness(14, 5, 14, 5),
-            Background = new SolidColorBrush(Color.FromRgb(0xE3, 0x5F, 0x52)),
-            Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF)),
-            BorderBrush = new SolidColorBrush(Color.FromRgb(0xE3, 0x5F, 0x52)),
-            BorderThickness = new Thickness(1),
+            Padding = new Thickness(14, 6, 14, 6),
+        };
+
+        private static Button MakePrimaryButton(string content) => new()
+        {
+            Content = content,
+            Style = PrimaryButtonStyle,
         };
 
         private static GridViewColumn Col(string header, string property, double width) => new()
@@ -201,8 +273,32 @@ namespace HDRGammaController
             DisplayMemberBinding = new System.Windows.Data.Binding(property),
         };
 
+        private static GridViewColumn ChipCol(string header, double width) => new()
+        {
+            Header = header,
+            Width = width,
+            CellTemplate = TypeChipTemplate,
+        };
+
+        /// <summary>
+        /// Reflects a running instrument capture across the window: it owns the instrument
+        /// and a Topmost patch surface, so both Create actions and the Search / Download /
+        /// Cancel controls that could close the window are disabled for its duration.
+        /// </summary>
+        private void SetCaptureBusy(bool busy)
+        {
+            _captureInProgress = busy;
+            _searchButton.IsEnabled = !busy;
+            _query.IsEnabled = !busy;
+            _createButton.IsEnabled = !busy;
+            _createMatrixButton.IsEnabled = !busy;
+            _closeButton.IsEnabled = !busy;
+            _downloadButton.IsEnabled = !busy && _list.SelectedItem != null;
+        }
+
         private async Task SearchAsync()
         {
+            if (_captureInProgress) return;
             _searchButton.IsEnabled = false;
             _status.Text = "Searching…";
             try
@@ -235,12 +331,15 @@ namespace HDRGammaController
             }
             finally
             {
+                // A capture may not start during a search (its buttons are disabled), so it is
+                // safe to unconditionally restore Search here.
                 _searchButton.IsEnabled = true;
             }
         }
 
         private void DownloadSelected()
         {
+            if (_captureInProgress) return;
             if (_list.SelectedItem is not CcssDatabaseClient.Entry entry) return;
             try
             {
@@ -262,7 +361,8 @@ namespace HDRGammaController
         /// </summary>
         private async Task CreateFromSpectrometerAsync()
         {
-            _createButton.IsEnabled = false;
+            if (_captureInProgress) return;
+            SetCaptureBusy(true);
             _status.Text = "Looking for a spectrometer…";
 
             ColorimeterService? colorimeter = null;
@@ -363,7 +463,7 @@ namespace HDRGammaController
                     try { await colorimeter.EndSpectralSessionAsync(); } catch { /* session already gone */ }
                     colorimeter.Dispose();
                 }
-                _createButton.IsEnabled = true;
+                SetCaptureBusy(false);
             }
         }
 
@@ -377,8 +477,8 @@ namespace HDRGammaController
         /// </summary>
         private async Task CreateCorrectionMatrixAsync()
         {
-            _createMatrixButton.IsEnabled = false;
-            _createButton.IsEnabled = false;
+            if (_captureInProgress) return;
+            SetCaptureBusy(true);
             _status.Text = "Looking for the first instrument…";
 
             ColorimeterService? first = null;
@@ -435,15 +535,22 @@ namespace HDRGammaController
                         await first!.EndMeasurementSessionAsync();
                         first.Dispose();
 
-                        var proceed = MessageBox.Show(this,
+                        // Themed confirm instead of a stock Win32 MessageBox: the old MessageBox
+                        // could open BEHIND the Topmost patch window and stall the flow. Drop the
+                        // patch window's Topmost around the prompt so the dialog is clearly visible
+                        // above the patch surface (where the user is looking), then restore it.
+                        bool wasTopmost = window.Topmost;
+                        window.Topmost = false;
+                        bool proceed = ConfirmDialog.Confirm(window,
+                            "Swap instruments",
                             $"Phase 1 with '{firstInfo.Model}' is complete.\n\n" +
                             "1. Remove it from the panel and unplug it.\n" +
                             "2. Connect the OTHER instrument and place it over the same measurement square.\n" +
-                            "3. Click OK to start phase 2.\n\n" +
+                            "3. Start phase 2 when ready.\n\n" +
                             "Do not change display settings or let the panel sleep in between.",
-                            "Swap instruments",
-                            MessageBoxButton.OKCancel, MessageBoxImage.Information);
-                        if (proceed != MessageBoxResult.OK) return false;
+                            "Start phase 2", "Cancel");
+                        window.Topmost = wasTopmost;
+                        if (!proceed) return false;
 
                         _status.Text = "Looking for the second instrument…";
                         second = new ColorimeterService(argyllBin);
@@ -524,8 +631,7 @@ namespace HDRGammaController
                     try { await second.EndMeasurementSessionAsync(); } catch { /* session already gone */ }
                     second.Dispose();
                 }
-                _createMatrixButton.IsEnabled = true;
-                _createButton.IsEnabled = true;
+                SetCaptureBusy(false);
             }
         }
 
