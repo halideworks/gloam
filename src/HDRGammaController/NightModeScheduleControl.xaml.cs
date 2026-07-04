@@ -260,21 +260,19 @@ namespace HDRGammaController
                 double elapsed = (t - curr.Time).TotalMinutes;
                 if (elapsed < 0) elapsed += 1440;
 
-                double trg = curr.Point.TargetKelvin;
-                double str = prev.Point.TargetKelvin;
+                int trg = curr.Point.TargetKelvin;
+                int str = prev.Point.TargetKelvin;
                 double fade = curr.Point.FadeMinutes;
 
                 if (elapsed < fade && fade > 0)
                 {
-                     double p = elapsed / fade;
-                     return str + (trg - str) * p;
+                    double p = elapsed / fade;
+                    return NightModeService.InterpolateKelvinInMired(str, trg, p);
                 }
                 return trg;
             };
 
-            // Optimization: Sample fewer points if dragging? No, 288 is fine if we just update PointCollection.
-            // Actually PointCollection is a Freezeable?
-            // Creating new PointCollection is fast.
+            // Five-minute samples keep the preview smooth while avoiding per-pixel redraw work.
             for (double relM = 0; relM <= 1440; relM += 5)
             {
                 double absM = relM + GraphStartMins;

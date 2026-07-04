@@ -4,7 +4,7 @@ Screenshots to capture for the Gloam site
 Placeholders live in index.html. Four are in the section id="screenshots"
 grid (dashboard.png is the full-width lead shot); night-mode-schedule.png
 sits in the night mode feature section (id="night-mode"). Each figure has a
-TODO comment naming the file expected here. Capture at 16:10 or similar wide
+placeholder comment naming the file expected here. Capture at 16:10 or similar wide
 aspect, PNG, ideally 1600px+ wide (2x for high-DPI). Dark theme, HDR monitor
 names visible where possible.
 
@@ -24,7 +24,7 @@ names visible where possible.
 
 4. night-mode-schedule.png
    The night mode settings. Show the sunset/sunrise schedule with location,
-   fade duration, and the per-app exclusion list.
+   fade duration, and the night-mode auto-disable list.
 
 5. pdf-report.png
    The printer-friendly PDF export, first page. A screenshot of the PDF open
@@ -37,4 +37,4 @@ index.html with:
 
 Keep the surrounding <div class="frame"> wrapper (it draws the gradient
 hairline border around the image), delete only the placeholder div and the
-TODO comment.
+placeholder comment.

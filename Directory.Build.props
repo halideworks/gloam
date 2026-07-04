@@ -1,0 +1,21 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <AnalysisMode>Default</AnalysisMode>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+    <EnableWindowsTargeting Condition="'$(OS)' != 'Windows_NT'">true</EnableWindowsTargeting>
+    <KnownAnalyzerBacklog>CA1001;CA1051;CA1068;CA1305;CA1310;CA1401;CA1510;CA1512;CA1513;CA1707;CA1711;CA1712;CA1716;CA1805;CA1806;CA1816;CA1822;CA1826;CA1838;CA1850;CA1859;CA1861;CA1866;CA1869;CA1870</KnownAnalyzerBacklog>
+    <NoWarn Condition="'$(GloamAnalyzerAudit)' != 'true'">$(NoWarn);$(KnownAnalyzerBacklog)</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(GloamStrictBuild)' == 'true'">
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningsNotAsErrors>NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
+  </PropertyGroup>
+</Project>

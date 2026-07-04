@@ -4,16 +4,18 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
 using HDRGammaController.Core;
+using HDRGammaController.Core.Calibration;
 
 namespace HDRGammaController.Cli
 {
     /// <summary>
-    /// Diagnostic dump tool for the LUT generator. Built as a regression harness for the
-    /// headroom-blend rewrite: you can visualize any calibration scenario as an ASCII
-    /// sparkline in seconds, or dump CSV for external plotting. See `--help` for usage.
+    /// Headless diagnostics for the color pipeline. It can dump LUTs, run CI-friendly LUT
+    /// invariants, compare scenarios, and inspect night-mode / Ultra Night multipliers without
+    /// starting the tray app or touching display state.
     /// </summary>
-    class Program
+    static class Program
     {
         static int Main(string[] args)
         {
@@ -30,6 +32,8 @@ namespace HDRGammaController.Cli
                     "lut" => RunLut(args),
                     "sweep" => RunSweep(args),
                     "compare" => RunCompare(args),
+                    "check-lut" => RunCheckLut(args),
+                    "night" => RunNight(args),
                     // Back-compat: old `Cli 2.2 200 [out.csv]` form still works
                     _ => RunLegacy(args)
                 };
@@ -45,24 +49,38 @@ namespace HDRGammaController.Cli
 
         private static void PrintHelp()
         {
-            Console.WriteLine("HDRGammaController.Cli — LUT generation diagnostic tool");
+            Console.WriteLine("Gloam CLI - headless color pipeline diagnostics");
             Console.WriteLine();
             Console.WriteLine("Usage:");
             Console.WriteLine("  cli lut      <gamma> <white> [options]   Dump one LUT");
             Console.WriteLine("  cli sweep    <gamma> <white>             Matrix of dimming/temp scenarios");
             Console.WriteLine("  cli compare  <gamma> <white> <A> <B>     Side-by-side diff of two scenarios");
+            Console.WriteLine("  cli check-lut <gamma> <white> [options]  Validate LUT invariants, exit non-zero on failure");
+            Console.WriteLine("  cli night    <kelvin> [options]          Inspect night-mode multipliers");
             Console.WriteLine();
             Console.WriteLine("Gamma:  2.2 | 2.4 | default");
             Console.WriteLine("White:  nits (e.g. 80, 200, 480)");
             Console.WriteLine();
-            Console.WriteLine("Options (lut):");
+            Console.WriteLine("Options (lut/check-lut):");
             Console.WriteLine("  --brightness N      0..100 (default 100)");
-            Console.WriteLine("  --temp T            -50..+50 (default 0)");
+            Console.WriteLine("  --temp T            temperature scale, extended for night mode");
+            Console.WriteLine("  --temp-k K          temperature as Kelvin");
             Console.WriteLine("  --tint T            -50..+50 (default 0)");
+            Console.WriteLine("  --algorithm NAME    perceptual | ultra | accurate | classic");
+            Console.WriteLine("  --strength N        perceptual strength 0..1");
+            Console.WriteLine("  --ccss PATH         .ccss spectral sample for Ultra Night");
             Console.WriteLine("  --linear-dim        Use linear instead of perceptual dimming");
             Console.WriteLine("  --sdr               Generate the SDR path (decode-gamma-calibrate-encode)");
             Console.WriteLine("  --csv PATH          Also write a CSV file");
+            Console.WriteLine("  --json PATH|-       Write machine-readable output, or '-' for stdout");
             Console.WriteLine("  --no-chart          Skip the ASCII sparkline");
+            Console.WriteLine();
+            Console.WriteLine("Options (night):");
+            Console.WriteLine("  --algorithm NAME    perceptual | ultra | accurate | classic");
+            Console.WriteLine("  --basis NAME        srgb | rec2020");
+            Console.WriteLine("  --strength N        perceptual strength 0..1");
+            Console.WriteLine("  --ccss PATH         .ccss spectral sample for Ultra Night");
+            Console.WriteLine("  --json PATH|-       Write machine-readable output, or '-' for stdout");
             Console.WriteLine();
             Console.WriteLine("Scenario shorthand (compare): 'b=50,t=-20' means brightness 50, temp -20");
             Console.WriteLine();
@@ -177,6 +195,116 @@ namespace HDRGammaController.Cli
             return 0;
         }
 
+        private static int RunCheckLut(string[] args)
+        {
+            if (args.Length < 3) throw new ArgumentException("check-lut requires <gamma> <white>");
+            var opts = new LutOptions
+            {
+                Mode = ParseGamma(args[1]),
+                WhiteLevel = ParseDouble(args[2]),
+                ShowChart = false
+            };
+            ParseCalOptions(args, 3, opts);
+
+            var lut = opts.IsSdr
+                ? LutGenerator.GenerateLut(opts.Mode, opts.WhiteLevel, opts.Calibration, isHdr: false)
+                : LutGenerator.GenerateLut(opts.Mode, opts.WhiteLevel, opts.Calibration, isHdr: true);
+
+            var stats = new[]
+            {
+                AnalyzeChannel("R", lut.R),
+                AnalyzeChannel("G", lut.G),
+                AnalyzeChannel("B", lut.B),
+                AnalyzeChannel("Grey", lut.Grey)
+            };
+            var failures = stats.SelectMany(s => s.Failures.Select(f => $"{s.Name}: {f}")).ToList();
+
+            var report = new
+            {
+                command = "check-lut",
+                gamma = GammaLabel(opts.Mode),
+                sdrWhiteNits = opts.WhiteLevel,
+                path = opts.IsSdr ? "sdr" : "hdr",
+                calibration = DescribeCalibration(opts.Calibration),
+                passed = failures.Count == 0,
+                failures,
+                channels = stats
+            };
+
+            if (opts.JsonPath == "-")
+            {
+                WriteJson(opts.JsonPath, report);
+            }
+            else
+            {
+                Console.WriteLine(failures.Count == 0 ? "PASS: LUT invariants hold." : "FAIL: LUT invariants broke.");
+                foreach (var failure in failures)
+                    Console.WriteLine("  " + failure);
+                foreach (var s in stats)
+                {
+                    Console.WriteLine(
+                        $"  {s.Name,-4} min={s.Min:F6} max={s.Max:F6} max_step={s.MaxPositiveStep:F6} " +
+                        $"max_drop={s.MaxNegativeStep:F6}");
+                }
+                if (opts.JsonPath != null) WriteJson(opts.JsonPath, report);
+            }
+
+            return failures.Count == 0 ? 0 : 2;
+        }
+
+        private static int RunNight(string[] args)
+        {
+            if (args.Length < 2) throw new ArgumentException("night requires <kelvin>");
+            var opts = new NightOptions { Kelvin = (int)Math.Round(ParseDouble(args[1])) };
+            ParseNightOptions(args, 2, opts);
+
+            opts.Kelvin = NightModeSettings.ClampKelvin(opts.Kelvin);
+            var coefficients = CcssMelanopicEstimator.TryLoad(opts.CcssPath);
+            var multipliers = GetNightMultipliers(opts, coefficients);
+            var melanopic = EstimateRelativeMelanopic(multipliers, coefficients);
+
+            var report = new
+            {
+                command = "night",
+                kelvin = opts.Kelvin,
+                algorithm = opts.Algorithm.ToString(),
+                basis = opts.Basis.ToString(),
+                perceptualStrength = opts.PerceptualStrength,
+                ccss = coefficients?.SourceName,
+                multipliers = new
+                {
+                    red = multipliers.R,
+                    green = multipliers.G,
+                    blue = multipliers.B
+                },
+                channelReduction = new
+                {
+                    red = 1.0 - multipliers.R,
+                    green = 1.0 - multipliers.G,
+                    blue = 1.0 - multipliers.B
+                },
+                relativeMelanopicPerLuminance = melanopic
+            };
+
+            if (opts.JsonPath == "-")
+            {
+                WriteJson(opts.JsonPath, report);
+                return 0;
+            }
+
+            Console.WriteLine($"Night: {opts.Kelvin}K, {opts.Algorithm}, {opts.Basis}");
+            if (opts.Algorithm == NightModeAlgorithm.Perceptual)
+                Console.WriteLine($"  strength: {opts.PerceptualStrength:F2}");
+            Console.WriteLine($"  multipliers: R={multipliers.R:F6} G={multipliers.G:F6} B={multipliers.B:F6}");
+            Console.WriteLine($"  channel cut: R={(1.0 - multipliers.R):P1} G={(1.0 - multipliers.G):P1} B={(1.0 - multipliers.B):P1}");
+            if (melanopic.HasValue)
+                Console.WriteLine($"  relative melanopic/luminance: {melanopic.Value:F3}x D65 white estimate");
+            else if (!string.IsNullOrWhiteSpace(opts.CcssPath))
+                Console.WriteLine("  melanopic estimate: unavailable; CCSS could not be parsed");
+            if (opts.JsonPath != null) WriteJson(opts.JsonPath, report);
+            return 0;
+        }
+
         // ---------- Core dump ----------
 
         private static void DumpLut(LutOptions opts)
@@ -184,6 +312,36 @@ namespace HDRGammaController.Cli
             var lut = opts.IsSdr
                 ? LutGenerator.GenerateLut(opts.Mode, opts.WhiteLevel, opts.Calibration, isHdr: false)
                 : LutGenerator.GenerateLut(opts.Mode, opts.WhiteLevel, opts.Calibration, isHdr: true);
+
+            var report = new
+            {
+                command = "lut",
+                gamma = GammaLabel(opts.Mode),
+                sdrWhiteNits = opts.WhiteLevel,
+                path = opts.IsSdr ? "sdr" : "hdr",
+                calibration = DescribeCalibration(opts.Calibration),
+                samples = SamplePoints(lut.Grey.Length).Select(i => new
+                {
+                    index = i,
+                    inputSignal = i / 1023.0,
+                    inputNits = TransferFunctions.PqEotf(i / 1023.0),
+                    outputSignal = lut.Grey[i],
+                    outputNits = TransferFunctions.PqEotf(lut.Grey[i])
+                }).ToArray(),
+                channels = new[]
+                {
+                    AnalyzeChannel("R", lut.R),
+                    AnalyzeChannel("G", lut.G),
+                    AnalyzeChannel("B", lut.B),
+                    AnalyzeChannel("Grey", lut.Grey)
+                }
+            };
+
+            if (opts.JsonPath == "-")
+            {
+                WriteJson(opts.JsonPath, report);
+                return;
+            }
 
             Console.WriteLine($"LUT: gamma {GammaLabel(opts.Mode)}, SDR white {opts.WhiteLevel} nits, " +
                               $"brightness {opts.Calibration.Brightness:0}, temp {opts.Calibration.Temperature:0}, tint {opts.Calibration.Tint:0}" +
@@ -211,6 +369,11 @@ namespace HDRGammaController.Cli
             {
                 WriteCsv(opts.CsvPath, lut);
                 Console.WriteLine($"\nWrote {opts.CsvPath}");
+            }
+
+            if (opts.JsonPath != null)
+            {
+                WriteJson(opts.JsonPath, report);
             }
         }
 
@@ -310,6 +473,94 @@ namespace HDRGammaController.Cli
             }
         }
 
+        private static readonly JsonSerializerOptions JsonOptions = new()
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            WriteIndented = true
+        };
+
+        private static void WriteJson(string path, object payload)
+        {
+            string json = JsonSerializer.Serialize(payload, JsonOptions);
+            if (path == "-")
+            {
+                Console.WriteLine(json);
+                return;
+            }
+
+            string? directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrWhiteSpace(directory))
+                Directory.CreateDirectory(directory);
+            File.WriteAllText(path, json + Environment.NewLine);
+            Console.WriteLine($"Wrote {path}");
+        }
+
+        private static object DescribeCalibration(CalibrationSettings calibration) => new
+        {
+            calibration.Brightness,
+            calibration.UseLinearBrightness,
+            calibration.Temperature,
+            kelvin = ColorAdjustments.TemperatureScaleToKelvin(calibration.Temperature),
+            calibration.TemperatureOffset,
+            calibration.Tint,
+            algorithm = calibration.Algorithm.ToString(),
+            calibration.PerceptualStrength,
+            calibration.UseUltraWarmMode,
+            calibration.NightModeCcssPath
+        };
+
+        private static ChannelStats AnalyzeChannel(string name, double[] values)
+        {
+            var failures = new List<string>();
+            double min = double.PositiveInfinity;
+            double max = double.NegativeInfinity;
+            double maxPositiveStep = 0.0;
+            double maxNegativeStep = 0.0;
+            double previous = double.NaN;
+
+            for (int i = 0; i < values.Length; i++)
+            {
+                double value = values[i];
+                if (!double.IsFinite(value))
+                {
+                    failures.Add($"non-finite value at index {i}");
+                    continue;
+                }
+                if (value < -1e-9 || value > 1.0 + 1e-9)
+                    failures.Add($"out-of-range value {value:G17} at index {i}");
+
+                min = Math.Min(min, value);
+                max = Math.Max(max, value);
+
+                if (double.IsFinite(previous))
+                {
+                    double step = value - previous;
+                    if (step >= 0)
+                    {
+                        maxPositiveStep = Math.Max(maxPositiveStep, step);
+                    }
+                    else
+                    {
+                        maxNegativeStep = Math.Max(maxNegativeStep, -step);
+                        if (step < -1e-7)
+                            failures.Add($"non-monotonic drop {step:G17} at index {i - 1}->{i}");
+                    }
+                }
+                previous = value;
+            }
+
+            if (values.Length == 0)
+                failures.Add("empty channel");
+
+            return new ChannelStats(
+                name,
+                double.IsPositiveInfinity(min) ? double.NaN : min,
+                double.IsNegativeInfinity(max) ? double.NaN : max,
+                maxPositiveStep,
+                maxNegativeStep,
+                failures);
+        }
+
         private static GammaMode ParseGamma(string s) => s.ToLowerInvariant() switch
         {
             "2.2" => GammaMode.Gamma22,
@@ -332,22 +583,151 @@ namespace HDRGammaController.Cli
             return v;
         }
 
+        private static string RequireValue(string[] args, ref int index, string option)
+        {
+            if (index + 1 >= args.Length)
+                throw new ArgumentException($"{option} requires a value");
+            index++;
+            return args[index];
+        }
+
+        private static NightModeAlgorithm ParseAlgorithm(string s) => s.Trim().ToLowerInvariant() switch
+        {
+            "perceptual" or "default" => NightModeAlgorithm.Perceptual,
+            "ultra" or "ultranight" or "ultra-night" or "amber" => NightModeAlgorithm.UltraNight,
+            "accurate" or "cie" or "cie1931" or "cie-1931" => NightModeAlgorithm.AccurateCIE1931,
+            "classic" or "standard" or "helland" => NightModeAlgorithm.Standard,
+            _ => throw new ArgumentException($"Unknown night algorithm: {s}")
+        };
+
+        private static NightBasis ParseBasis(string s) => s.Trim().ToLowerInvariant() switch
+        {
+            "srgb" or "sdr" or "rec709" or "rec.709" => NightBasis.Srgb,
+            "rec2020" or "rec.2020" or "2020" or "hdr" => NightBasis.Rec2020,
+            _ => throw new ArgumentException($"Unknown night basis: {s}")
+        };
+
         private static void ParseCalOptions(string[] args, int start, LutOptions opts)
         {
             for (int i = start; i < args.Length; i++)
             {
                 switch (args[i])
                 {
-                    case "--brightness": opts.Calibration.Brightness = ParseDouble(args[++i]); break;
-                    case "--temp":       opts.Calibration.Temperature = ParseDouble(args[++i]); break;
-                    case "--tint":       opts.Calibration.Tint = ParseDouble(args[++i]); break;
-                    case "--linear-dim": opts.Calibration.UseLinearBrightness = true; break;
-                    case "--sdr":        opts.IsSdr = true; break;
-                    case "--csv":        opts.CsvPath = args[++i]; break;
-                    case "--no-chart":   opts.ShowChart = false; break;
+                    case "--brightness":
+                        opts.Calibration.Brightness = ParseDouble(RequireValue(args, ref i, args[i]));
+                        break;
+                    case "--temp":
+                        opts.Calibration.Temperature = ParseDouble(RequireValue(args, ref i, args[i]));
+                        break;
+                    case "--temp-k":
+                        opts.Calibration.Temperature = (ParseDouble(RequireValue(args, ref i, args[i])) - 6500.0) / 70.0;
+                        break;
+                    case "--offset":
+                    case "--temp-offset":
+                        opts.Calibration.TemperatureOffset = ParseDouble(RequireValue(args, ref i, args[i]));
+                        break;
+                    case "--tint":
+                        opts.Calibration.Tint = ParseDouble(RequireValue(args, ref i, args[i]));
+                        break;
+                    case "--algorithm":
+                        opts.Calibration.Algorithm = ParseAlgorithm(RequireValue(args, ref i, args[i]));
+                        break;
+                    case "--strength":
+                    case "--perceptual-strength":
+                        opts.Calibration.PerceptualStrength = NightModeSettings.ClampPerceptualStrength(
+                            ParseDouble(RequireValue(args, ref i, args[i])));
+                        break;
+                    case "--ultra-warm":
+                        opts.Calibration.UseUltraWarmMode = true;
+                        break;
+                    case "--ccss":
+                        opts.Calibration.NightModeCcssPath = RequireValue(args, ref i, args[i]);
+                        opts.Calibration.NightMelanopicCoefficients = CcssMelanopicEstimator.TryLoad(opts.Calibration.NightModeCcssPath);
+                        break;
+                    case "--linear-dim":
+                        opts.Calibration.UseLinearBrightness = true;
+                        break;
+                    case "--sdr":
+                        opts.IsSdr = true;
+                        break;
+                    case "--csv":
+                        opts.CsvPath = RequireValue(args, ref i, args[i]);
+                        break;
+                    case "--json":
+                        opts.JsonPath = RequireValue(args, ref i, args[i]);
+                        break;
+                    case "--no-chart":
+                        opts.ShowChart = false;
+                        break;
                     default: throw new ArgumentException($"Unknown option: {args[i]}");
                 }
             }
+        }
+
+        private static void ParseNightOptions(string[] args, int start, NightOptions opts)
+        {
+            for (int i = start; i < args.Length; i++)
+            {
+                switch (args[i])
+                {
+                    case "--algorithm":
+                    case "--profile":
+                        opts.Algorithm = ParseAlgorithm(RequireValue(args, ref i, args[i]));
+                        break;
+                    case "--basis":
+                        opts.Basis = ParseBasis(RequireValue(args, ref i, args[i]));
+                        break;
+                    case "--strength":
+                    case "--perceptual-strength":
+                        opts.PerceptualStrength = NightModeSettings.ClampPerceptualStrength(
+                            ParseDouble(RequireValue(args, ref i, args[i])));
+                        break;
+                    case "--ccss":
+                        opts.CcssPath = RequireValue(args, ref i, args[i]);
+                        break;
+                    case "--json":
+                        opts.JsonPath = RequireValue(args, ref i, args[i]);
+                        break;
+                    default:
+                        throw new ArgumentException($"Unknown option: {args[i]}");
+                }
+            }
+        }
+
+        private static (double R, double G, double B) GetNightMultipliers(
+            NightOptions opts,
+            NightMelanopicCoefficients? coefficients)
+        {
+            return opts.Algorithm switch
+            {
+                NightModeAlgorithm.AccurateCIE1931 => ColorAdjustments.GetAccurateMultipliers(opts.Kelvin, opts.Basis),
+                NightModeAlgorithm.UltraNight => ColorAdjustments.GetUltraNightMultipliers(opts.Kelvin, coefficients, opts.Basis),
+                NightModeAlgorithm.Standard => ColorAdjustments.GetStandardMultipliers(opts.Kelvin),
+                _ => ColorAdjustments.GetPerceptualMultipliers(opts.Kelvin, opts.PerceptualStrength, opts.Basis)
+            };
+        }
+
+        private static double? EstimateRelativeMelanopic(
+            (double R, double G, double B) multipliers,
+            NightMelanopicCoefficients? coefficients)
+        {
+            if (coefficients == null) return null;
+
+            double neutralMelanopic = coefficients.RedMelanopic + coefficients.GreenMelanopic + coefficients.BlueMelanopic;
+            double neutralLuminance = coefficients.RedLuminance + coefficients.GreenLuminance + coefficients.BlueLuminance;
+            double shiftedMelanopic =
+                multipliers.R * coefficients.RedMelanopic +
+                multipliers.G * coefficients.GreenMelanopic +
+                multipliers.B * coefficients.BlueMelanopic;
+            double shiftedLuminance =
+                multipliers.R * coefficients.RedLuminance +
+                multipliers.G * coefficients.GreenLuminance +
+                multipliers.B * coefficients.BlueLuminance;
+
+            if (neutralMelanopic <= 0 || neutralLuminance <= 0 || shiftedLuminance <= 0)
+                return null;
+
+            return (shiftedMelanopic / shiftedLuminance) / (neutralMelanopic / neutralLuminance);
         }
 
         /// <summary>Parses `b=50,t=-20,tint=5` style shorthand into a CalibrationSettings.</summary>
@@ -368,14 +748,33 @@ namespace HDRGammaController.Cli
             }
         }
 
-        private class LutOptions
+        private sealed class LutOptions
         {
             public GammaMode Mode { get; set; } = GammaMode.Gamma22;
             public double WhiteLevel { get; set; } = 200;
             public CalibrationSettings Calibration { get; } = new CalibrationSettings();
-            public bool IsSdr { get; set; } = false;
+            public bool IsSdr { get; set; }
             public string? CsvPath { get; set; }
+            public string? JsonPath { get; set; }
             public bool ShowChart { get; set; } = true;
         }
+
+        private sealed class NightOptions
+        {
+            public int Kelvin { get; set; } = NightModeSettings.DefaultNightKelvin;
+            public NightModeAlgorithm Algorithm { get; set; } = NightModeAlgorithm.Perceptual;
+            public NightBasis Basis { get; set; } = NightBasis.Srgb;
+            public double PerceptualStrength { get; set; } = ColorAdjustments.DefaultPerceptualStrength;
+            public string? CcssPath { get; set; }
+            public string? JsonPath { get; set; }
+        }
+
+        private sealed record ChannelStats(
+            string Name,
+            double Min,
+            double Max,
+            double MaxPositiveStep,
+            double MaxNegativeStep,
+            IReadOnlyList<string> Failures);
     }
 }

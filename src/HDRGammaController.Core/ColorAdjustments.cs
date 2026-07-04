@@ -138,7 +138,7 @@ namespace HDRGammaController.Core
         /// +50 = 10000K, 70 K per unit) and clamps to the supported night-mode range.
         /// Night mode reaches below the slider's nominal −50 (down to 1900K ≈ −65.7).
         /// </summary>
-        private static int TemperatureScaleToKelvin(double temperature)
+        public static int TemperatureScaleToKelvin(double temperature)
         {
             temperature = ClampFinite(
                 temperature,

@@ -8,7 +8,8 @@ Formerly HDR Gamma Controller.
 
 - Fixes the Windows SDR-in-HDR gamma mismatch with per-monitor Gamma 2.2, Gamma 2.4, or Windows Default modes.
 - Restores corrections automatically on startup, display changes, resume, and driver or game ramp resets.
-- Provides a perceptual night mode using accurate CIE 1931 color temperature math, schedules, manual mode, fades, and per-app exclusions.
+- Provides a perceptual night mode built on CAT16 chromatic adaptation, with fixed-time or sun-position schedules, a manual override, perceptually uniform mired-space fades, and an Ultra Night profile for maximum blue suppression.
+- Auto-disables night mode for chosen applications while they are in the foreground, either on every monitor or only on the displays the application's window covers. Gamma correction and installed calibration profiles stay active.
 - Supports SDR and HDR colorimeter calibration through ArgyllCMS, including native Windows MHC2 profile installation and verification.
 - Remembers calibration setup per monitor, including target, preset, meter correction, display type, and window position.
 - Updates silently in the background when installed with the setup package.
@@ -70,11 +71,11 @@ Recommended flow:
 
 1. Warm up the display for at least 30 minutes.
 2. Pick the monitor, display type, target, and calibration preset.
-3. Use a matching `.ccss` or `.ccmx` correction for QD-OLED, wide-gamut LCD, and other non-standard panels.
+3. Use a matching `.ccss` or `.ccmx` correction for QD-OLED, wide-gamut LCD, and other non-standard panels. The setup dialog can search the DisplayCAL community database and download one directly.
 4. Run calibration. Gloam bypasses existing corrections while measuring.
-5. Review the report. Gloam applies the profile and verifies through it automatically.
+5. Review the report. Gloam applies the profile and re-measures through it automatically.
 
-For HDR desktop calibration, use **HDR Desktop PQ (sRGB gamut)**. For panels that already measure close to target, use white-point-only correction instead of full gamut correction.
+For HDR desktop calibration, use **HDR Desktop PQ (sRGB gamut)**. When a panel already measures close to target, prefer white-point-only correction over full gamut correction: correcting a panel that is already accurate reliably verifies worse, not better.
 
 ## Build From Source
 
@@ -88,6 +89,13 @@ Package locally:
 
 ```powershell
 .\package.ps1 -Version X.Y.Z
+```
+
+Headless checks:
+
+```powershell
+dotnet run --project src/HDRGammaController.Cli -- check-lut 2.2 200 --algorithm perceptual --temp-k 2700 --json artifacts\cli-lut-check.json
+dotnet run --project src/HDRGammaController.Cli -- night 2200 --algorithm ultra --basis rec2020 --json -
 ```
 
 ## Files

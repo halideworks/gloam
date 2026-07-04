@@ -347,7 +347,6 @@ namespace HDRGammaController.Core
         /// trigger, and cached sun times may belong to the wrong day — both otherwise leave a
         /// stale kelvin applied until the next natural tick.
         /// </summary>
-        // TODO(wire-up): call from TrayViewModel.HandleResume and a SystemEvents.TimeChanged handler.
         public void Refresh()
         {
             double? blend;
@@ -597,7 +596,7 @@ namespace HDRGammaController.Core
         /// linear-Kelvin lerp front-loads the perceived change into the cool half of the
         /// transition. Constant mired rate is the perceptually uniform fade.
         /// </summary>
-        internal static int InterpolateKelvinInMired(int startKelvin, int endKelvin, double progress)
+        public static int InterpolateKelvinInMired(int startKelvin, int endKelvin, double progress)
         {
             progress = double.IsFinite(progress) ? Math.Clamp(progress, 0.0, 1.0) : 1.0;
             if (startKelvin <= 0 || endKelvin <= 0) return endKelvin;

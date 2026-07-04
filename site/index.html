@@ -259,7 +259,7 @@
               </span>
               Night mode, done right
             </h3>
-            <p>Temperature shifts use the accurate CIE 1931 path by default and are blended in linear light, where light physically mixes. Use Off, Schedule, or Manual mode, with smooth fades and per-app exclusions.</p>
+            <p>Temperature shifts are computed from the Planckian locus and blended in linear light, where light physically mixes. The default profile models incomplete chromatic adaptation in CAT16 cone space; a fully colorimetric CIE 1931 path is also available. Use Off, Schedule, or Manual mode, with smooth fades and a per-application auto-disable list that drops the warm shift for chosen apps.</p>
           </article>
 
           <article class="feature-card">
@@ -423,9 +423,9 @@
               <span style="font-size: 1.25rem;">+</span>
             </summary>
             <div class="faq-body" style="padding-top: 1rem; opacity: 0.85; max-width: 800px;">
-              <p>Three differences. First, the math: Gloam uses accurate CIE 1931 temperature conversion by default and blends in linear light, where light physically mixes. Night Light is a simple compositor filter that tints without discernment.</p>
+              <p>Three differences. First, the math: Gloam derives its warm white points from the Planckian locus computed against the CIE 1931 observer, models incomplete chromatic adaptation in CAT16 cone space, and blends in linear light where light physically mixes. Night Light is a simple compositor filter that tints without discernment.</p>
               <p>Second, composition: Night Light fights other corrections for control of the pipeline. Gloam bakes the warm shift into the same high-precision LUTs as your gamma and calibration, so nothing bands or flickers.</p>
-              <p>Third, control: Off disables schedule and manual warmth, Schedule follows your configured time or sun position, and Manual forces your chosen warmth now. You can also set fades, per-app exclusions, and per-monitor temperature offsets.</p>
+              <p>Third, control: Off disables schedule and manual warmth, Schedule follows your configured time or sun position, and Manual holds your chosen warmth now. You can also set fades, a per-application night-mode auto-disable list that drops the warm shift while a chosen app is in the foreground (gamma and calibration stay active), and per-monitor temperature offsets.</p>
             </div>
           </details>
 
@@ -541,7 +541,7 @@
       }
     })();
 
-    // Pointer-events based comparison slider (buttery-smooth animation frame)
+    // Pointer-events based comparison slider (animation-frame throttled)
     (function () {
       const comparison = document.getElementById('comparison');
       const after = document.getElementById('comparison-after');

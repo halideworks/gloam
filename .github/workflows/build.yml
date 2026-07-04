@@ -46,12 +46,26 @@ jobs:
       - name: Test
         run: dotnet test src/HDRGammaController.sln --configuration Release --no-restore
 
+      - name: Headless CLI LUT check
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          dotnet run --project src/HDRGammaController.Cli/HDRGammaController.Cli.csproj --configuration Release --no-restore -- check-lut 2.2 200 --algorithm perceptual --temp-k 2700 --json artifacts/cli-lut-check.json
+
       - name: Vulnerability scan
         run: dotnet list src/HDRGammaController.sln package --vulnerable --include-transitive
 
       - name: Update feed consistency
         shell: pwsh
         run: ./scripts/Test-UpdateFeedConsistency.ps1
+
+      - name: Upload validation artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: Gloam_Validation
+          path: artifacts/*
+          if-no-files-found: ignore
 
   build:
     runs-on: windows-latest
@@ -171,7 +185,7 @@ jobs:
 
       - name: Upload build artifacts
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: Gloam_Velopack
           path: Releases/*

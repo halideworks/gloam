@@ -4,7 +4,7 @@ using HDRGammaController.Core;
 
 namespace HDRGammaController.DebugMonitors
 {
-    class Program
+    static class Program
     {
         static void Main(string[] args)
         {
@@ -24,7 +24,7 @@ namespace HDRGammaController.DebugMonitors
                     Console.WriteLine($"Device: {monitor.DeviceName}");
                     Console.WriteLine($"Friendly: {monitor.FriendlyName}");
                     Console.WriteLine($"HDR: {(monitor.IsHdrActive ? "ACTIVE" : "Inactive")} (Capable: {monitor.IsHdrCapable})");
-                    
+
                     string json = JsonSerializer.Serialize(monitor, options);
                     Console.WriteLine(json);
                 }
@@ -39,7 +39,7 @@ namespace HDRGammaController.DebugMonitors
             Console.WriteLine("Press any key to exit...");
             if (!Console.IsInputRedirected)
             {
-                 try { Console.ReadKey(); } catch { }
+                try { Console.ReadKey(); } catch { }
             }
         }
     }

@@ -24,6 +24,7 @@ build_log.txt
 
 # Editor / tool-local state
 .claude/
+.dotnet-home/
 .vscode/
 .idea/
 *.bak

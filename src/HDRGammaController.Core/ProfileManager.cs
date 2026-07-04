@@ -8,7 +8,7 @@ namespace HDRGammaController.Core
 {
     public class ProfileManager
     {
-        private string _templatePath;
+        private readonly string _templatePath;
         
         public ProfileManager(string templatePath)
         {
@@ -58,7 +58,7 @@ namespace HDRGammaController.Core
                 if (!Wcs.AssociateColorProfileWithDevice(null, sourcePath, monitor.MonitorDevicePath))
                 {
                     // Failed to associate
-                    throw new Exception("Failed to associate profile with device. Ensure monitor is active.");
+                    throw new InvalidOperationException("Failed to associate profile with device. Ensure monitor is active.");
                 }
 
                 // 6. Set as Default
@@ -88,12 +88,8 @@ namespace HDRGammaController.Core
 
         private string ComputeHash(string input)
         {
-            using (var md5 = MD5.Create())
-            {
-                byte[] bytes = Encoding.UTF8.GetBytes(input);
-                byte[] hash = md5.ComputeHash(bytes);
-                return BitConverter.ToString(hash).Replace("-", "").Substring(0, 8);
-            }
+            byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(input));
+            return BitConverter.ToString(hash).Replace("-", "").Substring(0, 8);
         }
     }
 }

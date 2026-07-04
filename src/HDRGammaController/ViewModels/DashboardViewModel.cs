@@ -396,11 +396,11 @@ namespace HDRGammaController.ViewModels
                 // Calculate Effective Temperature
                 double baseTemp = profile?.Temperature ?? 0;
                 double offset = profile?.TemperatureOffset ?? 0;
-                double effectiveTemp = baseTemp + offset + blendedShift;
-                int kelvin = (int)(6500 + effectiveTemp * 70);
-
-                string tempText = $"{kelvin}K";
-                if (_nightModeService.IsNightModeActive) tempText += " (Night)";
+                string tempText = FormatEffectiveTemperatureText(
+                    baseTemp,
+                    offset,
+                    blendedShift,
+                    _nightModeService.IsNightModeActive);
 
                 Items.Add(new DashboardItem
                 {
@@ -421,6 +421,22 @@ namespace HDRGammaController.ViewModels
 
             // Async load running apps
             _ = LoadRunningAppsAsync(_appExclusionItem);
+        }
+
+        internal static string FormatEffectiveTemperatureText(
+            double baseTemperatureScale,
+            double monitorOffsetScale,
+            double nightShiftScale,
+            bool nightModeActive)
+        {
+            double userAndOffset = ColorAdjustments.ComposeTemperatureScaleMired(
+                baseTemperatureScale,
+                monitorOffsetScale);
+            double effectiveTemperature = ColorAdjustments.ComposeTemperatureScaleMired(
+                userAndOffset,
+                nightShiftScale);
+            int kelvin = ColorAdjustments.TemperatureScaleToKelvin(effectiveTemperature);
+            return nightModeActive ? $"{kelvin}K (Night)" : $"{kelvin}K";
         }
 
         private async Task LoadRunningAppsAsync(AppExclusionItem item)

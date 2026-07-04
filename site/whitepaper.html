@@ -42,7 +42,7 @@
       <section>
         <h1>Gloam: A Technical Whitepaper</h1>
         <p class="paper-meta">
-          HDR-native display calibration on Windows. Last updated July 1, 2026.
+          HDR-native display calibration on Windows. Last updated July 4, 2026.
         </p>
         <blockquote>The machine promises fidelity but delivers translation, and every translation is a betrayal.</blockquote>
 
@@ -82,12 +82,13 @@
             <li><a href="#s4">The Transformation Pipeline</a></li>
             <li><a href="#s5">HDR Headroom Preservation</a></li>
             <li><a href="#s6">Calibration Adjustments</a></li>
-            <li><a href="#s7">Implementation Architecture</a></li>
-            <li><a href="#s8">Windows HDR Pipeline Context</a></li>
-            <li><a href="#s9">Verification and Accuracy</a></li>
-            <li><a href="#s10">Colorimeter Calibration and the MHC2 Pipeline</a></li>
-            <li><a href="#s11">Acknowledgements</a></li>
-            <li><a href="#s12">References</a></li>
+            <li><a href="#s7">Night Mode</a></li>
+            <li><a href="#s8">Implementation Architecture</a></li>
+            <li><a href="#s9">Windows HDR Pipeline Context</a></li>
+            <li><a href="#s10">Verification and Accuracy</a></li>
+            <li><a href="#s11">Colorimeter Calibration and the MHC2 Pipeline</a></li>
+            <li><a href="#s12">Acknowledgements</a></li>
+            <li><a href="#s13">References</a></li>
           </ol>
         </nav>
       </section>
@@ -207,18 +208,21 @@
             <tr><th>Input Code Value</th><th>sRGB Linear Output</th><th>Gamma 2.2 Linear Output</th><th>Difference</th></tr>
           </thead>
           <tbody>
-            <tr><td>0.10</td><td>0.0100</td><td>0.0063</td><td>+58.7%</td></tr>
-            <tr><td>0.20</td><td>0.0331</td><td>0.0217</td><td>+52.5%</td></tr>
-            <tr><td>0.30</td><td>0.0732</td><td>0.0545</td><td>+34.3%</td></tr>
-            <tr><td>0.40</td><td>0.1329</td><td>0.1113</td><td>+19.4%</td></tr>
-            <tr><td>0.50</td><td>0.2140</td><td>0.1972</td><td>+8.5%</td></tr>
+            <tr><td>0.10</td><td>0.0100</td><td>0.0063</td><td>+58.9%</td></tr>
+            <tr><td>0.20</td><td>0.0331</td><td>0.0290</td><td>+14.2%</td></tr>
+            <tr><td>0.30</td><td>0.0732</td><td>0.0707</td><td>+3.5%</td></tr>
+            <tr><td>0.40</td><td>0.1329</td><td>0.1332</td><td>−0.3%</td></tr>
+            <tr><td>0.50</td><td>0.2140</td><td>0.2176</td><td>−1.7%</td></tr>
           </tbody>
         </table>
         <p>
-          The sRGB curve produces significantly more light in the shadow and lower mid-tone regions: a
-          discrepancy exceeding 50% at the 10% input level that constitutes the mathematical origin of
-          the washed-out appearance, diminishing as values approach the mid-tones and converging to
-          near-zero above the 50% threshold where the curves effectively coincide.
+          The sRGB curve produces significantly more light in the deep shadows: a
+          discrepancy approaching 60% at the 10% input level that constitutes the mathematical origin of
+          the washed-out appearance. The gap falls off steeply — roughly 14% at 20% input, under 4% at
+          30% — and the two curves cross near the 40% input level, after which pure gamma 2.2 produces
+          marginally more light than sRGB (about −1.7% at 50%). The visible error is therefore
+          concentrated almost entirely in the darkest tones, precisely the region where the eye is most
+          sensitive to lifted black detail.
         </p>
       </section>
 
@@ -387,8 +391,13 @@
         <p>
           If the tool assumes a different white level than Windows is actually using, the correction
           will be miscalibrated: either crushing shadows (if the assumed white level is too low) or
-          elevating them (if too high). This parameter is therefore exposed in the user interface and
-          should match the user's Windows setting.
+          elevating them (if too high). Rather than ask the user to transcribe the slider, Gloam reads
+          the level Windows is actually applying directly from the OS: for each HDR-active display it
+          queries <code>DISPLAYCONFIG_SDR_WHITE_LEVEL</code> and uses the returned nits (clamped to a
+          plausible 40–1000 nit range, defaulting to 200 nits when the query is unavailable). The
+          value is therefore self-synchronizing — it tracks changes to the Windows slider without
+          user intervention — and the mapping table above is the OS's, not a control surface Gloam
+          exposes.
         </p>
       </section>
 
@@ -559,38 +568,57 @@
         <h4>CIE 1931 Accurate Method</h4>
         <p>
           For users demanding higher fidelity, Gloam also implements a physically accurate conversion
-          based on the CIE 1931 color space, using the Kang et al. cubic approximations of the
-          Planckian locus<sup class="fn"><a href="#ref10">[10]</a></sup> to compute the chromaticity
-          coordinates (x, y) for a given Kelvin temperature, transforming them into the XYZ color
-          space, and finally projecting them into linear sRGB via the D65 matrix before encoding and
-          normalizing to a maximum of 1. This method ensures that the white point shifts precisely
-          along the Planckian locus, preserving the exact chromaticity relationships defined by the
-          laws of physics.
+          based on the CIE 1931 color space. The chromaticity (x, y) of a blackbody radiator at a given
+          Kelvin temperature is read from a Planckian locus computed at startup by integrating Planck's
+          law against the CIE 1931 2° colour-matching functions (sampled at roughly 1% steps in CCT
+          from 1000 K to 25000 K and interpolated linearly in log-CCT), then transformed into XYZ and
+          projected into linear RGB (in the sRGB or Rec.2020 wire basis, whichever the target signal
+          uses) before normalizing the brightest channel to 1. Computing the locus from first
+          principles rather than from a closed-form fit keeps the same table mutually consistent with
+          the CCT/Duv inversion Gloam uses elsewhere (Ohno's 2014 method in CIE 1960
+          UCS)<sup class="fn"><a href="#ref12">[12]</a></sup>. The legacy
+          Kang et al. cubic approximation<sup class="fn"><a href="#ref10">[10]</a></sup> is retained
+          only as a fallback if the locus table should fail to build. This method ensures that the
+          white point shifts precisely along the Planckian locus, preserving the exact chromaticity
+          relationships defined by the laws of physics.
         </p>
         <p>
           The accurate path supplies the Planckian target used by the current default. Gloam's default
-          night profile is <strong>Perceptual</strong>: it computes the CIE 1931 warm white point, then
-          eases the resulting linear-light channel multipliers toward neutral by a user-facing
-          strength value. At strength 1.0 the result matches the full colorimetric shift; at the
-          shipped default of 0.8 the display remains visibly warm while retaining more green and blue
-          separation than a full 2700 K transform. The older Helland approximation remains available
-          as a simple reference curve.
+          night profile is <strong>Perceptual</strong>: it takes the warm and 6500 K neutral white
+          points on that same locus and models <em>incomplete chromatic adaptation</em> between them in
+          CAT16 sharpened-cone space<sup class="fn"><a href="#ref11">[11]</a></sup> (see
+          <a href="#perceptual-strength">Perceptual Strength</a>),
+          reducing the adapted white to per-channel multipliers only afterward. At strength 1.0 the
+          result matches the full colorimetric shift; at the shipped default of 0.8 the display remains
+          visibly warm while retaining more green and blue separation than a full 2700 K transform. The
+          older Helland approximation remains available as a simple reference curve.
         </p>
 
-        <h4>Perceptual Strength</h4>
+        <h4 id="perceptual-strength">Perceptual Strength</h4>
         <p>
           The display ramp is a per-channel 1D device. It can scale red, green, and blue
-          independently and curve each channel. A true 3×3 chromatic adaptation matrix sits outside
-          the Windows ramp API, so Gloam exposes the degree of adaptation:
+          independently and curve each channel, but a full 3×3 chromatic adaptation matrix sits outside
+          the Windows ramp API and cannot be realized in it. Within that constraint, the lever that
+          best preserves colour is not the finished RGB multipliers but the <em>degree of
+          adaptation</em> <var>D</var> ∈ [0, 1] applied while computing the white point. Gloam models
+          incomplete adaptation as an illuminant blend in CAT16 sharpened-cone space (Li et al. 2017;
+          CIE 248:2022)<sup class="fn"><a href="#ref11">[11]</a></sup>: the effective adopted white is
         </p>
         <div class="math">
-          <var>M</var><sub>perceptual</sub> = 1 + <var>D</var> × (<var>M</var><sub>CIE</sub> − 1)
+          <var>w</var><sub>adopted</sub> = <var>D</var> · <var>w</var><sub>target</sub> +
+          (1 − <var>D</var>) · <var>w</var><sub>6500</sub>&nbsp;&nbsp;(in CAT16 cone space)
         </div>
         <p>
-          Here <var>M</var><sub>CIE</sub> is the linear-light multiplier from the CIE path and
-          <var>D</var> is the perceptual strength in [0, 1]. This keeps the brightest channel at unity
-          and preserves more chroma separation on ordinary desktop content. It is a practical
-          color-appearance compromise designed for the Windows ramp that actually reaches the display.
+          computed by a von Kries scaling toward that adopted white, converted back to XYZ, and only
+          then reduced to per-channel display ratios through the same-path normalization the
+          Accurate method uses. At <var>D</var> = 1 this reproduces the full colorimetric shift; at
+          <var>D</var> = 0 it is the identity (1, 1, 1); at intermediate strengths the neutral 6500 K
+          point stays an exact identity in every wire basis. This replaces an earlier display-RGB lerp
+          of the finished multipliers (<var>M</var> = 1 + <var>D</var> × (<var>M</var><sub>CIE</sub> −
+          1)), which was an incomplete von Kries transform in the display-RGB basis rather than in a
+          sharpened cone space, and so eased colours along a less perceptually faithful path. The
+          construction keeps the brightest channel at unity (no clipping or colour cast) and preserves
+          more chroma separation on ordinary desktop content.
         </p>
 
         <h4>Ultra Night and Spectral Weighting</h4>
@@ -631,9 +659,21 @@ Y_i   = Σ P_i(λ) · V(λ)</code></pre>
 
         <h4>Temperature Offset for Night Mode</h4>
         <p>
-          Night mode uses a <strong>temperature offset</strong> from the base 6500K neutral. A −1500K
-          offset shifts toward warmer 5000K; a +500K offset shifts toward cooler 7000K. The adjustment
-          layers on top of the active color profile.
+          Night mode uses a <strong>temperature offset</strong> from the base 6500K neutral. Applied on
+          its own, a −1500K offset warms the white point to 5000K and a +500K offset cools it to 7000K.
+          The subtlety is what happens when this offset stacks on top of an existing adjustment — a
+          per-monitor white trim, say, combined with a scheduled night shift. Correlated colour
+          temperature is a <em>reciprocal</em> quantity: the same nominal Kelvin step is a much larger
+          perceptual step at the warm end than the cool end, so naively summing two offsets on the
+          Kelvin axis over-warms. Gloam instead composes them in <strong>mired space</strong>
+          (reciprocal megakelvin, the perceptually uniform CCT axis): each component is converted to
+          its mired distance from the 6500K reference, the distances are summed, and the result is
+          converted back to Kelvin. A single non-zero component composes to itself exactly, so this is
+          behaviour-preserving whenever only one adjustment is active; it only changes the result when
+          two are stacked, and there it changes it correctly. The resulting Kelvin value is clamped to
+          a permissive 1900K–10000K range (the same deep-warm floor as individual schedule targets,
+          but with enough cooling headroom above daylight that stacked adjustments are not
+          prematurely truncated).
         </p>
 
         <h3 id="s6-3">6.3 Tint (Green/Magenta Axis)</h3>
@@ -711,7 +751,11 @@ Y_i   = Σ P_i(λ) · V(λ)</code></pre>
           non-uniformities independent of the artistic intent.
         </p>
 
-        <h3 id="s6-6">6.6 Integrated Night Mode</h3>
+      </section>
+
+      <!-- ================= Section 7 ================= -->
+      <section>
+        <h2 id="s7">7. Night Mode</h2>
         <p>
           A persistent challenge in Windows color management is the conflict between hardware gamma
           tables (VCGT) and the system's native Night Light feature. When an external tool writes a
@@ -721,8 +765,8 @@ Y_i   = Σ P_i(λ) · V(λ)</code></pre>
         </p>
         <p>
           Gloam solves this by <strong>integrating night mode directly into the correction
-          pipeline</strong>. The application calculates the sun's position based on the user's
-          geolocation, determines the appropriate color temperature shift and rendering profile, and
+          pipeline</strong>. The application calculates the sun's position for the user's geolocation,
+          determines the appropriate color temperature shift and rendering profile, and
           <em>bakes it mathematically into the gamma LUTs</em> before they are ever sent to the
           display.
         </p>
@@ -733,29 +777,76 @@ Y_i   = Σ P_i(λ) · V(λ)</code></pre>
           <em>before</em> quantization, resulting in a smoother, band-free transition that maintains
           the integrity of the shadow details even as the screen warms to a deep amber.
         </p>
+
+        <h4>The Schedule Model</h4>
         <p>
-          The scheduler driving these transitions is event-disciplined: it emits exactly one change
-          notification per effective state change, and its timer adapts its cadence to the schedule.
-          During a fade it targets roughly one Kelvin of movement per update, bounded between display
-          refresh cadence and 500 ms; outside a fade it sleeps until the next scheduled transition,
-          capped at 60 seconds to remain robust against system clock changes. During a fade, each
-          notification produces at most one ramp write per display, and the deduplication described in
-          <a href="#s7-2">Section 7.2</a> suppresses any redundant ones.
+          A schedule is an ordered list of <em>points</em>, each of which defines a transition
+          <em>to</em> its own target. A point carries a trigger, a target color temperature (clamped to
+          the schedulable 1900K–6500K range; the shipped default night target is 2700K), and a fade
+          duration in minutes. The trigger is one of three kinds: a <strong>fixed wall-clock time</strong>,
+          or <strong>sunrise</strong> or <strong>sunset</strong> with a signed minute offset (so
+          &ldquo;30 minutes before sunset&rdquo; is a −30 offset on a sunset trigger). At each tick the
+          scheduler resolves every point to an absolute time for the current day, sorts them, finds the
+          most recent one that has fired, and fades from the previous point's target toward that
+          point's target over its fade duration. Because the list wraps at midnight, the &ldquo;previous&rdquo;
+          point for the first event of the day is the last event of the day before, so a fade that
+          begins before midnight and completes after it is handled without a discontinuity.
         </p>
         <p>
-          The updater follows the same operational philosophy. Installed builds check the GitHub
-          release feed, reject non-newer or malformed candidates, download the update in the
-          background, and schedule it for the next normal app exit or restart. Users do not need to
-          click through a browser or manually replace an installer. Portable builds intentionally skip
-          this path because there is no managed Velopack install to update.
+          Resolving a sun trigger runs a full <strong>NOAA solar-position ephemeris</strong> — Julian
+          day and century, the sun's geometric mean longitude and anomaly, the equation of center,
+          apparent longitude, obliquity of the ecliptic, declination, and the equation of time — to a
+          claimed accuracy of one to two minutes, using a refraction-corrected horizon zenith of
+          90.833°. Latitudes where the sun never crosses that horizon are handled explicitly: polar
+          night and midnight sun are detected (the hour-angle cosine falls outside [−1, 1]) and the
+          affected sunrise/sunset points fall back to 07:00 / 19:00 rather than scheduling a transition
+          at a degenerate sentinel time. This ephemeris is expensive relative to a timer tick, so the
+          resolved, time-sorted schedule is cached and only recomputed when the settings change or the
+          calendar day rolls over.
+        </p>
+
+        <h4>Perceptually Uniform Fades</h4>
+        <p>
+          A fade interpolates between two color temperatures, and the axis it interpolates <em>on</em>
+          matters. Interpolating linearly in Kelvin front-loads the entire perceived change into the
+          cool half of the transition, because equal Kelvin steps shrink in perceptual size as the
+          temperature warms. Gloam interpolates in <strong>mired</strong> instead:
+        </p>
+        <div class="math">
+          mired(<var>p</var>) = mired<sub>start</sub> +
+          (mired<sub>end</sub> − mired<sub>start</sub>) · <var>p</var>,&nbsp;&nbsp;
+          mired = 10<sup>6</sup> / <var>T</var>
+        </div>
+        <p>
+          which advances the white point at a constant perceptual rate across the whole fade. The
+          timer's cadence is derived from that same principle. Rather than tick at a fixed interval,
+          it targets a constant perceptual step per update — 0.05 mired, about 1 K near 4500K — so the
+          interval is the fade's total mired distance divided into fixed-size steps, clamped between one
+          display-refresh period (≈16.7 ms at 60 Hz) and 500 ms. A short 6500→6000K fade (~13 mired)
+          and a deep 2400→1900K fade (~110 mired) over the same wall-clock duration therefore tick at
+          very different rates but produce the same visual smoothness. Outside a fade the timer sleeps
+          until the next scheduled trigger, capped at 60 seconds so a system-clock change can never
+          strand a stale temperature for longer than a minute.
+        </p>
+        <p>
+          The scheduler is event-disciplined: it emits exactly one change notification per effective
+          state change (the target color temperature is integral, so equality is the dedupe test — a
+          coarser threshold would turn a gradual fade into visible steps). During a fade each
+          notification produces at most one ramp write per display, and the deduplication described in
+          <a href="#s8-2">Section 8.2</a> suppresses any redundant ones. A three-state control governs
+          the whole system — <strong>Off</strong> disables both scheduled and manual warmth,
+          <strong>Schedule</strong> follows the points above, and <strong>Manual</strong> pins a chosen
+          temperature immediately, bypassing the schedule — and the settings object the timer
+          enumerates is deep-copied on every update so an in-progress edit can never mutate the list
+          mid-fade.
         </p>
       </section>
 
-      <!-- ================= Section 7 ================= -->
+      <!-- ================= Section 8 ================= -->
       <section>
-        <h2 id="s7">7. Implementation Architecture</h2>
+        <h2 id="s8">8. Implementation Architecture</h2>
 
-        <h3 id="s7-1">7.1 LUT Structure</h3>
+        <h3 id="s8-1">8.1 LUT Structure</h3>
         <p>
           The correction takes the form of a 1024-point 1D Look-Up Table, a resolution derived from the
           Windows MHC2 (Monitor Hardware Calibration) profile format which specifies precisely 1024
@@ -773,7 +864,7 @@ Y_i   = Σ P_i(λ) · V(λ)</code></pre>
           <li><strong>LUT_Grey[1024]</strong>: reference (average of R, G, B)</li>
         </ul>
 
-        <h3 id="s7-2">7.2 Application Methods</h3>
+        <h3 id="s8-2">8.2 Application Methods</h3>
         <p>
           The controller loads the generated LUTs into the video card's hardware gamma ramp (VCGT, the
           Video Card Gamma Table).
@@ -836,11 +927,11 @@ Y_i   = Σ P_i(λ) · V(λ)</code></pre>
         </ul>
         <p>
           Together with the night-mode scheduler's single-event-per-state-change contract
-          (<a href="#s6-6">Section 6.6</a>), these ensure the ramp is written exactly once per genuine
+          (<a href="#s7">Section 7</a>), these ensure the ramp is written exactly once per genuine
           change in desired output.
         </p>
 
-        <h3 id="s7-3">7.3 SDR vs. HDR Processing Paths</h3>
+        <h3 id="s8-3">8.3 SDR vs. HDR Processing Paths</h3>
         <p>
           For SDR displays, those without HDR enabled, the transformation pipeline simplifies
           considerably, decoding input as gamma 2.2 to linear, applying calibration adjustments in
@@ -849,13 +940,23 @@ Y_i   = Σ P_i(λ) · V(λ)</code></pre>
           themselves (temperature, tint, dimming) apply identically in both cases, differing only in
           the encode/decode stages that bracket them.
         </p>
+
+        <h3 id="s8-4">8.4 Background Updates</h3>
+        <p>
+          The updater follows the same operational philosophy. Installed builds check the GitHub
+          release feed, reject non-newer or malformed candidates, download the update in the
+          background, and schedule it for the next normal app exit or restart. Users do not need to
+          click through a browser or manually replace an installer. Portable builds intentionally skip
+          this path because there is no managed Velopack install to update.
+        </p>
+
       </section>
 
-      <!-- ================= Section 8 ================= -->
+      <!-- ================= Section 9 ================= -->
       <section>
-        <h2 id="s8">8. Windows HDR Pipeline Context</h2>
+        <h2 id="s9">9. Windows HDR Pipeline Context</h2>
 
-        <h3 id="s8-1">8.1 The Desktop Window Manager (DWM)</h3>
+        <h3 id="s9-1">9.1 The Desktop Window Manager (DWM)</h3>
         <p>
           All visual output in modern Windows flows through the Desktop Window Manager, the compositor
           responsible for rendering the desktop, windows, and effects, and when HDR is enabled, DWM
@@ -866,7 +967,7 @@ Y_i   = Σ P_i(λ) · V(λ)</code></pre>
           the display's native format (typically HDR10/BT.2020).
         </p>
 
-        <h3 id="s8-2">8.2 Where LUTs Are Applied</h3>
+        <h3 id="s9-2">9.2 Where LUTs Are Applied</h3>
         <p>
           Color transforms apply in a hierarchy: application rendering first (sRGB for SDR apps, scRGB
           or HDR10 for HDR apps), then DWM conversion from SDR to HDR10 using the sRGB EOTF and SDR
@@ -881,7 +982,7 @@ Y_i   = Σ P_i(λ) · V(λ)</code></pre>
           mathematical pass.
         </p>
 
-        <h3 id="s8-3">8.3 Night Light Interaction</h3>
+        <h3 id="s9-3">9.3 Night Light Interaction</h3>
         <p>
           Windows' native Night Light applies its filter at the compositor level, where it competes
           with VCGT loading. Gloam's <strong>integrated night mode</strong> moves that work into the
@@ -891,11 +992,11 @@ Y_i   = Σ P_i(λ) · V(λ)</code></pre>
         </p>
       </section>
 
-      <!-- ================= Section 9 ================= -->
+      <!-- ================= Section 10 ================= -->
       <section>
-        <h2 id="s9">9. Verification and Accuracy</h2>
+        <h2 id="s10">10. Verification and Accuracy</h2>
 
-        <h3 id="s9-1">9.1 Mathematical Validation</h3>
+        <h3 id="s10-1">10.1 Mathematical Validation</h3>
         <p>
           The LUT generation algorithm was validated against the reference implementation from Dylan
           Raga's original project, with the JavaScript implementation using identical transfer function
@@ -905,7 +1006,7 @@ Y_i   = Σ P_i(λ) · V(λ)</code></pre>
           rounding error across the 1024-point LUT.
         </p>
 
-        <h3 id="s9-2">9.2 Visual Verification</h3>
+        <h3 id="s10-2">10.2 Visual Verification</h3>
         <p>
           Correct gamma application manifests visually as rich, defined shadows rather than elevated
           hazy gray; strong separation between light and dark elements; proper rendering of fog,
@@ -914,7 +1015,7 @@ Y_i   = Σ P_i(λ) · V(λ)</code></pre>
           (games, films) reveals the difference immediately to any attentive observer.
         </p>
 
-        <h3 id="s9-3">9.3 Common Failure Modes</h3>
+        <h3 id="s10-3">10.3 Common Failure Modes</h3>
         <table>
           <thead>
             <tr><th>Symptom</th><th>Likely Cause</th></tr>
@@ -928,9 +1029,9 @@ Y_i   = Σ P_i(λ) · V(λ)</code></pre>
         </table>
       </section>
 
-      <!-- ================= Section 10 ================= -->
+      <!-- ================= Section 11 ================= -->
       <section>
-        <h2 id="s10">10. Colorimeter Calibration and the MHC2 Pipeline</h2>
+        <h2 id="s11">11. Colorimeter Calibration and the MHC2 Pipeline</h2>
         <p>
           The per-channel ramp of Sections 4-7 corrects tone. Color correction needs a different
           mechanism: moving primaries and rotating a white point require a cross-channel transform,
@@ -942,7 +1043,7 @@ Y_i   = Σ P_i(λ) · V(λ)</code></pre>
           in both SDR and HDR.
         </p>
 
-        <h3 id="s10-1">10.1 The Matrix Slot Is an XYZ Transform</h3>
+        <h3 id="s11-1">11.1 The Matrix Slot Is an XYZ Transform</h3>
         <p>
           Windows applies the MHC2 matrix in CIE XYZ, after converting from the current wire RGB
           primaries and before converting back to those primaries. In other words, the matrix is
@@ -965,7 +1066,7 @@ Y_i   = Σ P_i(λ) · V(λ)</code></pre>
           on-screen.
         </p>
 
-        <h3 id="s10-2">10.2 White Point: Absolute Matrix, Uniform Scale</h3>
+        <h3 id="s11-2">11.2 White Point: Absolute Matrix, Uniform Scale</h3>
         <p>
           White-point correction belongs <strong>inside the matrix</strong>, as the textbook absolute
           mapping (content white to target white), with one refinement: on a panel whose native white
@@ -983,7 +1084,7 @@ Y_i   = Σ P_i(λ) · V(λ)</code></pre>
           multiplicatively per channel.
         </p>
 
-        <h3 id="s10-3">10.3 HDR: PQ-Domain LUTs and the Tone-Mapping Knee</h3>
+        <h3 id="s11-3">11.3 HDR: PQ-Domain LUTs and the Tone-Mapping Knee</h3>
         <p>
           In HDR the MHC2 LUTs operate on <strong>PQ wire signal</strong> (0-1 corresponding to
           0-10,000 nits via ST.2084), and two physical constraints bound what they may attempt. First,
@@ -1017,7 +1118,7 @@ Y_i   = Σ P_i(λ) · V(λ)</code></pre>
           grayscale result (0.57 ΔE2000 average).
         </p>
 
-        <h3 id="s10-4">10.4 Advanced Color Association</h3>
+        <h3 id="s11-4">11.4 Advanced Color Association</h3>
         <p>
           HDR displays read the <strong>Advanced Color list</strong> (registry
           <code>ICMProfileAC</code>) instead of the classic per-device profile association. That list
@@ -1032,7 +1133,7 @@ Y_i   = Σ P_i(λ) · V(λ)</code></pre>
           silently breaking both association and SDR-white-level queries.)
         </p>
 
-        <h3 id="s10-5">10.5 Meter Truth: Spectral Corrections</h3>
+        <h3 id="s11-5">11.5 Meter Truth: Spectral Corrections</h3>
         <p>
           A three-filter colorimeter is only as accurate as the spectral correction matching the
           panel's emission spectra, and modern panels (KSF/PFS phosphor LCDs, QD-OLED) are pathological
@@ -1046,7 +1147,7 @@ Y_i   = Σ P_i(λ) · V(λ)</code></pre>
           remembers the correction per monitor.
         </p>
 
-        <h3 id="s10-6">10.6 Verification and the Noise Floor</h3>
+        <h3 id="s11-6">11.6 Verification and the Noise Floor</h3>
         <p>
           Every calibration is verified by re-measuring a patch sweep <strong>through the applied
           profile</strong> (the compositor applies MHC2 to all content, so a patch window sees the
@@ -1073,9 +1174,9 @@ Y_i   = Σ P_i(λ) · V(λ)</code></pre>
         </p>
       </section>
 
-      <!-- ================= Section 11 ================= -->
+      <!-- ================= Section 12 ================= -->
       <section>
-        <h2 id="s11">11. Acknowledgements</h2>
+        <h2 id="s12">12. Acknowledgements</h2>
         <p>
           This work builds directly on the research and implementation of <strong>Dylan Raga</strong>
           (<a href="https://github.com/dylanraga/win11hdr-srgb-to-gamma2.2-icm">dylanraga/win11hdr-srgb-to-gamma2.2-icm</a>),
@@ -1090,9 +1191,9 @@ Y_i   = Σ P_i(λ) · V(λ)</code></pre>
         </ul>
       </section>
 
-      <!-- ================= Section 12 ================= -->
+      <!-- ================= Section 13 ================= -->
       <section>
-        <h2 id="s12">12. References</h2>
+        <h2 id="s13">13. References</h2>
         <ol class="refs">
           <li id="ref1">Poynton, C. (2003). <em>Digital Video and HDTV: Algorithms and Interfaces</em>. Morgan Kaufmann. Chapter on gamma and transfer functions.</li>
           <li id="ref2">IEC 61966-2-1:1999. <em>Multimedia systems and equipment - Colour measurement and management - Part 2-1: Colour management - Default RGB colour space - sRGB</em>.</li>
@@ -1104,14 +1205,26 @@ Y_i   = Σ P_i(λ) · V(λ)</code></pre>
           <li id="ref8">Helland, T. (2012). <em>How to Convert Temperature (K) to RGB: Algorithm and Sample Code</em>. <a href="https://tannerhelland.com/2012/09/18/convert-temperature-rgb-algorithm-code.html">tannerhelland.com</a></li>
           <li id="ref9">Stevens, S. S. (1957). On the psychophysical law. <em>Psychological Review</em>, 64(3), 153-181.</li>
           <li id="ref10">Kang, B., Moon, O., Hong, C., Lee, H., Cho, B., &amp; Kim, Y. (2002). Design of Advanced Color Temperature Control System for HDTV Applications. <em>Journal of the Korean Physical Society</em>, 41(6), 865-871.</li>
+          <li id="ref11">Li, C., Li, Z., Wang, Z., Xu, Y., Luo, M. R., Cui, G., Melgosa, M., Brill, M. H., &amp; Pointer, M. (2017). Comprehensive color solutions: CAM16, CAT16, and CAM16-UCS. <em>Color Research &amp; Application</em>, 42(6), 703-718. (CAT16 standardized in CIE 248:2022.)</li>
+          <li id="ref12">Ohno, Y. (2014). Practical Use and Calculation of CCT and Duv. <em>LEUKOS</em>, 10(1), 47-55.</li>
         </ol>
         <p class="paper-meta">
-          Last updated July 1, 2026: documented the perceptual night-mode default, Ultra Night
+          Last updated July 4, 2026: documented the perceptual night-mode default, Ultra Night
           spectral weighting from optional DisplayCAL CCSS samples, three-state Night Mode control,
           seamless Velopack update behavior, and calibration wizard state persistence.
-          Section 10 documents the MHC2 matrix XYZ-sandwich semantics, uniform-scale white handling,
+          Section 11 documents the MHC2 matrix XYZ-sandwich semantics, uniform-scale white handling,
           knee-safe PQ LUTs, Advanced Color association, spectral corrections, wire-exact HDR
           measurement via FP16 scRGB patches, and the PQ tracking verification sweep.
+        </p>
+        <p class="paper-meta">
+          Revised (code-audit pass): corrected the §2.4 sRGB-vs-gamma-2.2 comparison table and its
+          surrounding narrative (the gamma column previously held gamma-2.4 values); replaced the
+          §6.2 Perceptual-strength description and formula to match the shipped CAT16 cone-space
+          incomplete-adaptation model (the earlier display-RGB lerp was superseded in code); updated
+          the §6.2 Accurate method to describe the CIE-1931-CMF Planckian locus table now used, with
+          the Kang et al. cubic retained only as a fallback; and corrected §4.3 to reflect that the
+          SDR white level is auto-detected from <code>DISPLAYCONFIG_SDR_WHITE_LEVEL</code> rather than
+          entered by the user. Added references [11] (CAT16 / Li et al. 2017) and [12] (Ohno 2014).
         </p>
       </section>
 

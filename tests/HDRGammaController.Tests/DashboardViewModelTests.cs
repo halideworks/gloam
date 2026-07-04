@@ -1,4 +1,5 @@
 using System;
+using HDRGammaController.Core;
 using HDRGammaController.ViewModels;
 using Xunit;
 
@@ -36,6 +37,31 @@ namespace HDRGammaController.Tests
         {
             var now = new DateTime(2026, 7, 3, 7, 0, 1);
             Assert.Equal(new DateTime(2026, 7, 4, 7, 0, 0), DashboardViewModel.NextMorning(now));
+        }
+
+        [Fact]
+        public void FormatEffectiveTemperatureText_ComposesAdjustmentsInMiredSpace()
+        {
+            // Base temperature, per-monitor offset and night shift all compose in mired
+            // space in the apply path. The dashboard card must report that same result
+            // rather than the old linear scale sum.
+            double baseScale = -10.0;
+            double offsetScale = -10.0;
+            double nightShiftScale = -20.0;
+
+            double expectedScale = ColorAdjustments.ComposeTemperatureScaleMired(
+                ColorAdjustments.ComposeTemperatureScaleMired(baseScale, offsetScale),
+                nightShiftScale);
+            string expected = $"{ColorAdjustments.TemperatureScaleToKelvin(expectedScale)}K (Night)";
+
+            string actual = DashboardViewModel.FormatEffectiveTemperatureText(
+                baseScale,
+                offsetScale,
+                nightShiftScale,
+                nightModeActive: true);
+
+            Assert.Equal(expected, actual);
+            Assert.NotEqual("3700K (Night)", actual);
         }
     }
 }

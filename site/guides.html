@@ -90,8 +90,9 @@
 
           <li data-step="05">
             <h3>Live with it</h3>
-            <p>Your gamma preference and night mode compose on top of the installed calibration. Open Settings from the tray for night mode scheduling, fade duration, app exclusions, and per-monitor temperature offsets for visually matching displays to each other.</p>
-            <p>The Night Mode button cycles between <strong>Off</strong>, <strong>Schedule</strong>, and <strong>Manual</strong>. Off disables warmth entirely, Schedule follows your configured schedule, and Manual forces your selected temperature immediately.</p>
+            <p>Your gamma preference and night mode compose on top of the installed calibration. Open Settings from the tray for night mode scheduling, fade duration, the night-mode auto-disable list, and per-monitor temperature offsets for visually matching displays to each other.</p>
+            <p>The Night Mode button cycles between <strong>Off</strong>, <strong>Schedule</strong>, and <strong>Manual</strong>. Off disables warmth entirely, Schedule follows your configured schedule, and Manual holds your selected temperature immediately.</p>
+            <p>Application exclusions are a night-mode auto-disable list: while a listed application is in the foreground, night-mode warmth is turned off, either on every monitor or only on the displays its window covers. Your gamma correction and any installed calibration profile stay active; only the warm shift is suspended. This is useful for color-critical work in the evening, where you want neutral white on the working display without disabling night mode everywhere.</p>
             <p>Settings, reports, corrections, diagnostics, and logs are saved under <code>%LOCALAPPDATA%\Gloam</code>. Use <strong>Export Diagnostics</strong> from the tray when reporting issues.</p>
           </li>
         </ol>
@@ -118,7 +119,7 @@
         </ul>
 
         <h3>Use the right spectral correction</h3>
-        <p>A three-filter colorimeter is only as accurate as the spectral correction matching the panel's emission spectra. KSF/PFS phosphor LCDs and QD-OLEDs are pathological cases for generic corrections; mismatched corrections have measured white point errors of around 11 tint steps in opposite directions on two panels with the same meter. Use the in-app DisplayCAL corrections browser to fetch a .ccss matched to your panel. Gloam remembers the correction per monitor.</p>
+        <p>A three-filter colorimeter is only as accurate as the spectral correction matching the panel's emission spectra. KSF and PFS phosphor LCDs and QD-OLEDs are difficult cases for generic corrections: an uncorrected or mismatched filter set can push the measured white point in opposite directions on two panels read by the same meter, producing errors of many tint steps. Use the in-app DisplayCAL corrections browser to fetch a .ccss matched to your panel. Gloam remembers the correction per monitor.</p>
 
         <h3>Know when to correct less</h3>
         <p>If a panel already measures close to target natively (roughly 2.5 dE average or better), full gamut correction has nothing real to fix, and verification will reliably come back worse. Use the <strong>white point correction only</strong> mode, which Gloam auto-suggests for OLED, or no correction at all. More correction is not more accuracy.</p>
@@ -141,7 +142,7 @@
         <h2 style="margin-top: 0; margin-bottom: 2rem;">Troubleshooting</h2>
 
         <h3>Night Mode is not changing the display</h3>
-        <p>Check the button state. Off disables all warmth, including the schedule. Schedule only warms during the configured time window or sun-position window. Manual applies the selected temperature immediately.</p>
+        <p>Check the button state. Off disables all warmth, including the schedule. Schedule only warms during the configured time window or sun-position window. Manual holds the selected temperature immediately.</p>
 
         <h3>Calibration will not start</h3>
         <p>Confirm the meter is connected, click Refresh, and read the setup warning. HDR targets require Windows HDR to be active on the selected display. SDR targets require HDR to be off. For correction files, .ccss and .ccmx files may contain negative samples; that is valid and expected.</p>
