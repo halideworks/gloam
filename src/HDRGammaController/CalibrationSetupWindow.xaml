@@ -140,13 +140,13 @@
                                         </Style>
                                     </ComboBox.ItemContainerStyle>
                                 </ComboBox>
-                                <Button Grid.Column="1" Content="Find online…"
+                                <Button Grid.Column="1" Content="Find / Create…"
                                         Margin="6,0,0,0" Padding="10,2" Click="FindCorrection_Click"/>
                                 <Button Grid.Column="2" Content="Browse…"
                                         Margin="6,0,0,0" Padding="10,2" Click="BrowseCorrection_Click"/>
                             </Grid>
                             <TextBlock Foreground="{DynamicResource ThemeTextDim}" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0"
-                                       Text="A correction file (.ccss/.ccmx) matched to this exact panel makes the colorimeter read it truthfully. Essential on QD-OLED, where generic corrections shift the white point green/magenta by several ΔE. Use Find online to get one from the DisplayCAL community database. Remembered per monitor."/>
+                                       Text="A correction file (.ccss/.ccmx) matched to this exact panel makes the colorimeter read it truthfully. Essential on QD-OLED, where generic corrections shift the white point green/magenta by several ΔE. Use Find / Create to download one from the DisplayCAL community database, or generate your own from a spectrometer or a spectrometer+colorimeter pair. Remembered per monitor."/>
 
                             <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                                 <Button x:Name="ManageProfilesButton" Content="Manage installed calibration profiles…"

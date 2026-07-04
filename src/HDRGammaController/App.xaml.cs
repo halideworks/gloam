@@ -205,15 +205,38 @@ namespace HDRGammaController
             if (e.Category == UserPreferenceCategory.General ||
                 e.Category == UserPreferenceCategory.Color)
             {
-                Dispatcher.Invoke(() =>
-                {
-                    var settings = _serviceProvider?.GetService<SettingsManager>();
-                    if (settings?.DarkTheme == null)
-                        BrutalistTheme.Initialize(ThemeDetector.IsDarkMode());
-                    else
-                        ApplyTrayMenuTheme();
-                });
+                RefreshThemeFromSystem();
             }
+        }
+
+        /// <summary>
+        /// Re-evaluates the OS light/dark setting and re-themes the app (and tray menu) to match.
+        /// Invoked both from <see cref="OnUserPreferenceChanged"/> and from MainWindow's
+        /// WM_SETTINGCHANGE hook: the Windows light/dark toggle broadcasts WM_SETTINGCHANGE with
+        /// lParam == "ImmersiveColorSet", and .NET's SystemEvents.UserPreferenceChanged frequently
+        /// does NOT fire for it — which left the tray menu stuck on the appearance that was active
+        /// when the app started. A saved theme override stays authoritative over the OS setting.
+        /// </summary>
+        public void RefreshThemeFromSystem()
+        {
+            Dispatcher.Invoke(() =>
+            {
+                var settings = _serviceProvider?.GetService<SettingsManager>();
+                if (settings?.DarkTheme == null)
+                {
+                    // Follow the OS. Re-apply only on an actual change so the frequent
+                    // WM_SETTINGCHANGE storm doesn't churn brushes (and repaint canvases) needlessly.
+                    bool osDark = ThemeDetector.IsDarkMode();
+                    if (osDark != BrutalistTheme.IsDark)
+                        BrutalistTheme.Initialize(osDark); // -> Apply -> Changed -> ApplyTrayMenuTheme
+                }
+                else
+                {
+                    // Override in effect: the OS flip must not change the app theme, but keep the
+                    // tray menu brushes pinned to the current tokens defensively.
+                    ApplyTrayMenuTheme();
+                }
+            });
         }
 
         private void ApplyTrayMenuTheme()

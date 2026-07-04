@@ -73,7 +73,12 @@ namespace HDRGammaController
         {
             var browser = new CcssBrowserWindow(
                 _viewModel.SelectedMonitor?.Model.FriendlyName ?? "",
-                CalibrationSetupViewModel.CorrectionsFolder)
+                CalibrationSetupViewModel.CorrectionsFolder,
+                title: "Find or Create Meter Correction",
+                introText: "Search the DisplayCAL community database for a correction matched to your panel, or " +
+                           "generate your own: “From spectrometer…” measures this panel’s spectra into a " +
+                           ".ccss, and “Correction matrix…” builds a .ccmx from a spectrometer + colorimeter " +
+                           "pair. Saved files can be deleted or de-duplicated below.")
             {
                 Owner = this,
             };

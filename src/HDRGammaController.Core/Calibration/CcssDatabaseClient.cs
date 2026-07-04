@@ -254,6 +254,78 @@ namespace HDRGammaController.Core.Calibration
             return path;
         }
 
+        /// <summary>
+        /// Deletes a saved correction file from disk. Only .ccss/.ccmx files are accepted, so a
+        /// stray path can never turn this into an arbitrary-file delete.
+        /// </summary>
+        /// <exception cref="ArgumentException">The path is not a .ccss/.ccmx file.</exception>
+        public static void Delete(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("A correction file path is required.", nameof(path));
+
+            string ext = Path.GetExtension(path);
+            if (!ext.Equals(".ccss", StringComparison.OrdinalIgnoreCase) &&
+                !ext.Equals(".ccmx", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException($"Not a correction file: {path}", nameof(path));
+
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+
+        /// <summary>
+        /// Removes content-duplicate correction files from <paramref name="folder"/>, keeping one
+        /// file per unique CGATS body. The keeper is the one with the shortest file name (usually
+        /// the cleanest, e.g. "Dell AW3423DW - i1 Pro.ccss" over "…(2).ccss"). Returns the number
+        /// of files deleted. The picker already hides content-dupes from view via
+        /// <see cref="Deduplicate"/>; this reclaims the hidden copies from disk.
+        /// </summary>
+        public static int RemoveDuplicates(string folder)
+        {
+            if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
+                return 0;
+
+            var byContent = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            foreach (string pattern in new[] { "*.ccss", "*.ccmx" })
+            {
+                foreach (string path in Directory.GetFiles(folder, pattern, SearchOption.TopDirectoryOnly))
+                {
+                    string key;
+                    try
+                    {
+                        key = NormalizeCgats(File.ReadAllText(path));
+                    }
+                    catch
+                    {
+                        // Unreadable file: leave it alone rather than risk deleting the wrong copy.
+                        continue;
+                    }
+                    if (key.Length == 0) continue; // empty/garbage — not a safe dedup key
+                    if (!byContent.TryGetValue(key, out var list))
+                        byContent[key] = list = new List<string>();
+                    list.Add(path);
+                }
+            }
+
+            int removed = 0;
+            foreach (var group in byContent.Values)
+            {
+                if (group.Count < 2) continue;
+                // Keep the shortest name (ties broken alphabetically for determinism); delete the rest.
+                var keep = group
+                    .OrderBy(p => Path.GetFileName(p).Length)
+                    .ThenBy(p => p, StringComparer.OrdinalIgnoreCase)
+                    .First();
+                foreach (string path in group)
+                {
+                    if (path == keep) continue;
+                    try { File.Delete(path); removed++; }
+                    catch { /* file vanished or locked — skip */ }
+                }
+            }
+            return removed;
+        }
+
         private static string? FindExistingContentMatch(string folder, Entry entry)
         {
             string ext = entry.Type.Equals("ccmx", StringComparison.OrdinalIgnoreCase) ? ".ccmx" : ".ccss";

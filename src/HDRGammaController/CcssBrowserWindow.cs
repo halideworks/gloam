@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -22,6 +23,8 @@ namespace HDRGammaController
         private readonly Button _downloadButton;
         private readonly Button _createButton;
         private readonly Button _createMatrixButton;
+        private readonly Button _deleteButton;
+        private readonly Button _dedupeButton;
         private readonly Button _closeButton;
         private readonly ListView _list;
         private readonly TextBlock _status;
@@ -107,9 +110,9 @@ namespace HDRGammaController
             _typeFilter = string.IsNullOrWhiteSpace(typeFilter) ? null : typeFilter.Trim().ToLowerInvariant();
             Title = title ?? "Find Meter Correction - DisplayCAL Community Database";
             Width = 760;
-            Height = 520;
+            Height = 560;
             MinWidth = 760;
-            MinHeight = 520;
+            MinHeight = 560;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             this.SetResourceReference(BackgroundProperty, "ThemeBg");
             this.SetResourceReference(ForegroundProperty, "ThemeText");
@@ -160,6 +163,21 @@ namespace HDRGammaController
                 _createMatrixButton.Visibility = Visibility.Collapsed;
             }
 
+            // Management of the saved-correction library. Both are available wherever this
+            // browser is opened (calibration setup and the night-mode spectrum picker), so
+            // corrections can be tidied from anywhere they're chosen. Delete acts on the
+            // selected saved file; Remove duplicates cleans the whole corrections folder.
+            _deleteButton = MakeButton("Delete");
+            _deleteButton.IsEnabled = false;
+            _deleteButton.ToolTip = "Delete the selected saved correction file from disk. Only files saved in " +
+                                    "Gloam's corrections folder can be deleted (online results cannot).";
+            _deleteButton.Click += async (_, _) => await DeleteSelectedAsync();
+
+            _dedupeButton = MakeButton("Remove duplicates");
+            _dedupeButton.ToolTip = "Delete redundant saved correction files whose contents are identical, " +
+                                    "keeping one copy of each.";
+            _dedupeButton.Click += async (_, _) => await RemoveDuplicatesAsync();
+
             _closeButton = MakeButton("Cancel");
             _closeButton.Click += (_, _) => { if (_captureInProgress) return; DialogResult = false; Close(); };
 
@@ -185,6 +203,9 @@ namespace HDRGammaController
                 _downloadButton.Content = _list.SelectedItem is CcssDatabaseClient.Entry { LocalPath: not null }
                     ? "Use Saved"
                     : "Download & Use";
+                // Only saved files (those with a LocalPath) live on disk and can be deleted.
+                _deleteButton.IsEnabled = !_captureInProgress
+                    && _list.SelectedItem is CcssDatabaseClient.Entry { LocalPath: not null };
             };
             _list.MouseDoubleClick += (_, _) => { if (_list.SelectedItem != null) DownloadSelected(); };
 
@@ -216,9 +237,17 @@ namespace HDRGammaController
             createRow.Children.Add(_createButton);
             createRow.Children.Add(_createMatrixButton);
 
+            // Second action row: manage the saved library (distinct from the "make a new
+            // correction" Create actions above).
+            _dedupeButton.Margin = new Thickness(8, 0, 0, 0);
+            var manageRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 0) };
+            manageRow.Children.Add(_deleteButton);
+            manageRow.Children.Add(_dedupeButton);
+
             var leftPanel = new StackPanel { Orientation = Orientation.Vertical, VerticalAlignment = VerticalAlignment.Bottom };
             leftPanel.Children.Add(_status);
             leftPanel.Children.Add(createRow);
+            leftPanel.Children.Add(manageRow);
 
             _downloadButton.Margin = new Thickness(0, 0, 8, 0);
             var rightPanel = new StackPanel
@@ -292,8 +321,61 @@ namespace HDRGammaController
             _query.IsEnabled = !busy;
             _createButton.IsEnabled = !busy;
             _createMatrixButton.IsEnabled = !busy;
+            _dedupeButton.IsEnabled = !busy;
+            _deleteButton.IsEnabled = !busy
+                && _list.SelectedItem is CcssDatabaseClient.Entry { LocalPath: not null };
             _closeButton.IsEnabled = !busy;
             _downloadButton.IsEnabled = !busy && _list.SelectedItem != null;
+        }
+
+        /// <summary>
+        /// Deletes the selected saved correction file after a confirm, then refreshes the list.
+        /// Online results have no local file and are filtered out by the button's enabled state.
+        /// </summary>
+        private async Task DeleteSelectedAsync()
+        {
+            if (_captureInProgress) return;
+            if (_list.SelectedItem is not CcssDatabaseClient.Entry { LocalPath: { } path }) return;
+
+            bool confirmed = ConfirmDialog.Confirm(
+                this,
+                "Delete correction",
+                $"Delete this saved correction file from disk?\n\n{Path.GetFileName(path)}\n\nThis cannot be undone.",
+                "Delete",
+                "Cancel");
+            if (!confirmed) return;
+
+            try
+            {
+                CcssDatabaseClient.Delete(path);
+                _status.Text = $"Deleted {Path.GetFileName(path)}.";
+                await SearchAsync();
+            }
+            catch (Exception ex)
+            {
+                _status.Text = $"Delete failed: {ex.Message}";
+            }
+        }
+
+        /// <summary>
+        /// Removes content-duplicate files from the corrections folder, then refreshes the list.
+        /// The list already hides content-dupes, so this reclaims copies the user cannot see.
+        /// </summary>
+        private async Task RemoveDuplicatesAsync()
+        {
+            if (_captureInProgress) return;
+            try
+            {
+                int removed = CcssDatabaseClient.RemoveDuplicates(_saveFolder);
+                _status.Text = removed == 0
+                    ? "No duplicate correction files found."
+                    : $"Removed {removed} duplicate correction file(s).";
+                await SearchAsync();
+            }
+            catch (Exception ex)
+            {
+                _status.Text = $"Cleanup failed: {ex.Message}";
+            }
         }
 
         private async Task SearchAsync()

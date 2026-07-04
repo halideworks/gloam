@@ -74,6 +74,7 @@ namespace HDRGammaController
             const int WM_DISPLAYCHANGE = 0x007E;
             const int WM_POWERBROADCAST = 0x0218;
             const int PBT_APMRESUMEAUTOMATIC = 0x0012;
+            const int WM_SETTINGCHANGE = 0x001A;
 
             if (msg == WM_DISPLAYCHANGE)
             {
@@ -85,6 +86,20 @@ namespace HDRGammaController
                 if (wParam.ToInt32() == PBT_APMRESUMEAUTOMATIC)
                 {
                     _trayViewModel?.HandleResume();
+                }
+            }
+            else if (msg == WM_SETTINGCHANGE)
+            {
+                // The Windows light/dark toggle broadcasts WM_SETTINGCHANGE with
+                // lParam -> the wide string "ImmersiveColorSet". SystemEvents.UserPreferenceChanged
+                // often does NOT raise for this, which is what left the tray menu stuck on the
+                // appearance active at startup. Catch it here (this window's HWND is already
+                // hooked) and re-evaluate the OS theme.
+                if (lParam != IntPtr.Zero)
+                {
+                    string? area = System.Runtime.InteropServices.Marshal.PtrToStringUni(lParam);
+                    if (string.Equals(area, "ImmersiveColorSet", StringComparison.Ordinal))
+                        (Application.Current as App)?.RefreshThemeFromSystem();
                 }
             }
 
