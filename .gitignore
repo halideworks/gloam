@@ -50,3 +50,7 @@ HDRGammaController_*.zip
 Gloam_*.zip
 *.csv
 *.cal
+
+# Golden-sample regression fixtures are REAL measurement recordings the CI replay
+# tests depend on — they must ship in the repo despite the blanket *.csv ignore.
+!tests/HDRGammaController.Tests/Fixtures/**/*.csv
