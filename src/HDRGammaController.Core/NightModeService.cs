@@ -75,6 +75,14 @@ namespace HDRGammaController.Core
         /// </summary>
         public double PerceptualStrength { get; set; } = ColorAdjustments.DefaultPerceptualStrength;
 
+        /// <summary>
+        /// Constant-Y night mode: compensate the luminance the warm shift removes, within
+        /// headroom (HDR headroom, or the room dimming created on SDR). Excluded for
+        /// UltraNight, whose dimming is deliberate. Default off — normalize-to-max (dimmer
+        /// warm white) remains the standard night behavior.
+        /// </summary>
+        public bool PreserveLuminance { get; set; } = false;
+
         public static double ClampPerceptualStrength(double value) =>
             double.IsFinite(value) ? Math.Clamp(value, 0.0, 1.0) : ColorAdjustments.DefaultPerceptualStrength;
 
@@ -387,11 +395,20 @@ namespace HDRGammaController.Core
         // mired distance too: 6500→6000K spans ~13 mired while 2400→1900K spans ~110 — the
         // same Kelvin distance, wildly different perceptual distances. 0.05 mired ≈ 1 K near
         // 4500K, matching the old "≤1 K per update" smoothness target mid-transition.
-        private const double MaxMiredStepPerTick = 0.05;
+        // Since 3.5 this is only the FALLBACK: the live step ceiling comes from
+        // JndPacedFade.ComputeMaxStepMired (≤ 0.5 ΔE ITP per write at the current operating
+        // point), which prices in the active algorithm's luminance behavior as well.
+        private const double MaxMiredStepPerTick = JndPacedFade.FallbackStepMired;
+
+        // The apply pipeline coalesces hardware writes to one per 250 ms
+        // (GammaApplyService's coalescer floor) — the realized per-write step can never be
+        // finer than the fade rate × this floor, whatever the timer cadence asks for.
+        private const double HardwareWriteFloorMs = 250.0;
 
         private bool _inFadeWindow;
         private double _fadeTickMs = MaxFadeTickMs;
         private double _msToNextTrigger = double.MaxValue;
+        private bool _supraJndLoggedThisFade;
 
         // Resolved (time-sorted) schedule cache. Resolving a sun-trigger point runs the full
         // NOAA ephemeris math, and the old code redid it for every point on every tick. The
@@ -554,14 +571,37 @@ namespace HDRGammaController.Core
             if (timeSinceTrigger.TotalMinutes < fadeMinutes && fadeMinutes > 0)
             {
                 _inFadeWindow = true;
-                _fadeTickMs = CalculateFadeTickMilliseconds(startKelvin, endKelvin, fadeMinutes);
                 double progress = timeSinceTrigger.TotalMinutes / fadeMinutes;
                 progress = Math.Clamp(progress, 0.0, 1.0);
+                int interpolatedKelvin = InterpolateKelvinInMired(startKelvin, endKelvin, progress);
 
-                return InterpolateKelvinInMired(startKelvin, endKelvin, progress);
+                // JND pacing: the step ceiling is evaluated at the CURRENT operating point,
+                // so it adapts along the fade (cost: one CAT16/locus evaluation × a few
+                // probes at ≤ 2–4 Hz — negligible, no caching needed).
+                double maxStepMired = JndPacedFade.ComputeMaxStepMired(
+                    interpolatedKelvin, _settings.Algorithm, _settings.PerceptualStrength,
+                    _settings.UseUltraWarmMode, _settings.PreserveLuminance);
+                _fadeTickMs = CalculateFadeTickMilliseconds(startKelvin, endKelvin, fadeMinutes, maxStepMired);
+
+                // Duration wins over imperceptibility: when the fade rate at the ~4
+                // writes/sec hardware floor must exceed the JND ceiling, say so once per
+                // fade window instead of silently stretching the user's schedule.
+                double distanceMired = Math.Abs(1e6 / endKelvin - 1e6 / startKelvin);
+                double ratePerMs = distanceMired / (fadeMinutes * 60_000.0);
+                if (!_supraJndLoggedThisFade && ratePerMs * HardwareWriteFloorMs > maxStepMired)
+                {
+                    _supraJndLoggedThisFade = true;
+                    Log.Info(
+                        $"NightModeService: fade {startKelvin}K→{endKelvin}K over {fadeMinutes:F0} min " +
+                        $"outpaces JND pacing (needs {ratePerMs * HardwareWriteFloorMs:F3} mired/write, " +
+                        $"ceiling {maxStepMired:F3}); the schedule wins and steps may be briefly perceptible.");
+                }
+
+                return interpolatedKelvin;
             }
 
             // Otherwise we have arrived
+            _supraJndLoggedThisFade = false;
             return endKelvin;
         }
 
@@ -609,17 +649,23 @@ namespace HDRGammaController.Core
         }
 
         internal static double CalculateFadeTickMilliseconds(int startKelvin, int endKelvin, double fadeMinutes)
+            => CalculateFadeTickMilliseconds(startKelvin, endKelvin, fadeMinutes, MaxMiredStepPerTick);
+
+        internal static double CalculateFadeTickMilliseconds(
+            int startKelvin, int endKelvin, double fadeMinutes, double maxStepMired)
         {
             if (startKelvin <= 0 || endKelvin <= 0 || fadeMinutes <= 0) return MaxFadeTickMs;
+            if (!double.IsFinite(maxStepMired) || maxStepMired <= 0) maxStepMired = MaxMiredStepPerTick;
 
             // The fade advances at a constant mired rate (see InterpolateKelvinInMired), so
             // the tick interval that yields a fixed perceptual step per update is derived
-            // from the mired distance, not the Kelvin distance.
+            // from the mired distance, not the Kelvin distance. The step ceiling comes from
+            // JND pacing (JndPacedFade) with the historical 0.05 mired as fallback contract.
             double distanceMired = Math.Abs(1e6 / endKelvin - 1e6 / startKelvin);
             if (distanceMired <= 0) return MaxFadeTickMs;
 
             double millisecondsPerMired = fadeMinutes * 60_000.0 / distanceMired;
-            return Math.Clamp(millisecondsPerMired * MaxMiredStepPerTick, MinFadeTickMs, MaxFadeTickMs);
+            return Math.Clamp(millisecondsPerMired * maxStepMired, MinFadeTickMs, MaxFadeTickMs);
         }
 
         /// <summary>
@@ -641,7 +687,7 @@ namespace HDRGammaController.Core
         /// Defensive deep copy of settings and its schedule so the caller (the editor) cannot
         /// mutate the List/entries the timer enumerates after handing them to us.
         /// </summary>
-        private static NightModeSettings CloneSettings(NightModeSettings source)
+        internal static NightModeSettings CloneSettings(NightModeSettings source)
         {
             var clone = new NightModeSettings
             {
@@ -656,6 +702,7 @@ namespace HDRGammaController.Core
                 Algorithm = source.Algorithm,
                 UseUltraWarmMode = source.UseUltraWarmMode,
                 PerceptualStrength = NightModeSettings.ClampPerceptualStrength(source.PerceptualStrength),
+                PreserveLuminance = source.PreserveLuminance,
                 FadeMinutes = NightModeSettings.ClampFadeMinutes(source.FadeMinutes),
                 Schedule = new List<NightModeSchedulePoint>()
             };

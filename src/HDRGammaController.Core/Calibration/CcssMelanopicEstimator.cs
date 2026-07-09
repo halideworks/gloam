@@ -110,6 +110,140 @@ namespace HDRGammaController.Core.Calibration
         }
 
         /// <summary>
+        /// The raw per-channel spectra of a CCSS: the melanopic dashboard needs the actual
+        /// SPDs (to weight by the live per-channel gains), not the reduced coefficients
+        /// <see cref="TryEstimate"/> returns. <see cref="WhiteResidualFraction"/> is the
+        /// relative L2 residual of the CCSS white row against the best-scaled R+G+B sum —
+        /// nonzero on RGBW/heavily-overlapping panels, where the additive-channel assumption
+        /// is imperfect; callers fold it into their uncertainty rather than hide it. When the
+        /// CCSS has no identifiable white row, White is the synthesized R+G+B (residual 0).
+        /// </summary>
+        public sealed record CcssSpectra(
+            IReadOnlyList<double> Wavelengths,
+            IReadOnlyList<double> White,
+            IReadOnlyList<double> Red,
+            IReadOnlyList<double> Green,
+            IReadOnlyList<double> Blue,
+            string SourceName,
+            double WhiteResidualFraction);
+
+        private static readonly ConcurrentDictionary<string, SpectraCacheEntry> SpectraCache = new(StringComparer.OrdinalIgnoreCase);
+        private sealed record SpectraCacheEntry(DateTime LastWriteUtc, long Length, CcssSpectra? Spectra);
+
+        public static CcssSpectra? TryLoadSpectra(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return null;
+
+            try
+            {
+                var info = new FileInfo(path);
+                if (!info.Exists || !path.EndsWith(".ccss", StringComparison.OrdinalIgnoreCase))
+                    return null;
+
+                string key = info.FullName;
+                if (SpectraCache.TryGetValue(key, out var cached) &&
+                    cached.LastWriteUtc == info.LastWriteTimeUtc &&
+                    cached.Length == info.Length)
+                {
+                    return cached.Spectra;
+                }
+
+                var spectra = TryParseSpectra(File.ReadAllText(info.FullName), Path.GetFileName(info.FullName));
+                SpectraCache[key] = new SpectraCacheEntry(info.LastWriteTimeUtc, info.Length, spectra);
+                return spectra;
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"CcssMelanopicEstimator: failed to load spectra from '{path}': {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Extracts R/G/B/W spectra from CCSS content using the same parse and band-purity
+        /// primary selection as <see cref="TryEstimate"/> (one parse path, one set of
+        /// heuristics — the coefficients and the raw spectra can never disagree).
+        /// </summary>
+        public static CcssSpectra? TryParseSpectra(string content, string sourceName = "CCSS")
+        {
+            var validation = CgatsValidator.Validate(content, "ccss");
+            if (!validation.IsValid)
+                return null;
+
+            var parsed = Parse(content);
+            if (parsed == null || parsed.Rows.Count < 3)
+                return null;
+
+            var rows = parsed.Rows
+                .Select(r => new SpectralRow(r.Name, parsed.Wavelengths, r.Values))
+                .Where(r => r.Total > 1e-9)
+                .ToList();
+            if (rows.Count < 3) return null;
+
+            double medianTotal = rows.Select(r => r.Total).OrderBy(v => v).ElementAt(rows.Count / 2);
+            if (medianTotal > 0)
+                rows = rows.Where(r => r.Total > medianTotal * 0.08).ToList();
+            if (rows.Count < 3) return null;
+
+            var red = SelectDistinct(rows, null, r => r.RedPurity);
+            var green = SelectDistinct(rows, new[] { red }, r => r.GreenPurity);
+            var blue = SelectDistinct(rows, new[] { red, green }, r => r.BluePurity);
+            if (red == null || green == null || blue == null)
+                return null;
+
+            // White: the brightest remaining (non-primary) row; else synthesize R+G+B.
+            var white = rows
+                .Where(r => r != red && r != green && r != blue)
+                .OrderByDescending(r => r.Photopic)
+                .FirstOrDefault();
+
+            var sum = new double[parsed.Wavelengths.Count];
+            for (int i = 0; i < sum.Length; i++)
+                sum[i] = Math.Max(0, red.RawValues[i]) + Math.Max(0, green.RawValues[i]) + Math.Max(0, blue.RawValues[i]);
+
+            double residual = 0.0;
+            IReadOnlyList<double> whiteSpd = sum;
+            if (white != null)
+            {
+                whiteSpd = white.RawValues;
+                // Best least-squares scale of the channel sum onto the white row, then the
+                // relative residual — the honest measure of the additive-panel assumption.
+                double dot = 0, ss = 0, ww = 0;
+                for (int i = 0; i < sum.Length; i++)
+                {
+                    double w = Math.Max(0, white.RawValues[i]);
+                    dot += w * sum[i];
+                    ss += sum[i] * sum[i];
+                    ww += w * w;
+                }
+                if (ss > 1e-12 && ww > 1e-12)
+                {
+                    double s = dot / ss;
+                    double err = 0;
+                    for (int i = 0; i < sum.Length; i++)
+                    {
+                        double d = Math.Max(0, white.RawValues[i]) - s * sum[i];
+                        err += d * d;
+                    }
+                    residual = Math.Sqrt(err / ww);
+                }
+            }
+
+            return new CcssSpectra(
+                parsed.Wavelengths, whiteSpd, red.RawValues, green.RawValues, blue.RawValues,
+                sourceName, residual);
+        }
+
+        /// <summary>Photopic integral ∫SPD·V(λ)dλ — public so melanopic-EDI math shares the
+        /// exact tables and integration this estimator uses.</summary>
+        public static double Photopic(IReadOnlyList<double> wavelengths, IReadOnlyList<double> values)
+            => TrapezoidIntegrate(wavelengths, values, PhotopicSensitivity);
+
+        /// <summary>Melanopic integral ∫SPD·s_mel(λ)dλ (CIE S 026).</summary>
+        public static double Melanopic(IReadOnlyList<double> wavelengths, IReadOnlyList<double> values)
+            => TrapezoidIntegrate(wavelengths, values, MelanopicSensitivity);
+
+        /// <summary>
         /// Greedy per-channel selector: picks the highest-purity row for each primary. This band
         /// heuristic is robust for conventional RGB emissive stacks, but it can misattribute
         /// channels on displays whose primaries overlap heavily or add extra emitters — e.g.
@@ -136,6 +270,7 @@ namespace HDRGammaController.Core.Calibration
                 Name = name;
                 Wavelengths = wavelengths;
                 Values = values;
+                RawValues = values;
                 BlueBand = Band(430, 500);
                 GreenBand = Band(500, 590);
                 RedBand = Band(600, 700);
@@ -147,6 +282,8 @@ namespace HDRGammaController.Core.Calibration
             public string Name { get; }
             private IReadOnlyList<double> Wavelengths { get; }
             private IReadOnlyList<double> Values { get; }
+            /// <summary>The row's SPD samples, exposed for <see cref="TryParseSpectra"/>.</summary>
+            public IReadOnlyList<double> RawValues { get; }
             public double BlueBand { get; }
             public double GreenBand { get; }
             public double RedBand { get; }

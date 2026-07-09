@@ -290,13 +290,10 @@ namespace HDRGammaController.ViewModels
             OnPropertyChanged(nameof(IsLcdCcfl));
             OnPropertyChanged(nameof(IsOledHintVisible));
 
-            // OLED panels in HDR overshoot with full gamut correction (their processing is
-            // nonlinear); suggest white-point-only when the user picks OLED. Suggestion only:
-            // the user can still untick it.
-            if (type == DisplayType.Oled && !_loadingPrefs)
-            {
-                WhitePointOnly = true;
-            }
+            // No white-point-only auto-suggestion for OLED anymore: measured results on the
+            // QD-OLED were BETTER with full gamut correction, so full gamut is the default
+            // everywhere and the checkbox is a purely explicit user choice (a saved choice
+            // still restores in the load path).
             RefreshPreflight();
         }
 
@@ -530,12 +527,6 @@ namespace HDRGammaController.ViewModels
                 else if (DetectedDisplayType is DisplayType detected)
                 {
                     SetDisplayType(detected);
-                    // First time on a detected OLED: apply the white-point-only
-                    // suggestion the manual OLED pick would have made.
-                    if (detected == DisplayType.Oled)
-                    {
-                        WhitePointOnly = true;
-                    }
                 }
 
                 // A saved explicit white-point-only choice wins over the OLED suggestion.

@@ -1,0 +1,11 @@
+{
+  "SchemaVersion": 1,
+  "PanelLabel": "MSI MAG 271QPX QD-OLED",
+  "TargetName": "HDR Desktop PQ (sRGB gamut)",
+  "HdrMode": true,
+  "SdrWhiteNits": 200,
+  "InstrumentModel": "i1 DisplayPro",
+  "HasMeterCorrection": false,
+  "NativeCsv": "native-measurements.csv",
+  "VerificationCsv": "verification-measurements.csv"
+}

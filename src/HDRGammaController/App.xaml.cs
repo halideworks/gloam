@@ -36,6 +36,10 @@ namespace HDRGammaController
                 sp.GetRequiredService<DispwinRunner>(),
                 sp.GetRequiredService<SettingsManager>(),
                 sp.GetRequiredService<NightModeService>()));
+            // Live melanopic evaluation (roadmap 3.1): listens to the apply pipeline's
+            // state snapshots and feeds the dashboard card + nightly dose store.
+            services.AddSingleton(sp => new MelanopicMonitorService(
+                sp.GetRequiredService<GammaApplyService>()));
             services.AddSingleton<AppDetectionService>();
             services.AddSingleton<UpdateService>();
             services.AddSingleton<IToastService, ToastService>();

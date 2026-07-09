@@ -34,6 +34,7 @@ namespace HDRGammaController.Cli
                     "compare" => RunCompare(args),
                     "check-lut" => RunCheckLut(args),
                     "night" => RunNight(args),
+                    "golden-ingest" => RunGoldenIngest(args),
                     // Back-compat: old `Cli 2.2 200 [out.csv]` form still works
                     _ => RunLegacy(args)
                 };
@@ -57,6 +58,7 @@ namespace HDRGammaController.Cli
             Console.WriteLine("  cli compare  <gamma> <white> <A> <B>     Side-by-side diff of two scenarios");
             Console.WriteLine("  cli check-lut <gamma> <white> [options]  Validate LUT invariants, exit non-zero on failure");
             Console.WriteLine("  cli night    <kelvin> [options]          Inspect night-mode multipliers");
+            Console.WriteLine("  cli golden-ingest <fixtureDir> [options] Create/refresh a golden-sample regression fixture");
             Console.WriteLine();
             Console.WriteLine("Gamma:  2.2 | 2.4 | default");
             Console.WriteLine("White:  nits (e.g. 80, 200, 480)");
@@ -302,6 +304,99 @@ namespace HDRGammaController.Cli
             else if (!string.IsNullOrWhiteSpace(opts.CcssPath))
                 Console.WriteLine("  melanopic estimate: unavailable; CCSS could not be parsed");
             if (opts.JsonPath != null) WriteJson(opts.JsonPath, report);
+            return 0;
+        }
+
+        // ---------- Golden-sample ingest ----------
+
+        /// <summary>
+        /// Ingests a recorded measurement set into a golden-sample regression fixture, or
+        /// regenerates an existing fixture's baseline. Regeneration is the SANCTIONED way to
+        /// accept numeric pipeline changes: the baseline diff shows up in git review instead
+        /// of tests silently rewriting their own expectations.
+        /// </summary>
+        private static int RunGoldenIngest(string[] args)
+        {
+            if (args.Length < 2)
+                throw new ArgumentException(
+                    "golden-ingest requires <fixtureDir> [--native <csv> --verification <csv> " +
+                    "--target <name> --panel <label> [--hdr] [--sdr-white N] [--instrument <model>] [--meter-correction]]");
+
+            string fixtureDir = args[1];
+            string manifestPath = Path.Combine(fixtureDir, "manifest.json");
+
+            string? nativeCsv = null, verificationCsv = null, targetName = null,
+                panelLabel = null, instrument = null;
+            bool hdrMode = false, meterCorrection = false;
+            double sdrWhite = 200.0;
+
+            for (int i = 2; i < args.Length; i++)
+            {
+                switch (args[i])
+                {
+                    case "--native": nativeCsv = RequireValue(args, ref i, args[i]); break;
+                    case "--verification": verificationCsv = RequireValue(args, ref i, args[i]); break;
+                    case "--target": targetName = RequireValue(args, ref i, args[i]); break;
+                    case "--panel": panelLabel = RequireValue(args, ref i, args[i]); break;
+                    case "--instrument": instrument = RequireValue(args, ref i, args[i]); break;
+                    case "--sdr-white": sdrWhite = ParseDouble(RequireValue(args, ref i, args[i])); break;
+                    case "--hdr": hdrMode = true; break;
+                    case "--meter-correction": meterCorrection = true; break;
+                    default: throw new ArgumentException($"Unknown option: {args[i]}");
+                }
+            }
+
+            GoldenSampleManifest manifest;
+            if (nativeCsv != null || verificationCsv != null)
+            {
+                // Creation mode: copy the recordings in and write a fresh manifest.
+                if (nativeCsv == null || verificationCsv == null || targetName == null || panelLabel == null)
+                    throw new ArgumentException(
+                        "Creating a fixture needs --native, --verification, --target and --panel.");
+
+                Directory.CreateDirectory(fixtureDir);
+                File.Copy(nativeCsv, Path.Combine(fixtureDir, "native-measurements.csv"), overwrite: true);
+                File.Copy(verificationCsv, Path.Combine(fixtureDir, "verification-measurements.csv"), overwrite: true);
+                manifest = new GoldenSampleManifest
+                {
+                    PanelLabel = panelLabel,
+                    TargetName = targetName,
+                    HdrMode = hdrMode,
+                    SdrWhiteNits = sdrWhite,
+                    InstrumentModel = instrument,
+                    HasMeterCorrection = meterCorrection,
+                };
+                manifest.Save(manifestPath);
+            }
+            else
+            {
+                if (!File.Exists(manifestPath))
+                    throw new ArgumentException(
+                        $"No manifest at {manifestPath} - pass --native/--verification/--target/--panel to create the fixture.");
+                manifest = GoldenSampleManifest.Load(manifestPath);
+            }
+
+            var target = StandardTargets.GetByName(manifest.TargetName)
+                ?? throw new ArgumentException($"Unknown calibration target '{manifest.TargetName}'.");
+
+            var native = MeasurementCsvImporter.Load(Path.Combine(fixtureDir, manifest.NativeCsv));
+            var verification = MeasurementCsvImporter.Load(Path.Combine(fixtureDir, manifest.VerificationCsv));
+
+            var baseline = GoldenSampleBaseline.Compute(
+                native.Measurements, verification.Measurements, target,
+                manifest.HdrMode, manifest.SdrWhiteNits,
+                manifest.ToUncertaintyContext(verification.Measurements));
+            baseline.Save(Path.Combine(fixtureDir, "baseline.json"));
+
+            Console.WriteLine($"Golden fixture '{manifest.PanelLabel}' at {fixtureDir}");
+            Console.WriteLine($"  target: {target.Name}  hdr: {manifest.HdrMode}  sdr-white: {manifest.SdrWhiteNits} nits");
+            Console.WriteLine($"  native rows: {native.Measurements.Count}  verification rows: {verification.Measurements.Count}");
+            Console.WriteLine($"  characterization: peak {baseline.PeakLuminanceNits:F1} nits, black {baseline.BlackLevelNits:F3} nits, gamma {baseline.MeasuredGamma:F3}");
+            Console.WriteLine($"  verify: avg dE {baseline.AverageDeltaE:F3}, max {baseline.MaxDeltaE:F3}" +
+                              (baseline.UncertaintyExpandedU is { } u ? $" (U95 +/- {u:F3})" : string.Empty));
+            if (baseline.HdrLutSamples != null)
+                Console.WriteLine($"  hdr lut: black {baseline.HdrMeasuredBlackNits:F3}, peak {baseline.HdrMeasuredPeakNits:F1}, wire-exact {baseline.HdrWireExact}");
+            Console.WriteLine("  wrote baseline.json");
             return 0;
         }
 

@@ -573,6 +573,22 @@ namespace HDRGammaController.Core
                     settings.PerceptualStrength,
                     settings.NightMelanopicCoefficients,
                     temperatureBasis);
+
+                // Constant-Y option: recover the luminance the warm shift removed, within
+                // headroom. UltraNight is excluded — its dimming is deliberate melanopic-dose
+                // reduction; boosting it back would invert the mode's purpose.
+                if (settings.PreserveNightLuminance &&
+                    settings.Algorithm != NightModeAlgorithm.UltraNight)
+                {
+                    temp = RescaleToConstantLuminance(
+                        temp,
+                        temperatureBasis,
+                        settings.NightLuminanceCeiling,
+                        settings.Brightness < 100.0
+                            ? ApplyDimming(1.0, settings.Brightness, settings.UseLinearBrightness)
+                            : 1.0);
+                }
+
                 r *= temp.R;
                 g *= temp.G;
                 b *= temp.B;
@@ -597,11 +613,17 @@ namespace HDRGammaController.Core
             g += settings.GreenOffset;
             b += settings.BlueOffset;
             
-            // 6. Clamp to valid range
-            r = Math.Clamp(r, 0.0, 1.0);
-            g = Math.Clamp(g, 0.0, 1.0);
-            b = Math.Clamp(b, 0.0, 1.0);
-            
+            // 6. Clamp to valid range. Constant-Y raises the ceiling above 1.0 ONLY when the
+            // apply service granted real HDR headroom (NightLuminanceCeiling stays 1.0 on the
+            // SDR path, whose 256-entry GDI ramp clips at 1.0 and cannot represent boost).
+            double upper = settings.PreserveNightLuminance &&
+                           settings.Algorithm != NightModeAlgorithm.UltraNight
+                ? Math.Max(1.0, settings.NightLuminanceCeiling)
+                : 1.0;
+            r = Math.Clamp(r, 0.0, upper);
+            g = Math.Clamp(g, 0.0, upper);
+            b = Math.Clamp(b, 0.0, upper);
+
             return (r, g, b);
         }
 
@@ -659,6 +681,108 @@ namespace HDRGammaController.Core
 
         private static double PositiveFiniteOrZero(double value) =>
             double.IsFinite(value) ? Math.Max(value, 0.0) : 0.0;
+
+        /// <summary>
+        /// The per-channel multipliers the applied state puts on WHITE, spectral SHAPE only:
+        /// temperature (with the constant-Y rescale when active), tint and RGB gains —
+        /// brightness dimming deliberately excluded (it scales magnitude, not spectral
+        /// shape; melanopic math applies it once to the absolute luminance instead, see
+        /// MelanopicCalculator). Offsets are also excluded (an additive lift is zero at the
+        /// white-shape question this answers).
+        /// </summary>
+        public static (double R, double G, double B) GetAppliedWhiteShapeMultipliers(
+            CalibrationSettings settings, NightBasis basis)
+        {
+            settings = (settings ?? CalibrationSettings.Default).Sanitized();
+            double r = 1.0, g = 1.0, b = 1.0;
+
+            double effectiveTemperature = EffectiveTemperatureScale(settings);
+            if (Math.Abs(effectiveTemperature) > 0.01)
+            {
+                var temp = GetTemperatureMultipliers(
+                    effectiveTemperature, settings.Algorithm, settings.UseUltraWarmMode,
+                    settings.PerceptualStrength, settings.NightMelanopicCoefficients, basis);
+                if (settings.PreserveNightLuminance &&
+                    settings.Algorithm != NightModeAlgorithm.UltraNight)
+                {
+                    temp = RescaleToConstantLuminance(
+                        temp, basis, settings.NightLuminanceCeiling,
+                        settings.Brightness < 100.0
+                            ? ApplyDimming(1.0, settings.Brightness, settings.UseLinearBrightness)
+                            : 1.0);
+                }
+                r *= temp.R; g *= temp.G; b *= temp.B;
+            }
+
+            if (Math.Abs(settings.Tint) > 0.01)
+            {
+                var tint = GetTintMultipliers(settings.Tint);
+                r *= tint.R; g *= tint.G; b *= tint.B;
+            }
+
+            r *= settings.RedGain;
+            g *= settings.GreenGain;
+            b *= settings.BlueGain;
+
+            return (r, g, b);
+        }
+
+        /// <summary>
+        /// Relative luminance of the white produced by per-channel multipliers in the given
+        /// wire basis: the dot product with the Y row of the basis RGB→XYZ matrix. Both
+        /// matrices are white-normalized (rows sum to 1 at Y=1), so this photometric wire-Y
+        /// IS CIE Y — there is no separate colorimetric quantity to choose.
+        /// </summary>
+        internal static double WhiteLuminance((double R, double G, double B) multipliers, NightBasis basis)
+        {
+            var m = basis == NightBasis.Rec2020
+                ? ColorMath.Rec2020ToXyzMatrix
+                : ColorMath.SrgbToXyzMatrix;
+            return m[1, 0] * multipliers.R + m[1, 1] * multipliers.G + m[1, 2] * multipliers.B;
+        }
+
+        /// <summary>
+        /// Constant-Y night mode: rescales normalize-to-max temperature multipliers so the
+        /// shifted white keeps the luminance of the unshifted white, within representable
+        /// headroom. The ideal rescale is s = 1/Y(m); it is clamped so no channel exceeds
+        /// <paramref name="ceiling"/> after the dimmed input white passes through
+        /// (s ≤ ceiling / (dimmedWhiteFraction · max(m))) — partial preservation is the
+        /// graceful degradation when headroom runs out, never an error.
+        /// </summary>
+        /// <remarks>
+        /// The rescale compensates ONLY the temperature-induced luminance loss: user dimming
+        /// d cancels in the preserved ratio Y(d·s·m)/Y(d·1) = s·Y(m) = 1, and appears here
+        /// solely because dimming CREATES headroom (a dimmed SDR ramp has room above the
+        /// dimmed white). On SDR at full brightness ceiling = 1 and max(m) = 1, so s = 1 and
+        /// the feature is honestly inert — constant-Y is an HDR-headroom / dimmed-SDR
+        /// feature. The preserved Y is the ramp's pre-MHC2 Y (the GPU ramp runs before
+        /// Windows' compositor correction); for a calibrated display MHC2 is near-neutral on
+        /// the white axis, an accepted approximation. 6500K identity multipliers short-circuit
+        /// so the (1,1,1) invariant stays bit-exact rather than relying on the Y row summing
+        /// to 1.0 in floating point.
+        /// </remarks>
+        internal static (double R, double G, double B) RescaleToConstantLuminance(
+            (double R, double G, double B) multipliers,
+            NightBasis basis,
+            double ceiling,
+            double dimmedWhiteFraction)
+        {
+            if (multipliers is (1.0, 1.0, 1.0)) return multipliers;
+            if (!IsUsableRgb((multipliers.R, multipliers.G, multipliers.B))) return multipliers;
+
+            double y = WhiteLuminance(multipliers, basis);
+            if (!double.IsFinite(y) || y <= 0.0 || y >= 1.0) return multipliers;
+
+            ceiling = ClampFinite(ceiling, 1.0, 4.0, 1.0);
+            dimmedWhiteFraction = ClampFinite(dimmedWhiteFraction, 1e-6, 1.0, 1.0);
+            double maxChannel = MaxChannel((multipliers.R, multipliers.G, multipliers.B));
+            if (maxChannel <= 0.0) return multipliers;
+
+            double s = Math.Min(1.0 / y, ceiling / (dimmedWhiteFraction * maxChannel));
+            if (!double.IsFinite(s) || s <= 1.0) return multipliers;
+
+            return (multipliers.R * s, multipliers.G * s, multipliers.B * s);
+        }
 
         private static double MaxChannel((double r, double g, double b) rgb) =>
             Math.Max(rgb.r, Math.Max(rgb.g, rgb.b));

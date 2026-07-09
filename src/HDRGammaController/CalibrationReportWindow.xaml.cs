@@ -2035,11 +2035,12 @@ namespace HDRGammaController
         /// <summary>
         /// Closed-loop refinement of the installed HDR tone LUT — the single biggest HDR
         /// accuracy step after the open-loop install, and what Calman/ColourSpace-grade EOTF
-        /// tracking does: re-measure the PQ ladder THROUGH the active matrix+LUT correction,
-        /// apply one multiplicative correction to the LUT (<see cref="HdrMhc2LutBuilder.Refine"/>),
-        /// re-install, and re-measure the same ladder so the user sees before/after. The
-        /// refined profile is recorded via the same OnInstalled path as the original install,
-        /// so reapply-on-boot picks it up.
+        /// tracking does: re-measure the PQ ladder THROUGH the active matrix+LUT correction
+        /// and iterate multiplicative corrections (<see cref="HdrRefinementLoop"/> over
+        /// <see cref="HdrMhc2LutBuilder.Refine"/>) with keep-best discipline until the ladder
+        /// converges below 1% average error or 3 passes are spent — the display always ends
+        /// on the best measured pass. Every install is recorded via the same OnInstalled path
+        /// as the original, so reapply-on-boot picks the final profile up.
         /// </summary>
         private async Task RefineHdrTrackingAsync()
         {
@@ -2074,8 +2075,9 @@ namespace HDRGammaController
 
             if (!ConfirmDialog.Confirm(this, "Refine HDR Tracking",
                     "Place the probe on the display, then press Yes.\n\n" +
-                    $"Gloam re-measures {rungs.Count} PQ ladder levels through the installed profile, applies one " +
-                    "closed-loop correction to the HDR tone curve, re-installs, and re-measures to confirm.\n\n" +
+                    $"Gloam re-measures {rungs.Count} PQ ladder levels through the installed profile and runs up to " +
+                    "3 closed-loop correction passes (~1 minute per pass), keeping whichever pass measured best. " +
+                    "It stops early once the ladder converges below 1% average error.\n\n" +
                     "Tip: turn night mode off first - it tints and dims the measurements.",
                     confirmLabel: "Yes", cancelLabel: "Cancel"))
                 return;
@@ -2114,33 +2116,9 @@ namespace HDRGammaController
                 patchWindow.Show();
                 await colorimeter.BeginMeasurementSessionAsync(hdrMode: true, refineCts.Token);
 
-                // 1) Measure the ladder through the CURRENT correction.
-                Vm.StatusText = "Measuring PQ tracking through the installed profile…";
-                var before = await MeasurePqRungsAsync(
-                    patchWindow, colorimeter, ctx, rungs, "HDR refine", 0, refineCts.Token);
-
-                // 2) One multiplicative closed-loop correction (pure math; refuses when
-                // refinement can't help).
-                var outcome = HdrMhc2LutBuilder.Refine(
-                    currentLuts, before.Select(r => r.M).ToList(), currentLuts.MeasuredPeakNits);
-                if (outcome.Refined is not { } refined)
-                {
-                    Vm.StatusText = $"HDR refinement skipped: {outcome.RefusalReason}.";
-                    Vm.StatusBrush = outcome.RefusalReason?.Contains("converged") == true
-                        ? CalibrationReportViewModel.GreenBrush
-                        : CalibrationReportViewModel.AmberBrush;
-                    Log.Info($"CalibrationReportWindow: HDR refinement refused: {outcome.RefusalReason} " +
-                             $"(avg |error| {outcome.AverageAbsErrorBefore:P2} over {outcome.RungCount} rungs).");
-                    return;
-                }
-                double beforeAvg = outcome.AverageAbsErrorBefore;
-
-                // 3) Re-install with the refined LUT: same matrix, colorimetry and ICC tags —
-                // the installer recomputes them from the unchanged characterization/target and
-                // takes the refined LUTs in place of the open-loop build. Distinct filename:
-                // reusing the original's minute-stamped name would silently keep the OLD
-                // profile bytes (InstallColorProfile won't overwrite an existing name).
-                Vm.StatusText = "Installing refined profile…";
+                // The "previous default" recorded with every OnInstalled must be the TRUE
+                // pre-refinement default — computed per pass it would capture this session's
+                // own pass-1 profile as the thing to restore.
                 MonitorInfo installMonitor = ResolveCurrentMonitor(ctx.Monitor) ?? ctx.Monitor;
                 string? previousDefaultProfile = null;
                 if (installMonitor.MonitorDevicePath.Length > 0)
@@ -2152,50 +2130,100 @@ namespace HDRGammaController
                         saved?.PreviousColorProfileName);
                 }
 
-                var result = CalibrationProfileInstaller.Install(
-                    installMonitor, characterization, EffectiveTarget(ctx),
-                    ctx.LutR, ctx.LutG, ctx.LutB, ctx.WhiteLevel,
-                    hdrMode: true, measurements: _measurements,
-                    profileNameOverride: BuildRefinedProfileName(installedName),
-                    hdrLutsOverride: refined);
-                if (!result.Success)
+                string? supersededThisSession = null;
+
+                // Measure/install delegates around the Core keep-best loop. Each install goes
+                // through the exact path of the original single pass: distinct filename (a
+                // reused name would silently keep the OLD profile bytes), OnInstalled
+                // recording for reapply-on-boot, and a compositor settle.
+                var loopConfig = new HdrRefinementLoop.Config
                 {
-                    Vm.StatusText = $"Refined profile install failed: {result.Error}";
-                    Vm.StatusBrush = CalibrationReportViewModel.AmberBrush;
+                    InitialLuts = currentLuts,
+                    RungNits = rungs,
+                    MeasureLadderAsync = async (ladder, sequenceOffset, token) =>
+                    {
+                        var readings = await MeasurePqRungsAsync(
+                            patchWindow!, colorimeter, ctx, ladder, "HDR refine", sequenceOffset, token);
+                        return (IReadOnlyList<MeasurementResult>)readings.Select(r => r.M).ToList();
+                    },
+                    InstallAsync = async (candidate, token) =>
+                    {
+                        var result = CalibrationProfileInstaller.Install(
+                            installMonitor, characterization, EffectiveTarget(ctx),
+                            ctx.LutR, ctx.LutG, ctx.LutB, ctx.WhiteLevel,
+                            hdrMode: true, measurements: _measurements,
+                            profileNameOverride: BuildRefinedProfileName(_installedProfileName ?? installedName),
+                            hdrLutsOverride: candidate);
+                        if (!result.Success)
+                            throw new InvalidOperationException($"Refined profile install failed: {result.Error}");
+
+                        installedRefined = true;
+                        // This session's previous refined profile is now superseded — clean it
+                        // up (never the original calibration profile).
+                        if (supersededThisSession is { } stale && stale != result.ProfileName)
+                        {
+                            try { CalibrationProfileInstaller.Uninstall(installMonitor, stale); }
+                            catch (Exception ex)
+                            {
+                                Log.Info($"CalibrationReportWindow: superseded refined profile cleanup failed: {ex.Message}");
+                            }
+                        }
+                        supersededThisSession = result.ProfileName;
+
+                        _installedProfileName = result.ProfileName;
+                        _profileApplied = true;
+                        _profileEnabled = true;
+                        _installedHdrLuts = result.HdrLuts ?? candidate;
+                        Vm.ApplyButtonContent = "Disable Profile";
+                        // Same recording path as the original install: the tray retires the
+                        // old association and remembers the refined name for reapply-on-boot.
+                        ctx.OnInstalled?.Invoke(result.ProfileName, previousDefaultProfile);
+
+                        // The compositor needs a moment to pick the new profile up.
+                        await Task.Delay(1000, token);
+                        return (result.HdrLuts ?? candidate, result.ProfileName);
+                    },
+                    Progress = new Progress<HdrRefinementLoop.PassProgress>(p =>
+                    {
+                        Vm.StatusText = p.Pass == 0
+                            ? "Measuring PQ tracking through the installed profile…"
+                            : $"Refine pass {p.Pass}/{p.MaxPasses}: {p.Phase}…";
+                    }),
+                };
+
+                var outcome = await HdrRefinementLoop.RunAsync(loopConfig, refineCts.Token);
+
+                if (!outcome.AnyInstall)
+                {
+                    // Converged before any pass, or pass 1 refused — the profile is unchanged.
+                    Vm.StatusText = $"HDR refinement skipped: {outcome.StopReason}.";
+                    Vm.StatusBrush = outcome.Converged
+                        ? CalibrationReportViewModel.GreenBrush
+                        : CalibrationReportViewModel.AmberBrush;
+                    Log.Info($"CalibrationReportWindow: HDR refinement made no install: {outcome.StopReason} " +
+                             $"(initial avg |error| {outcome.InitialAvgAbsError:P2}).");
                     return;
                 }
-                installedRefined = true;
-                _installedProfileName = result.ProfileName;
-                _profileApplied = true;
-                _profileEnabled = true;
-                _installedHdrLuts = result.HdrLuts ?? refined;
-                Vm.ApplyButtonContent = "Disable Profile";
-                // Same recording path as the original install: the tray retires the old
-                // association and remembers the refined name, so reapply-on-boot uses it.
-                ctx.OnInstalled?.Invoke(result.ProfileName, previousDefaultProfile);
 
-                // 4) Re-measure the same ladder through the refined correction so the user
-                // sees measured before/after, not a promise. Short settle first: the
-                // compositor needs a moment to pick the new profile up.
-                await Task.Delay(1000, refineCts.Token);
-                Vm.StatusText = "Verifying refined PQ tracking…";
-                var after = await MeasurePqRungsAsync(
-                    patchWindow, colorimeter, ctx, rungs, "HDR refine verify", rungs.Count, refineCts.Token);
-                double afterAvg = HdrMhc2LutBuilder.AverageAbsLuminanceError(after.Select(r => r.M));
-
-                foreach (var (requested, m) in after)
-                    Log.Info($"CalibrationReportWindow: refined PQ {requested,6:F0} nits -> {m.Xyz.Y,7:F1} " +
-                             $"({(m.Xyz.Y - requested) / requested:+0.0%;-0.0%})");
-
-                string afterText = double.IsFinite(afterAvg) ? $"{afterAvg:P1}" : "n/a";
-                string line = $"Closed-loop HDR refinement: avg PQ luminance error {beforeAvg:P1} → {afterText} " +
-                              $"({rungs.Count} rungs to {rungs[^1]:F0} nits, one multiplicative pass).";
+                // Error trajectory across passes, e.g. "4.2% → 1.6% → 0.7%". The final figure
+                // is the BEST pass's measured ladder (the loop ends with it installed).
+                var trajectory = new List<string> { $"{outcome.InitialAvgAbsError:P1}" };
+                trajectory.AddRange(outcome.Passes
+                    .Where(p => p.AvgAbsErrorAfter is not null)
+                    .Select(p => $"{p.AvgAbsErrorAfter:P1}"));
+                string bestNote = outcome.EndedOnBest
+                    ? " — final numbers are the best pass's measured ladder, reinstalled"
+                    : string.Empty;
+                string line = $"Closed-loop HDR refinement: avg PQ luminance error {string.Join(" → ", trajectory)} " +
+                              $"({rungs.Count} rungs to {rungs[^1]:F0} nits; {outcome.StopReason}{bestNote}).";
                 Vm.VerifyDetailText = string.IsNullOrEmpty(Vm.VerifyDetailText)
                     ? line
                     : Vm.VerifyDetailText + "\n" + line;
                 Vm.IsVerifyDetailVisible = true;
 
-                Vm.StatusText = $"HDR tracking refined: avg PQ luminance error {beforeAvg:P1} → {afterText}.";
+                Vm.StatusText = $"HDR tracking refined: avg PQ luminance error " +
+                                $"{outcome.InitialAvgAbsError:P1} → {outcome.FinalAvgAbsError:P1}" +
+                                $"{(outcome.Converged ? " (converged)" : string.Empty)}.";
                 Vm.StatusBrush = CalibrationReportViewModel.GreenBrush;
                 CalibrationSounds.PlayCompletion();
                 Log.Info($"CalibrationReportWindow: {line}");
@@ -2203,7 +2231,7 @@ namespace HDRGammaController
             catch (OperationCanceledException)
             {
                 Vm.StatusText = installedRefined
-                    ? "HDR refinement cancelled after install - the refined profile is active but unverified."
+                    ? "HDR refinement cancelled - the best measured pass was restored to the display."
                     : "HDR refinement cancelled - the profile is unchanged.";
                 Vm.StatusBrush = CalibrationReportViewModel.DimBrush;
             }

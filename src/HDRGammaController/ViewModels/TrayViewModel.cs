@@ -39,6 +39,7 @@ namespace HDRGammaController.ViewModels
         private int _nightModeToggleId = -1;
 
         private readonly AppDetectionService _appDetectionService;
+        private readonly MelanopicMonitorService? _melanopicService;
         // Guarded by _activeMonitorsLock: RefreshMonitors (UI thread) mutates this while
         // OnForegroundAppChanged can enumerate it from the foreground-app hook thread.
         private List<MonitorInfo> _activeMonitors = new List<MonitorInfo>();
@@ -53,6 +54,7 @@ namespace HDRGammaController.ViewModels
         public ICommand StartupCommand { get; }
         public ICommand DashboardCommand { get; }
         public ICommand CalibrateCommand { get; }
+        public ICommand TrustCheckCommand { get; }
         public ICommand ExportDiagnosticsCommand { get; }
         public string AppVersion => _updateService.DisplayVersion;
         public string TrayToolTipText => $"Gloam {AppVersion}";
@@ -67,6 +69,7 @@ namespace HDRGammaController.ViewModels
             AppDetectionService appDetectionService,
             UpdateService updateService,
             IToastService? toastService = null,
+            MelanopicMonitorService? melanopicService = null,
             HotkeyManager? hotkeyManager = null)
         {
             // Dependencies are constructed by the DI container (App.ConfigureServices)
@@ -84,6 +87,7 @@ namespace HDRGammaController.ViewModels
             _appDetectionService = appDetectionService;
             _updateService = updateService;
             _toastService = toastService;
+            _melanopicService = melanopicService;
 
             _dispwinRunner.DispwinUnavailable += () =>
                 OnUiThread(() =>
@@ -106,6 +110,7 @@ namespace HDRGammaController.ViewModels
             StartupCommand = new RelayCommand(ToggleStartup);
             DashboardCommand = new RelayCommand(OpenDashboard);
             CalibrateCommand = new RelayCommand(OpenCalibration);
+            TrustCheckCommand = new RelayCommand(OpenTrustCheck);
             ExportDiagnosticsCommand = new RelayCommand(ExportDiagnostics);
 
             RefreshMonitors();
@@ -131,6 +136,81 @@ namespace HDRGammaController.ViewModels
             };
             _updateCheckTimer.Tick += (_, _) => CheckForUpdates();
             _updateCheckTimer.Start();
+
+            // Trust-check reminder: opt-in (needs the probe attached and aimed, so it is a
+            // reminder toast, never an auto-run). Checked at startup and once a day.
+            CheckTrustCheckReminder();
+            _trustCheckReminderTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromHours(24)
+            };
+            _trustCheckReminderTimer.Tick += (_, _) => CheckTrustCheckReminder();
+            _trustCheckReminderTimer.Start();
+        }
+
+        private readonly DispatcherTimer _trustCheckReminderTimer;
+
+        private void CheckTrustCheckReminder()
+        {
+            try
+            {
+                int intervalDays = _settingsManager.TrustCheckReminderDays;
+                if (intervalDays <= 0) return;
+
+                // Last-run time is derived from the trend store itself (the source of
+                // truth) across all calibrated monitors.
+                DateTime? lastCheckUtc = null;
+                List<MonitorInfo> monitors;
+                lock (_activeMonitorsLock) { monitors = _activeMonitors.ToList(); }
+                bool anyCalibrated = false;
+                foreach (var monitor in monitors)
+                {
+                    if (string.IsNullOrEmpty(monitor.MonitorDevicePath)) continue;
+                    if (!_settingsManager.HasMhc2Calibration(monitor.MonitorDevicePath)) continue;
+                    anyCalibrated = true;
+                    var history = TrustCheckHistory.Load(monitor.MonitorDevicePath);
+                    if (history.Count > 0)
+                    {
+                        var newest = history[^1].TimestampUtc;
+                        if (lastCheckUtc == null || newest > lastCheckUtc) lastCheckUtc = newest;
+                    }
+                }
+
+                if (!anyCalibrated) return;
+                if (!TrustCheckHistory.ShouldRemind(lastCheckUtc, DateTime.UtcNow, intervalDays)) return;
+
+                _toastService?.Show(
+                    "Time for a trust check",
+                    lastCheckUtc is { } last
+                        ? $"The last 20-second display check was {(DateTime.UtcNow - last).TotalDays:F0} days ago."
+                        : "Run a 20-second display check to start tracking calibration drift.",
+                    ToastKind.Info, "Run check", OpenTrustCheck);
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"TrayViewModel: trust-check reminder failed: {ex.Message}");
+            }
+        }
+
+        private void OpenTrustCheck()
+        {
+            // Only one probe exists: refuse while a calibration flow or another trust
+            // check is running (same guard as OpenCalibration).
+            foreach (Window window in Application.Current.Windows)
+            {
+                bool inUse = window is CalibrationSetupWindow or CalibrationWindow or TrustCheckWindow
+                    || (window is CalibrationReportWindow report && report.IsVerifyRunning);
+                if (!inUse) continue;
+
+                if (window.WindowState == WindowState.Minimized)
+                    window.WindowState = WindowState.Normal;
+                window.Activate();
+                return;
+            }
+
+            var trustCheckWindow = new TrustCheckWindow(
+                _monitorManager, _settingsManager, _dispwinRunner, _nightModeService, _toastService);
+            trustCheckWindow.Show();
         }
         
         // The downloaded-and-ready update awaiting apply. Null until one is detected and
@@ -637,7 +717,7 @@ namespace HDRGammaController.ViewModels
 
         private void OpenDashboard()
         {
-            var dashboard = new DashboardWindow(_monitorManager, _settingsManager, _nightModeService, _updateService, RequestApply);
+            var dashboard = new DashboardWindow(_monitorManager, _settingsManager, _nightModeService, _updateService, RequestApply, _melanopicService);
             dashboard.Show();
         }
 
@@ -814,6 +894,7 @@ namespace HDRGammaController.ViewModels
             {
                 TrayItems.Add(new ActionViewModel("Open Dashboard...", DashboardCommand));
                 TrayItems.Add(new ActionViewModel("Calibrate Display...", CalibrateCommand));
+                TrayItems.Add(new ActionViewModel("Trust Check...", TrustCheckCommand));
                 TrayItems.Add(new ActionViewModel("───────────", null));
                 
                 int index = 1;

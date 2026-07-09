@@ -186,6 +186,9 @@ namespace HDRGammaController.Core
         public NightModeAlgorithm Algorithm { get; set; } = NightModeAlgorithm.Perceptual;
         public bool UseUltraWarmMode { get; set; } = false;
         public double PerceptualStrength { get; set; } = ColorAdjustments.DefaultPerceptualStrength;
+        // Constant-Y night mode (3.3). Bool defaulting false: absent in older settings files
+        // deserializes to off — no schema bump needed.
+        public bool PreserveLuminance { get; set; } = false;
 
         public List<NightModeSchedulePoint> Schedule { get; set; } = new List<NightModeSchedulePoint>();
         
@@ -207,6 +210,7 @@ namespace HDRGammaController.Core
             Algorithm = ResolveAlgorithm(Algorithm),
             UseUltraWarmMode = UseUltraWarmMode,
             PerceptualStrength = NightModeSettings.ClampPerceptualStrength(PerceptualStrength),
+            PreserveLuminance = PreserveLuminance,
             Schedule = CloneSchedule(Schedule)
         };
 
@@ -233,6 +237,7 @@ namespace HDRGammaController.Core
             Algorithm = settings.Algorithm,
             UseUltraWarmMode = settings.UseUltraWarmMode,
             PerceptualStrength = NightModeSettings.ClampPerceptualStrength(settings.PerceptualStrength),
+            PreserveLuminance = settings.PreserveLuminance,
             Schedule = CloneSchedule(settings.Schedule)
         };
 
@@ -408,6 +413,28 @@ namespace HDRGammaController.Core
         public void SetDarkTheme(bool dark)
         {
             lock (_dataLock) { _data.DarkTheme = dark; _dataVersion++; }
+            Save();
+        }
+
+        /// <summary>
+        /// Trust-check reminder cadence in days; 0 = reminders off (the default — the check
+        /// needs the probe attached, so it is opt-in). The last-run time is not stored here:
+        /// it is derived from the newest TrustCheckHistory entry, the actual source of truth.
+        /// </summary>
+        public int TrustCheckReminderDays
+        {
+            get { lock (_dataLock) { return _data.TrustCheckReminderDays; } }
+        }
+
+        public void SetTrustCheckReminderDays(int days)
+        {
+            days = Math.Clamp(days, 0, 365);
+            lock (_dataLock)
+            {
+                if (_data.TrustCheckReminderDays == days) return;
+                _data.TrustCheckReminderDays = days;
+                _dataVersion++;
+            }
             Save();
         }
 
@@ -1067,6 +1094,8 @@ namespace HDRGammaController.Core
             public bool StartupDefaultApplied { get; set; }
             public bool LegacyInstallWarningShown { get; set; }
             public bool AllowWindowsNightLight { get; set; }
+            // Trust-check reminder cadence in days; 0 (the default for absent field) = off.
+            public int TrustCheckReminderDays { get; set; }
             public Dictionary<string, WindowBoundsData> WindowBounds { get; set; } = new Dictionary<string, WindowBoundsData>();
         }
 

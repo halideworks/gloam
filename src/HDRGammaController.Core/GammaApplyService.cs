@@ -155,6 +155,18 @@ namespace HDRGammaController.Core
             {
                 ApplyNightModeToCalibration(calibration, currentKelvin, nightModeSettingsOverride ?? _settingsManager.NightMode);
                 calibration.NightMelanopicCoefficients = CcssMelanopicEstimator.TryLoad(calibration.NightModeCcssPath);
+
+                // Constant-Y headroom ceiling, per monitor: on HDR the boost may use the
+                // panel's real headroom above SDR white (capped 2× — typical need is only
+                // 1.15–1.45×); on SDR the 256-entry GDI ramp clips at 1.0 and the ceiling
+                // stays there (dimming still creates in-range headroom). Unreported peak
+                // (0) falls back to 1.0 — never bloom past an unknown panel limit.
+                double sdrWhite = MonitorInfo.SanitizeSdrWhiteLevel(monitor.SdrWhiteLevel);
+                calibration.NightLuminanceCeiling =
+                    calibration.PreserveNightLuminance &&
+                    monitor.IsHdrActive && monitor.HdrPeakNits > sdrWhite
+                        ? Math.Min(2.0, monitor.HdrPeakNits / sdrWhite)
+                        : 1.0;
             }
 
             // Extended range: 1900K..10000K. See CalibrationSettings.Temperature
@@ -174,7 +186,83 @@ namespace HDRGammaController.Core
                 }
             }
 
+            PublishSnapshot(monitor, calibration);
+
             _coalescer.Submit(monitor.HMonitor, (monitor, mode, calibration, MonitorInfo.SanitizeSdrWhiteLevel(monitor.SdrWhiteLevel)));
+        }
+
+        /// <summary>
+        /// What the live melanopic dashboard consumes: the resolved applied state per monitor
+        /// (roadmap 3.1). Gains are white-SHAPE multipliers with brightness excluded — see
+        /// <see cref="ColorAdjustments.GetAppliedWhiteShapeMultipliers"/>.
+        /// </summary>
+        public readonly record struct AppliedStateSnapshot(
+            IntPtr HMonitor,
+            string MonitorDevicePath,
+            int EffectiveKelvin,
+            NightModeAlgorithm Algorithm,
+            double GainR,
+            double GainG,
+            double GainB,
+            double Brightness,
+            bool UseLinearBrightness,
+            double SdrWhiteLevel,
+            bool IsHdrActive,
+            string? CcssPath,
+            DateTime TimestampUtc);
+
+        /// <summary>Raised once per EFFECTIVE state change (deduped) from the synchronous
+        /// resolve in <see cref="RequestApply"/> — a state-change signal, never per ramp write.</summary>
+        public event Action<AppliedStateSnapshot>? StateApplied;
+
+        private readonly Dictionary<IntPtr, int> _lastSnapshotKey = new();
+        private readonly object _snapshotLock = new();
+
+        private void PublishSnapshot(MonitorInfo monitor, CalibrationSettings calibration)
+        {
+            var handler = StateApplied;
+            if (handler == null) return;
+
+            try
+            {
+                // The wire basis the eye actually sees: Rec.2020 container on HDR, sRGB on SDR.
+                var basis = monitor.IsHdrActive ? NightBasis.Rec2020 : NightBasis.Srgb;
+                var gains = ColorAdjustments.GetAppliedWhiteShapeMultipliers(calibration, basis);
+                var snapshot = new AppliedStateSnapshot(
+                    monitor.HMonitor,
+                    monitor.MonitorDevicePath,
+                    ColorAdjustments.TemperatureScaleToKelvin(
+                        ColorAdjustments.ComposeTemperatureScaleMired(calibration.Temperature, calibration.TemperatureOffset)),
+                    calibration.Algorithm,
+                    gains.R, gains.G, gains.B,
+                    calibration.Brightness,
+                    calibration.UseLinearBrightness,
+                    MonitorInfo.SanitizeSdrWhiteLevel(monitor.SdrWhiteLevel),
+                    monitor.IsHdrActive,
+                    calibration.NightModeCcssPath,
+                    DateTime.UtcNow);
+
+                // Dedupe on the effective content (excluding the timestamp) so a night-mode
+                // fade only publishes when something perceptible changed.
+                int key = HashCode.Combine(
+                    snapshot.EffectiveKelvin, snapshot.Algorithm,
+                    HashCode.Combine((int)Math.Round(gains.R * 1000), (int)Math.Round(gains.G * 1000),
+                        (int)Math.Round(gains.B * 1000)),
+                    (int)Math.Round(snapshot.Brightness), snapshot.IsHdrActive,
+                    (int)Math.Round(snapshot.SdrWhiteLevel), snapshot.CcssPath?.GetHashCode(StringComparison.OrdinalIgnoreCase) ?? 0);
+                lock (_snapshotLock)
+                {
+                    if (_lastSnapshotKey.TryGetValue(monitor.HMonitor, out int last) && last == key)
+                        return;
+                    _lastSnapshotKey[monitor.HMonitor] = key;
+                }
+
+                handler(snapshot);
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"GammaApplyService: state snapshot publish failed: {ex.Message}");
+            }
         }
 
         internal static void ApplyNightModeToCalibration(CalibrationSettings calibration, int currentKelvin, NightModeSettings nightModeSettings)
@@ -188,6 +276,7 @@ namespace HDRGammaController.Core
             calibration.Algorithm = nightModeSettings.Algorithm;
             calibration.UseUltraWarmMode = nightModeSettings.UseUltraWarmMode;
             calibration.PerceptualStrength = nightModeSettings.PerceptualStrength;
+            calibration.PreserveNightLuminance = nightModeSettings.PreserveLuminance;
         }
 
         public void ApplyAll(IEnumerable<MonitorInfo> monitors)

@@ -37,6 +37,7 @@ namespace HDRGammaController.Core
             double RedOffset, double GreenOffset, double BlueOffset,
             NightModeAlgorithm Algorithm, bool LinearBrightness, bool UltraWarm,
             double PerceptualStrength,
+            bool PreserveNightLuminance, double NightLuminanceCeiling,
             string? NightModeCcssPath,
             double NightRedMel, double NightGreenMel, double NightBlueMel,
             double NightRedLum, double NightGreenLum, double NightBlueLum,
@@ -48,6 +49,7 @@ namespace HDRGammaController.Core
                 value.RedOffset, value.GreenOffset, value.BlueOffset,
                 value.Algorithm, value.UseLinearBrightness, value.UseUltraWarmMode,
                 value.PerceptualStrength,
+                value.PreserveNightLuminance, value.NightLuminanceCeiling,
                 value.NightModeCcssPath,
                 value.NightMelanopicCoefficients?.RedMelanopic ?? 0.0,
                 value.NightMelanopicCoefficients?.GreenMelanopic ?? 0.0,
@@ -208,6 +210,24 @@ namespace HDRGammaController.Core
             // real HDR highlights stayed fully calibrated regardless of the user's intent.
             double pqSdrWhite = TransferFunctions.PqInverseEotf(sdrWhiteLevel);
 
+            // Constant-Y boost anchor: when the SDR-region white is boosted above the plain
+            // (dimmed) white, the headroom blend's target must START at the boosted value —
+            // blending a flat boosted channel toward a target that begins below it produces a
+            // dip (non-monotonic LUT) just above the SDR/HDR boundary. The anchor is the max
+            // channel's output at input white through the full adjustment chain.
+            double boostAnchorNits = 0.0;
+            if (calibration.HasAdjustments && calibration.PreserveNightLuminance &&
+                calibration.NightLuminanceCeiling > 1.0 + 1e-9)
+            {
+                var (wR, wG, wB) = ColorAdjustments.ApplyUserAdjustmentsLinear(
+                    1.0, 1.0, 1.0, calibration, NightBasis.Rec2020);
+                double anchor = Math.Max(wR, Math.Max(wG, wB)) * sdrWhiteLevel;
+                double plainDimmedWhite = ColorAdjustments.ApplyDimmingNits(
+                    sdrWhiteLevel, calibration.Brightness, sdrWhiteLevel, calibration.UseLinearBrightness);
+                if (anchor > plainDimmedWhite + 1e-9)
+                    boostAnchorNits = anchor;
+            }
+
             for (int i = 0; i < 1024; i++)
             {
                 double normalized = i / 1023.0;
@@ -277,7 +297,7 @@ namespace HDRGammaController.Core
                     // HDR highlights (no re-gamma, no temperature tint on a 2000-nit
                     // specular) while still honoring the brightness slider — so a
                     // user dimming the screen sees highlights come down too.
-                    double headroomSignal = ComputeHeadroomTarget(linear, calibration, sdrWhiteLevel);
+                    double headroomSignal = ComputeHeadroomTarget(linear, calibration, sdrWhiteLevel, boostAnchorNits);
 
                     // Blend in PQ-signal space (perceptually uniform) with a smoothstep
                     // for C¹ continuity at the SDR/HDR boundary, eliminating the visible
@@ -302,8 +322,25 @@ namespace HDRGammaController.Core
         /// dimming the screen leaves HDR highlights at full brightness, which the user
         /// experiences as specular bloom punching through a dimmed UI.
         /// </summary>
-        private static double ComputeHeadroomTarget(double linearNits, CalibrationSettings calibration, double sdrWhiteLevel)
+        private static double ComputeHeadroomTarget(
+            double linearNits, CalibrationSettings calibration, double sdrWhiteLevel,
+            double boostAnchorNits = 0.0)
         {
+            if (boostAnchorNits > 0.0)
+            {
+                // Constant-Y boost active: compress the passthrough range [sdrWhite, 10000]
+                // onto [anchor, 10000] with a power remap that is exact at both ends and
+                // monotone in between. Perceptually this is the honest statement of the
+                // rendering intent: constant-Y redefines diffuse white brighter, so highlight
+                // headroom genuinely shrinks; the grade's ordering is preserved and the top
+                // of PQ still lands at true passthrough. (This REPLACES the dimmed-passthrough
+                // branch — the anchor already includes the brightness dimming, because it is
+                // the measured output of the full adjustment chain at input white.)
+                double gammaPrime = Math.Log(10000.0 / boostAnchorNits) / Math.Log(10000.0 / sdrWhiteLevel);
+                double remapped = boostAnchorNits * Math.Pow(linearNits / sdrWhiteLevel, gammaPrime);
+                return TransferFunctions.PqInverseEotf(Math.Min(remapped, 10000.0));
+            }
+
             if (calibration.Brightness >= 100.0)
             {
                 // No dimming — target is pure passthrough. Re-encode original linear nits
@@ -404,6 +441,17 @@ namespace HDRGammaController.Core
                 throw new ArgumentNullException(nameof(characterization));
 
             calibration = (calibration ?? CalibrationSettings.Default).Sanitized();
+
+            // Constant-Y boost is capped at 1.0 on the measured-calibration path: the tone
+            // curves were fit over [black, measured white] and InverseLookup cannot soundly
+            // extrapolate above the fit. The HDR-headroom boost lives on the plain ramp path
+            // (GenerateLutInternal), which is the one night mode rides on MHC2-calibrated
+            // displays anyway. Within the measured range (dimmed input) constant-Y still works.
+            if (calibration.NightLuminanceCeiling > 1.0)
+            {
+                calibration = calibration.Clone();
+                calibration.NightLuminanceCeiling = 1.0;
+            }
 
             double[] lutR = new double[1024];
             double[] lutG = new double[1024];

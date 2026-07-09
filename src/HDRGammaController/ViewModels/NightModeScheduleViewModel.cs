@@ -75,6 +75,7 @@ namespace HDRGammaController.ViewModels
                 {
                     OnPropertyChanged(nameof(AlgorithmDescription));
                     OnPropertyChanged(nameof(IsUltraWarmApplicable));
+                    OnPropertyChanged(nameof(IsPreserveLuminanceApplicable));
                     OnPropertyChanged(nameof(IsPerceptualSelected));
                     if (_settings == null) return;
                     _settings.Algorithm = value;
@@ -85,6 +86,27 @@ namespace HDRGammaController.ViewModels
 
         /// <summary>Ultra Warm only affects the Classic (Standard/Helland) curve.</summary>
         public bool IsUltraWarmApplicable => _algorithm == NightModeAlgorithm.Standard;
+
+        private bool _preserveLuminance;
+        public bool PreserveLuminance
+        {
+            get => _preserveLuminance;
+            set
+            {
+                if (SetProperty(ref _preserveLuminance, value))
+                {
+                    if (_settings == null) return;
+                    _settings.PreserveLuminance = value;
+                    SettingsEdited?.Invoke();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Constant-Y does not apply to UltraNight — its dimming is deliberate
+        /// melanopic-dose reduction that a luminance boost would undo.
+        /// </summary>
+        public bool IsPreserveLuminanceApplicable => _algorithm != NightModeAlgorithm.UltraNight;
 
         /// <summary>The intensity slider only applies to the Perceptual algorithm.</summary>
         public bool IsPerceptualSelected => _algorithm == NightModeAlgorithm.Perceptual;
@@ -159,13 +181,16 @@ namespace HDRGammaController.ViewModels
             _algorithm = _settings.Algorithm;
             _perceptualStrengthPercent = NightModeSettings.ClampPerceptualStrength(_settings.PerceptualStrength) * 100.0;
             _useUltraWarmMode = _settings.UseUltraWarmMode;
+            _preserveLuminance = _settings.PreserveLuminance;
 
             OnPropertyChanged(nameof(Algorithm));
             OnPropertyChanged(nameof(AlgorithmDescription));
             OnPropertyChanged(nameof(IsUltraWarmApplicable));
+            OnPropertyChanged(nameof(IsPreserveLuminanceApplicable));
             OnPropertyChanged(nameof(IsPerceptualSelected));
             OnPropertyChanged(nameof(PerceptualStrengthPercent));
             OnPropertyChanged(nameof(UseUltraWarmMode));
+            OnPropertyChanged(nameof(PreserveLuminance));
         }
 
         /// <summary>
@@ -358,7 +383,9 @@ namespace HDRGammaController.ViewModels
     {
         public static IReadOnlyList<NightModeAlgorithmOption> DefaultOptions { get; } = new List<NightModeAlgorithmOption>
         {
-            new(NightModeAlgorithm.Perceptual, "Perceptual (recommended)"),
+            // "default", not "recommended": Ultra Night may become the recommended mode once
+            // its melanopic tuning is complete — don't bake a ranking into the label.
+            new(NightModeAlgorithm.Perceptual, "Perceptual (default)"),
             new(NightModeAlgorithm.UltraNight, "Ultra Night (amber)"),
             new(NightModeAlgorithm.AccurateCIE1931, "Accurate (CIE 1931)"),
             new(NightModeAlgorithm.Standard, "Classic (warm)"),

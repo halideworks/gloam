@@ -115,6 +115,21 @@ namespace HDRGammaController.Core
         public bool UseLinearBrightness { get; set; } = false;
 
         /// <summary>
+        /// Constant-Y night mode: compensate the luminance the warm shift removes, within
+        /// headroom (see <see cref="ColorAdjustments.RescaleToConstantLuminance"/>). Does not
+        /// apply to UltraNight, whose dimming is deliberate.
+        /// </summary>
+        public bool PreserveNightLuminance { get; set; } = false;
+
+        /// <summary>
+        /// Luminance ceiling for <see cref="PreserveNightLuminance"/>, relative to SDR white
+        /// in the wire signal. Runtime-only; populated by the apply service from the
+        /// monitor's HDR headroom (HdrPeakNits / SdrWhiteLevel, capped) — 1.0 on the SDR
+        /// path, whose GDI ramp cannot represent boost. Not persisted.
+        /// </summary>
+        public double NightLuminanceCeiling { get; set; } = 1.0;
+
+        /// <summary>
         /// Returns true if any adjustments are applied (non-default values).
         /// </summary>
         public bool HasAdjustments =>
@@ -162,7 +177,9 @@ namespace HDRGammaController.Core
             NightModeCcssPath = this.NightModeCcssPath,
             NightMelanopicCoefficients = this.NightMelanopicCoefficients,
             UseUltraWarmMode = this.UseUltraWarmMode,
-            PerceptualStrength = this.PerceptualStrength
+            PerceptualStrength = this.PerceptualStrength,
+            PreserveNightLuminance = this.PreserveNightLuminance,
+            NightLuminanceCeiling = this.NightLuminanceCeiling
         };
 
         /// <summary>
@@ -189,7 +206,9 @@ namespace HDRGammaController.Core
             NightModeCcssPath = NightModeCcssPath,
             NightMelanopicCoefficients = NightMelanopicCoefficients,
             UseUltraWarmMode = UseUltraWarmMode,
-            PerceptualStrength = ClampFinite(PerceptualStrength, 0.0, 1.0, ColorAdjustments.DefaultPerceptualStrength)
+            PerceptualStrength = ClampFinite(PerceptualStrength, 0.0, 1.0, ColorAdjustments.DefaultPerceptualStrength),
+            PreserveNightLuminance = PreserveNightLuminance,
+            NightLuminanceCeiling = ClampFinite(NightLuminanceCeiling, 1.0, 4.0, 1.0)
         };
 
         private static bool IsAdjusted(double value, double neutral, double tolerance) =>
@@ -229,11 +248,13 @@ namespace HDRGammaController.Core
             int lutInstanceKey = RuntimeHelpers.GetHashCode(MeasuredCorrectionLut);
             // Perceptual strength changes the multipliers, so it must invalidate the LUT cache.
             int strengthKey = (int)Math.Round(PerceptualStrength * 100);
+            // Constant-Y flag and ceiling change the multipliers/clamp — same cache rule.
+            int ceilingKey = (int)Math.Round(NightLuminanceCeiling * 100);
 
             return HashCode.Combine(
                 HashCode.Combine(brightnessKey, tempKey, tempOffsetKey, tintKey),
                 HashCode.Combine(rGainKey, gGainKey, bGainKey),
-                HashCode.Combine(rOffsetKey, gOffsetKey, bOffsetKey),
+                HashCode.Combine(rOffsetKey, gOffsetKey, bOffsetKey, PreserveNightLuminance, ceilingKey),
                 HashCode.Combine((int)Algorithm, UseLinearBrightness, UseUltraWarmMode, strengthKey, lutKey, lutInstanceKey, nightCcssKey)
             );
         }

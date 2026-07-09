@@ -328,6 +328,35 @@
                                 </StackPanel>
                             </Border>
                         </Expander>
+
+                        <!-- Melanopic (circadian) status -->
+                        <Expander x:Name="MelanopicExpander" Margin="0,24,0,0" IsExpanded="True"
+                                  Foreground="{DynamicResource ThemeText}"
+                                  Expanded="MelanopicExpander_Expanded">
+                            <Expander.Header>
+                                <TextBlock Text="Circadian light (melanopic)"
+                                           FontFamily="{StaticResource DisplayFont}" FontWeight="Bold" FontSize="14"
+                                           Foreground="{DynamicResource ThemeText}"/>
+                            </Expander.Header>
+                            <Border BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1" Margin="0,10,0,0" Padding="16">
+                                <StackPanel>
+                                    <TextBlock x:Name="MelanopicSummary" TextWrapping="Wrap"
+                                               FontFamily="{StaticResource MonoFont}" FontSize="13"
+                                               Foreground="{DynamicResource ThemeText}"
+                                               Text="Waiting for the first applied state…"/>
+                                    <TextBlock x:Name="MelanopicProvenance" TextWrapping="Wrap" FontSize="11"
+                                               FontFamily="{StaticResource BodyFont}"
+                                               Foreground="{DynamicResource ThemeTextDim}" Margin="0,8,0,0"/>
+                                    <!-- One dose chart per display: overlaying monitors on one
+                                         axis made mixed-brightness setups unreadable. -->
+                                    <StackPanel x:Name="DoseChartsPanel" Margin="0,12,0,0"
+                                                SizeChanged="DoseCanvas_SizeChanged"/>
+                                    <TextBlock x:Name="DoseSummary" FontSize="11"
+                                               FontFamily="{StaticResource BodyFont}"
+                                               Foreground="{DynamicResource ThemeTextDim}" Margin="0,8,0,0"/>
+                                </StackPanel>
+                            </Border>
+                        </Expander>
                     </StackPanel>
                 </ScrollViewer>
             </Grid>

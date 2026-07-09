@@ -44,7 +44,13 @@ namespace HDRGammaController.Core.Calibration
         // Closed-loop refinement policy (see Refine).
         private const int RefineMinRungs = 4;
         private const double RefineMaxAbsError = 0.35;   // any rung beyond ±35% → something else is wrong
-        private const double RefineConvergedError = 0.01; // avg |e−1| under 1% → not worth a reinstall
+
+        /// <summary>
+        /// Avg |e−1| under this → Refine refuses as "already converged" (a reinstall would
+        /// churn for nothing). Public so <see cref="HdrRefinementLoop"/> can recognize that
+        /// refusal as success rather than a failure to iterate on.
+        /// </summary>
+        public const double RefineConvergedError = 0.01;
         private const double RefineClampMin = 0.7;       // per-point correction factor bounds
         private const double RefineClampMax = 1.4;
 
@@ -237,16 +243,28 @@ namespace HDRGammaController.Core.Calibration
         /// The panel's reachable peak the existing LUT was built against (its
         /// <see cref="Result.MeasuredPeakNits"/>): anchors where the identity blend begins.
         /// </param>
+        /// <param name="damping">
+        /// Blend of each rung's correction factor toward 1 BEFORE the [0.7, 1.4] clamp:
+        /// e′ = 1 + damping·(e − 1). 1.0 (the default) is the full multiplicative step and
+        /// reproduces the pre-damping behavior bit-for-bit; the iterated loop uses smaller
+        /// steps on later passes to prevent oscillation on panels whose gain is not locally
+        /// smooth. The convergence/refusal gates always evaluate the UNdamped error — damping
+        /// changes step size, never the diagnosis.
+        /// </param>
         public static RefinementResult Refine(
             Result existing,
             IEnumerable<MeasurementResult> postInstallMeasurements,
-            double targetPeakNits)
+            double targetPeakNits,
+            double damping = 1.0)
         {
             if (existing == null) throw new ArgumentNullException(nameof(existing));
             if (existing.LutR is not { Length: >= 2 })
                 throw new ArgumentException("Existing LUT is empty.", nameof(existing));
             if (!double.IsFinite(targetPeakNits) || targetPeakNits <= 0)
                 throw new ArgumentOutOfRangeException(nameof(targetPeakNits));
+            if (!double.IsFinite(damping) || damping <= 0.0 || damping > 1.0)
+                throw new ArgumentOutOfRangeException(nameof(damping),
+                    $"Damping {damping} must be in (0, 1].");
 
             double s = existing.MatrixNeutralScale;
 
@@ -294,7 +312,7 @@ namespace HDRGammaController.Core.Calibration
             var knots = rungs
                 .Select(r => (
                     X: TransferFunctions.PqInverseEotf(s * r.Req),
-                    E: Math.Clamp(r.Y / r.Req, RefineClampMin, RefineClampMax)))
+                    E: Math.Clamp(1.0 + damping * (r.Y / r.Req - 1.0), RefineClampMin, RefineClampMax)))
                 .ToList();
 
             // Fade region: from the top measured rung to where Build's identity blend begins

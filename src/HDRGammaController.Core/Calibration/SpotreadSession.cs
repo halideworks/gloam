@@ -112,6 +112,19 @@ namespace HDRGammaController.Core.Calibration
             "couldn't find an instrument"
         };
 
+        // The instrument answered but physically refuses to read the screen (i1 DisplayPro
+        // with the ambient-light diffuser rotated over the sensor, probe in ambient
+        // orientation, …). spotread prints this IMMEDIATELY on the read attempt — before
+        // this classification the run silently waited out the 30 s measurement timeout
+        // three times and failed with no explanation, hiding an instantly user-correctable
+        // problem (2026-07-09 field failure).
+        private static readonly string[] ProbePositionFragments =
+        {
+            "sensor being in the wrong position",
+            "ambient filter should be removed",
+            "sensor should be facing the display",
+        };
+
         // Generic error tokens are only fatal when they START the message. Matching
         // "error: "/"error-" anywhere in the line (as this class used to) aborts runs on
         // harmless instrument-info output that merely mentions the word (e.g. correction
@@ -738,6 +751,29 @@ namespace HDRGammaController.Core.Calibration
                 {
                     _sharingViolationSeen = true;
                     break;
+                }
+            }
+
+            // 5a. Probe mispositioned (ambient diffuser over the sensor, wrong orientation):
+            //     fail the pending read NOW with an actionable message instead of letting it
+            //     ride the 30 s timeout into a poisoned session — the user can fix this in
+            //     two seconds if we actually tell them.
+            foreach (var fragment in ProbePositionFragments)
+            {
+                if (lower.Contains(fragment))
+                {
+                    _fatalError =
+                        "The instrument is not positioned to read the screen " +
+                        $"({line.Trim().Trim('(', ')')}). Rotate the ambient-light diffuser off the " +
+                        "sensor and place the probe flat against the panel, then start again.";
+                    var positionEx = new InvalidOperationException(_fatalError);
+                    _readyTcs.TrySetException(positionEx);
+                    lock (_stateLock)
+                    {
+                        _pendingMeasurement?.TrySetException(positionEx);
+                        _pendingSpectral?.TrySetException(positionEx);
+                    }
+                    return;
                 }
             }
 

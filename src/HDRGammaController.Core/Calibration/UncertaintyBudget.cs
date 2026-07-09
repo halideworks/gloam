@@ -371,6 +371,96 @@ namespace HDRGammaController.Core.Calibration
 
         #endregion
 
+        #region Melanopic (roadmap 3.1)
+
+        /// <summary>
+        /// Where the panel spectra used for melanopic math came from — the dominant
+        /// uncertainty for a colorimeter-only user, ordered best to worst.
+        /// </summary>
+        public enum CcssProvenance
+        {
+            /// <summary>Spectral capture of THIS unit (Gloam's own CCSS generation).</summary>
+            UserCapturedThisPanel,
+
+            /// <summary>Community CCSS matched to the same display model (different unit,
+            /// panel-lot binning and backlight aging differ).</summary>
+            DbMatchedSameModel,
+
+            /// <summary>Foreign or synthesized primaries — gamut and peak wavelengths are
+            /// guesswork.</summary>
+            GenericOrOtherPanel,
+        }
+
+        // Relative standard uncertainty on the mel-DER from the CCSS source. Engineering
+        // estimates (documented, not measured): a same-unit capture leaves band-selection +
+        // instrument spectral-sampling residual (~5%); same-model DB spectra add unit-to-unit
+        // and aging spread (~10%); generic/foreign spectra are peak-wavelength guesses (~25%,
+        // melanopic weight moves fast with blue-peak position).
+        public const double MelDerRelStdU_UserPanel = 0.05;
+        public const double MelDerRelStdU_DbSameModel = 0.10;
+        public const double MelDerRelStdU_Generic = 0.25;
+
+        /// <summary>
+        /// Relative std-u of the ASSUMED viewing geometry, applied to the absolute mel-EDI
+        /// only (the % reduction is geometry-free by construction). Rectangular over roughly
+        /// a 2× solid-angle range → half-width/√3 ≈ 0.35. Deliberately large: the app cannot
+        /// know the user's true viewing distance or how much of the visual field the screen
+        /// fills.
+        /// </summary>
+        public const double ViewingGeometryRelStdU = 0.35;
+
+        /// <summary>Melanopic metrics with expanded (k=2) intervals: the EDI interval
+        /// includes the geometry term; the reduction interval never does.</summary>
+        public sealed record MelanopicUncertainty(
+            double EdiValue, double EdiExpandedU,
+            double ReductionValue, double ReductionExpandedU,
+            CcssProvenance Provenance)
+        {
+            public string Describe() =>
+                $"mel-EDI {EdiValue:F1} ± {EdiExpandedU:F1} mel-lx (k=2, incl. assumed viewing geometry); " +
+                $"reduction {ReductionValue:P0} ± {ReductionExpandedU:P0} (geometry-free); " +
+                $"spectra: {Provenance}";
+        }
+
+        public static double MelDerRelStdU(CcssProvenance provenance) => provenance switch
+        {
+            CcssProvenance.UserCapturedThisPanel => MelDerRelStdU_UserPanel,
+            CcssProvenance.DbMatchedSameModel => MelDerRelStdU_DbSameModel,
+            _ => MelDerRelStdU_Generic,
+        };
+
+        /// <summary>
+        /// Builds the melanopic uncertainty budget. The reduction interval RSS-combines the
+        /// CCSS-provenance term (counted for state and baseline — conservatively treated as
+        /// independent though partially correlated) with the additive-white residual; the EDI
+        /// interval additionally includes the viewing-geometry term. Both expanded at k=2.
+        /// </summary>
+        public static MelanopicUncertainty CombineMelanopic(
+            MelanopicReading reading,
+            CcssProvenance provenance,
+            double whiteResidualFraction)
+        {
+            double provRel = MelDerRelStdU(provenance);
+            double residualRel = double.IsFinite(whiteResidualFraction)
+                ? Math.Clamp(Math.Abs(whiteResidualFraction), 0.0, 1.0)
+                : 0.0;
+
+            // Reduction R = 1 − ratio: the uncertainty of the RATIO maps 1:1 onto R.
+            double ratio = 1.0 - reading.ReductionFraction;
+            double ratioRel = Rss(provRel, provRel, residualRel); // state + baseline + additivity
+            double reductionStdU = Math.Abs(ratio) * ratioRel;
+
+            double ediRel = Rss(provRel, residualRel, ViewingGeometryRelStdU);
+            double ediStdU = Math.Abs(reading.MelanopicEdiLux) * ediRel;
+
+            return new MelanopicUncertainty(
+                reading.MelanopicEdiLux, CoverageFactorK * ediStdU,
+                reading.ReductionFraction, CoverageFactorK * reductionStdU,
+                provenance);
+        }
+
+        #endregion
+
         #region Combination
 
         /// <summary>Root-sum-square of independent standard-uncertainty terms (GUM quadrature).</summary>

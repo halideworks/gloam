@@ -955,7 +955,7 @@ namespace HDRGammaController.Core.Calibration
         /// middle values. Timestamp is taken from the middle reading so drift fitting sees
         /// the temporal center of the read burst.
         /// </summary>
-        internal static MeasurementResult MedianMeasurement(ColorPatch patch, IReadOnlyList<MeasurementResult> reads)
+        public static MeasurementResult MedianMeasurement(ColorPatch patch, IReadOnlyList<MeasurementResult> reads)
         {
             if (reads.Count == 1) return reads[0];
 

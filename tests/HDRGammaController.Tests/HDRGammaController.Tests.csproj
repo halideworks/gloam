@@ -29,4 +29,10 @@
     <ProjectReference Include="..\..\src\HDRGammaController\HDRGammaController.csproj" />
   </ItemGroup>
 
+  <!-- Golden-sample regression fixtures: recorded real-panel measurement sets replayed
+       through the live pipeline (see GoldenReplayTests). -->
+  <ItemGroup>
+    <None Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

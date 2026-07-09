@@ -79,6 +79,38 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public async Task MeasureAsync_ProbeWrongPosition_FailsFastWithActionableMessage()
+        {
+            // 2026-07-09 field failure: the i1 DisplayPro's ambient diffuser was over the
+            // sensor. spotread reported it IMMEDIATELY, but the session waited out the full
+            // measurement timeout three times and the run died with no explanation. The
+            // wrong-position report must fail the pending read at once, with instructions.
+            var session = CreateFakeSession(out _, out _);
+            session.MeasureTimeout = TimeSpan.FromSeconds(30); // must NOT be what ends this
+
+            var task = session.MeasureAsync(CancellationToken.None);
+            session.SimulateOutputLine("Spot read failed due to the sensor being in the wrong position");
+            session.SimulateOutputLine("(Ambient filter should be removed)");
+
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => task);
+            Assert.Contains("not positioned", ex.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("diffuser", ex.Message, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public async Task MeasureAsync_AmbientFilterLineAlone_AlsoFailsFast()
+        {
+            var session = CreateFakeSession(out _, out _);
+            session.MeasureTimeout = TimeSpan.FromSeconds(30);
+
+            var task = session.MeasureAsync(CancellationToken.None);
+            session.SimulateOutputLine("(Ambient filter should be removed)");
+
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => task);
+            Assert.Contains("Ambient filter", ex.Message, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
         public void StaleXyzLine_WithNoPendingMeasurement_IsIgnoredAndLogged()
         {
             var session = CreateFakeSession(out var log, out _);

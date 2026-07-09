@@ -187,7 +187,7 @@
                                       IsChecked="{Binding WhitePointOnly}"
                                       Content="White point correction only (skip gamut re-mapping)"/>
                             <TextBlock Foreground="{DynamicResource ThemeTextDim}" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0"
-                                       Text="Corrects white point and tone but leaves the panel's color gamut untouched. Recommended when the native gamut already measures close to the target, or on OLEDs in HDR, where the panel's own processing makes full gamut correction overshoot. Auto-suggested for OLED."/>
+                                       Text="Corrects white point and tone but leaves the panel's color gamut untouched. Useful when the native gamut already measures close to the target. Full gamut correction is the default — it measured better even on OLED panels."/>
                         </StackPanel>
                     </Border>
 

@@ -126,6 +126,19 @@
                            VerticalAlignment="Center" Margin="14,0,0,0" FontSize="10"
                            FontFamily="{DynamicResource BodyFont}" Foreground="{DynamicResource ThemeTextDim}"/>
             </StackPanel>
+
+            <!-- Constant-Y luminance preservation (hidden for Ultra Night, whose dimming is deliberate) -->
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,10,0,0"
+                        Visibility="{Binding IsPreserveLuminanceApplicable, Converter={StaticResource BoolToVis}}"
+                        ToolTip="Compensates the brightness the warm shift removes, within available headroom: full effect needs HDR headroom above SDR white (or a dimmed SDR screen). On SDR at 100% brightness there is no headroom and the default dimmer warm white applies.">
+                <CheckBox IsChecked="{Binding PreserveLuminance}"
+                          VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <TextBlock Foreground="{DynamicResource ThemeText}" FontFamily="{DynamicResource BodyFont}"
+                           FontSize="12" VerticalAlignment="Center">
+                    <Run Text="Preserve brightness" FontWeight="Bold"/>
+                    <Run Text=" - constant-luminance warm shift (uses HDR headroom)" Foreground="{DynamicResource ThemeTextDim}"/>
+                </TextBlock>
+            </StackPanel>
         </StackPanel>
 
         <!-- List -->
