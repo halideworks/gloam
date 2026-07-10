@@ -174,19 +174,57 @@ namespace HDRGammaController.Core.Calibration
         /// only the 100-nit rung is emitted).
         /// </summary>
         public static IReadOnlyList<ColoredHdrStimulus> Build(double displayPeakNits)
+            => Build(displayPeakNits, includeNeutrals: false, containerRgbToXyz: null);
+
+        /// <summary>
+        /// Gamut-aware variant: the hues are generated in the CONTAINER'S primaries
+        /// (<paramref name="containerRgbToXyz"/>), so grading an sRGB-gamut HDR target uses
+        /// reachable sRGB/Rec.709 hues instead of Rec.2020 hues the panel cannot produce
+        /// (which otherwise grade the panel's gamut clip, not its color — the source of the
+        /// spurious 40–160 ΔE ITP on sRGB-gamut HDR panels). Null falls back to Rec.2020.
+        /// </summary>
+        public static IReadOnlyList<ColoredHdrStimulus> Build(double displayPeakNits, double[,]? containerRgbToXyz)
+            => Build(displayPeakNits, includeNeutrals: false, containerRgbToXyz);
+
+        /// <summary>
+        /// The matrix-refinement variant (roadmap 2.2): the colored hues PLUS a White
+        /// stimulus at every surviving rung. The neutral anchors are what keep a
+        /// least-squares matrix refit from trading white-point accuracy for colored-patch
+        /// accuracy — without them the fit could rotate the whole gamut around a drifted
+        /// white and grade "better" while looking worse.
+        /// </summary>
+        public static IReadOnlyList<ColoredHdrStimulus> BuildForMatrixRefinement(double displayPeakNits)
+            => Build(displayPeakNits, includeNeutrals: true, containerRgbToXyz: null);
+
+        /// <summary>Gamut-aware refinement stimuli (see <see cref="Build(double, double[,])"/>).</summary>
+        public static IReadOnlyList<ColoredHdrStimulus> BuildForMatrixRefinement(
+            double displayPeakNits, double[,]? containerRgbToXyz)
+            => Build(displayPeakNits, includeNeutrals: true, containerRgbToXyz);
+
+        private static IReadOnlyList<ColoredHdrStimulus> Build(
+            double displayPeakNits, bool includeNeutrals, double[,]? containerRgbToXyz)
         {
+            var matrix = containerRgbToXyz ?? ColorMath.Rec2020ToXyzMatrix;
             bool peakKnown = double.IsFinite(displayPeakNits) && displayPeakNits > 0;
             var stimuli = new List<ColoredHdrStimulus>();
             foreach (double rung in RungNits)
             {
                 if (rung > 100.0 && (!peakKnown || rung > displayPeakNits))
                     continue;
-                foreach (var (name, r, g, b) in Hues)
+                var hues = includeNeutrals
+                    ? new (string Name, double R, double G, double B)[] { ("White", 1, 1, 1) }
+                        .Concat(Hues)
+                    : Hues.AsEnumerable();
+                foreach (var (name, r, g, b) in hues)
                 {
                     var unit = new LinearRgb(r, g, b);
-                    // Luminance of the unit hue in the container: the Y row of the
-                    // Rec.2020 RGB→XYZ matrix (matrix is D65-normalized: (1,1,1) → Y=1).
-                    var unitXyz = ColorMath.LinearRec2020ToXyz(unit);
+                    // Luminance of the unit hue in the container (matrix is D65-normalized:
+                    // (1,1,1) → Y=1). Generated in the container's own primaries so the
+                    // reference is reachable on a panel calibrated to that container.
+                    var unitXyz = new CieXyz(
+                        matrix[0, 0] * r + matrix[0, 1] * g + matrix[0, 2] * b,
+                        matrix[1, 0] * r + matrix[1, 1] * g + matrix[1, 2] * b,
+                        matrix[2, 0] * r + matrix[2, 1] * g + matrix[2, 2] * b);
                     double scale = rung / unitXyz.Y; // white-equivalent nits per channel
                     var referenceXyz = unitXyz * scale; // Y == rung exactly
                     var scRgb = ColorMath.XyzToLinearSrgb(referenceXyz);

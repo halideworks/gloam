@@ -340,6 +340,38 @@
                             </Expander.Header>
                             <Border BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1" Margin="0,10,0,0" Padding="16">
                                 <StackPanel>
+                                    <!-- Headline: current melanopic exposure vs the evening recommendation. -->
+                                    <Grid Margin="0,0,0,12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0">
+                                            <TextBlock Text="MELANOPIC EXPOSURE NOW" Style="{StaticResource Kicker}"/>
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom">
+                                                <TextBlock x:Name="ExposureBig" Text="—"
+                                                           FontFamily="{StaticResource DisplayFont}" FontWeight="ExtraBold"
+                                                           FontSize="40" Foreground="{DynamicResource ThemeText}"/>
+                                                <TextBlock Text="mel-lx" FontFamily="{StaticResource DisplayFont}"
+                                                           FontSize="15" Foreground="{DynamicResource ThemeTextDim}"
+                                                           VerticalAlignment="Bottom" Margin="6,0,0,7"/>
+                                            </StackPanel>
+                                            <TextBlock x:Name="ExposureRecommendation" FontSize="12"
+                                                       FontFamily="{StaticResource BodyFont}"
+                                                       Foreground="{DynamicResource ThemeTextDim}" TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                            <TextBlock Text="TONIGHT'S DOSE" Style="{StaticResource Kicker}" HorizontalAlignment="Right"/>
+                                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Bottom">
+                                                <TextBlock x:Name="DoseBig" Text="—"
+                                                           FontFamily="{StaticResource DisplayFont}" FontWeight="ExtraBold"
+                                                           FontSize="28" Foreground="{DynamicResource ThemeText}"/>
+                                                <TextBlock Text="mel-lx·h" FontFamily="{StaticResource DisplayFont}"
+                                                           FontSize="13" Foreground="{DynamicResource ThemeTextDim}"
+                                                           VerticalAlignment="Bottom" Margin="5,0,0,5"/>
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Grid>
                                     <TextBlock x:Name="MelanopicSummary" TextWrapping="Wrap"
                                                FontFamily="{StaticResource MonoFont}" FontSize="13"
                                                Foreground="{DynamicResource ThemeText}"

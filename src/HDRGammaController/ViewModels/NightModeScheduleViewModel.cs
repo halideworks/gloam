@@ -108,6 +108,47 @@ namespace HDRGammaController.ViewModels
         /// </summary>
         public bool IsPreserveLuminanceApplicable => _algorithm != NightModeAlgorithm.UltraNight;
 
+        // Dose-based ceiling (3.2): checkbox + mel-lux threshold. 0 in settings = off.
+        private bool _doseCeilingEnabled;
+        public bool DoseCeilingEnabled
+        {
+            get => _doseCeilingEnabled;
+            set
+            {
+                if (SetProperty(ref _doseCeilingEnabled, value))
+                {
+                    WriteDoseCeiling();
+                }
+            }
+        }
+
+        private string _doseCeilingText = "10";
+        public string DoseCeilingText
+        {
+            get => _doseCeilingText;
+            set
+            {
+                if (SetProperty(ref _doseCeilingText, value) && _doseCeilingEnabled)
+                {
+                    WriteDoseCeiling();
+                }
+            }
+        }
+
+        private void WriteDoseCeiling()
+        {
+            if (_settings == null) return;
+            double ceiling = 0.0;
+            if (_doseCeilingEnabled &&
+                double.TryParse(_doseCeilingText, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.CurrentCulture, out double parsed))
+            {
+                ceiling = NightModeSettings.ClampMelanopicCeiling(parsed);
+            }
+            _settings.MelanopicEdiCeiling = ceiling;
+            SettingsEdited?.Invoke();
+        }
+
         /// <summary>The intensity slider only applies to the Perceptual algorithm.</summary>
         public bool IsPerceptualSelected => _algorithm == NightModeAlgorithm.Perceptual;
 
@@ -182,6 +223,9 @@ namespace HDRGammaController.ViewModels
             _perceptualStrengthPercent = NightModeSettings.ClampPerceptualStrength(_settings.PerceptualStrength) * 100.0;
             _useUltraWarmMode = _settings.UseUltraWarmMode;
             _preserveLuminance = _settings.PreserveLuminance;
+            _doseCeilingEnabled = _settings.MelanopicEdiCeiling > 0;
+            if (_settings.MelanopicEdiCeiling > 0)
+                _doseCeilingText = _settings.MelanopicEdiCeiling.ToString("0.#");
 
             OnPropertyChanged(nameof(Algorithm));
             OnPropertyChanged(nameof(AlgorithmDescription));
@@ -191,6 +235,8 @@ namespace HDRGammaController.ViewModels
             OnPropertyChanged(nameof(PerceptualStrengthPercent));
             OnPropertyChanged(nameof(UseUltraWarmMode));
             OnPropertyChanged(nameof(PreserveLuminance));
+            OnPropertyChanged(nameof(DoseCeilingEnabled));
+            OnPropertyChanged(nameof(DoseCeilingText));
         }
 
         /// <summary>

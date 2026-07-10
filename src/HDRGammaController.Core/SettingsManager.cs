@@ -189,6 +189,8 @@ namespace HDRGammaController.Core
         // Constant-Y night mode (3.3). Bool defaulting false: absent in older settings files
         // deserializes to off — no schema bump needed.
         public bool PreserveLuminance { get; set; } = false;
+        // Dose-based ceiling (3.2), mel-lux; 0/absent = off — no schema bump needed.
+        public double MelanopicEdiCeiling { get; set; } = 0.0;
 
         public List<NightModeSchedulePoint> Schedule { get; set; } = new List<NightModeSchedulePoint>();
         
@@ -211,6 +213,7 @@ namespace HDRGammaController.Core
             UseUltraWarmMode = UseUltraWarmMode,
             PerceptualStrength = NightModeSettings.ClampPerceptualStrength(PerceptualStrength),
             PreserveLuminance = PreserveLuminance,
+            MelanopicEdiCeiling = NightModeSettings.ClampMelanopicCeiling(MelanopicEdiCeiling),
             Schedule = CloneSchedule(Schedule)
         };
 
@@ -238,6 +241,7 @@ namespace HDRGammaController.Core
             UseUltraWarmMode = settings.UseUltraWarmMode,
             PerceptualStrength = NightModeSettings.ClampPerceptualStrength(settings.PerceptualStrength),
             PreserveLuminance = settings.PreserveLuminance,
+            MelanopicEdiCeiling = NightModeSettings.ClampMelanopicCeiling(settings.MelanopicEdiCeiling),
             Schedule = CloneSchedule(settings.Schedule)
         };
 

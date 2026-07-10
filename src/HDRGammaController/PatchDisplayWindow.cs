@@ -39,6 +39,8 @@ namespace HDRGammaController
         private readonly TextBlock _nextPatch;
         private readonly Grid _currentNextRow;
         private readonly StackPanel _controlsRow;
+        private readonly StackPanel _placementRow;
+        private readonly TextBlock _placementInstruction;
         private readonly Button _muteButton;
         private Action? _cancelRequested;
 
@@ -248,7 +250,43 @@ namespace HDRGammaController
             _controlsRow.Children.Add(cancelButton);
             _controlsRow.Children.Add(_muteButton);
 
+            // Placement prompt: a clear instruction + a big Begin button, shown before a
+            // refine/characterize run so the user drags the patch onto the probe and starts
+            // deliberately (mirrors the calibration positioning step). Hidden during the sweep.
+            _placementInstruction = new TextBlock
+            {
+                Foreground = Brushes.White,
+                FontSize = 16,
+                FontWeight = FontWeights.SemiBold,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                TextAlignment = TextAlignment.Center,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 12),
+            };
+            var beginButton = new Button
+            {
+                Content = "Begin measurement",
+                Padding = new Thickness(30, 12, 30, 12),
+                FontSize = 15,
+                FontWeight = FontWeights.Bold,
+                Foreground = Brushes.White,
+                Background = Accent,
+                BorderThickness = new Thickness(0),
+                Cursor = System.Windows.Input.Cursors.Hand,
+                HorizontalAlignment = HorizontalAlignment.Center,
+            };
+            beginButton.Click += (_, _) => ContinueRequested?.Invoke();
+            _placementRow = new StackPanel
+            {
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 4, 0, 4),
+                Visibility = Visibility.Collapsed,
+            };
+            _placementRow.Children.Add(_placementInstruction);
+            _placementRow.Children.Add(beginButton);
+
             var overlayContent = new StackPanel { MaxWidth = 600 };
+            overlayContent.Children.Add(_placementRow);
             overlayContent.Children.Add(_progress);
             overlayContent.Children.Add(infoRow);
             overlayContent.Children.Add(_currentNextRow);
@@ -329,6 +367,32 @@ namespace HDRGammaController
             _currentPatch.Text = patchName;
             _nextPatch.Text = nextPatchName ?? "(last patch)";
             _currentNextRow.Visibility = Visibility.Visible;
+        }
+
+        /// <summary>
+        /// Shows the placement prompt (drag instruction + big Begin button) and enables
+        /// dragging the patch, hiding the progress strip. The caller awaits ContinueRequested
+        /// (Begin button / Enter / double-click), then calls <see cref="HidePlacementPrompt"/>.
+        /// </summary>
+        public void ShowPlacementPrompt(string instruction)
+        {
+            _placementInstruction.Text = instruction;
+            _placementRow.Visibility = Visibility.Visible;
+            _progress.Visibility = Visibility.Collapsed;
+            _percent.Visibility = Visibility.Collapsed;
+            _patchInfo.Visibility = Visibility.Collapsed;
+            _phase.Visibility = Visibility.Collapsed;
+            EnableDrag();
+        }
+
+        public void HidePlacementPrompt()
+        {
+            _placementRow.Visibility = Visibility.Collapsed;
+            _progress.Visibility = Visibility.Visible;
+            _percent.Visibility = Visibility.Visible;
+            _patchInfo.Visibility = Visibility.Visible;
+            _phase.Visibility = Visibility.Visible;
+            DisableDrag();
         }
 
         private void SetProgressBar(int current, int total)

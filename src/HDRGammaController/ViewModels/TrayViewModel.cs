@@ -55,6 +55,7 @@ namespace HDRGammaController.ViewModels
         public ICommand DashboardCommand { get; }
         public ICommand CalibrateCommand { get; }
         public ICommand TrustCheckCommand { get; }
+        public ICommand MatchDisplaysCommand { get; }
         public ICommand ExportDiagnosticsCommand { get; }
         public string AppVersion => _updateService.DisplayVersion;
         public string TrayToolTipText => $"Gloam {AppVersion}";
@@ -111,6 +112,7 @@ namespace HDRGammaController.ViewModels
             DashboardCommand = new RelayCommand(OpenDashboard);
             CalibrateCommand = new RelayCommand(OpenCalibration);
             TrustCheckCommand = new RelayCommand(OpenTrustCheck);
+            MatchDisplaysCommand = new RelayCommand(OpenMatchDisplays);
             ExportDiagnosticsCommand = new RelayCommand(ExportDiagnostics);
 
             RefreshMonitors();
@@ -211,6 +213,12 @@ namespace HDRGammaController.ViewModels
             var trustCheckWindow = new TrustCheckWindow(
                 _monitorManager, _settingsManager, _dispwinRunner, _nightModeService, _toastService);
             trustCheckWindow.Show();
+        }
+
+        private void OpenMatchDisplays()
+        {
+            var matchWindow = new DisplayMatchWindow(_monitorManager, _settingsManager, () => OnUiThread(ApplyAll));
+            matchWindow.Show();
         }
         
         // The downloaded-and-ready update awaiting apply. Null until one is detected and
@@ -895,6 +903,7 @@ namespace HDRGammaController.ViewModels
                 TrayItems.Add(new ActionViewModel("Open Dashboard...", DashboardCommand));
                 TrayItems.Add(new ActionViewModel("Calibrate Display...", CalibrateCommand));
                 TrayItems.Add(new ActionViewModel("Trust Check...", TrustCheckCommand));
+                TrayItems.Add(new ActionViewModel("Match Displays...", MatchDisplaysCommand));
                 TrayItems.Add(new ActionViewModel("───────────", null));
                 
                 int index = 1;

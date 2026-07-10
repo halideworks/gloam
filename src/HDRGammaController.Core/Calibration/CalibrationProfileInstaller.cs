@@ -121,6 +121,16 @@ namespace HDRGammaController.Core.Calibration
         /// Builds and installs the calibrated profile for <paramref name="monitor"/>. Returns
         /// the installed profile filename so callers can record it (and later revert).
         /// </summary>
+        /// <param name="xyzCorrectionOverride">
+        /// Closed-loop HDR color refinement (roadmap 2.2): the measured 3×3 XYZ residual F
+        /// (measured ≈ F·reference through the installed chain, from
+        /// <see cref="HdrColorMatrixRefiner"/>). When present the gamut matrix becomes
+        /// M′ = D⁻¹·F⁻¹·T, cancelling the residual to first order. Note the changed matrix
+        /// changes the uniform neutral scale, so an accompanying
+        /// <paramref name="hdrLutsOverride"/> will normally be rejected and the HDR tone
+        /// LUTs rebuilt from <paramref name="measurements"/> at the new scale — by design,
+        /// the LUT input domain depends on the matrix scale.
+        /// </param>
         public static InstallResult Install(
             MonitorInfo monitor,
             DisplayCharacterization characterization,
@@ -130,7 +140,8 @@ namespace HDRGammaController.Core.Calibration
             bool hdrMode = false,
             IReadOnlyList<MeasurementResult>? measurements = null,
             string? profileNameOverride = null,
-            HdrMhc2LutBuilder.Result? hdrLutsOverride = null)
+            HdrMhc2LutBuilder.Result? hdrLutsOverride = null,
+            double[,]? xyzCorrectionOverride = null)
         {
             if (string.IsNullOrEmpty(monitor.MonitorDevicePath))
                 return new InstallResult(false, "", "Monitor has no device path; cannot associate a profile.");
@@ -182,7 +193,22 @@ namespace HDRGammaController.Core.Calibration
             }
 
             double[,] matrix;
-            try { matrix = Mhc2ProfileBuilder.BuildGamutMatrix(characterization, matrixTarget); }
+            try
+            {
+                matrix = Mhc2ProfileBuilder.BuildGamutMatrix(characterization, matrixTarget);
+                if (xyzCorrectionOverride != null)
+                {
+                    // M′ = D⁻¹·F⁻¹·T: pre-compensate the measured XYZ residual so the
+                    // panel lands the references the matrix intended. BuildGamutMatrix is
+                    // D⁻¹·T, so left-compose D⁻¹·F⁻¹·D — equivalently rebuild directly.
+                    var displayXyzToRgb = ColorMath.Invert3x3(characterization.RgbToXyzMatrix);
+                    matrix = ColorMath.MultiplyMatrices(
+                        displayXyzToRgb,
+                        ColorMath.MultiplyMatrices(
+                            ColorMath.Invert3x3(xyzCorrectionOverride),
+                            matrixTarget.RgbToXyzMatrix));
+                }
+            }
             catch (Exception ex) { return new InstallResult(false, "", $"Gamut matrix failed: {ex.Message}"); }
 
             // GAMUT GUARD: block only when the target gamut is wider than the panel can EMIT

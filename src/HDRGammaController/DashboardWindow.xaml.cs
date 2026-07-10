@@ -132,20 +132,32 @@ namespace HDRGammaController
 
         // ---- Melanopic (circadian) card ----------------------------------------------------
 
+        // Evening melanopic-EDI recommendation (Brown et al. 2022 consensus): keep melanopic
+        // exposure under ~10 mel-lx in the hours before bed, under ~1 during sleep.
+        private const double EveningMelEdiCeiling = 10.0;
+
+        // The chart is redrawn on a SLOW cadence (rebuilding canvases is what flickered); the
+        // headline numbers update on the fast throttle from in-memory state (no disk).
+        private DateTime _lastDoseRedrawUtc = DateTime.MinValue;
+        private double _cachedTonightDose;
+        private int _cachedDoseMonitorCount;
+
         private void OnMelanopicUpdated(MelanopicMonitorState state)
         {
-            // Raised on a worker thread; coalesce onto the UI thread.
+            // Raised on the service's worker thread; coalesce onto the UI thread.
             Dispatcher.BeginInvoke(() =>
             {
                 if (!_melanopicThrottle.IsEnabled) _melanopicThrottle.Start();
             });
         }
 
-        private void MelanopicExpander_Expanded(object sender, RoutedEventArgs e) => RefreshMelanopic();
+        private void MelanopicExpander_Expanded(object sender, RoutedEventArgs e) => RefreshMelanopic(forceChart: true);
 
-        private void DoseCanvas_SizeChanged(object sender, SizeChangedEventArgs e) => RefreshMelanopic();
+        private void DoseCanvas_SizeChanged(object sender, SizeChangedEventArgs e) => RefreshMelanopic(forceChart: true);
 
-        private void RefreshMelanopic()
+        private void RefreshMelanopic() => RefreshMelanopic(forceChart: false);
+
+        private void RefreshMelanopic(bool forceChart)
         {
             if (_melanopicService == null || !IsLoaded) return;
             try
@@ -162,6 +174,8 @@ namespace HDRGammaController
                     .Where(m => !string.IsNullOrEmpty(m.MonitorDevicePath))
                     .GroupBy(m => m.MonitorDevicePath, StringComparer.OrdinalIgnoreCase)
                     .ToDictionary(g => g.Key, g => g.First().FriendlyName, StringComparer.OrdinalIgnoreCase);
+
+                RefreshHeadline(states);
 
                 var lines = new System.Text.StringBuilder();
                 foreach (var state in states.OrderBy(s => Name(s.MonitorDevicePath)))
@@ -186,7 +200,13 @@ namespace HDRGammaController
                         ? " Load a CCSS for your panel (Settings → Ultra Night spectrum) to tighten these numbers."
                         : string.Empty);
 
-                DrawDoseCurve();
+                // Only rebuild the chart (disk read + canvas rebuild) occasionally — doing it
+                // per update is what flickered. The dose curve changes slowly.
+                if (forceChart || (DateTime.UtcNow - _lastDoseRedrawUtc).TotalSeconds >= 15)
+                {
+                    _lastDoseRedrawUtc = DateTime.UtcNow;
+                    DrawDoseCurve();
+                }
             }
             catch (Exception ex)
             {
@@ -199,23 +219,48 @@ namespace HDRGammaController
                     : devicePath.Length > 24 ? "…" + devicePath[^24..] : devicePath;
         }
 
+        private void RefreshHeadline(IReadOnlyList<MelanopicMonitorState> states)
+        {
+            // "Exposure now" is the combined melanopic EDI across displays (the eye sees the
+            // sum; labeled an upper bound when >1). Cheap — straight from in-memory state.
+            double combinedEdi = states.Sum(s => Math.Max(0, s.Reading.MelanopicEdiLux));
+            ExposureBig.Text = combinedEdi >= 100 ? combinedEdi.ToString("F0") : combinedEdi.ToString("F1");
+
+            bool overCeiling = combinedEdi > EveningMelEdiCeiling;
+            ExposureBig.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty,
+                overCeiling ? "ThemeAmber" : "ThemeText");
+            string suffix = states.Count > 1 ? " (combined, upper bound)" : string.Empty;
+            ExposureRecommendation.Text = overCeiling
+                ? $"Above the ≈{EveningMelEdiCeiling:F0} mel-lx evening target{suffix} — warm or dim the screen before bed."
+                : $"At or below the ≈{EveningMelEdiCeiling:F0} mel-lx evening target{suffix} — good for pre-sleep.";
+
+            DoseBig.Text = _cachedTonightDose >= 100
+                ? _cachedTonightDose.ToString("F0")
+                : _cachedTonightDose.ToString("F1");
+        }
+
         private static string FormatReduction(double fraction) =>
             double.IsFinite(fraction) ? $"{-fraction:P0}" : "n/a";
 
         private void DrawDoseCurve()
         {
-            DoseChartsPanel.Children.Clear();
             if (_melanopicService == null) return;
 
             // "Tonight" window: the last 12 hours — long enough to hold any evening, without
             // needing the sun schedule to be configured.
             DateTime windowStart = DateTime.Now.AddHours(-12);
             var samples = MelanopicDoseStore.LoadSince(windowStart);
-            double totalDose = MelanopicDoseStore.IntegrateDose(samples);
+            _cachedTonightDose = MelanopicDoseStore.IntegrateDose(samples);
+            _cachedDoseMonitorCount = samples.Select(s => s.MonitorDevicePath).Distinct().Count();
+            DoseBig.Text = _cachedTonightDose >= 100
+                ? _cachedTonightDose.ToString("F0")
+                : _cachedTonightDose.ToString("F1");
+
+            DoseChartsPanel.Children.Clear();
 
             if (samples.Count < 2)
             {
-                DoseSummary.Text = "Dose curve appears once melanopic samples accumulate (state changes + a 5-minute keepalive).";
+                DoseSummary.Text = "Dose curve appears once melanopic samples accumulate (a sample a minute while the screen is on).";
                 return;
             }
 
@@ -271,8 +316,8 @@ namespace HDRGammaController
             });
 
             DoseSummary.Text = monitorCount > 1
-                ? $"Combined eye dose over the last 12 h: {totalDose:F0} mel-lx·h (all displays summed — an upper-bound estimate)."
-                : $"Cumulative melanopic dose over the last 12 h: {totalDose:F0} mel-lx·h.";
+                ? $"Combined eye dose over the last 12 h: {_cachedTonightDose:F0} mel-lx·h (all displays summed — an upper-bound estimate)."
+                : $"Cumulative melanopic dose over the last 12 h: {_cachedTonightDose:F0} mel-lx·h.";
 
             string MonitorName(string devicePath) =>
                 _monitorNamesByPath.TryGetValue(devicePath, out var n)

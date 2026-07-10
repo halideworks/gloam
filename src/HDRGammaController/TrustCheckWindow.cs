@@ -411,11 +411,15 @@ namespace HDRGammaController
             var latest = history[^1];
             string u95 = latest.U95DeltaE is { } u ? $" ± {u:F2}" : string.Empty;
             var verdict = TrustCheckHistory.AnalyzeDrift(history);
+            // Roadmap 4.2 (feasible core): trend-fitted drift prediction with honest gates —
+            // it says nothing until the history can statistically support a statement.
+            var prediction = DriftPredictor.Predict(history, DateTime.UtcNow);
             _latest.Text =
                 $"Last check {latest.TimestampUtc.ToLocalTime():yyyy-MM-dd HH:mm}: avg ΔE2000 {latest.AvgDeltaE2000:F2}{u95}, " +
                 $"white {latest.WhiteCctK:F0} K / {latest.WhiteNits:F1} nits, Duv {latest.WhiteDuv:+0.0000;-0.0000}" +
                 $" [{latest.TargetName}{(latest.HdrMode ? ", HDR" : string.Empty)}]" +
-                (verdict != null ? $"\n{verdict.Summary}" : string.Empty);
+                (verdict != null ? $"\n{verdict.Summary}" : string.Empty) +
+                (prediction != null ? $"\n{prediction.Summary}" : string.Empty);
 
             if (history.Count < 2 || _deltaECanvas.ActualWidth < 40) return;
 

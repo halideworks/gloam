@@ -83,7 +83,7 @@ namespace HDRGammaController.Core.Calibration
             int sequenceOffset = 0;
 
             config.Progress?.Report(new PassProgress(0, config.MaxRefinePasses, "measuring initial ladder"));
-            var measured = await config.MeasureLadderAsync(config.RungNits, sequenceOffset, ct).ConfigureAwait(false);
+            var measured = await config.MeasureLadderAsync(config.RungNits, sequenceOffset, ct);
             sequenceOffset += measured.Count;
 
             double initialError = HdrMhc2LutBuilder.AverageAbsLuminanceError(measured);
@@ -130,7 +130,7 @@ namespace HDRGammaController.Core.Calibration
 
                     config.Progress?.Report(new PassProgress(pass, config.MaxRefinePasses, "installing"));
                     var (installed, profileName) = await config.InstallAsync(refinement.Refined, ct)
-                        .ConfigureAwait(false);
+                        ;
                     anyInstall = true;
 
                     if (!ReferenceEquals(installed, refinement.Refined))
@@ -151,7 +151,7 @@ namespace HDRGammaController.Core.Calibration
 
                     config.Progress?.Report(new PassProgress(pass, config.MaxRefinePasses, "measuring PQ ladder"));
                     measured = await config.MeasureLadderAsync(config.RungNits, sequenceOffset, ct)
-                        .ConfigureAwait(false);
+                        ;
                     sequenceOffset += measured.Count;
 
                     double afterError = HdrMhc2LutBuilder.AverageAbsLuminanceError(measured);
@@ -187,7 +187,7 @@ namespace HDRGammaController.Core.Calibration
                     try
                     {
                         var (_, name) = await config.InstallAsync(best.Luts, CancellationToken.None)
-                            .ConfigureAwait(false);
+                            ;
                         best = (best.Luts, best.Error, name);
                     }
                     catch
@@ -205,7 +205,7 @@ namespace HDRGammaController.Core.Calibration
                 // LUTs back. No re-measure: best's ladder numbers were already measured.
                 config.Progress?.Report(new PassProgress(passes.Count, config.MaxRefinePasses,
                     "reinstalling best pass"));
-                var (_, name) = await config.InstallAsync(best.Luts, ct).ConfigureAwait(false);
+                var (_, name) = await config.InstallAsync(best.Luts, ct);
                 best = (best.Luts, best.Error, name);
                 endedOnBest = true;
             }

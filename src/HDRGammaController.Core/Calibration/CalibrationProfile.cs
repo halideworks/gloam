@@ -504,6 +504,10 @@ namespace HDRGammaController.Core.Calibration
         public double? DetailedPrimariesDeltaE { get; set; }
         public double? DetailedSaturationDeltaE { get; set; }
         public double? DetailedMemoryColorsDeltaE { get; set; }
+
+        /// <summary>HDR tone-mapping characterization (roadmap 2.3), when one ran.
+        /// Nullable so pre-feature report JSONs load unchanged.</summary>
+        public ToneMappingCharacterization? ToneMapping { get; set; }
     }
 
     /// <summary>

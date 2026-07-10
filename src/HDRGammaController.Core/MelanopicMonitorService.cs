@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Timers;
 using HDRGammaController.Core.Calibration;
 
@@ -35,14 +36,31 @@ namespace HDRGammaController.Core
         private readonly object _lock = new();
         private readonly Dictionary<string, GammaApplyService.AppliedStateSnapshot> _lastSnapshots = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, MelanopicMonitorState> _lastStates = new(StringComparer.OrdinalIgnoreCase);
-        private bool _disposed;
+        private readonly Dictionary<string, DateTime> _lastAppendUtc = new(StringComparer.OrdinalIgnoreCase);
+
+        // Background worker: the apply-path handler NEVER computes, does I/O, or raises
+        // events on the caller's thread (that thread is the UI thread during a night-mode
+        // fade — doing melanopic math + a JSONL append per fade tick there froze the whole
+        // system). It only stashes the latest snapshot per monitor and pulses the worker,
+        // which coalesces to the newest pending snapshot.
+        private readonly Dictionary<string, GammaApplyService.AppliedStateSnapshot> _pending = new(StringComparer.OrdinalIgnoreCase);
+        private readonly object _pendingLock = new();
+        private readonly AutoResetEvent _wake = new(false);
+        private readonly Thread _worker;
+        private volatile bool _disposed;
 
         /// <summary>Assumed viewing solid angle Ω_eff in steradian (see MelanopicCalculator).</summary>
         public double ViewingSolidAngleSr { get; set; } = MelanopicCalculator.DefaultViewingSolidAngleSr;
 
         public const double KeepaliveMinutes = 5.0;
 
-        /// <summary>Raised (on a worker thread) whenever any monitor's melanopic state was
+        /// <summary>Minimum spacing between DISK samples per monitor. A live state change
+        /// still updates the number instantly, but the dose store is appended at most this
+        /// often per monitor — so a 30-minute fade writes ~30 lines, not thousands, and the
+        /// dashboard's read-back stays cheap.</summary>
+        public const double MinAppendIntervalSeconds = 60.0;
+
+        /// <summary>Raised (on the worker thread) whenever any monitor's melanopic state was
         /// re-evaluated. UI subscribers marshal and throttle themselves.</summary>
         public event Action<MelanopicMonitorState>? MelanopicUpdated;
 
@@ -51,8 +69,16 @@ namespace HDRGammaController.Core
             _applyService = applyService ?? throw new ArgumentNullException(nameof(applyService));
             _applyService.StateApplied += OnStateApplied;
 
+            _worker = new Thread(WorkerLoop)
+            {
+                IsBackground = true,
+                Name = "MelanopicWorker",
+                Priority = ThreadPriority.BelowNormal,
+            };
+            _worker.Start();
+
             _keepalive = new System.Timers.Timer(TimeSpan.FromMinutes(KeepaliveMinutes).TotalMilliseconds) { AutoReset = true };
-            _keepalive.Elapsed += (_, _) => ResampleAll();
+            _keepalive.Elapsed += (_, _) => QueueKeepalive();
             _keepalive.Start();
 
             MelanopicDoseStore.RotateRetention();
@@ -64,28 +90,55 @@ namespace HDRGammaController.Core
             get { lock (_lock) { return _lastStates.Values.ToList(); } }
         }
 
+        // Apply-path handler: MUST stay trivial (no compute, no I/O, no event). Runs on the
+        // UI thread during fades.
         private void OnStateApplied(GammaApplyService.AppliedStateSnapshot snapshot)
         {
             if (string.IsNullOrEmpty(snapshot.MonitorDevicePath)) return;
-            lock (_lock) { _lastSnapshots[snapshot.MonitorDevicePath] = snapshot; }
-            Evaluate(snapshot, persist: true);
+            lock (_pendingLock) { _pending[snapshot.MonitorDevicePath] = snapshot; }
+            _wake.Set();
         }
 
-        private void ResampleAll()
+        private void QueueKeepalive()
         {
+            // Re-queue the last snapshot per monitor at the current wall clock so the dose
+            // integral advances while nothing changes on screen.
             List<GammaApplyService.AppliedStateSnapshot> snapshots;
             lock (_lock) { snapshots = _lastSnapshots.Values.ToList(); }
-            foreach (var snapshot in snapshots)
+            if (snapshots.Count == 0) return;
+            lock (_pendingLock)
             {
-                // Keepalive samples reuse the last state at the current wall clock so the
-                // dose integral advances while nothing changes on screen.
-                Evaluate(snapshot with { TimestampUtc = DateTime.UtcNow }, persist: true);
+                foreach (var s in snapshots)
+                    _pending[s.MonitorDevicePath] = s with { TimestampUtc = DateTime.UtcNow };
+            }
+            _wake.Set();
+        }
+
+        private void WorkerLoop()
+        {
+            while (!_disposed)
+            {
+                _wake.WaitOne();
+                if (_disposed) return;
+
+                List<GammaApplyService.AppliedStateSnapshot> batch;
+                lock (_pendingLock)
+                {
+                    if (_pending.Count == 0) continue;
+                    batch = _pending.Values.ToList();
+                    _pending.Clear();
+                }
+
+                foreach (var snapshot in batch)
+                {
+                    if (_disposed) return;
+                    Evaluate(snapshot);
+                }
             }
         }
 
-        private void Evaluate(GammaApplyService.AppliedStateSnapshot snapshot, bool persist)
+        private void Evaluate(GammaApplyService.AppliedStateSnapshot snapshot)
         {
-            if (_disposed) return;
             try
             {
                 // Skip while a calibration owns the display: measurements through a bypassed
@@ -119,18 +172,30 @@ namespace HDRGammaController.Core
 
                 lock (_lock) { _lastStates[snapshot.MonitorDevicePath] = state; }
 
-                if (persist && double.IsFinite(reading.MelanopicEdiLux))
+                // Throttle DISK appends per monitor: the live number updated above is
+                // instant; the dose curve only needs a point every minute or so.
+                if (double.IsFinite(reading.MelanopicEdiLux))
                 {
-                    MelanopicDoseStore.Append(new MelanopicDoseSample
+                    bool doAppend;
+                    lock (_lock)
                     {
-                        TimestampUtc = snapshot.TimestampUtc,
-                        MonitorDevicePath = snapshot.MonitorDevicePath,
-                        MelanopicEdiLux = reading.MelanopicEdiLux,
-                        EdiExpandedU = uncertainty.EdiExpandedU,
-                        ReductionFraction = reading.ReductionFraction,
-                        Kelvin = snapshot.EffectiveKelvin,
-                        HasSpectra = hasSpectra,
-                    });
+                        doAppend = !_lastAppendUtc.TryGetValue(snapshot.MonitorDevicePath, out var last) ||
+                                   (snapshot.TimestampUtc - last).TotalSeconds >= MinAppendIntervalSeconds;
+                        if (doAppend) _lastAppendUtc[snapshot.MonitorDevicePath] = snapshot.TimestampUtc;
+                    }
+                    if (doAppend)
+                    {
+                        MelanopicDoseStore.Append(new MelanopicDoseSample
+                        {
+                            TimestampUtc = snapshot.TimestampUtc,
+                            MonitorDevicePath = snapshot.MonitorDevicePath,
+                            MelanopicEdiLux = reading.MelanopicEdiLux,
+                            EdiExpandedU = uncertainty.EdiExpandedU,
+                            ReductionFraction = reading.ReductionFraction,
+                            Kelvin = snapshot.EffectiveKelvin,
+                            HasSpectra = hasSpectra,
+                        });
+                    }
                 }
 
                 MelanopicUpdated?.Invoke(state);
@@ -188,6 +253,9 @@ namespace HDRGammaController.Core
             _applyService.StateApplied -= OnStateApplied;
             _keepalive.Stop();
             _keepalive.Dispose();
+            _wake.Set(); // release the worker from WaitOne
+            try { _worker.Join(TimeSpan.FromSeconds(2)); } catch { }
+            _wake.Dispose();
         }
     }
 }

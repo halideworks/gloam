@@ -83,6 +83,17 @@ namespace HDRGammaController.Core
         /// </summary>
         public bool PreserveLuminance { get; set; } = false;
 
+        /// <summary>
+        /// Dose-based circadian ceiling (roadmap 3.2): maximum melanopic EDI in mel-lux
+        /// while night mode is active; 0 = off. When the scheduled state exceeds it, the
+        /// governor picks the perceptually-cheapest (kelvin, brightness) that complies
+        /// (see <see cref="CircadianDoseGovernor"/>).
+        /// </summary>
+        public double MelanopicEdiCeiling { get; set; } = 0.0;
+
+        public static double ClampMelanopicCeiling(double value) =>
+            !double.IsFinite(value) || value <= 0 ? 0.0 : Math.Clamp(value, 0.5, 1000.0);
+
         public static double ClampPerceptualStrength(double value) =>
             double.IsFinite(value) ? Math.Clamp(value, 0.0, 1.0) : ColorAdjustments.DefaultPerceptualStrength;
 
@@ -703,6 +714,7 @@ namespace HDRGammaController.Core
                 UseUltraWarmMode = source.UseUltraWarmMode,
                 PerceptualStrength = NightModeSettings.ClampPerceptualStrength(source.PerceptualStrength),
                 PreserveLuminance = source.PreserveLuminance,
+                MelanopicEdiCeiling = NightModeSettings.ClampMelanopicCeiling(source.MelanopicEdiCeiling),
                 FadeMinutes = NightModeSettings.ClampFadeMinutes(source.FadeMinutes),
                 Schedule = new List<NightModeSchedulePoint>()
             };

@@ -557,19 +557,24 @@
                           VerticalAlignment="Center" HorizontalAlignment="Left"
                           Margin="0,0,0,10"/>
 
-                <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right">
-                    <Button x:Name="ExportReportButton"
-                            Content="Export Report"
-                            ToolTip="Print or save as PDF via Microsoft Print to PDF"
+                <!-- Top+bottom margin gives the brutalist hover "lift" (a 1px translate + drop
+                     shadow) room so it never clips against the footer edge. Buttons are
+                     consolidated into menus (Export ▾, Refine ▾) so the bar stays compact. -->
+                <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,4,0,3">
+                    <!-- Export menu: report (PDF) or LUT -->
+                    <Button x:Name="ExportMenuButton"
+                            Content="Export ▾"
+                            ToolTip="Export the report as a PDF, or the correction LUT."
                             Style="{StaticResource BrutBtnSecondary}"
                             Margin="0,0,10,0"
-                            Click="ExportReportButton_Click"/>
-
-                    <Button x:Name="ExportButton"
-                            Content="Export LUT"
-                            Style="{StaticResource BrutBtnSecondary}"
-                            Margin="0,0,10,0"
-                            Click="ExportButton_Click"/>
+                            Click="ExportMenu_Click">
+                        <Button.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem x:Name="ExportReportMenuItem" Header="Export report (print / PDF)…" Click="ExportReportButton_Click"/>
+                                <MenuItem x:Name="ExportLutMenuItem" Header="Export LUT…" Click="ExportButton_Click"/>
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                    </Button>
 
                     <Button x:Name="ApplyButton"
                             Content="{Binding ApplyButtonContent}"
@@ -586,25 +591,39 @@
                             Margin="0,0,10,0"
                             Click="VerifyButton_Click"/>
 
-                    <!-- HDR only (shown by code-behind once the apply context arrives; enabled
-                         after the profile is applied): closed-loop refinement of the PQ tone
-                         LUT through the installed correction. -->
-                    <Button x:Name="RefineHdrButton"
-                            Content="Refine HDR"
+                    <!-- Refine menu: HDR tone / HDR color (HDR + profile applied) and white
+                         point tools. Item visibility/enable is set by UpdateRefineButtonState. -->
+                    <Button x:Name="RefineMenuButton"
+                            Content="Refine ▾"
+                            ToolTip="Closed-loop refinements: HDR tone curve, HDR color/gamut, or white point tools. Place the probe on the display first."
+                            Style="{StaticResource BrutBtnSecondary}"
+                            Margin="0,0,10,0"
+                            Click="RefineMenu_Click">
+                        <Button.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem x:Name="RefineHdrMenuItem" Header="HDR tone curve"
+                                          ToolTip="Re-measures the PQ ladder through the installed profile and iterates a closed-loop correction to the HDR tone curve (Calman-style EOTF tracking)."
+                                          Click="RefineHdrButton_Click"/>
+                                <MenuItem x:Name="RefineHdrColorMenuItem" Header="HDR color / gamut"
+                                          ToolTip="Measures colored + neutral stimuli at multiple luminance levels and fits a correction to the gamut matrix (catches panels whose gamut rotates with brightness)."
+                                          Click="RefineHdrColorButton_Click"/>
+                                <Separator/>
+                                <MenuItem x:Name="WhiteToolsMenuItem" Header="White point tools…"
+                                          ToolTip="Re-anchor white with a quick measurement (drift fix), or trim the target white by eye against a reference display."
+                                          Click="WhiteToolsButton_Click"/>
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                    </Button>
+
+                    <!-- HDR only: tone-mapping characterization (roadmap 2.3). -->
+                    <Button x:Name="CharacterizeHdrButton"
+                            Content="Characterize HDR"
                             Visibility="Collapsed"
                             IsEnabled="False"
-                            ToolTip="Re-measures the PQ ladder through the installed profile and applies one closed-loop correction to the HDR tone curve, then re-installs and re-verifies (Calman-style EOTF iteration). Place the probe on the display first."
+                            ToolTip="Measures a dense near-peak PQ ladder plus white windows from 1% to full-frame to find the panel's TRUE tone-mapping knee, peak and ABL behavior versus its claimed metadata, and suggests HGIG game-calibration values. Place the probe on the display first."
                             Style="{StaticResource BrutBtnSecondary}"
                             Margin="0,0,10,0"
-                            Click="RefineHdrButton_Click"/>
-
-                    <Button x:Name="WhiteToolsButton"
-                            Content="White Tools"
-                            IsEnabled="{Binding IsWhiteToolsEnabled}"
-                            ToolTip="Re-anchor white with a quick measurement (drift fix), or trim the target white by eye against a reference display."
-                            Style="{StaticResource BrutBtnSecondary}"
-                            Margin="0,0,10,0"
-                            Click="WhiteToolsButton_Click"/>
+                            Click="CharacterizeHdrButton_Click"/>
 
                     <Button Content="Close"
                             IsEnabled="{Binding IsCloseEnabled}"

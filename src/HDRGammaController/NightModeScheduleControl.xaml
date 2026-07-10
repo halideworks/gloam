@@ -139,6 +139,24 @@
                     <Run Text=" - constant-luminance warm shift (uses HDR headroom)" Foreground="{DynamicResource ThemeTextDim}"/>
                 </TextBlock>
             </StackPanel>
+
+            <!-- Dose-based circadian ceiling (roadmap 3.2) -->
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,10,0,0"
+                        ToolTip="While night mode is active, keeps the screen's melanopic light dose at or under this ceiling. If the scheduled warmth alone is not enough, Gloam picks the least visible combination of extra warmth and dimming (CAM16-UCS) that complies. Typical evening targets: 10–30 mel-lx; melatonin-sensitive: under 10.">
+                <CheckBox IsChecked="{Binding DoseCeilingEnabled}"
+                          VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <TextBlock Foreground="{DynamicResource ThemeText}" FontFamily="{DynamicResource BodyFont}"
+                           FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0">
+                    <Run Text="Melanopic dose ceiling" FontWeight="Bold"/>
+                    <Run Text=" - cap circadian light at" Foreground="{DynamicResource ThemeTextDim}"/>
+                </TextBlock>
+                <TextBox Width="52" VerticalAlignment="Center" HorizontalContentAlignment="Right"
+                         Text="{Binding DoseCeilingText, UpdateSourceTrigger=LostFocus}"
+                         IsEnabled="{Binding DoseCeilingEnabled}"/>
+                <TextBlock Text="mel-lx" Foreground="{DynamicResource ThemeTextDim}"
+                           FontFamily="{DynamicResource BodyFont}" FontSize="12"
+                           VerticalAlignment="Center" Margin="6,0,0,0"/>
+            </StackPanel>
         </StackPanel>
 
         <!-- List -->

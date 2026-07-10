@@ -153,7 +153,8 @@ namespace HDRGammaController.Core
 
             if (nightModeActive)
             {
-                ApplyNightModeToCalibration(calibration, currentKelvin, nightModeSettingsOverride ?? _settingsManager.NightMode);
+                var nightSettings = nightModeSettingsOverride ?? _settingsManager.NightMode;
+                ApplyNightModeToCalibration(calibration, currentKelvin, nightSettings);
                 calibration.NightMelanopicCoefficients = CcssMelanopicEstimator.TryLoad(calibration.NightModeCcssPath);
 
                 // Constant-Y headroom ceiling, per monitor: on HDR the boost may use the
@@ -167,6 +168,8 @@ namespace HDRGammaController.Core
                     monitor.IsHdrActive && monitor.HdrPeakNits > sdrWhite
                         ? Math.Min(2.0, monitor.HdrPeakNits / sdrWhite)
                         : 1.0;
+
+                ApplyDoseCeiling(calibration, nightSettings, monitor, sdrWhite);
             }
 
             // Extended range: 1900K..10000K. See CalibrationSettings.Temperature
@@ -262,6 +265,71 @@ namespace HDRGammaController.Core
             catch (Exception ex)
             {
                 Log.Info($"GammaApplyService: state snapshot publish failed: {ex.Message}");
+            }
+        }
+
+        private readonly Dictionary<IntPtr, int> _doseLogKeys = new();
+        private readonly object _doseLogLock = new();
+
+        /// <summary>
+        /// Dose-based circadian ceiling (roadmap 3.2): when the scheduled night state's
+        /// melanopic EDI exceeds the user's ceiling, replace it with the governor's
+        /// perceptually-cheapest compliant (kelvin, brightness) operating point. Runs per
+        /// monitor because dose depends on the panel's spectra, white level and brightness.
+        /// The solved kelvin already includes any per-monitor temperature trim (it was fed
+        /// the COMPOSED effective kelvin), so the trim offset is folded to zero.
+        /// </summary>
+        private void ApplyDoseCeiling(
+            CalibrationSettings calibration, NightModeSettings nightSettings,
+            MonitorInfo monitor, double sdrWhite)
+        {
+            double ceiling = NightModeSettings.ClampMelanopicCeiling(nightSettings.MelanopicEdiCeiling);
+            if (ceiling <= 0) return;
+
+            try
+            {
+                var spectra = CcssMelanopicEstimator.TryLoadSpectra(calibration.NightModeCcssPath)
+                    ?? MelanopicCalculator.GenericPrimaries(wideGamut: monitor.IsHdrActive);
+
+                int effectiveKelvin = ColorAdjustments.TemperatureScaleToKelvin(
+                    ColorAdjustments.ComposeTemperatureScaleMired(calibration.Temperature, calibration.TemperatureOffset));
+
+                var solution = CircadianDoseGovernor.Solve(
+                    spectra,
+                    calibration.Algorithm,
+                    calibration.PerceptualStrength,
+                    calibration.UseUltraWarmMode,
+                    calibration.PreserveNightLuminance,
+                    effectiveKelvin,
+                    calibration.Brightness,
+                    sdrWhite,
+                    MelanopicCalculator.DefaultViewingSolidAngleSr,
+                    ceiling,
+                    calibration.NightMelanopicCoefficients);
+
+                if (!solution.Adjusted) return;
+
+                calibration.Temperature = (solution.Kelvin - 6500) / 70.0;
+                calibration.TemperatureOffset = 0.0;
+                calibration.Brightness = solution.BrightnessPercent;
+
+                // Log once per distinct solution per monitor — fades re-solve at up to 4 Hz.
+                int logKey = HashCode.Combine(solution.Kelvin, (int)solution.BrightnessPercent, solution.CeilingMet);
+                lock (_doseLogLock)
+                {
+                    if (_doseLogKeys.TryGetValue(monitor.HMonitor, out int last) && last == logKey) return;
+                    _doseLogKeys[monitor.HMonitor] = logKey;
+                }
+                Log.Info($"GammaApplyService: dose ceiling {ceiling:F1} mel-lx on {monitor.FriendlyName}: " +
+                         $"{effectiveKelvin}K → {solution.Kelvin}K, brightness → {solution.BrightnessPercent:F0}% " +
+                         $"(est. {solution.MelanopicEdiLux:F1} mel-lx, ΔE′ {solution.DeltaEPrimeFromScheduled:F1}" +
+                         $"{(solution.CeilingMet ? string.Empty : "; ceiling unreachable, best effort")})");
+            }
+            catch (Exception ex)
+            {
+                // The governor must never take down the apply path — worst case the
+                // scheduled state applies un-governed.
+                Log.Info($"GammaApplyService: dose ceiling evaluation failed: {ex.Message}");
             }
         }
 

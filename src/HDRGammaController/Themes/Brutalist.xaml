@@ -153,6 +153,70 @@
     <!-- Implicit Button = secondary -->
     <Style TargetType="Button" BasedOn="{StaticResource BrutBtnSecondary}"/>
 
+    <!-- Brutalist context menus (e.g. the report window's Export ▾ / Refine ▾ dropdowns):
+         hard square surface, themed border, red hover. Explicitly-styled menus (the tray)
+         keep their own keyed style; this implicit style covers the rest. -->
+    <Style TargetType="ContextMenu">
+        <Setter Property="Background" Value="{DynamicResource ThemeSurface}"/>
+        <Setter Property="Foreground" Value="{DynamicResource ThemeText}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource ThemeBorder}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="3"/>
+        <Setter Property="FontFamily" Value="{DynamicResource BodyFont}"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="HasDropShadow" Value="False"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ContextMenu">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            Padding="{TemplateBinding Padding}"
+                            SnapsToDevicePixels="True">
+                        <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style TargetType="MenuItem">
+        <Setter Property="Foreground" Value="{DynamicResource ThemeText}"/>
+        <Setter Property="FontFamily" Value="{DynamicResource BodyFont}"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="MenuItem">
+                    <Border x:Name="Border" Background="Transparent" Padding="12,8" SnapsToDevicePixels="True">
+                        <ContentPresenter x:Name="cp" ContentSource="Header" RecognizesAccessKey="True"
+                                          HorizontalAlignment="Left" VerticalAlignment="Center"
+                                          TextElement.Foreground="{TemplateBinding Foreground}"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsHighlighted" Value="True">
+                            <Setter TargetName="Border" Property="Background" Value="{DynamicResource ThemeAccent}"/>
+                            <Setter TargetName="cp" Property="TextElement.Foreground" Value="{DynamicResource ThemeOnAccent}"/>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.4"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style TargetType="Separator">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Separator">
+                    <Border Height="1" Margin="6,4" Background="{DynamicResource ThemeBorder}" Opacity="0.6"/>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- Flat square meter-on-track progress bar -->
     <Style TargetType="ProgressBar">
         <Setter Property="Background" Value="{DynamicResource ThemeTrack}"/>

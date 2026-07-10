@@ -125,16 +125,38 @@ an installer LUT rebuild (matrix-scale mismatch) stops the loop honestly rather 
 LUTs it never computed. One spotread session spans all passes; superseded refined profiles from
 the same session are cleaned up. Verified to converge on fitted golden panels (see 0.3 Tier B).
 
-**2.2 Colored HDR closed loop.** We now *measure* R/G/B/CMY error in HDR; the next step is
+**2.2 Colored HDR closed loop.** `[DONE — v1.6.0; needs hardware validation]` We now *measure* R/G/B/CMY error in HDR; the next step is
 *correcting* it: refine the MHC2 matrix from measured primaries at multiple luminance levels
 (luminance-weighted least squares over the colored rungs), catching panels whose gamut rotates
 with brightness (most QD-OLEDs). Nothing on the market closes the loop on HDR color — this would
 be a genuine first.
 
-**2.3 Tone-mapping characterization.** Measure the panel's actual roll-off (dense rungs near peak,
+*Method.* The sweep measures R/G/B/C/M/Y **plus White** at each rung (the neutral anchors are
+mandatory — an unanchored 3×3 fit can rotate the whole gamut around a drifted white and grade
+"better" while looking worse; the fit refuses without them). The residual is modeled as
+measured ≈ F·reference in XYZ and fit by luminance-weighted least squares (pairs normalized to
+rung luminance, weighted √Y); the installer's new `xyzCorrectionOverride` composes the refined
+matrix M′ = D⁻¹·F⁻¹·T. Keep-best loop (`HdrColorMatrixLoop`) caps at 2 passes (a colored sweep
+is ~2 min), cumulative across passes (F_total = F₂·F₁), with the same refusal honesty as the
+tone loop (converged <2 avg ΔE ITP, wild >25, per-element deviation cap 0.25). A changed matrix
+changes the neutral scale, so the HDR tone LUTs are rebuilt open-loop at the new scale and the
+UI says to run Refine HDR again for the final tone pass — the coupling is by design, not a leak.
+
+**2.3 Tone-mapping characterization.** `[DONE — v1.6.0; needs hardware validation]` Measure the panel's actual roll-off (dense rungs near peak,
 plus APL variants), report the true knee/peak against its EDID/DXGI claims, and emit suggested
 HGIG-style calibration values for games plus corrected MaxCLL/MaxFALL metadata. The gap between
 claimed and real HDR behavior is the single biggest source of user confusion in HDR.
+
+*Method.* "Characterize HDR" in the report window: a dense ladder at fractions of the claimed
+peak (40%…125%, so under-claiming panels are caught too) finds the true knee — first level where
+tracking falls below 95%, sub-rung interpolated — and true peak; an APL sweep renders the same
+white through FP16 windows covering 1/4/10/25/50/100% of the screen area (fresh renderer per
+size; long settles because ABL reacts over hundreds of ms) for the nits-vs-APL curve and
+full-frame peak. `ToneMappingAnalyzer` (pure, tested) emits HGIG suggestions (peak/MaxTML = the
+measured window peak, MaxCLL = measured peak, MaxFALL = measured full-frame) and the result
+persists on the report JSON (`ToneMappingCharacterization`, nullable/backward-compatible). The
+sweep runs through whatever chain is active and the summary says which — native-panel truth vs
+through-profile tracking are both legitimate questions. Also feeds 2.4's ABL context.
 
 **2.4 ABL/APL characterization.** OLED brightness depends on average picture level. Sweep the same
 white rung at 1/4/10/25/50/100% window sizes, chart nits-vs-APL, and annotate all other HDR
@@ -163,10 +185,22 @@ per-day JSONL dose store (90-day retention), charted on the dashboard with the m
 labeled as the upper bound it is. HDR states are SDR-white-anchored and annotated (HDR content
 luminance is unknowable from the wire).
 
-**3.2 Circadian scheduling by dose, not color.** Novel: let the user set a target melanopic-EDI
+**3.2 Circadian scheduling by dose, not color.** `[DONE — v1.6.0]` Novel: let the user set a target melanopic-EDI
 ceiling for the evening (e.g. <10 melanopic lux after 22:00) and have Gloam solve for the
 CCT/brightness trajectory that meets it with the least visible color change (optimize in CAM16-UCS
 distance). Turns night mode from an aesthetic into an instrument.
+
+*Method.* Shipped as a **governor**, not a second schedule: a single mel-lux ceiling
+(night-mode setting, 0 = off) that rides the existing kelvin schedule. Per monitor and per
+apply, the scheduled state's mel-EDI is evaluated from the panel's CCSS spectra; when it
+exceeds the ceiling, `CircadianDoseGovernor` scans warmer kelvins (never cooler, never
+brighter), computes the minimum dimming per kelvin in closed form (mel-EDI is linear in white
+luminance at fixed kelvin), and picks the candidate with minimum **CAM16-UCS ΔE′** from the
+scheduled appearance — CAM16-UCS was implemented for this (`Cam16Ucs`, forward model + ΔE′,
+pinned to the published Li et al. 2017 test vector; dim surround, L_A = white/5) because ΔE
+ITP-class metrics cannot price a luminance change against a chromaticity change across
+adaptation. Unreachable ceilings degrade honestly (warm/dim floor, logged "best effort").
+Solutions are memoized; the governor can never take down the apply path.
 
 **3.3 Luminance-preserving option.** `[DONE — v1.5.0]` The current normalize-to-max is the right default; add an
 optional constant-Y mode (compensate the luminance the warm shift removes, within headroom) for
@@ -215,10 +249,19 @@ investigate alternating between two adjacent quantized ramps at compositor caden
 intermediate values (spatio-temporal dithering for gradients). Risky (DWM behavior, flicker
 sensitivity) — prototype behind a flag, measure with the probe, publish findings either way.
 
-**4.2 Bayesian display model.** Treat the characterization as a posterior (priors from the golden
+**4.2 Bayesian display model.** `[PARTIAL — v1.7.0: drift prediction shipped; the rest stays research]`
+Treat the characterization as a posterior (priors from the golden
 panel library per panel type; measurements as evidence). Yields: principled uncertainty (1.3),
 adaptive sampling acquisition (1.1), and drift *prediction* — "your panel has drifted an estimated
 1.2 ΔE since calibration; re-verify?" from thermal/aging trend models over the stored history.
+
+*What shipped.* `DriftPredictor` fits the trust-check trend (per installed profile): slope with
+standard error and a significance gate (no statement below 3 points / 7 days of span — failing
+the gate means saying LESS, never more), predictive interval combining regression SE with the
+checks' own U95, and a projected recalibration-threshold crossing date. Surfaced in the trust
+check window. *What deliberately did not:* the Bayesian characterization prior and acquisition —
+they need a golden-panel library per panel type, and we have two panels; revisit when the
+community correction database (Tier 5) exists.
 
 **4.3 Micro-verification. ** `[DONE — v1.5.0]` A 6-patch, 20-second "trust check" runnable any time (or scheduled
 monthly): white/gray/black plus primaries, trended over months in a dashboard. Display aging
@@ -235,15 +278,32 @@ BOTH the RSS-combined U95 of the two runs and a practical floor (1.0 avg ΔE / 0
 cadence is an opt-in reminder toast — never an auto-run, which cannot assume the probe is attached
 and aimed.
 
-**4.4 Observer metamerism correction.** CIE 2006 physiological observer (age/field-size
+**4.4 Observer metamerism correction.** `[DEFERRED — dropped from v1.7.0]` CIE 2006 physiological observer (age/field-size
 parameterized) instead of the fixed 2° observer, applied through the CCSS spectral path: a
 60-year-old's D65 is not a 20-year-old's. Expose as an advanced "observer age" setting with the
 math documented. No shipping tool does this.
 
-**4.5 Multi-display matching solver.** Minimize the *maximum* perceptual difference (CAM16-UCS)
+*Why deferred:* the CIE 2006/CIE 170 model needs its published reference tables (lens and
+macular-pigment optical densities, low-density cone absorbance spectra) vendored and verified
+against the standard's own worked values. Implementing it from memory would mean fabricating
+spectral data — a violation of the project's honesty bar worse than the feature's absence.
+Pick it back up when the tables can be vendored from CVRL with checksums and a verification
+test against published CMFs.
+
+**4.5 Multi-display matching solver.** `[DONE — v1.7.0 (model-based tier)]` Minimize the *maximum* perceptual difference (CAM16-UCS)
 across all connected panels jointly — common white AND matched grays within each panel's gamut —
 rather than calibrating each panel to an absolute target it may not reach. The dual-monitor color
 mismatch is the most common real-world complaint calibration tools ignore.
+
+*Method.* Tray → "Match Displays…": `DisplayMatchSolver` grid-searches white chromaticity over
+the calibrated whites' neighborhood; per candidate, each panel's drive comes from its measured
+RGB→XYZ inverse (infeasible when any channel goes non-positive), the common luminance is the
+dimmest panel's reach at that chromaticity, and the winner minimizes the worst-case CAM16-UCS
+ΔE′ from each panel's current state. The solution applies as per-monitor channel gains
+(normalize-to-max, nothing clips) + a brightness cap — pure existing plumbing, reversible via
+Reset Trims. Honestly labeled MODEL-BASED: it runs on stored characterizations, so residual
+per-panel calibration error and inter-panel instrument metamerism are invisible to it; a
+probe-assisted measured matching pass is the natural second tier.
 
 **4.6 Per-app color intent.** The app-exclusion machinery already exists; extend it to per-app
 *rendering intent* (e.g. games get contrast-preserving gamut clip, photo apps get colorimetric)
@@ -274,8 +334,8 @@ almost already can.
 | v1.4.0 | **Tier 1 (1.1–1.5)** | **DONE (code+tests)** | All five calibration-to-instrument-grade items landed together; instrument-grade calibration is the foundation everything else builds on |
 | Gate | 0.1, 0.2 | Partially done | Real hardware run completed 2026-06-30/07-09 on the MSI/M27Q panels with the i1 Display Pro (its recordings seed the 0.3 golden fixtures); the spectro-dependent validations (1.2 capture handshake, 1.5 CCMX pair) remain pending until a spectrometer is available, as does the 0.2 cross-tool comparison |
 | v1.5.0 | **2.1, 3.1, 4.3, 0.3 + 3.3, 3.5** | **DONE (code+tests)** | The queued quartet plus two night-mode backlog items pulled in (constant-Y warmth, JND-paced fades); 1116 tests green incl. golden replay of real panel data. Interactive verification on hardware (multi-pass Refine HDR, a live trust check, the melanopic card) is the release gate |
-| v1.6.0 | 2.2, 2.3, 3.2 | Queued | The HDR-color closed loop and dose-based circadian scheduling — genuine firsts |
-| v1.7.0+ | 4.5, 4.2, 4.4 | Research | Multi-display matching, Bayesian model, observer metamerism |
+| v1.6.0 | **2.2, 2.3, 3.2** | **DONE (code+tests)** | The HDR-color closed loop and dose-based circadian scheduling — genuine firsts; 1150 tests green. 2.2/2.3 need a real HDR-panel run before release |
+| v1.7.0 | **4.5, 4.2 (drift prediction)** | **DONE (code+tests)** | Model-based multi-display matching + trend-fitted drift prediction; 1162 tests green. 4.4 observer metamerism DEFERRED (needs vendored CIE 2006 reference tables); full Bayesian prior deferred pending a golden-panel library |
 | Ongoing | Tier 5 | Ongoing | Docs, CLI, community DB, parser hardening compound across releases |
 
 > Tier 1 was pulled forward and completed as a single v1.4.0 push rather than spread across

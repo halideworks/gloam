@@ -48,6 +48,8 @@ argyll_cache_*/
 argyll_cache_*.zip
 HDRGammaController_*.zip
 Gloam_*.zip
+Releases/
+ReleasesNew/
 *.csv
 *.cal
 
