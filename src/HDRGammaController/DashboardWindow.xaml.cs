@@ -132,15 +132,44 @@ namespace HDRGammaController
 
         // ---- Melanopic (circadian) card ----------------------------------------------------
 
-        // Evening melanopic-EDI recommendation (Brown et al. 2022 consensus): keep melanopic
-        // exposure under ~10 mel-lx in the hours before bed, under ~1 during sleep.
+        // Melanopic-EDI targets from the Brown et al. 2022 consensus (PLOS Biology) /
+        // CIE TN 015:2023: daytime aim for >=250 mel-lx to support alertness; evening (the
+        // hours before bed) keep under ~10 mel-lx; during sleep under ~1 mel-lx. These are
+        // instantaneous corneal illuminance targets, not a standardized cumulative dose.
         private const double EveningMelEdiCeiling = 10.0;
+        private const double DaytimeMelEdiTarget = 250.0;
+        private const double NightMelEdiCeiling = 1.0;
 
         // The chart is redrawn on a SLOW cadence (rebuilding canvases is what flickered); the
         // headline numbers update on the fast throttle from in-memory state (no disk).
         private DateTime _lastDoseRedrawUtc = DateTime.MinValue;
-        private double _cachedTonightDose;
+        private double _cachedEveningDose;
+        private double _cachedEveningBudget;
+        private bool _cachedEveningActive;
         private int _cachedDoseMonitorCount;
+
+        private enum CircadianPhase { Daytime, Evening, Night }
+
+        // Clock-based phase. Simple and location-independent: daytime 06:00-18:00, evening
+        // 18:00-23:00, night 23:00-06:00. The evening window is the "hours before bed" the
+        // <=10 mel-lx target applies to.
+        private static CircadianPhase CurrentPhase()
+        {
+            int h = DateTime.Now.Hour;
+            if (h >= 23 || h < 6) return CircadianPhase.Night;
+            if (h >= 18) return CircadianPhase.Evening;
+            return CircadianPhase.Daytime;
+        }
+
+        // The evening dose accumulates from 18:00 local through the night. Returns null during
+        // the daytime, when the low-light target doesn't apply.
+        private static DateTime? EveningWindowStart()
+        {
+            var now = DateTime.Now;
+            if (now.Hour >= 18) return now.Date.AddHours(18);
+            if (now.Hour < 6) return now.Date.AddDays(-1).AddHours(18);
+            return null;
+        }
 
         private void OnMelanopicUpdated(MelanopicMonitorState state)
         {
@@ -151,7 +180,7 @@ namespace HDRGammaController
             });
         }
 
-        private void MelanopicExpander_Expanded(object sender, RoutedEventArgs e) => RefreshMelanopic(forceChart: true);
+        private void MelanopicAdvancedExpander_Expanded(object sender, RoutedEventArgs e) => RefreshMelanopic(forceChart: true);
 
         private void DoseCanvas_SizeChanged(object sender, SizeChangedEventArgs e) => RefreshMelanopic(forceChart: true);
 
@@ -165,7 +194,7 @@ namespace HDRGammaController
                 var states = _melanopicService.CurrentStates;
                 if (states.Count == 0)
                 {
-                    MelanopicSummary.Text = "Waiting for the first applied state…";
+                    MelanopicSummary.Text = "Waiting for the first applied state.";
                     return;
                 }
 
@@ -174,6 +203,14 @@ namespace HDRGammaController
                     .Where(m => !string.IsNullOrEmpty(m.MonitorDevicePath))
                     .GroupBy(m => m.MonitorDevicePath, StringComparer.OrdinalIgnoreCase)
                     .ToDictionary(g => g.Key, g => g.First().FriendlyName, StringComparer.OrdinalIgnoreCase);
+
+                // Slow path (disk read + dose math): recompute the evening dose on a throttle,
+                // and only rebuild the charts when the advanced section is actually open.
+                if (forceChart || (DateTime.UtcNow - _lastDoseRedrawUtc).TotalSeconds >= 15)
+                {
+                    _lastDoseRedrawUtc = DateTime.UtcNow;
+                    RefreshDoseData(drawCharts: MelanopicAdvancedExpander.IsExpanded);
+                }
 
                 RefreshHeadline(states);
 
@@ -199,14 +236,6 @@ namespace HDRGammaController
                     (anyGeneric
                         ? " Load a CCSS for your panel (Settings → Ultra Night spectrum) to tighten these numbers."
                         : string.Empty);
-
-                // Only rebuild the chart (disk read + canvas rebuild) occasionally — doing it
-                // per update is what flickered. The dose curve changes slowly.
-                if (forceChart || (DateTime.UtcNow - _lastDoseRedrawUtc).TotalSeconds >= 15)
-                {
-                    _lastDoseRedrawUtc = DateTime.UtcNow;
-                    DrawDoseCurve();
-                }
             }
             catch (Exception ex)
             {
@@ -221,40 +250,89 @@ namespace HDRGammaController
 
         private void RefreshHeadline(IReadOnlyList<MelanopicMonitorState> states)
         {
-            // "Exposure now" is the combined melanopic EDI across displays (the eye sees the
-            // sum; labeled an upper bound when >1). Cheap — straight from in-memory state.
+            // "Melanopic light now" is the combined melanopic EDI across displays (the eye sees
+            // the sum). Cheap: straight from in-memory state.
             double combinedEdi = states.Sum(s => Math.Max(0, s.Reading.MelanopicEdiLux));
             ExposureBig.Text = combinedEdi >= 100 ? combinedEdi.ToString("F0") : combinedEdi.ToString("F1");
 
-            bool overCeiling = combinedEdi > EveningMelEdiCeiling;
-            ExposureBig.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty,
-                overCeiling ? "ThemeAmber" : "ThemeText");
-            string suffix = states.Count > 1 ? " (combined, upper bound)" : string.Empty;
-            ExposureRecommendation.Text = overCeiling
-                ? $"Above the ≈{EveningMelEdiCeiling:F0} mel-lx evening target{suffix} — warm or dim the screen before bed."
-                : $"At or below the ≈{EveningMelEdiCeiling:F0} mel-lx evening target{suffix} — good for pre-sleep.";
+            string screenPhrase = states.Count > 1 ? "your screens add" : "your screen adds";
+            string ediText = combinedEdi >= 10 ? combinedEdi.ToString("F0") : combinedEdi.ToString("F1");
 
-            DoseBig.Text = _cachedTonightDose >= 100
-                ? _cachedTonightDose.ToString("F0")
-                : _cachedTonightDose.ToString("F1");
+            bool over;
+            string message;
+            switch (CurrentPhase())
+            {
+                case CircadianPhase.Daytime:
+                    over = false;
+                    message = $"Daytime: bright light is good for alertness (aim for {DaytimeMelEdiTarget:F0}+ mel-lx total at your eyes). Right now {screenPhrase} about {ediText}.";
+                    break;
+                case CircadianPhase.Evening:
+                    over = combinedEdi > EveningMelEdiCeiling;
+                    message = over
+                        ? $"Evening: keep total light under {EveningMelEdiCeiling:F0} mel-lx in the hours before bed. Right now {screenPhrase} about {ediText}, so warm or dim the screen."
+                        : $"Evening: on track for the hours before bed. Right now {screenPhrase} about {ediText}, within the under-{EveningMelEdiCeiling:F0} mel-lx target.";
+                    break;
+                default: // Night
+                    over = combinedEdi > NightMelEdiCeiling;
+                    message = over
+                        ? $"Night: aim for under {NightMelEdiCeiling:F0} mel-lx near sleep. Right now {screenPhrase} about {ediText}, so keep the screen warm and dim."
+                        : $"Night: low light, good for sleep. Right now {screenPhrase} about {ediText}.";
+                    break;
+            }
+
+            ExposureBig.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty,
+                over ? "ThemeAmber" : "ThemeText");
+            ExposureRecommendation.Text = message;
+
+            // Evening dose vs a budget derived from the <=10 mel-lx evening target (there is no
+            // standardized cumulative-dose threshold, so this is a Gloam-derived reference).
+            if (_cachedEveningActive)
+            {
+                DoseBig.Text = _cachedEveningDose >= 100 ? _cachedEveningDose.ToString("F0") : _cachedEveningDose.ToString("F1");
+                DoseBig.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty,
+                    _cachedEveningDose > _cachedEveningBudget ? "ThemeAmber" : "ThemeText");
+                DoseGoal.Text = $"of ~{_cachedEveningBudget:F0} at the 10 mel-lx evening target";
+            }
+            else
+            {
+                DoseBig.Text = "0";
+                DoseBig.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "ThemeText");
+                DoseGoal.Text = "accrues from 6pm vs the 10 mel-lx target";
+            }
         }
 
         private static string FormatReduction(double fraction) =>
             double.IsFinite(fraction) ? $"{-fraction:P0}" : "n/a";
 
-        private void DrawDoseCurve()
+        private void RefreshDoseData(bool drawCharts)
         {
             if (_melanopicService == null) return;
 
-            // "Tonight" window: the last 12 hours — long enough to hold any evening, without
-            // needing the sun schedule to be configured.
+            // 12-hour window holds any evening without needing the sun schedule configured.
             DateTime windowStart = DateTime.Now.AddHours(-12);
             var samples = MelanopicDoseStore.LoadSince(windowStart);
-            _cachedTonightDose = MelanopicDoseStore.IntegrateDose(samples);
             _cachedDoseMonitorCount = samples.Select(s => s.MonitorDevicePath).Distinct().Count();
-            DoseBig.Text = _cachedTonightDose >= 100
-                ? _cachedTonightDose.ToString("F0")
-                : _cachedTonightDose.ToString("F1");
+
+            // Evening dose = integral of mel-EDI since 18:00 local; budget = the target ceiling
+            // held over the same span (10 mel-lx x hours elapsed).
+            var eveningStart = EveningWindowStart();
+            if (eveningStart is DateTime es)
+            {
+                DateTime esUtc = es.ToUniversalTime();
+                var evening = samples.Where(s => s.TimestampUtc >= esUtc).ToList();
+                _cachedEveningDose = MelanopicDoseStore.IntegrateDose(evening);
+                double hours = Math.Max(0, (DateTime.Now - es).TotalHours);
+                _cachedEveningBudget = EveningMelEdiCeiling * hours;
+                _cachedEveningActive = true;
+            }
+            else
+            {
+                _cachedEveningActive = false;
+                _cachedEveningDose = 0;
+                _cachedEveningBudget = 0;
+            }
+
+            if (!drawCharts) return;
 
             DoseChartsPanel.Children.Clear();
 
@@ -287,7 +365,7 @@ namespace HDRGammaController
 
                 var header = new System.Windows.Controls.TextBlock
                 {
-                    Text = $"{name} — now {ordered[^1].MelanopicEdiLux:F1} mel-lx · {monitorDose:F0} mel-lx·h over 12 h",
+                    Text = $"{name}: now {ordered[^1].MelanopicEdiLux:F1} mel-lx · {monitorDose:F0} mel-lx·h over 12 h",
                     FontSize = 11,
                     Margin = new Thickness(0, monitorCount == 1 ? 0 : 10, 0, 4),
                 };
@@ -315,9 +393,12 @@ namespace HDRGammaController
                 }
             });
 
+            string doseLine = _cachedEveningActive
+                ? $"This evening's screen dose so far: {_cachedEveningDose:F1} mel-lx·h, against a {_cachedEveningBudget:F0} budget if the screen sat right at the 10 mel-lx evening target since 6pm."
+                : "The evening dose begins accruing at 6pm, measured against the 10 mel-lx evening target.";
             DoseSummary.Text = monitorCount > 1
-                ? $"Combined eye dose over the last 12 h: {_cachedTonightDose:F0} mel-lx·h (all displays summed — an upper-bound estimate)."
-                : $"Cumulative melanopic dose over the last 12 h: {_cachedTonightDose:F0} mel-lx·h.";
+                ? doseLine + " Charts below cover the last 12 hours, one per display (summed dose is an upper bound)."
+                : doseLine + " The chart below covers the last 12 hours.";
 
             string MonitorName(string devicePath) =>
                 _monitorNamesByPath.TryGetValue(devicePath, out var n)
