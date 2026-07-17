@@ -163,14 +163,16 @@ namespace HDRGammaController.Tests
                 Assert.Equal(0.0512, ReadS15(b, t + 12), 3);
                 Assert.Equal(437.5, ReadS15(b, t + 16), 3);
 
-                // lumi tag Y must carry the peak as well.
+                // ICC.1 luminanceTag: absolute cd/m² lives in Y; X and Z must be zero.
                 int tagCount = ReadU32(b, 128);
                 for (int i = 0; i < tagCount; i++)
                 {
                     int e = 132 + i * 12;
                     if (ReadU32(b, e) != 0x6C756D69) continue; // 'lumi'
                     int off = ReadU32(b, e + 4);
+                    Assert.Equal(0.0, ReadS15(b, off + 8), 5);
                     Assert.Equal(437.5, ReadS15(b, off + 12), 3);
+                    Assert.Equal(0.0, ReadS15(b, off + 16), 5);
                     return;
                 }
                 // Template without a lumi tag would also be acceptable — but ours has one.
@@ -520,7 +522,9 @@ namespace HDRGammaController.Tests
                 // lumi carries the measured peak (patched via lumiPeakNits, SDR path).
                 int lumi = FindTag(b, 0x6C756D69, out _);
                 Assert.True(lumi > 0, "lumi tag missing");
+                Assert.Equal(0.0, ReadS15(b, lumi + 8), 5);
                 Assert.Equal(412.5, ReadS15(b, lumi + 12), 3);
+                Assert.Equal(0.0, ReadS15(b, lumi + 16), 5);
 
                 // chrm (informational) carries the raw device chromaticities.
                 int chrm = FindTag(b, 0x6368726D, out _);
@@ -611,6 +615,198 @@ namespace HDRGammaController.Tests
             {
                 try { File.Delete(outPath); } catch { }
             }
+        }
+
+        [Theory]
+        [InlineData(TransferFunctionType.Pq)]
+        [InlineData(TransferFunctionType.Hlg)]
+        public void Build_HdrCharacterization_UsesSrgbTrc_AndKeepsHdrCorrectionInMhc2(
+            TransferFunctionType hdrTransferFunction)
+        {
+            string? template = FindTemplate();
+            if (template == null) return; // template not present in this checkout; skip silently
+
+            // Regression for the Photoshop washout: the HDR calibration target describes the
+            // PQ/HLG WIRE, but ordinary ICC readers still target Windows' sRGB presentation
+            // space. Publishing the wire EOTF as r/g/bTRC made a 50% sRGB midpoint decode to
+            // about 0.09 instead of 0.214, so Photoshop re-encoded it much brighter before DWM
+            // applied the Advanced Color transform again.
+            var hdrTarget = new CalibrationTarget
+            {
+                Name = $"HDR {hdrTransferFunction} characterization test",
+                RedPrimary = Chromaticity.Rec709Red,
+                GreenPrimary = Chromaticity.Rec709Green,
+                BluePrimary = Chromaticity.Rec709Blue,
+                WhitePoint = Chromaticity.D65,
+                TransferFunction = hdrTransferFunction,
+                PeakLuminance = 1000,
+                ReferenceWhite = 203,
+            };
+            var identity = new double[,] { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } };
+            var wireLut = IdentityLut();
+
+            string outPath = Path.Combine(Path.GetTempPath(), $"mhc2_hdr_icc_{Guid.NewGuid():N}.icm");
+            try
+            {
+                Mhc2ProfileBuilder.Build(template, outPath, identity, wireLut, wireLut, wireLut,
+                    minLuminanceNits: 0.02, maxLuminanceNits: 242.0,
+                    colorimetry: hdrTarget);
+                Assert.False(Mhc2ProfileBuilder.NeedsAdvancedColorIccCharacterizationRepair(outPath));
+                var b = File.ReadAllBytes(outPath);
+
+                int rTrc = FindTag(b, 0x72545243, out int rTrcSize);
+                int gTrc = FindTag(b, 0x67545243, out _);
+                int bTrc = FindTag(b, 0x62545243, out _);
+                Assert.True(rTrc > 0 && rTrc == gTrc && rTrc == bTrc,
+                    "HDR ICC channels must share one app-facing TRC");
+                Assert.Equal(0x63757276, ReadU32(b, rTrc)); // 'curv'
+                Assert.Equal(1024, ReadU32(b, rTrc + 8));
+                Assert.Equal(12 + 1024 * 2, rTrcSize);
+
+                foreach (int idx in new[] { 0, 25, 128, 256, 512, 767, 800, 1023 })
+                {
+                    double signal = idx / 1023.0;
+                    double stored = ReadCurveSample(b, rTrc, idx);
+                    double expected = ColorMath.SrgbEotf(signal);
+                    Assert.True(Math.Abs(stored - expected) < 1e-3,
+                        $"HDR ICC TRC[{idx}] = {stored:F6}, expected app-facing sRGB {expected:F6}");
+                }
+
+                double midpoint = ReadCurveSample(b, rTrc, 512);
+                double wireMidpoint = hdrTarget.ApplyEotf(512.0 / 1023.0);
+                Assert.True(Math.Abs(midpoint - wireMidpoint) > 0.05,
+                    $"classic ICC TRC leaked {hdrTransferFunction} wire behavior ({midpoint:F5} vs {wireMidpoint:F5})");
+                Assert.True(ReadCurveSample(b, rTrc, 800) < 0.7,
+                    "classic ICC TRC must not contain PQ's clipped highlight shelf");
+
+                // The MHC2 header and wire LUT remain independent and untouched: only the
+                // ordinary ICC characterization changed domains.
+                int mhc2 = FindMhc2(b);
+                Assert.Equal(0.02, ReadS15(b, mhc2 + 12), 3);
+                Assert.Equal(242.0, ReadS15(b, mhc2 + 16), 3);
+                int lut0 = mhc2 + ReadU32(b, mhc2 + 24);
+                foreach (int idx in new[] { 0, 256, 512, 800, 1023 })
+                    Assert.Equal(wireLut[idx], ReadS15(b, lut0 + 8 + idx * 4), 4);
+
+                var lumi = ReadXyzTag(b, 0x6C756D69);
+                Assert.Equal(0.0, lumi[0], 5);
+                Assert.Equal(242.0, lumi[1], 3);
+                Assert.Equal(0.0, lumi[2], 5);
+            }
+            finally
+            {
+                try { File.Delete(outPath); } catch { }
+            }
+        }
+
+        private static double ReadCurveSample(byte[] b, int curveOffset, int index)
+        {
+            int sampleOffset = curveOffset + 12 + index * 2;
+            return ((b[sampleOffset] << 8) | b[sampleOffset + 1]) / 65535.0;
+        }
+
+        [Fact]
+        public void RepairAdvancedColorIccCharacterization_PreservesMeasuredMhc2ByteForByte()
+        {
+            string? template = FindTemplate();
+            if (template == null) return; // template not present in this checkout; skip silently
+
+            var identity = new double[,] { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } };
+            var wireLut = IdentityLut();
+            // Distinctive wire calibration: the migration must not regenerate or normalize it.
+            for (int i = 0; i < wireLut.Length; i++)
+                wireLut[i] = Math.Pow(i / 1023.0, 1.07);
+
+            string sourcePath = Path.Combine(Path.GetTempPath(), $"mhc2_legacy_{Guid.NewGuid():N}.icm");
+            string repairedPath = Path.Combine(Path.GetTempPath(), $"mhc2_repaired_{Guid.NewGuid():N}.icm");
+            try
+            {
+                Mhc2ProfileBuilder.Build(template, sourcePath, identity, wireLut, wireLut, wireLut,
+                    description: "legacy unsafe HDR profile",
+                    minLuminanceNits: 0.02, maxLuminanceNits: 242.0,
+                    colorimetry: StandardTargets.Rec709Pq);
+
+                // Recreate the legacy defect in a structurally-valid profile: replace the
+                // shared sampled sRGB TRC with the target's PQ EOTF and contaminate lumi X/Z
+                // with the stale D50-scaled template components old builds retained.
+                var legacy = File.ReadAllBytes(sourcePath);
+                int legacyTrc = FindTag(legacy, 0x72545243, out _);
+                for (int i = 0; i < 1024; i++)
+                    WriteCurveSample(legacy, legacyTrc, i,
+                        StandardTargets.Rec709Pq.ApplyEotf(i / 1023.0));
+                int legacyLumi = FindTag(legacy, 0x6C756D69, out _);
+                WriteS15(legacy, legacyLumi + 8, 771.3696);
+                WriteS15(legacy, legacyLumi + 16, 660.1504);
+                File.WriteAllBytes(sourcePath, legacy);
+                Assert.True(Mhc2ProfileBuilder.NeedsAdvancedColorIccCharacterizationRepair(sourcePath));
+
+                int sourceMhc2 = FindTag(legacy, 0x4D484332, out int sourceMhc2Size);
+                Mhc2ProfileBuilder.RepairAdvancedColorIccCharacterization(
+                    sourcePath, repairedPath, "ICC-safe migrated profile");
+                Assert.False(Mhc2ProfileBuilder.NeedsAdvancedColorIccCharacterizationRepair(repairedPath));
+                var repaired = File.ReadAllBytes(repairedPath);
+
+                int repairedMhc2 = FindTag(repaired, 0x4D484332, out int repairedMhc2Size);
+                Assert.Equal(sourceMhc2Size, repairedMhc2Size);
+                for (int i = 0; i < sourceMhc2Size; i++)
+                    Assert.Equal(legacy[sourceMhc2 + i], repaired[repairedMhc2 + i]);
+
+                // Every fixed characterization component except TRC/lumi/description remains
+                // byte-identical too; the migration is not a covert recalibration.
+                foreach (int sig in new[]
+                {
+                    0x77747074 /*wtpt*/, 0x63686164 /*chad*/, 0x7258595A /*rXYZ*/,
+                    0x6758595A /*gXYZ*/, 0x6258595A /*bXYZ*/, 0x6368726D /*chrm*/,
+                })
+                {
+                    int before = FindTag(legacy, sig, out int beforeSize);
+                    int after = FindTag(repaired, sig, out int afterSize);
+                    Assert.Equal(beforeSize, afterSize);
+                    for (int i = 0; i < beforeSize; i++)
+                        Assert.Equal(legacy[before + i], repaired[after + i]);
+                }
+
+                int repairedTrc = FindTag(repaired, 0x72545243, out _);
+                Assert.Equal(ColorMath.SrgbEotf(512.0 / 1023.0),
+                    ReadCurveSample(repaired, repairedTrc, 512), 3);
+                Assert.NotEqual(ReadCurveSample(legacy, legacyTrc, 512),
+                    ReadCurveSample(repaired, repairedTrc, 512), 2);
+
+                var lumi = ReadXyzTag(repaired, 0x6C756D69);
+                Assert.Equal(0.0, lumi[0], 5);
+                Assert.Equal(242.0, lumi[1], 3);
+                Assert.Equal(0.0, lumi[2], 5);
+
+                int desc = FindTag(repaired, 0x64657363, out _);
+                int strLen = ReadU32(repaired, desc + 20);
+                int strOff = ReadU32(repaired, desc + 24);
+                Assert.Equal("ICC-safe migrated profile",
+                    System.Text.Encoding.BigEndianUnicode.GetString(repaired, desc + strOff, strLen));
+
+                for (int z = 84; z < 100; z++) Assert.Equal(0, repaired[z]);
+            }
+            finally
+            {
+                try { File.Delete(sourcePath); } catch { }
+                try { File.Delete(repairedPath); } catch { }
+            }
+        }
+
+        private static void WriteCurveSample(byte[] b, int curveOffset, int index, double value)
+        {
+            int raw = (int)Math.Round(Math.Clamp(value, 0.0, 1.0) * 65535.0);
+            int sampleOffset = curveOffset + 12 + index * 2;
+            b[sampleOffset] = (byte)(raw >> 8);
+            b[sampleOffset + 1] = (byte)raw;
+        }
+
+        private static void WriteS15(byte[] b, int offset, double value)
+        {
+            int raw = (int)Math.Round(value * 65536.0);
+            b[offset] = (byte)(raw >> 24);
+            b[offset + 1] = (byte)(raw >> 16);
+            b[offset + 2] = (byte)(raw >> 8);
+            b[offset + 3] = (byte)raw;
         }
 
         [Fact]

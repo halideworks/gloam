@@ -54,7 +54,13 @@ namespace HDRGammaController.Core.Calibration
             try
             {
                 if (hdrMode)
-                    return GetAdvancedColorAssociations(monitor).FirstOrDefault();
+                {
+                    if (AdvancedColorProfileAssociation.TryGetSelectedDefault(
+                            monitor, out string? advancedDefault, out string? error))
+                        return advancedDefault;
+                    Log.Info($"CalibrationProfileInstaller: Advanced Color default query failed: {error}");
+                    return null;
+                }
 
                 if (!Wcs.WcsGetDefaultColorProfileSize(
                         Wcs.WCS_PROFILE_MANAGEMENT_SCOPE.WCS_PROFILE_MANAGEMENT_SCOPE_CURRENT_USER,
@@ -89,19 +95,11 @@ namespace HDRGammaController.Core.Calibration
             {
                 if (hdrMode)
                 {
-                    if (!DisplayConfig.TryGetPathForGdiName(monitor.DeviceName, out var adapterId, out uint sourceId, out _))
-                        return false;
-
-                    int hr = Wcs.ColorProfileAddDisplayAssociation(
-                        Wcs.WCS_PROFILE_MANAGEMENT_SCOPE.WCS_PROFILE_MANAGEMENT_SCOPE_CURRENT_USER,
-                        profileName, adapterId, sourceId,
-                        setAsDefault: true, associateAsAdvancedColor: true);
-                    if (hr != 0)
-                    {
-                        Log.Info($"CalibrationProfileInstaller: restore Advanced Color default failed (HRESULT 0x{hr:X8}) for {profileName}");
-                        return false;
-                    }
-                    return true;
+                    bool restored = AdvancedColorProfileAssociation.TryActivateInstalled(
+                        monitor, profileName, out _, out string? error);
+                    if (!restored)
+                        Log.Info($"CalibrationProfileInstaller: restore Advanced Color default failed for {profileName}: {error}");
+                    return restored;
                 }
 
                 if (!Wcs.AssociateColorProfileWithDevice(null, profileName, monitor.MonitorDevicePath))
@@ -349,12 +347,13 @@ namespace HDRGammaController.Core.Calibration
                 // The internal description is what Windows Color Management displays — without
                 // it the profile shows the template's leftover "SDR ACM: srgb_d50 [...]" text.
                 //
-                // colorimetry (M6): rewrite the template's synthetic sRGB/G2.2 characterization
-                // tags (wtpt/chad/rXYZ/gXYZ/bXYZ/TRC/chrm) with the colorimetry the display
-                // presents once this profile is active, so ICC-aware apps (Photoshop etc.) see
-                // the real display. matrixTarget is exactly that colorimetry: the calibration
-                // target for full-gamut installs, or the panel's MEASURED primaries with the
-                // (matrix-corrected) target white for white-point-only installs.
+                // colorimetry: rewrite the template's characterization primaries/white with
+                // what the calibrated display presents. In HDR the builder deliberately keeps
+                // the ordinary ICC TRCs sRGB: Windows apps and SDR content target that
+                // presentation encoding under Advanced Color, while PQ belongs exclusively to
+                // the MHC2 wire-domain payload. Exposing the target's PQ TRC here made Photoshop
+                // color-manage sRGB images into PQ before DWM managed them again (washed-out
+                // canvas in both of Photoshop's HDR display modes).
                 //
                 // lumiPeakNits: SDR installs carry the measured peak in the 'lumi' tag without
                 // touching the MHC2 header range; HDR installs already patch lumi through
@@ -367,43 +366,24 @@ namespace HDRGammaController.Core.Calibration
                         ? characterization.PeakLuminance
                         : null);
 
-                // Copy into the system color store. Returns false if an identical name already
-                // exists — harmless, we re-associate below regardless.
-                if (!Wcs.InstallColorProfile(null, srcPath))
-                    Log.Info($"CalibrationProfileInstaller: InstallColorProfile returned false for {profileName} (may already exist).");
-
                 if (hdrMode)
                 {
-                    // HDR displays read profiles from the ADVANCED COLOR association list
-                    // (registry ICMProfileAC) — the classic association APIs only touch the
-                    // SDR list, which Windows ignores while HDR is on. This is how the
-                    // Windows HDR Calibration app's own profiles are associated.
-                    // Resolve the DisplayConfig identity FRESH at install time — the cached
-                    // enumeration may predate an HDR toggle or display-topology change.
-                    var adapterId = monitor.DisplayConfigAdapterId;
-                    uint sourceId = monitor.DisplayConfigSourceId;
-                    bool haveIds = monitor.HasDisplayConfigIds;
-                    if (DisplayConfig.TryGetPathForGdiName(monitor.DeviceName, out var freshAdapter, out uint freshSource, out _))
-                    {
-                        adapterId = freshAdapter;
-                        sourceId = freshSource;
-                        haveIds = true;
-                    }
-                    if (!haveIds)
-                        return new InstallResult(false, profileName,
-                            "Could not resolve this display's identity (adapter LUID / source id) for the " +
-                            "Advanced Color profile association. Try re-opening calibration to refresh displays.");
+                    if (!TryInstallVerified(srcPath, profileName,
+                            AdvancedColorProfileAssociation.Platform, out bool newlyInstalled, out string? installError))
+                        return new InstallResult(false, profileName, installError);
 
-                    int hr = Wcs.ColorProfileAddDisplayAssociation(
-                        Wcs.WCS_PROFILE_MANAGEMENT_SCOPE.WCS_PROFILE_MANAGEMENT_SCOPE_CURRENT_USER,
-                        profileName, adapterId, sourceId,
-                        setAsDefault: true, associateAsAdvancedColor: true);
-                    if (hr != 0)
-                        return new InstallResult(false, profileName,
-                            $"Windows refused the Advanced Color profile association (HRESULT 0x{hr:X8}).");
+                    if (!AdvancedColorProfileAssociation.TryActivateInstalled(
+                            monitor, profileName, out _, out string? associationError))
+                    {
+                        if (newlyInstalled)
+                            AdvancedColorProfileAssociation.Platform.UninstallColorProfile(profileName, delete: true);
+                        return new InstallResult(false, profileName, associationError);
+                    }
                 }
                 else
                 {
+                    if (!Wcs.InstallColorProfile(null, srcPath))
+                        Log.Info($"CalibrationProfileInstaller: InstallColorProfile returned false for {profileName} (may already exist).");
                     if (!Wcs.AssociateColorProfileWithDevice(null, srcPath, monitor.MonitorDevicePath))
                         return new InstallResult(false, profileName,
                             "Windows refused to associate the profile with the display. Make sure the monitor is active.");
@@ -435,27 +415,26 @@ namespace HDRGammaController.Core.Calibration
         /// what pre-measurement bypass should use — measuring native must not destroy the
         /// user's previous calibration.
         /// </summary>
-        public static void Disable(MonitorInfo monitor, string profileName)
+        public static bool Disable(MonitorInfo monitor, string profileName)
         {
-            if (string.IsNullOrEmpty(monitor.MonitorDevicePath) || string.IsNullOrEmpty(profileName)) return;
+            if (string.IsNullOrEmpty(monitor.MonitorDevicePath) || string.IsNullOrEmpty(profileName)) return false;
             try
             {
                 // Remove from BOTH association lists (SDR and Advanced Color) — we don't track
                 // which mode the profile was installed for, and removing from a list it isn't
                 // in is harmless.
                 Wcs.DisassociateColorProfileFromDevice(null, profileName, monitor.MonitorDevicePath);
-                if (DisplayConfig.TryGetPathForGdiName(monitor.DeviceName, out var adapterId, out uint sourceId, out _))
-                {
-                    Wcs.ColorProfileRemoveDisplayAssociation(
-                        Wcs.WCS_PROFILE_MANAGEMENT_SCOPE.WCS_PROFILE_MANAGEMENT_SCOPE_CURRENT_USER,
-                        profileName, adapterId, sourceId,
-                        dissociateAdvancedColor: true);
-                }
+                bool removed = AdvancedColorProfileAssociation.TryRemoveCurrentUser(
+                    monitor, profileName, out string? error);
+                if (!removed)
+                    Log.Error($"CalibrationProfileInstaller: Advanced Color disable failed: {error}");
                 Log.Info($"CalibrationProfileInstaller: Disabled '{profileName}' on {monitor.FriendlyName} (file kept in color store).");
+                return removed;
             }
             catch (Exception ex)
             {
                 Log.Error($"CalibrationProfileInstaller: Disable failed: {ex.Message}");
+                return false;
             }
         }
 
@@ -471,12 +450,8 @@ namespace HDRGammaController.Core.Calibration
             {
                 if (hdrMode)
                 {
-                    if (!DisplayConfig.TryGetPathForGdiName(monitor.DeviceName, out var adapterId, out uint sourceId, out _))
-                        return false;
-                    return Wcs.ColorProfileAddDisplayAssociation(
-                        Wcs.WCS_PROFILE_MANAGEMENT_SCOPE.WCS_PROFILE_MANAGEMENT_SCOPE_CURRENT_USER,
-                        profileName, adapterId, sourceId,
-                        setAsDefault: true, associateAsAdvancedColor: true) == 0;
+                    return AdvancedColorProfileAssociation.TryActivateInstalled(
+                        monitor, profileName, out _, out _);
                 }
 
                 if (!Wcs.AssociateColorProfileWithDevice(null, profileName, monitor.MonitorDevicePath))
@@ -494,6 +469,88 @@ namespace HDRGammaController.Core.Calibration
         }
 
         /// <summary>
+        /// Creates and installs an ICC-safe copy of an existing Gloam HDR profile while
+        /// preserving its measured MHC2 calibration payload. The new copy becomes the
+        /// Advanced Color default, then the old association is retired (the old profile file
+        /// remains installed for rollback). No colorimeter run is required.
+        /// </summary>
+        public static InstallResult RepairAdvancedColorProfile(
+            MonitorInfo monitor, string existingProfileName, string repairedProfileName)
+        {
+            if (monitor == null || string.IsNullOrEmpty(monitor.MonitorDevicePath))
+                return new InstallResult(false, "", "Monitor has no device path; cannot repair its profile.");
+            if (string.IsNullOrWhiteSpace(existingProfileName))
+                return new InstallResult(false, "", "Existing profile name is required.");
+            if (string.IsNullOrWhiteSpace(repairedProfileName))
+                return new InstallResult(false, "", "Repaired profile name is required.");
+
+            existingProfileName = Path.GetFileName(existingProfileName.Trim());
+            repairedProfileName = Path.GetFileName(repairedProfileName.Trim());
+            if (string.Equals(existingProfileName, repairedProfileName, StringComparison.OrdinalIgnoreCase))
+                return new InstallResult(false, repairedProfileName,
+                    "The repaired profile must use a fresh filename so Windows reloads its transform.");
+            if (!string.Equals(Path.GetExtension(repairedProfileName), ".icm", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(Path.GetExtension(repairedProfileName), ".icc", StringComparison.OrdinalIgnoreCase))
+                return new InstallResult(false, repairedProfileName, "Repaired profile must use an .icm or .icc extension.");
+
+            var platform = AdvancedColorProfileAssociation.Platform;
+            string colorStore = platform.ColorStoreDirectory;
+            string sourcePath = Path.Combine(colorStore, existingProfileName);
+            if (!File.Exists(sourcePath))
+                return new InstallResult(false, repairedProfileName,
+                    $"Existing profile was not found in the Windows color store: {existingProfileName}");
+
+            string stagingDirectory = Path.Combine(Path.GetTempPath(), $"gloam-profile-repair-{Guid.NewGuid():N}");
+            string stagedPath = Path.Combine(stagingDirectory, repairedProfileName);
+            bool newlyInstalled = false;
+            AdvancedColorProfileAssociation.ActivationReceipt? receipt = null;
+            try
+            {
+                Directory.CreateDirectory(stagingDirectory);
+                Mhc2ProfileBuilder.RepairAdvancedColorIccCharacterization(
+                    sourcePath, stagedPath, Path.GetFileNameWithoutExtension(repairedProfileName));
+
+                if (!TryInstallVerified(stagedPath, repairedProfileName, platform,
+                        out newlyInstalled, out string? installError))
+                    return new InstallResult(false, repairedProfileName,
+                        installError);
+
+                if (!AdvancedColorProfileAssociation.TryActivateInstalled(
+                        monitor, repairedProfileName, out receipt, out string? associationError, platform))
+                {
+                    if (newlyInstalled)
+                        platform.UninstallColorProfile(repairedProfileName, delete: true);
+                    return new InstallResult(false, repairedProfileName, associationError);
+                }
+
+                // New default is live before the old association is removed. Keep the old
+                // profile installed so rollback does not depend on recalibration.
+                if (!AdvancedColorProfileAssociation.TryRemoveCurrentUser(
+                        monitor, existingProfileName, out string? retireError, platform))
+                {
+                    if (receipt != null)
+                        AdvancedColorProfileAssociation.TryRollback(monitor, receipt, platform, out _);
+                    if (newlyInstalled)
+                        platform.UninstallColorProfile(repairedProfileName, delete: true);
+                    return new InstallResult(false, repairedProfileName,
+                        $"Could not retire the old association; the change was rolled back. {retireError}");
+                }
+                Log.Info($"CalibrationProfileInstaller: Repaired '{existingProfileName}' as '{repairedProfileName}' " +
+                         $"for {monitor.FriendlyName}; MHC2 calibration preserved.");
+                return new InstallResult(true, repairedProfileName, null);
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"CalibrationProfileInstaller: HDR profile repair failed: {ex.Message}");
+                return new InstallResult(false, repairedProfileName, ex.Message);
+            }
+            finally
+            {
+                try { if (Directory.Exists(stagingDirectory)) Directory.Delete(stagingDirectory, recursive: true); } catch { }
+            }
+        }
+
+        /// <summary>
         /// Disables EVERY profile this app ever associated with the monitor (matched by our
         /// "&lt;monitor&gt; - &lt;target&gt; - &lt;date&gt;" naming), not just the recorded latest. A past
         /// bug installed several in one session; if a stale association ever becomes the
@@ -506,22 +563,12 @@ namespace HDRGammaController.Core.Calibration
                 return;
             try
             {
-                using var key = OpenProfileAssociationKey(monitor);
-                if (key == null) return;
-
                 // Derive the prefix from the SAME Sanitize() form BuildProfileName writes on
                 // disk — an invalid char or a >40-char name makes the stored name diverge from
                 // the raw FriendlyName, and a prefix off the raw name would match nothing, so
                 // cleanup would silently leave a stale association behind.
                 string prefix = BuildProfileNamePrefix(monitor);
-                var names = new List<string>();
-                foreach (var valueName in new[] { "ICMProfile", "ICMProfileAC" })
-                {
-                    if (key.GetValue(valueName) is string[] multi)
-                        names.AddRange(multi);
-                    else if (key.GetValue(valueName) is string single)
-                        names.Add(single);
-                }
+                var names = AdvancedColorProfileAssociation.GetCurrentUserProfiles(monitor).ToList();
 
                 foreach (string name in names.Distinct(StringComparer.OrdinalIgnoreCase))
                 {
@@ -536,27 +583,6 @@ namespace HDRGammaController.Core.Calibration
             }
         }
 
-        private static Microsoft.Win32.RegistryKey? OpenProfileAssociationKey(MonitorInfo monitor)
-        {
-            string suffix = monitor.MonitorDevicePath.TrimEnd('\\');
-            int cut = suffix.LastIndexOf('\\');
-            if (cut < 0) return null;
-            suffix = suffix[(cut + 1)..];
-
-            return Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
-                $@"Software\Microsoft\Windows NT\CurrentVersion\ICM\ProfileAssociations\Display\{{4d36e96e-e325-11ce-bfc1-08002be10318}}\{suffix}");
-        }
-
-        private static IReadOnlyList<string> GetAdvancedColorAssociations(MonitorInfo monitor)
-        {
-            using var key = OpenProfileAssociationKey(monitor);
-            if (key?.GetValue("ICMProfileAC") is string[] multi)
-                return multi.Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
-            if (key?.GetValue("ICMProfileAC") is string single && !string.IsNullOrWhiteSpace(single))
-                return new[] { single };
-            return Array.Empty<string>();
-        }
-
         /// <summary>Fully removes a previously-installed calibration profile from a monitor.</summary>
         public static void Uninstall(MonitorInfo monitor, string profileName)
         {
@@ -564,19 +590,48 @@ namespace HDRGammaController.Core.Calibration
             try
             {
                 Wcs.DisassociateColorProfileFromDevice(null, profileName, monitor.MonitorDevicePath);
-                if (DisplayConfig.TryGetPathForGdiName(monitor.DeviceName, out var adapterId, out uint sourceId, out _))
-                {
-                    Wcs.ColorProfileRemoveDisplayAssociation(
-                        Wcs.WCS_PROFILE_MANAGEMENT_SCOPE.WCS_PROFILE_MANAGEMENT_SCOPE_CURRENT_USER,
-                        profileName, adapterId, sourceId,
-                        dissociateAdvancedColor: true);
-                }
+                AdvancedColorProfileAssociation.TryRemoveCurrentUser(monitor, profileName, out _);
                 Wcs.UninstallColorProfile(null, profileName, true);
                 Log.Info($"CalibrationProfileInstaller: Removed '{profileName}' from {monitor.FriendlyName}.");
             }
             catch (Exception ex)
             {
                 Log.Error($"CalibrationProfileInstaller: Uninstall failed: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Installs a staged profile and verifies the color-store bytes. InstallColorProfile
+        /// returns false both for real failures and for a filename that already exists, so a
+        /// false return is accepted only when the existing file is byte-identical. A same-name
+        /// different profile is never silently activated.
+        /// </summary>
+        private static bool TryInstallVerified(
+            string stagedPath,
+            string profileName,
+            IAdvancedColorProfilePlatform platform,
+            out bool newlyInstalled,
+            out string? error)
+        {
+            newlyInstalled = platform.InstallColorProfile(stagedPath);
+            try
+            {
+                if (AdvancedColorProfileAssociation.VerifyInstalledProfile(
+                        stagedPath, profileName, platform, out error))
+                    return true;
+
+                if (newlyInstalled)
+                    platform.UninstallColorProfile(profileName, delete: true);
+                newlyInstalled = false;
+                return false;
+            }
+            catch (Exception ex)
+            {
+                if (newlyInstalled)
+                    platform.UninstallColorProfile(profileName, delete: true);
+                newlyInstalled = false;
+                error = $"Could not verify the installed profile: {ex.Message}";
+                return false;
             }
         }
 

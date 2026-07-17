@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Win32;
 using Hardcodet.Wpf.TaskbarNotification;
 using HDRGammaController.Core;
+using HDRGammaController.Core.Calibration;
 using HDRGammaController.Services;
 using HDRGammaController.ViewModels;
 
@@ -26,6 +27,7 @@ namespace HDRGammaController
 
             services.AddSingleton<MonitorManager>();
             services.AddSingleton<SettingsManager>();
+            services.AddSingleton<AdvancedColorProfileMigrationService>();
             services.AddSingleton<DispwinRunner>(); // Auto-detects
             services.AddSingleton(sp =>
                 new NightModeService(sp.GetRequiredService<SettingsManager>().NightMode));
@@ -111,6 +113,12 @@ namespace HDRGammaController
                 // pre-Velopack install) so boot never resurrects an old binary. Installed
                 // builds only: a portable/dev run must not steal the registration.
                 StartupManager.RepairIfStale(updateService.IsInstalled);
+
+                // Repair legacy HDR profile characterization and, just as importantly,
+                // verify that Windows is consulting the list containing the saved profile.
+                // This runs before the tray/apply path so settings and the active compositor
+                // correction agree from the first rendered frame.
+                _serviceProvider.GetRequiredService<AdvancedColorProfileMigrationService>().Run();
 
                 Log.Info("App.OnStartup: Creating MainWindow...");
                 var mainWindow = new MainWindow();

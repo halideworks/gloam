@@ -155,8 +155,9 @@
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
 
-                                <ComboBox IsEditable="True" ItemsSource="{Binding RunningApps}"
-                                          Text="{Binding NewAppText, UpdateSourceTrigger=PropertyChanged}"
+                                <ComboBox x:Name="ExcludedAppPicker" IsEditable="True" ItemsSource="{Binding RunningApps}"
+                                          AutomationProperties.AutomationId="ExcludedAppPicker"
+                                          Text="{Binding NewAppText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                           Foreground="{DynamicResource ThemeText}" AllowDrop="False">
                                     <ComboBox.Resources>
                                         <Style TargetType="TextBox">
@@ -167,8 +168,23 @@
                                         </Style>
                                     </ComboBox.Resources>
                                 </ComboBox>
+                                <TextBlock Text="Select or type an app..." Margin="9,0,30,0"
+                                           VerticalAlignment="Center" IsHitTestVisible="False"
+                                           Foreground="{DynamicResource ThemeTextDim}">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding NewAppText}" Value="">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
 
-                                <Button Grid.Column="1" Content="Add" Padding="14,6"
+                                <Button x:Name="AddExcludedAppButton" Grid.Column="1" Content="Add" Padding="14,6"
+                                        AutomationProperties.AutomationId="AddExcludedApp"
                                         Command="{Binding DataContext.AddExcludedAppCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                         CommandParameter="{Binding}"/>
                             </Grid>
@@ -304,7 +320,7 @@
 
                 <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
                     <StackPanel>
-                        <ItemsControl ItemsSource="{Binding Items}">
+                        <ItemsControl x:Name="DashboardItems" ItemsSource="{Binding Items}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
                                     <WrapPanel />

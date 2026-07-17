@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
@@ -63,6 +64,8 @@ namespace HDRGammaController.ViewModels
         private const int RefreshThrottleMs = 500;
         private bool _refreshPending;
         private List<MonitorInfo>? _cachedMonitors;
+        private int _runningAppScanGeneration;
+        private volatile bool _isDisposed;
 
         public SettingsManager SettingsManager { get; }
 
@@ -156,7 +159,12 @@ namespace HDRGammaController.ViewModels
 
             // Re-refresh when blend changes (for live update) - throttled. Kept as a stored
             // handler so Dispose can unsubscribe; the service outlives this window.
-            _blendChangedHandler = _ => Application.Current.Dispatcher.BeginInvoke(new Action(ThrottledRefresh));
+            _blendChangedHandler = _ =>
+            {
+                var dispatcher = Application.Current?.Dispatcher;
+                if (!_isDisposed && dispatcher != null && !dispatcher.HasShutdownStarted)
+                    dispatcher.BeginInvoke(new Action(ThrottledRefresh));
+            };
             _nightModeService.BlendChanged += _blendChangedHandler;
 
             // Calibration bypass has no event (and night mode is paused during it, so no
@@ -327,6 +335,8 @@ namespace HDRGammaController.ViewModels
 
         public void ThrottledRefresh()
         {
+            if (_isDisposed) return;
+
             var now = DateTime.Now;
             if ((now - _lastRefreshTime).TotalMilliseconds >= RefreshThrottleMs)
             {
@@ -340,7 +350,8 @@ namespace HDRGammaController.ViewModels
                 _ = Application.Current.Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
                 {
                     _refreshPending = false;
-                    Refresh(reEnumerate: false);
+                    if (!_isDisposed)
+                        Refresh(reEnumerate: false);
                 }));
             }
         }
@@ -353,6 +364,8 @@ namespace HDRGammaController.ViewModels
         /// </param>
         public void Refresh(bool reEnumerate = true)
         {
+            if (_isDisposed) return;
+
             // If night mode changed from elsewhere (tray hotkey toggle, another window, the
             // night-mode timer's blend tick), re-read the authoritative snapshot so the
             // schedule editor doesn't show stale values that Save would then clobber. Skip
@@ -380,8 +393,7 @@ namespace HDRGammaController.ViewModels
             int nightKelvin = _nightModeService.CurrentNightKelvin;
             double blendedShift = (nightKelvin - 6500) / 70.0;
 
-            Items.Clear();
-
+            var refreshedItems = new List<DashboardItem>(monitors.Count);
             foreach (var m in monitors)
             {
                 // Load current state
@@ -402,7 +414,7 @@ namespace HDRGammaController.ViewModels
                     blendedShift,
                     _nightModeService.IsNightModeActive);
 
-                Items.Add(new DashboardItem
+                refreshedItems.Add(new DashboardItem
                 {
                     Model = m,
                     FriendlyName = m.FriendlyName,
@@ -417,10 +429,81 @@ namespace HDRGammaController.ViewModels
                 });
             }
 
-            Items.Add(_appExclusionItem);
+            SyncDashboardItems(Items, refreshedItems, _appExclusionItem);
 
-            // Async load running apps
-            _ = LoadRunningAppsAsync(_appExclusionItem);
+            // Blend ticks only change the monitor-card tint text. Re-scanning processes on
+            // every tick used to clear the ComboBox ItemsSource while a choice was selected,
+            // which could erase NewAppText before the Add command read it.
+            if (reEnumerate)
+                _ = LoadRunningAppsAsync(_appExclusionItem);
+        }
+
+        /// <summary>
+        /// Updates monitor cards without removing the long-lived app-exclusion item. WPF
+        /// keeps that item's generated container (and therefore an open ComboBox popup)
+        /// alive across night-mode blend refreshes.
+        /// </summary>
+        internal static void SyncDashboardItems(
+            ObservableCollection<object> items,
+            IReadOnlyList<DashboardItem> refreshedItems,
+            AppExclusionItem appExclusionItem)
+        {
+            var available = items.OfType<DashboardItem>().ToList();
+            var used = new HashSet<DashboardItem>();
+            var desired = new List<object>(refreshedItems.Count + 1);
+
+            foreach (var refreshed in refreshedItems)
+            {
+                var existing = available.FirstOrDefault(item =>
+                    !used.Contains(item) && SameMonitor(item.Model, refreshed.Model));
+
+                if (existing == null)
+                {
+                    desired.Add(refreshed);
+                    continue;
+                }
+
+                existing.UpdateFrom(refreshed);
+                used.Add(existing);
+                desired.Add(existing);
+            }
+
+            desired.Add(appExclusionItem);
+
+            for (int index = 0; index < desired.Count; index++)
+            {
+                if (index < items.Count && ReferenceEquals(items[index], desired[index]))
+                    continue;
+
+                int existingIndex = IndexOfReference(items, desired[index], index + 1);
+                if (existingIndex >= 0)
+                    items.Move(existingIndex, index);
+                else
+                    items.Insert(index, desired[index]);
+            }
+
+            while (items.Count > desired.Count)
+                items.RemoveAt(items.Count - 1);
+        }
+
+        private static bool SameMonitor(MonitorInfo left, MonitorInfo right)
+        {
+            if (!string.IsNullOrEmpty(left.MonitorDevicePath) || !string.IsNullOrEmpty(right.MonitorDevicePath))
+                return string.Equals(left.MonitorDevicePath, right.MonitorDevicePath, StringComparison.OrdinalIgnoreCase);
+
+            return string.Equals(left.DeviceName, right.DeviceName, StringComparison.OrdinalIgnoreCase)
+                && left.OutputId == right.OutputId;
+        }
+
+        private static int IndexOfReference(ObservableCollection<object> items, object target, int startIndex)
+        {
+            for (int index = Math.Max(0, startIndex); index < items.Count; index++)
+            {
+                if (ReferenceEquals(items[index], target))
+                    return index;
+            }
+
+            return -1;
         }
 
         internal static string FormatEffectiveTemperatureText(
@@ -441,48 +524,106 @@ namespace HDRGammaController.ViewModels
 
         private async Task LoadRunningAppsAsync(AppExclusionItem item)
         {
+            int generation = Interlocked.Increment(ref _runningAppScanGeneration);
             var apps = await Task.Run(GetRunningApps);
-            item.RunningApps.Clear();
-            foreach (var app in apps) item.RunningApps.Add(app);
+            if (_isDisposed || generation != Volatile.Read(ref _runningAppScanGeneration))
+                return;
+
+            SyncRunningApps(item.RunningApps, apps);
+        }
+
+        /// <summary>
+        /// Reconciles the process list without a collection Reset. Retained entries keep
+        /// their identity, so a selected running app is not transiently removed and written
+        /// back to the editable ComboBox as an empty string.
+        /// </summary>
+        internal static void SyncRunningApps(
+            ObservableCollection<string> runningApps,
+            IReadOnlyList<string> refreshedApps)
+        {
+            for (int index = 0; index < refreshedApps.Count; index++)
+            {
+                string app = refreshedApps[index];
+                if (index < runningApps.Count &&
+                    string.Equals(runningApps[index], app, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                int existingIndex = -1;
+                for (int candidate = index + 1; candidate < runningApps.Count; candidate++)
+                {
+                    if (string.Equals(runningApps[candidate], app, StringComparison.OrdinalIgnoreCase))
+                    {
+                        existingIndex = candidate;
+                        break;
+                    }
+                }
+
+                if (existingIndex >= 0)
+                    runningApps.Move(existingIndex, index);
+                else
+                    runningApps.Insert(index, app);
+            }
+
+            while (runningApps.Count > refreshedApps.Count)
+                runningApps.RemoveAt(runningApps.Count - 1);
         }
 
         private static List<string> GetRunningApps()
         {
             try
             {
-                return Process.GetProcesses()
-                    .Where(p => p.MainWindowHandle != IntPtr.Zero && !string.IsNullOrEmpty(p.MainWindowTitle))
-                    .Select(p =>
+                var appNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var process in Process.GetProcesses())
+                {
+                    using (process)
                     {
-                        try { return p.ProcessName.ToLowerInvariant() + ".exe"; }
-                        catch { return null; }
-                    })
-                    .Where(n => !string.IsNullOrEmpty(n))
-                    .Select(n => n!)
-                    .Distinct()
-                    .OrderBy(n => n)
-                    .ToList();
+                        try
+                        {
+                            if (process.MainWindowHandle != IntPtr.Zero &&
+                                !string.IsNullOrEmpty(process.MainWindowTitle))
+                            {
+                                appNames.Add(process.ProcessName.ToLowerInvariant() + ".exe");
+                            }
+                        }
+                        catch
+                        {
+                            // Access denied or the process exited during enumeration.
+                        }
+                    }
+                }
+
+                return appNames.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList();
             }
             catch { return new List<string>(); }
         }
 
         private void AddExcludedApp(AppExclusionItem? item)
         {
-            if (item == null) return;
-
-            string app = item.NewAppText?.Trim() ?? "";
-            if (string.IsNullOrWhiteSpace(app) || app == AppExclusionItem.Placeholder) return;
-            if (!app.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) app += ".exe";
-
-            // Check if exists
-            if (!item.ExcludedApps.Any(r => r.AppName.Equals(app, StringComparison.OrdinalIgnoreCase)))
-            {
-                var rule = new AppExclusionRule { AppName = app, FullDisable = false };
-                item.ExcludedApps.Add(rule);
+            if (item != null && TryAddExcludedApp(item))
                 SaveExcludedApps();
+        }
+
+        internal static bool TryAddExcludedApp(AppExclusionItem item)
+        {
+            string app = AppExclusionRule.NormalizeAppName(item.NewAppText);
+            if (app.Length == 0) return false;
+
+            bool added = false;
+            if (!item.ExcludedApps.Any(rule =>
+                rule.AppName.Equals(app, StringComparison.OrdinalIgnoreCase)))
+            {
+                item.ExcludedApps.Add(new AppExclusionRule
+                {
+                    AppName = app,
+                    FullDisable = false
+                });
+                added = true;
             }
 
-            item.NewAppText = "";
+            item.NewAppText = string.Empty;
+            return added;
         }
 
         private void RemoveExcludedApp(AppExclusionRule? rule)
@@ -537,6 +678,9 @@ namespace HDRGammaController.ViewModels
 
         public void Dispose()
         {
+            if (_isDisposed) return;
+            _isDisposed = true;
+            Interlocked.Increment(ref _runningAppScanGeneration);
             _nightModeService.BlendChanged -= _blendChangedHandler;
             _bypassPollTimer.Stop();
         }

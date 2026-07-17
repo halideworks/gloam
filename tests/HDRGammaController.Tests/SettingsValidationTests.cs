@@ -634,6 +634,50 @@ namespace HDRGammaController.Tests
             Assert.True(rule.FullDisable);
         }
 
+        [Fact]
+        public void NormalizeExcludedApps_DropsInvalidRules_AndMergesDuplicates()
+        {
+            var normalized = SettingsManager.NormalizeExcludedApps(new AppExclusionRule?[]
+            {
+                null,
+                new AppExclusionRule { AppName = " " },
+                new AppExclusionRule { AppName = @"C:\Apps\Resolve", FullDisable = false },
+                new AppExclusionRule { AppName = "resolve.EXE", FullDisable = true }
+            });
+
+            var rule = Assert.Single(normalized);
+            Assert.Equal("Resolve.exe", rule.AppName);
+            Assert.True(rule.FullDisable);
+        }
+
+        [Fact]
+        public void SettingsManager_ExcludedApps_AreDeepSnapshots()
+        {
+            string originalData = AppPaths.DataDir;
+            string originalRoaming = AppPaths.RoamingDataDir;
+            string tempDir = CreateTempDirectory();
+
+            try
+            {
+                AppPaths.UseDataDirectoriesForCurrentProcess(tempDir, Path.Combine(tempDir, "roaming"));
+                var settings = new SettingsManager();
+                var source = new AppExclusionRule { AppName = "resolve.exe", FullDisable = false };
+                settings.SetExcludedApps(new System.Collections.Generic.List<AppExclusionRule> { source });
+
+                source.AppName = "mutated.exe";
+                var snapshot = settings.ExcludedApps;
+                snapshot[0].AppName = "also-mutated.exe";
+
+                var stored = Assert.Single(settings.ExcludedApps);
+                Assert.Equal("resolve.exe", stored.AppName);
+            }
+            finally
+            {
+                AppPaths.UseDataDirectoriesForCurrentProcess(originalData, originalRoaming);
+                DeleteDirectory(tempDir);
+            }
+        }
+
         #endregion
 
         private static DisplayCalibrationProfile ValidCalibrationProfile(string monitorDevicePath) => new()

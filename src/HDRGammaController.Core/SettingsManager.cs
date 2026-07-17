@@ -15,6 +15,29 @@ namespace HDRGammaController.Core
     {
         public string AppName { get; set; } = string.Empty;
         public bool FullDisable { get; set; } = false;
+
+        internal AppExclusionRule Clone() => new AppExclusionRule
+        {
+            AppName = AppName,
+            FullDisable = FullDisable
+        };
+
+        public static string NormalizeAppName(string? appName)
+        {
+            string normalized = appName?.Trim().Trim('"') ?? string.Empty;
+            if (normalized.Length == 0) return string.Empty;
+
+            // Process.GetProcessById reports a base executable name, while users may paste
+            // a full path into the editable picker. Store the same basename format emitted
+            // by AppDetectionService so the foreground lookup can actually match it.
+            normalized = Path.GetFileName(normalized);
+            if (normalized.Length == 0 || normalized.Length > 260) return string.Empty;
+
+            if (!normalized.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                normalized += ".exe";
+
+            return normalized;
+        }
     }
 
     public class WindowBoundsData
@@ -532,6 +555,7 @@ namespace HDRGammaController.Core
                                     NightMode = legacy.NightMode,
                                     ExcludedApps = legacy.ExcludedApps?.Select(path => new AppExclusionRule { AppName = path, FullDisable = false }).ToList() ?? new List<AppExclusionRule>()
                                 };
+                                ValidateAndClampSettings(loaded);
                                 Log.Info("SettingsManager: Legacy migration successful.");
                                 Log.Info($"SettingsManager: Loaded {loaded.MonitorProfiles.Count} monitor profiles.");
                                 // Persist in the new format under the lock to avoid racing another Load.
@@ -587,7 +611,7 @@ namespace HDRGammaController.Core
             }
         }
 
-        public void Save()
+        public bool Save()
         {
             string json;
             int profileCount;
@@ -598,7 +622,7 @@ namespace HDRGammaController.Core
                 {
                     // A newer build wrote this file; an older binary must never clobber it.
                     Log.Info($"SettingsManager: Save refused; settings.json schema is newer than this build supports (v{CurrentSchemaVersion}).");
-                    return;
+                    return false;
                 }
 
                 if (LoadFailedPreservingFile && _dataVersion == _dataVersionAtLoad)
@@ -606,7 +630,7 @@ namespace HDRGammaController.Core
                     // The file on disk could not be parsed and nothing has changed in memory
                     // since: a save now would just overwrite the user's file with defaults.
                     Log.Info("SettingsManager: Save suppressed; settings.json failed to parse at load and no setting has changed since.");
-                    return;
+                    return false;
                 }
 
                 // Stamp the schema version we are about to write.
@@ -642,11 +666,40 @@ namespace HDRGammaController.Core
                     File.WriteAllText(tempPath, json);
                     File.Move(tempPath, SettingsFilePath, overwrite: true);
                     Log.Info($"SettingsManager: Saved {profileCount} monitor profiles (v{snapshotVersion}).");
+                    return true;
                 }
             }
             catch (Exception ex)
             {
                 Log.Info($"SettingsManager: Failed to save settings: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Creates a recoverable point-in-time copy before an automatic profile migration.
+        /// The same writer lock used by Save prevents a backup from racing a temp-file swap.
+        /// </summary>
+        public string? TryCreateBackup(string label)
+        {
+            try
+            {
+                lock (_saveLock)
+                {
+                    if (!File.Exists(SettingsFilePath)) return null;
+                    string safeLabel = new string((label ?? "backup")
+                        .Where(c => char.IsLetterOrDigit(c) || c is '-' or '_' or '.').ToArray());
+                    if (safeLabel.Length == 0) safeLabel = "backup";
+                    string backupPath = SettingsFilePath +
+                        $".{safeLabel}-{DateTime.Now:yyyyMMdd-HHmmss}.bak";
+                    File.Copy(SettingsFilePath, backupPath, overwrite: false);
+                    return backupPath;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"SettingsManager: Could not create settings backup: {ex.Message}");
+                return null;
             }
         }
 
@@ -823,7 +876,7 @@ namespace HDRGammaController.Core
             {
                 lock (_dataLock)
                 {
-                    return _data.ExcludedApps.ToList();
+                    return _data.ExcludedApps.Select(rule => rule.Clone()).ToList();
                 }
             }
         }
@@ -832,10 +885,81 @@ namespace HDRGammaController.Core
         {
             lock (_dataLock)
             {
-                _data.ExcludedApps = apps ?? new List<AppExclusionRule>();
+                _data.ExcludedApps = NormalizeExcludedApps(apps);
                 _dataVersion++;
             }
             Save();
+        }
+
+        /// <summary>
+        /// Atomically replaces the recorded native profile only when it still names the
+        /// profile the migration inspected. The in-memory value is restored if the durable
+        /// settings write fails, allowing the caller to roll Windows' association back too.
+        /// </summary>
+        public bool TryReplaceMhc2Calibration(
+            string monitorDevicePath, string expectedProfileName, string replacementProfileName)
+        {
+            if (string.IsNullOrWhiteSpace(monitorDevicePath) ||
+                string.IsNullOrWhiteSpace(expectedProfileName) ||
+                string.IsNullOrWhiteSpace(replacementProfileName))
+                return false;
+
+            lock (_dataLock)
+            {
+                if (!_data.MonitorProfiles.TryGetValue(monitorDevicePath, out var profile) ||
+                    !string.Equals(profile.Mhc2ProfileName, expectedProfileName,
+                        StringComparison.OrdinalIgnoreCase))
+                    return false;
+                profile.Mhc2ProfileName = replacementProfileName;
+                _dataVersion++;
+            }
+
+            if (Save()) return true;
+
+            lock (_dataLock)
+            {
+                if (_data.MonitorProfiles.TryGetValue(monitorDevicePath, out var profile) &&
+                    string.Equals(profile.Mhc2ProfileName, replacementProfileName,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    profile.Mhc2ProfileName = expectedProfileName;
+                    _dataVersion++;
+                }
+            }
+            return false;
+        }
+
+        internal static List<AppExclusionRule> NormalizeExcludedApps(
+            IEnumerable<AppExclusionRule?>? apps)
+        {
+            var normalized = new List<AppExclusionRule>();
+            if (apps == null) return normalized;
+
+            foreach (var rule in apps)
+            {
+                if (rule == null) continue;
+
+                string appName = AppExclusionRule.NormalizeAppName(rule.AppName);
+                if (appName.Length == 0) continue;
+
+                var duplicate = normalized.FirstOrDefault(existing =>
+                    existing.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase));
+                if (duplicate != null)
+                {
+                    // Preserve the stronger scope if a hand-edited or legacy file contains
+                    // duplicate rules with conflicting values.
+                    duplicate.FullDisable |= rule.FullDisable;
+                    continue;
+                }
+
+                normalized.Add(new AppExclusionRule
+                {
+                    AppName = appName,
+                    FullDisable = rule.FullDisable
+                });
+            }
+
+            return normalized;
         }
 
         #region Calibration Profile Management
@@ -989,6 +1113,11 @@ namespace HDRGammaController.Core
         private static void ValidateAndClampSettings(SettingsData data)
         {
             if (data == null) return;
+
+            // Null entries, duplicates, paths and extension-less names can all arrive from
+            // hand-edited or legacy settings. Canonicalize them before the foreground hook
+            // starts reading this list.
+            data.ExcludedApps = NormalizeExcludedApps(data.ExcludedApps);
 
             // Validate monitor profiles
             foreach (var profile in data.MonitorProfiles.Values)

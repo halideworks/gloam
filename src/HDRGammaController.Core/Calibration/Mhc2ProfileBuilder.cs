@@ -11,11 +11,12 @@ namespace HDRGammaController.Core.Calibration
     /// gamma ramp alone cannot do, because the ramp is per-channel 1D with no cross-channel
     /// matrix.
     ///
-    /// Besides the MHC2 tag, the builder can synthesize TRUE ICC characterization tags
+    /// Besides the MHC2 tag, the builder can synthesize ICC characterization tags
     /// (wtpt/chad/rXYZ/gXYZ/bXYZ/rTRC/gTRC/bTRC/chrm) for the colorimetry the display
-    /// actually presents once the profile is active — without that, ICC-aware apps
-    /// (Photoshop etc.) read the template's synthetic sRGB/G2.2 description regardless of
-    /// what the calibration installed. See <see cref="Build"/>'s colorimetry parameter.
+    /// presents once the profile is active. The ordinary ICC tags describe the app-facing
+    /// presentation space, which remains sRGB-encoded under Windows Advanced Color; HDR
+    /// PQ/HLG wire correction belongs only in MHC2. See <see cref="Build"/>'s colorimetry
+    /// parameter.
     ///
     /// MHC2 tag binary layout (reverse-engineered from the shipped templates, which were
     /// produced by MHC2Gen):
@@ -52,6 +53,7 @@ namespace HDRGammaController.Core.Calibration
         private const int GTrcSignature = 0x67545243; // 'gTRC'
         private const int BTrcSignature = 0x62545243; // 'bTRC'
         private const int ChrmSignature = 0x6368726D; // 'chrm'
+        private const int LumiSignature = 0x6C756D69; // 'lumi'
         private const int CurvSignature = 0x63757276; // 'curv'
         private const int XyzTypeSignature = 0x58595A20; // 'XYZ '
         private const int TrcSampleCount = 1024;
@@ -74,8 +76,9 @@ namespace HDRGammaController.Core.Calibration
         /// wtpt/chad/rXYZ/gXYZ/bXYZ/rTRC/gTRC/bTRC/chrm tags are rewritten so ICC-aware apps
         /// see the real display instead of the template's synthetic sRGB/G2.2 values
         /// (ICC v4 convention: wtpt = PCS D50, chad = Bradford(actual white → D50),
-        /// r/g/bXYZ = chad-adapted primaries, TRC = the colorimetry's EOTF). Null keeps
-        /// the template's tags untouched.</param>
+        /// r/g/bXYZ = chad-adapted primaries). SDR targets use their requested EOTF. HDR
+        /// targets use the app-facing sRGB EOTF here; their PQ/HLG calibration remains in
+        /// the MHC2 payload. Null keeps the template's tags untouched.</param>
         /// <param name="lumiPeakNits">Measured peak luminance written to the 'lumi' tag ONLY
         /// (the MHC2 header stays untouched) — the SDR install path uses this so the lumi tag
         /// carries the measured peak without altering the MHC2 header range Windows reads for
@@ -153,6 +156,99 @@ namespace HDRGammaController.Core.Calibration
         }
 
         /// <summary>
+        /// Repairs an existing HDR/Advanced Color profile created by an older Gloam build
+        /// without touching its measured MHC2 matrix, LUTs, or luminance range. Only the
+        /// ordinary ICC TRCs, luminance tag, description, and profile ID are rewritten.
+        /// The output must be installed under a fresh filename so Windows cannot reuse a
+        /// cached transform for the old profile.
+        /// </summary>
+        public static void RepairAdvancedColorIccCharacterization(
+            string sourcePath, string outputPath, string? description = null)
+        {
+            if (string.IsNullOrWhiteSpace(sourcePath))
+                throw new ArgumentException("Source profile path is required.", nameof(sourcePath));
+            if (string.IsNullOrWhiteSpace(outputPath))
+                throw new ArgumentException("Output profile path is required.", nameof(outputPath));
+            if (string.Equals(Path.GetFullPath(sourcePath), Path.GetFullPath(outputPath),
+                    StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException(
+                    "Repair output must use a new path so the source profile remains recoverable.",
+                    nameof(outputPath));
+
+            byte[] data = File.ReadAllBytes(sourcePath);
+            int mhc2 = FindMhc2Tag(data);
+            double peakNits = ReadS15Fixed16(data, mhc2 + 16);
+            ValidateLuminanceMetadata(peakNits, nameof(sourcePath), "MHC2 peak");
+            if (peakNits <= 0.0)
+                throw new InvalidDataException("MHC2 peak luminance must be greater than zero for HDR repair.");
+
+            // Do not rebuild from a stock template: the existing MHC2 block is the measured
+            // calibration and must survive byte-for-byte. Repoint only the three classic ICC
+            // TRC entries at a new shared sRGB curve.
+            data = AppendTagBlock(data, BuildSampledTrc(ColorMath.SrgbEotf),
+                RTrcSignature, GTrcSignature, BTrcSignature);
+            PatchLumiTag(data, peakNits);
+
+            if (!string.IsNullOrWhiteSpace(description))
+                data = PatchDescription(data, description);
+
+            for (int z = 84; z < 100; z++) data[z] = 0;
+            File.WriteAllBytes(outputPath, data);
+        }
+
+        /// <summary>
+        /// Returns true when an MHC2 profile still advertises a non-sRGB classic ICC TRC.
+        /// Advanced Color presents ordinary integer app content in sRGB; PQ/HLG belongs in
+        /// the private MHC2 wire correction only. Older Gloam profiles advertised PQ here,
+        /// which made ICC-aware editors such as Photoshop apply a second HDR conversion.
+        /// Invalid or non-MHC2 inputs throw so migration never rewrites an unrelated profile.
+        /// </summary>
+        public static bool NeedsAdvancedColorIccCharacterizationRepair(string profilePath)
+        {
+            if (string.IsNullOrWhiteSpace(profilePath))
+                throw new ArgumentException("Profile path is required.", nameof(profilePath));
+
+            byte[] data = File.ReadAllBytes(profilePath);
+            _ = FindMhc2Tag(data);
+            return !IsSrgbTrc(data, RTrcSignature) ||
+                   !IsSrgbTrc(data, GTrcSignature) ||
+                   !IsSrgbTrc(data, BTrcSignature);
+        }
+
+        private static bool IsSrgbTrc(byte[] data, int signature)
+        {
+            int entry = FindTagEntry(data, signature);
+            if (entry < 0) throw new InvalidDataException($"Profile lacks '{SignatureName(signature)}'.");
+            int offset = ReadU32(data, entry + 4);
+            int size = ReadU32(data, entry + 8);
+            if (offset < 0 || size < 12 || offset + size > data.Length ||
+                ReadU32(data, offset) != CurvSignature)
+                throw new InvalidDataException($"Profile has an invalid '{SignatureName(signature)}' curve.");
+
+            int count = ReadU32(data, offset + 8);
+            if (count < 2 || count > 1_000_000 || size < 12 + count * 2)
+                return false;
+
+            // Multiple samples prevent a coincidental midpoint match from classifying a
+            // gamma/PQ/HLG curve as safe. Tolerance covers 16-bit quantization and linear
+            // interpolation of profiles written by other conforming tools.
+            double[] probes = { 0.05, 0.18, 0.25, 0.50, 0.75, 0.90 };
+            foreach (double signal in probes)
+            {
+                double position = signal * (count - 1);
+                int lo = (int)Math.Floor(position);
+                int hi = Math.Min(lo + 1, count - 1);
+                double fraction = position - lo;
+                double a = ReadU16(data, offset + 12 + lo * 2) / 65535.0;
+                double b = ReadU16(data, offset + 12 + hi * 2) / 65535.0;
+                double actual = a + (b - a) * fraction;
+                if (Math.Abs(actual - ColorMath.SrgbEotf(signal)) > 0.002)
+                    return false;
+            }
+            return true;
+        }
+
+        /// <summary>
         /// Replaces the profile's 'desc' tag (what Windows Color Management displays) with
         /// <paramref name="description"/>. The new text rarely fits the template's allocation,
         /// so a fresh 'mluc' (en-US) block is appended at the end of the file and the tag
@@ -186,7 +282,8 @@ namespace HDRGammaController.Core.Calibration
         ///   wtpt = the PCS illuminant D50 (the media white AFTER chromatic adaptation),
         ///   chad = the Bradford matrix adapting the display's ACTUAL white to D50,
         ///   rXYZ/gXYZ/bXYZ = the display primaries pushed through chad (PCS-adapted),
-        ///   rTRC/gTRC/bTRC = the colorimetry's EOTF (shared 'curv' tag, like the template),
+        ///   rTRC/gTRC/bTRC = the app-facing EOTF (shared 'curv' tag, like the template),
+        ///     which is the target EOTF in SDR and sRGB in HDR/Advanced Color,
         ///   chrm = the raw device chromaticities (informational, patched when present).
         /// The fixed-size tags (wtpt/chad/XYZ/chrm) are patched in place; the TRC curve is
         /// appended and the three TRC tag-table entries repointed at the shared block, the
@@ -209,7 +306,7 @@ namespace HDRGammaController.Core.Calibration
             WriteXyzTag(data, BXyzSignature, pcsPrimaries[0, 2], pcsPrimaries[1, 2], pcsPrimaries[2, 2]);
             PatchChrmTag(data, colorimetry);
 
-            return AppendTagBlock(data, BuildTrcCurve(colorimetry),
+            return AppendTagBlock(data, BuildIccCharacterizationTrc(colorimetry),
                 RTrcSignature, GTrcSignature, BTrcSignature);
         }
 
@@ -234,13 +331,19 @@ namespace HDRGammaController.Core.Calibration
         }
 
         /// <summary>
-        /// Builds the shared TRC 'curv' tag for the colorimetry's EOTF: a compact gamma
-        /// entry for pure power-law targets, the ICC identity form for linear, and a
-        /// 1024-point sampled curve for everything piecewise (sRGB, BT.1886, PQ, HLG —
-        /// PQ is normalized to the target peak and clips at 1.0 above it).
+        /// Builds the shared classic ICC TRC. Windows Advanced Color's app-facing integer
+        /// presentation space remains sRGB even while the display wire uses PQ/HLG. Writing
+        /// a PQ/HLG curve here makes ICC-aware apps convert ordinary images into a wire
+        /// encoding that DWM then color-manages again, producing a large washed-out shift.
+        /// Therefore HDR targets always advertise sRGB in the ordinary ICC matrix/TRC path;
+        /// their actual HDR correction stays exclusively in the MHC2 matrix and 1D LUTs.
+        /// SDR targets retain their requested transfer function.
         /// </summary>
-        private static byte[] BuildTrcCurve(CalibrationTarget colorimetry)
+        private static byte[] BuildIccCharacterizationTrc(CalibrationTarget colorimetry)
         {
+            if (colorimetry.IsHdr)
+                return BuildSampledTrc(ColorMath.SrgbEotf);
+
             if (colorimetry.TransferFunction == TransferFunctionType.Gamma &&
                 colorimetry.Gamma is double gamma &&
                 double.IsFinite(gamma) && gamma is >= 1.0 and <= 4.0)
@@ -261,13 +364,18 @@ namespace HDRGammaController.Core.Calibration
                 return tag;
             }
 
+            return BuildSampledTrc(colorimetry.ApplyEotf);
+        }
+
+        private static byte[] BuildSampledTrc(Func<double, double> eotf)
+        {
             byte[] sampled = new byte[12 + TrcSampleCount * 2];
             WriteU32(sampled, 0, CurvSignature);
             WriteU32(sampled, 8, TrcSampleCount);
             for (int i = 0; i < TrcSampleCount; i++)
             {
                 double signal = i / (double)(TrcSampleCount - 1);
-                double linear = Math.Clamp(colorimetry.ApplyEotf(signal), 0.0, 1.0);
+                double linear = Math.Clamp(eotf(signal), 0.0, 1.0);
                 WriteU16(sampled, 12 + i * 2, (int)Math.Round(linear * 65535.0));
             }
             return sampled;
@@ -384,23 +492,25 @@ namespace HDRGammaController.Core.Calibration
             (char)(signature & 0xFF),
         });
 
-        /// <summary>Writes the display peak luminance into the 'lumi' tag's XYZ Y field.</summary>
+        /// <summary>
+        /// Writes the display peak luminance into the 'lumi' tag. ICC.1 defines luminance
+        /// as absolute cd/m² in Y and requires X/Z to be zero; rewrite the full XYZ payload
+        /// so stale template chromaticity components cannot leak into color-managed apps.
+        /// </summary>
         private static void PatchLumiTag(byte[] data, double maxNits)
         {
             ValidateLuminanceMetadata(maxNits, nameof(maxNits), "Maximum");
 
-            const int LumiSignature = 0x6C756D69; // 'lumi'
-            int tagCount = ReadU32(data, IccHeaderSize);
-            for (int i = 0; i < tagCount; i++)
-            {
-                int e = IccHeaderSize + 4 + i * IccTagEntrySize;
-                if (e + 12 > data.Length || ReadU32(data, e) != LumiSignature) continue;
-                int off = ReadU32(data, e + 4);
-                // XYZType: sig(4) + reserved(4) + X(4) + Y(4) + Z(4) — luminance lives in Y.
-                if (off + 20 <= data.Length)
-                    WriteS15Fixed16(data, off + 12, maxNits);
-                return;
-            }
+            int entry = FindTagEntry(data, LumiSignature);
+            if (entry < 0) return;
+
+            int off = RequireTagDataOffset(data, LumiSignature, 20);
+            if (ReadU32(data, off) != XyzTypeSignature)
+                throw new InvalidDataException("Tag 'lumi' is not XYZ-typed where expected.");
+
+            WriteS15Fixed16(data, off + 8, 0.0);
+            WriteS15Fixed16(data, off + 12, maxNits);
+            WriteS15Fixed16(data, off + 16, 0.0);
         }
 
         private static void WriteU32(byte[] b, int o, int v)
@@ -558,6 +668,10 @@ namespace HDRGammaController.Core.Calibration
 
         private static int ReadU32(byte[] b, int o) =>
             (b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3];
+
+        private static int ReadU16(byte[] b, int o) => (b[o] << 8) | b[o + 1];
+
+        private static double ReadS15Fixed16(byte[] b, int o) => ReadU32(b, o) / 65536.0;
 
         private static void WriteS15Fixed16(byte[] b, int o, double value)
         {
