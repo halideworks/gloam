@@ -373,7 +373,8 @@ namespace HDRGammaController.Core.Calibration
                 DetailedGrayscaleDeltaE = FiniteOrNull(summary.DetailedGrayscaleDeltaE),
                 DetailedPrimariesDeltaE = FiniteOrNull(summary.DetailedPrimariesDeltaE),
                 DetailedSaturationDeltaE = FiniteOrNull(summary.DetailedSaturationDeltaE),
-                DetailedMemoryColorsDeltaE = FiniteOrNull(summary.DetailedMemoryColorsDeltaE)
+                DetailedMemoryColorsDeltaE = FiniteOrNull(summary.DetailedMemoryColorsDeltaE),
+                ProofCertificate = summary.ProofCertificate?.SanitizedCopy(),
             };
         }
 
@@ -508,6 +509,13 @@ namespace HDRGammaController.Core.Calibration
         /// <summary>HDR tone-mapping characterization (roadmap 2.3), when one ran.
         /// Nullable so pre-feature report JSONs load unchanged.</summary>
         public ToneMappingCharacterization? ToneMapping { get; set; }
+
+        /// <summary>
+        /// Hardware-constrained MHC2 model certificate and its targeted physical
+        /// counterexample readings. Nullable so reports saved before Proof-Calibrate load
+        /// without migration.
+        /// </summary>
+        public Mhc2ProofCertificate? ProofCertificate { get; set; }
     }
 
     /// <summary>

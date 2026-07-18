@@ -97,6 +97,10 @@ namespace HDRGammaController
         // HDR tone-mapping characterization (roadmap 2.3), when one ran this session.
         private ToneMappingCharacterization? _toneMapping;
 
+        // Proof-Calibrate's hardware-constrained model certificate. The install populates
+        // its predictions; verification attaches the targeted physical counterexamples.
+        private Mhc2ProofCertificate? _proofCertificate;
+
         // Completion notice for the long probe operations (refine/characterize): set inside
         // the operation, shown by the click handler AFTER the Task returns — i.e. after the
         // topmost patch window has closed, so the modal isn't hidden behind it on a single
@@ -240,6 +244,7 @@ namespace HDRGammaController
             _activeCharacterization = characterization;
             _correctionLut = correctionLut;
             _measurements = measurements;
+            _proofCertificate = profile.ReportSummary?.ProofCertificate;
             _peakWhiteDriftFraction = peakWhiteDriftFraction;
             _driftCompensationApplied = driftCompensationApplied;
             _isHistorical = metrics == null && measurements == null;
@@ -385,6 +390,12 @@ namespace HDRGammaController
                     Vm.GradeScopeText = s.GradeScopeLabel;
                 if (!string.IsNullOrEmpty(s.SummaryText))
                     Vm.SummaryText = s.SummaryText;
+                if (s.ProofCertificate is { } proof)
+                {
+                    _proofCertificate = proof;
+                    Vm.VerifyDetailText = proof.Describe();
+                    Vm.IsVerifyDetailVisible = true;
+                }
 
                 // Detailed verification survives into history: the persisted per-patch list
                 // is enough to rebuild the histogram, per-patch chart, worst-10 and the
@@ -540,6 +551,7 @@ namespace HDRGammaController
                     DetailedSaturationDeltaE = breakdown?.SaturationDeltaE,
                     DetailedMemoryColorsDeltaE = breakdown?.MemoryColorsDeltaE,
                     ToneMapping = _toneMapping,
+                    ProofCertificate = _proofCertificate,
                 };
 
                 if (_reportSavePath == null)
@@ -1478,7 +1490,8 @@ namespace HDRGammaController
                 var result = CalibrationProfileInstaller.Install(
                     installMonitor, _activeCharacterization, EffectiveTarget(ctx),
                     ctx.LutR, ctx.LutG, ctx.LutB, ctx.WhiteLevel,
-                    hdrMode: ctx.HdrMode, measurements: _measurements);
+                    hdrMode: ctx.HdrMode, measurements: _measurements,
+                    idealCorrectionLut: _correctionLut);
 
                 if (result.Success)
                 {
@@ -1486,8 +1499,15 @@ namespace HDRGammaController
                     _installedProfileName = result.ProfileName;
                     _profileEnabled = true;
                     _installedHdrLuts = result.HdrLuts;
+                    _proofCertificate = result.ProofCertificate;
                     Vm.ApplyButtonContent = "Disable Profile";
                     ctx.OnInstalled?.Invoke(result.ProfileName, previousDefaultProfile);
+
+                    // Persist the model certificate even when the user applies without an
+                    // automatic verify. A later verify replaces this model-only snapshot
+                    // with the same certificate plus physical counterexample readings.
+                    if (_proofCertificate != null)
+                        PersistReportSummary(after: null);
 
                     if (runVerify && ctx.Colorimeter != null)
                     {
@@ -3086,18 +3106,53 @@ namespace HDRGammaController
                 var patches = detailedSweep
                     ? VerificationPatchSets.Detailed(verificationTarget, ctx.HdrMode)
                     : CalibrationVerifier.BuildVerificationPatches();
+                IReadOnlyList<ColorPatch> allProofPatches = !ctx.HdrMode && _proofCertificate is { } proof
+                    ? proof.BuildVerificationPatches(verificationTarget)
+                    : Array.Empty<ColorPatch>();
+                // The standard sweep already measures white, black, primaries, secondaries
+                // and a memory color. Reuse an exact standard reading when the adversarial
+                // search selects one of those points instead of needlessly displaying it a
+                // second time; RecordMeasurements matches both proof names and exact RGB.
+                IReadOnlyList<ColorPatch> proofPatches = allProofPatches
+                    .Where(proofPatch => !patches.Any(standardPatch =>
+                        Math.Abs(standardPatch.DisplayRgb.R - proofPatch.DisplayRgb.R) <= 1e-6 &&
+                        Math.Abs(standardPatch.DisplayRgb.G - proofPatch.DisplayRgb.G) <= 1e-6 &&
+                        Math.Abs(standardPatch.DisplayRgb.B - proofPatch.DisplayRgb.B) <= 1e-6))
+                    .ToList();
+                int ordinaryPatchCount = patches.Count + proofPatches.Count;
                 var results = new List<MeasurementResult>();
+                var proofResults = new List<MeasurementResult>();
                 await colorimeter.BeginMeasurementSessionAsync(hdrMode: ctx.HdrMode, verifyCts.Token);
                 for (int i = 0; i < patches.Count; i++)
                 {
                     var p = patches[i];
-                    var next = i + 1 < patches.Count ? patches[i + 1] : null;
-                    Vm.VerifyButtonContent = $"Verifying {i + 1}/{patches.Count}…";
-                    patchWindow.SetProgress(i + 1, patches.Count, PatchLabel(p),
+                    var next = i + 1 < patches.Count
+                        ? patches[i + 1]
+                        : proofPatches.FirstOrDefault();
+                    Vm.VerifyButtonContent = $"Verifying {i + 1}/{ordinaryPatchCount}…";
+                    patchWindow.SetProgress(i + 1, ordinaryPatchCount, PatchLabel(p),
                         next == null ? null : PatchLabel(next));
                     patchWindow.SetColor(p.DisplayRgb.R, p.DisplayRgb.G, p.DisplayRgb.B);
                     await Task.Delay(i == 0 ? 1200 : 500, verifyCts.Token); // settle (longer for the first patch)
                     results.Add(await colorimeter.MeasureAsync(p, ctx.HdrMode, verifyCts.Token));
+                    if (ctx.CaptureSounds)
+                        CalibrationSounds.PlayCapture();
+                }
+                // COUNTEREXAMPLE-DRIVEN CERTIFICATION: the model searched the full cube for
+                // the most damaging points after adding held-out residual and coverage
+                // uncertainty. Measure those exact points separately: they strengthen the
+                // proof artifact without biasing the stable headline verification grade.
+                for (int i = 0; i < proofPatches.Count; i++)
+                {
+                    var p = proofPatches[i];
+                    var next = i + 1 < proofPatches.Count ? proofPatches[i + 1] : null;
+                    int progress = patches.Count + i + 1;
+                    Vm.VerifyButtonContent = $"Stress-testing {progress}/{ordinaryPatchCount}…";
+                    patchWindow.SetProgress(progress, ordinaryPatchCount, PatchLabel(p),
+                        next == null ? null : PatchLabel(next));
+                    patchWindow.SetColor(p.DisplayRgb.R, p.DisplayRgb.G, p.DisplayRgb.B);
+                    await Task.Delay(500, verifyCts.Token);
+                    proofResults.Add(await colorimeter.MeasureAsync(p, ctx.HdrMode, verifyCts.Token));
                     if (ctx.CaptureSounds)
                         CalibrationSounds.PlayCapture();
                 }
@@ -3119,6 +3174,8 @@ namespace HDRGammaController
                         patches.Count + (pqTracking?.AttemptedRungs ?? 0), verifyCts.Token)
                     : null;
                 var persistedVerifyMeasurements = new List<MeasurementResult>(results);
+                if (proofResults.Count > 0)
+                    persistedVerifyMeasurements.AddRange(proofResults);
                 if (pqTracking?.Readings.Count > 0)
                     persistedVerifyMeasurements.AddRange(pqTracking.Readings);
                 if (coloredHdr?.Readings.Count > 0)
@@ -3167,6 +3224,19 @@ namespace HDRGammaController
                     $"Grayscale residual split: tone {after.AverageGrayscaleToneDeltaE:F2} / color {after.AverageGrayscaleColorDeltaE:F2} ΔE2000 " +
                     $"(tone near black is mostly instrument noise; color is a visible cast). " +
                     $"ΔE ITP avg {after.AverageItpDeltaE:F1}, max {after.MaxItpDeltaE:F1} (BT.2124; ~3x ΔE2000 scale, 1 unit ≈ 1 JND).";
+                if (_proofCertificate != null)
+                {
+                    double whiteY = results
+                        .Where(r => r.IsValid && r.Patch.Category == PatchCategory.Grayscale &&
+                                    r.Patch.DisplayRgb.R >= 0.99 && r.Patch.DisplayRgb.G >= 0.99 &&
+                                    r.Patch.DisplayRgb.B >= 0.99)
+                        .Select(r => r.Xyz.Y)
+                        .DefaultIfEmpty(0)
+                        .Max();
+                    _proofCertificate.RecordMeasurements(
+                        results.Concat(proofResults).ToList(), verificationTarget, whiteY);
+                    Vm.VerifyDetailText += "\n" + _proofCertificate.Describe();
+                }
                 // The two HDR sweeps get their own kicker-labeled blocks (visual hierarchy)
                 // instead of being newline-joined into the prose. Cleared on an SDR re-verify
                 // so stale HDR results don't linger next to fresh SDR numbers.

@@ -41,7 +41,17 @@ namespace HDRGammaController.Tests
                             new VerifiedPatchResult { Name = "bad", DeltaE = double.PositiveInfinity },
                             new VerifiedPatchResult { Name = "ok", Category = "Grayscale", DeltaE = 1.25 }
                         },
-                        DetailedGrayscaleDeltaE = double.NegativeInfinity
+                        DetailedGrayscaleDeltaE = double.NegativeInfinity,
+                        ProofCertificate = new Mhc2ProofCertificate
+                        {
+                            CorrectabilityFraction = double.PositiveInfinity,
+                            Compiled = new Mhc2ErrorStatistics { P95DeltaE = 1.1, MaxDeltaE = double.NaN },
+                            Counterexamples = new List<Mhc2Counterexample>
+                            {
+                                new() { Name = "proof", R = 0.25, G = double.NaN, B = 0.75,
+                                    PredictedDeltaE = 1.0, EmpiricalUpperEstimate = 1.8 },
+                            },
+                        }
                     }
                 };
 
@@ -65,6 +75,11 @@ namespace HDRGammaController.Tests
                 var patch = Assert.Single(loaded.ReportSummary.DetailedPatches!);
                 Assert.Equal("ok", patch.Name);
                 Assert.Equal(1.25, patch.DeltaE);
+                Assert.NotNull(loaded.ReportSummary.ProofCertificate);
+                Assert.Equal(0, loaded.ReportSummary.ProofCertificate!.CorrectabilityFraction);
+                Assert.Equal(1.1, loaded.ReportSummary.ProofCertificate.Compiled.P95DeltaE);
+                Assert.Equal(0, loaded.ReportSummary.ProofCertificate.Compiled.MaxDeltaE);
+                Assert.Equal(0, Assert.Single(loaded.ReportSummary.ProofCertificate.Counterexamples).G);
             }
             finally
             {

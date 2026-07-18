@@ -25,7 +25,8 @@ namespace HDRGammaController.Core.Calibration
         /// really on the wire. Null for SDR installs and failures before LUT generation.
         /// </param>
         public sealed record InstallResult(bool Success, string ProfileName, string? Error,
-            HdrMhc2LutBuilder.Result? HdrLuts = null);
+            HdrMhc2LutBuilder.Result? HdrLuts = null,
+            Mhc2ProofCertificate? ProofCertificate = null);
 
         /// <summary>
         /// Chooses the Windows profile backup to preserve before activating a Gloam profile.
@@ -129,6 +130,11 @@ namespace HDRGammaController.Core.Calibration
         /// LUTs rebuilt from <paramref name="measurements"/> at the new scale — by design,
         /// the LUT input domain depends on the matrix scale.
         /// </param>
+        /// <param name="idealCorrectionLut">
+        /// SDR only: the ideal full 3D correction to distill into MHC2's actual 3×3 matrix
+        /// and monotone per-channel LUT primitives. Null retains the established direct
+        /// matrix/tone path and produces no proof certificate.
+        /// </param>
         public static InstallResult Install(
             MonitorInfo monitor,
             DisplayCharacterization characterization,
@@ -139,7 +145,8 @@ namespace HDRGammaController.Core.Calibration
             IReadOnlyList<MeasurementResult>? measurements = null,
             string? profileNameOverride = null,
             HdrMhc2LutBuilder.Result? hdrLutsOverride = null,
-            double[,]? xyzCorrectionOverride = null)
+            double[,]? xyzCorrectionOverride = null,
+            Lut3D? idealCorrectionLut = null)
         {
             if (string.IsNullOrEmpty(monitor.MonitorDevicePath))
                 return new InstallResult(false, "", "Monitor has no device path; cannot associate a profile.");
@@ -265,6 +272,32 @@ namespace HDRGammaController.Core.Calibration
                 perChannelGrayTracking =
                     !ReferenceEquals(toneR, lutR) || !ReferenceEquals(toneG, lutG) || !ReferenceEquals(toneB, lutB);
             }
+            Mhc2ProofCertificate? proofCertificate = null;
+            if (!hdrMode && idealCorrectionLut != null)
+            {
+                try
+                {
+                    IReadOnlyList<ModelResidual> residuals = measurements is { Count: > 0 }
+                        ? new Lut3DGenerator(target, measurements).ComputeModelResiduals()
+                        : Array.Empty<ModelResidual>();
+                    var compiled = Mhc2HardwareCompiler.Compile(
+                        scaledMatrix, toneR, toneG, toneB,
+                        idealCorrectionLut, characterization, target,
+                        measurements, residuals,
+                        optimizeMatrix: !target.WhitePointOnly);
+                    scaledMatrix = compiled.Matrix;
+                    (toneR, toneG, toneB) = (compiled.LutR, compiled.LutG, compiled.LutB);
+                    proofCertificate = compiled.Certificate;
+                    Log.Info("CalibrationProfileInstaller: " + proofCertificate.Describe());
+                }
+                catch (Exception ex)
+                {
+                    // Compilation is deliberately an enhancement, never an install gate.
+                    // The pre-existing matrix/LUT payload remains untouched on any model,
+                    // numerical or data-shape failure.
+                    Log.Error($"CalibrationProfileInstaller: Proof-Calibrate compile skipped; baseline retained: {ex.Message}");
+                }
+            }
             HdrMhc2LutBuilder.Result? installedHdrLuts = null;
             if (hdrMode)
             {
@@ -328,9 +361,9 @@ namespace HDRGammaController.Core.Calibration
                 $"  mode {(hdrMode ? "HDR (PQ-domain LUTs)" : "SDR")}{(target.WhitePointOnly ? ", WHITE-POINT-ONLY matrix" : "")}" +
                 (!hdrMode ? $", tone LUTs {(perChannelGrayTracking
                     ? "PER-CHANNEL gray-tracking (ramp-fitted delta composed onto neutral)"
-                    : characterization.HasPerChannelToneCurves
-                        ? "per-channel (built from ramp-fitted curves)"
-                        : "neutral (shared luminance curve)")}" : "") +
+                        : characterization.HasPerChannelToneCurves
+                            ? "per-channel (built from ramp-fitted curves)"
+                            : "neutral (shared luminance curve)")}" : "") +
                 (hdrMode ? $", header range {headerMinNits:F3}–{headerMaxNits:F0} nits, SDR white {monitor.SdrWhiteLevel:F0} nits" +
                            $", LUT source {(wireExactLuts ? "WIRE-EXACT FP16 ladder" : "SDR-mapped grayscale fallback")}" +
                            (ReferenceEquals(installedHdrLuts, hdrLutsOverride) && hdrLutsOverride != null
@@ -395,7 +428,7 @@ namespace HDRGammaController.Core.Calibration
                 }
 
                 Log.Info($"CalibrationProfileInstaller: Installed + set default '{profileName}' for {monitor.FriendlyName} ({(hdrMode ? "advanced color" : "SDR")} association).");
-                return new InstallResult(true, profileName, null, installedHdrLuts);
+                return new InstallResult(true, profileName, null, installedHdrLuts, proofCertificate);
             }
             catch (Exception ex)
             {
