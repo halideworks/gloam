@@ -91,6 +91,31 @@ namespace HDRGammaController.Core
         /// </summary>
         public double MelanopicEdiCeiling { get; set; } = 0.0;
 
+        /// <summary>
+        /// Treatment of HDR highlights above diffuse white. A live melanopic ceiling always
+        /// upgrades the effective policy to DoseBound so highlights cannot silently escape it.
+        /// </summary>
+        public NightHdrHighlightPolicy HdrHighlightPolicy { get; set; } = NightHdrHighlightPolicy.Comfort;
+
+        /// <summary>
+        /// Compile the final night transform for the real 256-entry/16-bit hardware ramp.
+        /// Safe-by-construction and baseline-gated; enabled by default.
+        /// </summary>
+        public bool OptimizeHardwareRamp { get; set; } = true;
+
+        /// <summary>
+        /// Spend at most a conservative sub-JND colour budget in the least-visible direction
+        /// to reduce melanopic output. The ramp compiler disables the change if its structure
+        /// or perceptual gates fail.
+        /// </summary>
+        public bool HarvestSubJndBudget { get; set; } = true;
+
+        /// <summary>
+        /// Opt-in, privacy-preserving screen feedback. Only aggregate linear RGB is retained;
+        /// captured pixels are zeroed and discarded immediately.
+        /// </summary>
+        public bool ContentAdaptiveDose { get; set; } = false;
+
         public static double ClampMelanopicCeiling(double value) =>
             !double.IsFinite(value) || value <= 0 ? 0.0 : Math.Clamp(value, 0.5, 1000.0);
 
@@ -251,13 +276,24 @@ namespace HDRGammaController.Core
         // every read/write path takes this lock. BlendChanged is always raised OUTSIDE
         // the lock to avoid handler reentrancy/deadlock.
         private readonly object _stateLock = new();
-        private bool _disposed;
+        // Serializes event delivery with disposal without holding _stateLock while invoking
+        // user code. A concurrent publisher deposits one latest value and returns instead of
+        // waiting, so a callback may safely wait on other settings work. Dispose suppresses
+        // queued handlers; one already running may finish.
+        private readonly object _eventLock = new();
+        private bool _deliveringBlendEvent;
+        private bool _pendingBlendEvent;
+        private double _pendingBlend;
+        private int _blendEventThreadId;
+        private int _timerCallbackActive;
+        private volatile bool _disposed;
 
         /// <summary>
-        /// Fired exactly once per effective state change (kelvin moved or settings changed).
-        /// Subscribers re-apply gamma and refresh UI. Value is 1.0 while night mode is in
-        /// effect, 0 when forced back to day. Firing more than once per change causes
-        /// redundant dispwin invocations, which the user sees as flicker.
+        /// Fired serially for effective state changes (kelvin moved or settings changed).
+        /// Simultaneous publishers coalesce to the latest pending value so they cannot form
+        /// a callback lock cycle or queue redundant display writes. Subscribers re-apply
+        /// gamma and refresh UI. Value is 1.0 while night mode is in effect, 0 when forced
+        /// back to day.
         /// </summary>
         public event Action<double>? BlendChanged;
 
@@ -288,10 +324,11 @@ namespace HDRGammaController.Core
             double? blend;
             lock (_stateLock)
             {
+                if (_disposed) return;
                 _pauseUntil = until;
                 blend = UpdateStateLocked(); // Immediate apply
             }
-            if (blend.HasValue) BlendChanged?.Invoke(blend.Value);
+            if (blend.HasValue) RaiseBlendChanged(blend.Value);
         }
 
         public void UpdateSettings(NightModeSettings newSettings)
@@ -302,6 +339,7 @@ namespace HDRGammaController.Core
 
             lock (_stateLock)
             {
+                if (_disposed) return;
                 // If specific settings changed (like toggle/times), force immediate re-eval
                 bool wasEnabled = _settings.Enabled;
 
@@ -328,8 +366,8 @@ namespace HDRGammaController.Core
                 }
             }
 
-            if (blend.HasValue) BlendChanged?.Invoke(blend.Value);
-            else if (forceReapply) BlendChanged?.Invoke(1.0);
+            if (blend.HasValue) RaiseBlendChanged(blend.Value);
+            else if (forceReapply) RaiseBlendChanged(1.0);
         }
 
         public void Start()
@@ -337,15 +375,16 @@ namespace HDRGammaController.Core
             double? blend;
             lock (_stateLock)
             {
+                if (_disposed) return;
                 blend = StartLocked();
             }
-            if (blend.HasValue) BlendChanged?.Invoke(blend.Value);
+            if (blend.HasValue) RaiseBlendChanged(blend.Value);
         }
 
         /// <summary>Caller must hold <see cref="_stateLock"/>. Returns the blend value to fire, or null.</summary>
         private double? StartLocked()
         {
-            if (!_settings.Enabled) return null;
+            if (_disposed || !_settings.Enabled) return null;
             double? blend = UpdateStateLocked();
             ScheduleNextTickLocked();
             return blend;
@@ -355,6 +394,7 @@ namespace HDRGammaController.Core
         {
             lock (_stateLock)
             {
+                if (_disposed) return;
                 _timer.Stop();
             }
         }
@@ -380,25 +420,102 @@ namespace HDRGammaController.Core
                 blend = UpdateStateLocked();
                 ScheduleNextTickLocked();
             }
-            if (blend.HasValue) BlendChanged?.Invoke(blend.Value);
+            if (blend.HasValue) RaiseBlendChanged(blend.Value);
         }
 
         private void OnTimerElapsed(object? sender, ElapsedEventArgs e)
         {
-            double? blend;
-            lock (_stateLock)
+            if (System.Threading.Interlocked.CompareExchange(ref _timerCallbackActive, 1, 0) != 0)
+                return;
+            try
             {
-                if (_disposed) return;
-                blend = UpdateStateLocked();
-                ScheduleNextTickLocked();
+                double? blend;
+                lock (_stateLock)
+                {
+                    if (_disposed) return;
+                    blend = UpdateStateLocked();
+                }
+                if (blend.HasValue) RaiseBlendChanged(blend.Value);
             }
-            if (blend.HasValue) BlendChanged?.Invoke(blend.Value);
+            finally
+            {
+                // This is a one-shot timer. Re-arm only after subscriber work returns so a
+                // slow multi-monitor LUT/apply cannot overlap the next fade tick. Progress
+                // is wall-clock based and catches up naturally rather than queueing work.
+                lock (_stateLock)
+                {
+                    System.Threading.Volatile.Write(ref _timerCallbackActive, 0);
+                    if (!_disposed) ScheduleNextTickLocked();
+                }
+            }
+        }
+
+        private void RaiseBlendChanged(double blend)
+        {
+            lock (_eventLock)
+            {
+                // A subscriber is allowed to synchronously update settings. Coalesce that
+                // nested notification into the event already being delivered instead of
+                // waiting on our own thread. A publisher on another thread also deposits
+                // its latest value and returns, removing the cross-thread variant of the
+                // same deadlock while preserving serialized subscriber execution.
+                if (_disposed) return;
+                if (_deliveringBlendEvent)
+                {
+                    if (_blendEventThreadId != Environment.CurrentManagedThreadId)
+                    {
+                        _pendingBlend = blend;
+                        _pendingBlendEvent = true;
+                    }
+                    return;
+                }
+                _deliveringBlendEvent = true;
+                _blendEventThreadId = Environment.CurrentManagedThreadId;
+            }
+
+            double nextBlend = blend;
+            while (true)
+            {
+                try
+                {
+                    BlendChanged?.Invoke(nextBlend);
+                }
+                catch
+                {
+                    lock (_eventLock)
+                    {
+                        _deliveringBlendEvent = false;
+                        _pendingBlendEvent = false;
+                        _blendEventThreadId = 0;
+                    }
+                    throw;
+                }
+
+                lock (_eventLock)
+                {
+                    if (_disposed || !_pendingBlendEvent)
+                    {
+                        // This transition to idle is atomic with the pending check. A new
+                        // publisher can now become the sole drain owner; no finally block
+                        // from this owner can race in afterward and clear its state.
+                        _deliveringBlendEvent = false;
+                        _blendEventThreadId = 0;
+                        return;
+                    }
+                    nextBlend = _pendingBlend;
+                    _pendingBlendEvent = false;
+                }
+            }
         }
 
         // Tick adaptively while a fade is interpolating and sleep while idle. The cadence
         // targets a constant perceptual step per update (see MaxMiredStepPerTick), so short
         // and long transitions are both smooth.
-        private const double MinFadeTickMs = 1000.0 / 60.0;
+        // The apply path cannot realize writes faster than 250 ms. Ticking faster only
+        // regenerates LUTs and queues UI work that the coalescer will discard, so pace the
+        // producer at the same floor: identical displayed quality, up to 15× less work on
+        // pathological short fades.
+        private const double MinFadeTickMs = 250.0;
         private const double MaxFadeTickMs = 500;
         private const double IdleTickMs = 60000;
 
@@ -584,7 +701,10 @@ namespace HDRGammaController.Core
                 _inFadeWindow = true;
                 double progress = timeSinceTrigger.TotalMinutes / fadeMinutes;
                 progress = Math.Clamp(progress, 0.0, 1.0);
-                int interpolatedKelvin = InterpolateKelvinInMired(startKelvin, endKelvin, progress);
+                int interpolatedKelvin = NightFadeTrajectory.InterpolateKelvin(
+                    startKelvin, endKelvin, progress,
+                    _settings.Algorithm, _settings.PerceptualStrength,
+                    _settings.UseUltraWarmMode, _settings.PreserveLuminance);
 
                 // JND pacing: the step ceiling is evaluated at the CURRENT operating point,
                 // so it adapts along the fade (cost: one CAT16/locus evaluation × a few
@@ -592,19 +712,34 @@ namespace HDRGammaController.Core
                 double maxStepMired = JndPacedFade.ComputeMaxStepMired(
                     interpolatedKelvin, _settings.Algorithm, _settings.PerceptualStrength,
                     _settings.UseUltraWarmMode, _settings.PreserveLuminance);
-                _fadeTickMs = CalculateFadeTickMilliseconds(startKelvin, endKelvin, fadeMinutes, maxStepMired);
+                // Arc-length timing is intentionally non-uniform in mired. Price the LOCAL
+                // trajectory derivative rather than the old whole-fade average, otherwise a
+                // fast section of the new perceptual clock could outrun its JND write budget.
+                double probeProgress = progress < 0.999
+                    ? Math.Min(1.0, progress + 0.001)
+                    : Math.Max(0.0, progress - 0.001);
+                int probeKelvin = NightFadeTrajectory.InterpolateKelvin(
+                    startKelvin, endKelvin, probeProgress,
+                    _settings.Algorithm, _settings.PerceptualStrength,
+                    _settings.UseUltraWarmMode, _settings.PreserveLuminance);
+                double progressSpan = Math.Abs(probeProgress - progress);
+                double localMiredSpan = Math.Abs(1e6 / probeKelvin - 1e6 / interpolatedKelvin);
+                double localRatePerMs = progressSpan > 1e-9
+                    ? localMiredSpan / (progressSpan * fadeMinutes * 60_000.0)
+                    : 0.0;
+                _fadeTickMs = localRatePerMs > 1e-12
+                    ? Math.Clamp(maxStepMired / localRatePerMs, MinFadeTickMs, MaxFadeTickMs)
+                    : CalculateFadeTickMilliseconds(startKelvin, endKelvin, fadeMinutes, maxStepMired);
 
                 // Duration wins over imperceptibility: when the fade rate at the ~4
                 // writes/sec hardware floor must exceed the JND ceiling, say so once per
                 // fade window instead of silently stretching the user's schedule.
-                double distanceMired = Math.Abs(1e6 / endKelvin - 1e6 / startKelvin);
-                double ratePerMs = distanceMired / (fadeMinutes * 60_000.0);
-                if (!_supraJndLoggedThisFade && ratePerMs * HardwareWriteFloorMs > maxStepMired)
+                if (!_supraJndLoggedThisFade && localRatePerMs * HardwareWriteFloorMs > maxStepMired)
                 {
                     _supraJndLoggedThisFade = true;
                     Log.Info(
                         $"NightModeService: fade {startKelvin}K→{endKelvin}K over {fadeMinutes:F0} min " +
-                        $"outpaces JND pacing (needs {ratePerMs * HardwareWriteFloorMs:F3} mired/write, " +
+                        $"outpaces JND pacing (needs {localRatePerMs * HardwareWriteFloorMs:F3} mired/write, " +
                         $"ceiling {maxStepMired:F3}); the schedule wins and steps may be briefly perceptible.");
                 }
 
@@ -715,6 +850,12 @@ namespace HDRGammaController.Core
                 PerceptualStrength = NightModeSettings.ClampPerceptualStrength(source.PerceptualStrength),
                 PreserveLuminance = source.PreserveLuminance,
                 MelanopicEdiCeiling = NightModeSettings.ClampMelanopicCeiling(source.MelanopicEdiCeiling),
+                HdrHighlightPolicy = Enum.IsDefined(typeof(NightHdrHighlightPolicy), source.HdrHighlightPolicy)
+                    ? source.HdrHighlightPolicy
+                    : NightHdrHighlightPolicy.Comfort,
+                OptimizeHardwareRamp = source.OptimizeHardwareRamp,
+                HarvestSubJndBudget = source.HarvestSubJndBudget,
+                ContentAdaptiveDose = source.ContentAdaptiveDose,
                 FadeMinutes = NightModeSettings.ClampFadeMinutes(source.FadeMinutes),
                 Schedule = new List<NightModeSchedulePoint>()
             };
@@ -746,6 +887,13 @@ namespace HDRGammaController.Core
                 _disposed = true;
                 _timer.Stop();
                 _timer.Dispose();
+            }
+            // If a timer callback already left _stateLock, either let its event finish or
+            // suppress it here. The common path is uncontended and returns immediately.
+            lock (_eventLock)
+            {
+                _pendingBlendEvent = false;
+                BlendChanged = null;
             }
         }
     }

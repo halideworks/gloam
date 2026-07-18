@@ -43,11 +43,13 @@ namespace HDRGammaController.Core.Calibration
         /// Computes the melanopic state for the current per-channel gains.
         /// </summary>
         /// <param name="spectra">Panel channel SPDs (from CCSS or the generic fallback).</param>
-        /// <param name="linearGains">Linear-light per-channel gains of the applied state —
-        /// spectral SHAPE only: brightness dimming must NOT be inside these (it scales
-        /// magnitude, not shape) — pass it via <paramref name="whiteLuminanceNits"/>.</param>
-        /// <param name="whiteLuminanceNits">Absolute luminance of the unshifted white at the
-        /// current brightness (ApplyDimmingNits of the SDR white level).</param>
+        /// <param name="linearGains">Linear-light per-channel coefficients of the emitted
+        /// state. These are normally white-shape gains and may also include aggregate content;
+        /// brightness magnitude must stay outside and be passed via
+        /// <paramref name="whiteLuminanceNits"/>.</param>
+        /// <param name="whiteLuminanceNits">Absolute reference luminance at the current
+        /// brightness (normally diffuse white; an HDR safety envelope may use full-field
+        /// luminance).</param>
         /// <param name="viewingSolidAngleSr">Assumed Ω_eff for the corneal-illuminance step.</param>
         /// <param name="hasSpectra">False when using synthesized generic primaries.</param>
         public static MelanopicReading Compute(
@@ -58,29 +60,54 @@ namespace HDRGammaController.Core.Calibration
             bool hasSpectra = true)
         {
             ArgumentNullException.ThrowIfNull(spectra);
-            int n = spectra.Wavelengths.Count;
+            int n = Math.Min(
+                spectra.Wavelengths.Count,
+                Math.Min(spectra.Red.Count, Math.Min(spectra.Green.Count, spectra.Blue.Count)));
 
             // Additive panel: baseline white is exactly the channel sum, so the state SPD
             // and the baseline decompose consistently (the CCSS white row's residual against
-            // this sum is carried separately as an uncertainty term).
-            var stateSpd = new double[n];
-            var baselineSpd = new double[n];
+            // this sum is carried separately as an uncertainty term). Fuse the four spectral
+            // integrations into this one pass: a ceiling solve evaluates dozens of candidates,
+            // so materializing two SPDs and traversing them six times was pure memory traffic.
+            double gainR = Math.Max(0, linearGains.R);
+            double gainG = Math.Max(0, linearGains.G);
+            double gainB = Math.Max(0, linearGains.B);
+            double melanopicState = 0.0;
+            double melanopicBaseline = 0.0;
+            double photopicState = 0.0;
+            double photopicBaseline = 0.0;
             for (int i = 0; i < n; i++)
             {
                 double r = Math.Max(0, spectra.Red[i]);
                 double g = Math.Max(0, spectra.Green[i]);
                 double b = Math.Max(0, spectra.Blue[i]);
-                stateSpd[i] = Math.Max(0, linearGains.R) * r
-                            + Math.Max(0, linearGains.G) * g
-                            + Math.Max(0, linearGains.B) * b;
-                baselineSpd[i] = r + g + b;
+                double state = gainR * r + gainG * g + gainB * b;
+                double baseline = r + g + b;
+                double wavelength = spectra.Wavelengths[i];
+                double dLambda;
+                if (n == 1)
+                    dLambda = 1.0;
+                else if (i == 0)
+                    dLambda = Math.Abs((spectra.Wavelengths[1] - wavelength) * 0.5);
+                else if (i == n - 1)
+                    dLambda = Math.Abs((wavelength - spectra.Wavelengths[n - 2]) * 0.5);
+                else
+                    dLambda = Math.Abs((spectra.Wavelengths[i + 1] - spectra.Wavelengths[i - 1]) * 0.5);
+
+                double melWeight = CcssMelanopicEstimator.MelanopicSensitivityAt(wavelength) * dLambda;
+                double photoWeight = CcssMelanopicEstimator.PhotopicSensitivityAt(wavelength) * dLambda;
+                melanopicState += state * melWeight;
+                melanopicBaseline += baseline * melWeight;
+                photopicState += state * photoWeight;
+                photopicBaseline += baseline * photoWeight;
             }
 
-            double melDerState = CcssMelanopicEstimator.MelanopicDer(spectra.Wavelengths, stateSpd);
-            double melDerBaseline = CcssMelanopicEstimator.MelanopicDer(spectra.Wavelengths, baselineSpd);
-
-            double photopicState = CcssMelanopicEstimator.Photopic(spectra.Wavelengths, stateSpd);
-            double photopicBaseline = CcssMelanopicEstimator.Photopic(spectra.Wavelengths, baselineSpd);
+            double melDerState = n >= 2
+                ? CcssMelanopicEstimator.MelanopicDerFromIntegrals(melanopicState, photopicState)
+                : double.NaN;
+            double melDerBaseline = n >= 2
+                ? CcssMelanopicEstimator.MelanopicDerFromIntegrals(melanopicBaseline, photopicBaseline)
+                : double.NaN;
             double yRel = photopicBaseline > 0 ? photopicState / photopicBaseline : 0.0;
 
             double screenNits = Math.Max(0, whiteLuminanceNits) * yRel;
@@ -103,7 +130,17 @@ namespace HDRGammaController.Core.Calibration
         /// uncertainty and a "load a CCSS" prompt, and % reduction remains meaningful because
         /// it is a ratio through the same assumed spectra.
         /// </summary>
+        private static readonly Lazy<CcssMelanopicEstimator.CcssSpectra> GenericSrgbPrimaries =
+            new(() => CreateGenericPrimaries(wideGamut: false));
+        private static readonly Lazy<CcssMelanopicEstimator.CcssSpectra> GenericWideGamutPrimaries =
+            new(() => CreateGenericPrimaries(wideGamut: true));
+
+        /// <summary>Returns a shared immutable-by-contract fallback spectrum. Callers must not
+        /// mutate its backing lists; reuse avoids rebuilding five 81-sample arrays per apply.</summary>
         public static CcssMelanopicEstimator.CcssSpectra GenericPrimaries(bool wideGamut = false)
+            => wideGamut ? GenericWideGamutPrimaries.Value : GenericSrgbPrimaries.Value;
+
+        private static CcssMelanopicEstimator.CcssSpectra CreateGenericPrimaries(bool wideGamut)
         {
             var wavelengths = Enumerable.Range(0, 81).Select(i => 380.0 + i * 5.0).ToArray();
 

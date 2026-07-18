@@ -31,11 +31,11 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
-        public void FadeCadence_ShortTransition_UsesRefreshRateBound()
+        public void FadeCadence_ShortTransition_UsesHardwareWriteBound()
         {
             double interval = NightModeService.CalculateFadeTickMilliseconds(6500, 1900, 1);
 
-            Assert.InRange(interval, 16.6, 16.7);
+            Assert.Equal(250.0, interval);
         }
 
         [Theory]

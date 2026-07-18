@@ -116,5 +116,24 @@ namespace HDRGammaController.Tests
             _ = Cam16Ucs.ToJabPrime(new CieXyz(0, 0, 0), vc);
             _ = Cam16Ucs.ToJabPrime(new CieXyz(-1, 0.5, 2), vc);
         }
+
+        [Fact]
+        public void HotPath_IsEffectivelyAllocationFreeAfterWarmup()
+        {
+            var vc = Cam16Ucs.DisplayConditions(new CieXyz(95.047, 100.0, 108.883));
+            var sample = new CieXyz(42.1, 38.7, 19.4);
+            for (int i = 0; i < 64; i++)
+                _ = Cam16Ucs.ToJabPrime(sample, vc);
+
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            double checksum = 0.0;
+            for (int i = 0; i < 2048; i++)
+                checksum += Cam16Ucs.ToJabPrime(sample, vc).J;
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.True(checksum > 0.0);
+            Assert.True(allocated < 16 * 1024,
+                $"CAM16 hot path allocated {allocated:N0} bytes after warmup");
+        }
     }
 }

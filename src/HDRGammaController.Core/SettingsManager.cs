@@ -214,6 +214,10 @@ namespace HDRGammaController.Core
         public bool PreserveLuminance { get; set; } = false;
         // Dose-based ceiling (3.2), mel-lux; 0/absent = off — no schema bump needed.
         public double MelanopicEdiCeiling { get; set; } = 0.0;
+        public NightHdrHighlightPolicy HdrHighlightPolicy { get; set; } = NightHdrHighlightPolicy.Comfort;
+        public bool OptimizeHardwareRamp { get; set; } = true;
+        public bool HarvestSubJndBudget { get; set; } = true;
+        public bool ContentAdaptiveDose { get; set; } = false;
 
         public List<NightModeSchedulePoint> Schedule { get; set; } = new List<NightModeSchedulePoint>();
         
@@ -237,6 +241,12 @@ namespace HDRGammaController.Core
             PerceptualStrength = NightModeSettings.ClampPerceptualStrength(PerceptualStrength),
             PreserveLuminance = PreserveLuminance,
             MelanopicEdiCeiling = NightModeSettings.ClampMelanopicCeiling(MelanopicEdiCeiling),
+            HdrHighlightPolicy = Enum.IsDefined(typeof(NightHdrHighlightPolicy), HdrHighlightPolicy)
+                ? HdrHighlightPolicy
+                : NightHdrHighlightPolicy.Comfort,
+            OptimizeHardwareRamp = OptimizeHardwareRamp,
+            HarvestSubJndBudget = HarvestSubJndBudget,
+            ContentAdaptiveDose = ContentAdaptiveDose,
             Schedule = CloneSchedule(Schedule)
         };
 
@@ -265,6 +275,12 @@ namespace HDRGammaController.Core
             PerceptualStrength = NightModeSettings.ClampPerceptualStrength(settings.PerceptualStrength),
             PreserveLuminance = settings.PreserveLuminance,
             MelanopicEdiCeiling = NightModeSettings.ClampMelanopicCeiling(settings.MelanopicEdiCeiling),
+            HdrHighlightPolicy = Enum.IsDefined(typeof(NightHdrHighlightPolicy), settings.HdrHighlightPolicy)
+                ? settings.HdrHighlightPolicy
+                : NightHdrHighlightPolicy.Comfort,
+            OptimizeHardwareRamp = settings.OptimizeHardwareRamp,
+            HarvestSubJndBudget = settings.HarvestSubJndBudget,
+            ContentAdaptiveDose = settings.ContentAdaptiveDose,
             Schedule = CloneSchedule(settings.Schedule)
         };
 

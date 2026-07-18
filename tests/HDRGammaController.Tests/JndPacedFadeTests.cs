@@ -143,7 +143,7 @@ namespace HDRGammaController.Tests
 
             // A huge step ceiling clamps at MaxFadeTickMs; a tiny one at MinFadeTickMs.
             Assert.Equal(500.0, NightModeService.CalculateFadeTickMilliseconds(6500, 6400, 240, 2.0));
-            Assert.Equal(1000.0 / 60.0, NightModeService.CalculateFadeTickMilliseconds(6500, 1900, 0.05, 0.01), 6);
+            Assert.Equal(250.0, NightModeService.CalculateFadeTickMilliseconds(6500, 1900, 0.05, 0.01), 6);
 
             // Non-finite/invalid ceiling falls back to the historical 0.05 heuristic.
             Assert.Equal(

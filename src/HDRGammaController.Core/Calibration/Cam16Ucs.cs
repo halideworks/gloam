@@ -56,8 +56,12 @@ namespace HDRGammaController.Core.Calibration
 
             // Work in the conventional Y_white = 100 relative scale.
             double scale = 100.0 / white.Y;
-            double[] x = { xyz.X * scale, xyz.Y * scale, xyz.Z * scale };
-            double[] xw = { white.X * scale, white.Y * scale, white.Z * scale };
+            double x = xyz.X * scale;
+            double y = xyz.Y * scale;
+            double zInput = xyz.Z * scale;
+            double xw = white.X * scale;
+            double yw = white.Y * scale;
+            double zw = white.Z * scale;
 
             var (f, c, nc) = SurroundParams(vc.Surround);
             double la = Math.Max(vc.AdaptingLuminanceCdM2, 1e-6);
@@ -75,32 +79,45 @@ namespace HDRGammaController.Core.Calibration
             double nbb = 0.725 * Math.Pow(1.0 / n, 0.2);
             double ncb = nbb;
 
-            // CAT16 cone responses.
-            double[] rgb = MulM16(x);
-            double[] rgbW = MulM16(xw);
+            // CAT16 cone responses. Keep these scalar: this routine sits inside every
+            // perceptual compiler and fade sample, and allocating nine three-element arrays
+            // per call creates far more GC work than useful arithmetic on x64.
+            double r = 0.401288 * x + 0.650173 * y - 0.051461 * zInput;
+            double g = -0.250268 * x + 1.204414 * y + 0.045854 * zInput;
+            double bCone = -0.002079 * x + 0.048952 * y + 0.953127 * zInput;
+            double rw = 0.401288 * xw + 0.650173 * yw - 0.051461 * zw;
+            double gw = -0.250268 * xw + 1.204414 * yw + 0.045854 * zw;
+            double bw = -0.002079 * xw + 0.048952 * yw + 0.953127 * zw;
 
             // Von Kries with degree of adaptation, gain referenced to the white.
-            double[] dRgb = new double[3];
-            for (int i = 0; i < 3; i++)
-                dRgb[i] = d * (100.0 / rgbW[i]) + 1.0 - d;
-
-            double[] rgbC = { rgb[0] * dRgb[0], rgb[1] * dRgb[1], rgb[2] * dRgb[2] };
-            double[] rgbCw = { rgbW[0] * dRgb[0], rgbW[1] * dRgb[1], rgbW[2] * dRgb[2] };
+            double dr = d * (100.0 / rw) + 1.0 - d;
+            double dg = d * (100.0 / gw) + 1.0 - d;
+            double db = d * (100.0 / bw) + 1.0 - d;
+            double rc = r * dr;
+            double gc = g * dg;
+            double bc = bCone * db;
+            double rcw = rw * dr;
+            double gcw = gw * dg;
+            double bcw = bw * db;
 
             // Post-adaptation nonlinear compression.
-            double[] rgbA = { Compress(rgbC[0], fl), Compress(rgbC[1], fl), Compress(rgbC[2], fl) };
-            double[] rgbAw = { Compress(rgbCw[0], fl), Compress(rgbCw[1], fl), Compress(rgbCw[2], fl) };
+            double ra = Compress(rc, fl);
+            double ga = Compress(gc, fl);
+            double ba = Compress(bc, fl);
+            double raw = Compress(rcw, fl);
+            double gaw = Compress(gcw, fl);
+            double baw = Compress(bcw, fl);
 
             // Opponent dimensions.
-            double a = rgbA[0] - 12.0 * rgbA[1] / 11.0 + rgbA[2] / 11.0;
-            double b = (rgbA[0] + rgbA[1] - 2.0 * rgbA[2]) / 9.0;
+            double a = ra - 12.0 * ga / 11.0 + ba / 11.0;
+            double b = (ra + ga - 2.0 * ba) / 9.0;
             double hRad = Math.Atan2(b, a);
             double hDeg = hRad * 180.0 / Math.PI;
             if (hDeg < 0) hDeg += 360.0;
 
             // Achromatic responses.
-            double aResp = (2.0 * rgbA[0] + rgbA[1] + rgbA[2] / 20.0 - 0.305) * nbb;
-            double awResp = (2.0 * rgbAw[0] + rgbAw[1] + rgbAw[2] / 20.0 - 0.305) * nbb;
+            double aResp = (2.0 * ra + ga + ba / 20.0 - 0.305) * nbb;
+            double awResp = (2.0 * raw + gaw + baw / 20.0 - 0.305) * nbb;
 
             // Lightness J.
             double j = aResp <= 0
@@ -111,7 +128,7 @@ namespace HDRGammaController.Core.Calibration
             double hPrimeRad = (hDeg < 20.14 ? hDeg + 360.0 : hDeg) * Math.PI / 180.0;
             double et = 0.25 * (Math.Cos(hPrimeRad + 2.0) + 3.8);
             double t = (50000.0 / 13.0) * nc * ncb * et * Math.Sqrt(a * a + b * b)
-                       / (rgbA[0] + rgbA[1] + 21.0 * rgbA[2] / 20.0 + 1e-12);
+                       / (ra + ga + 21.0 * ba / 20.0 + 1e-12);
             double chroma = Math.Pow(t, 0.9) * Math.Sqrt(j / 100.0)
                             * Math.Pow(1.64 - Math.Pow(0.29, n), 0.73);
 
@@ -138,15 +155,6 @@ namespace HDRGammaController.Core.Calibration
         /// <summary>Convenience: ΔE′ between two absolute XYZ states under shared conditions.</summary>
         public static double DeltaEPrime(CieXyz a, CieXyz b, ViewingConditions vc)
             => DeltaEPrime(ToJabPrime(a, vc), ToJabPrime(b, vc));
-
-        // CAT16 forward matrix (M16), same values as ColorMath.Cat16Matrix — restated here
-        // as a flat multiply to avoid allocating double[,] per evaluation in solver loops.
-        private static double[] MulM16(double[] v) => new[]
-        {
-            0.401288 * v[0] + 0.650173 * v[1] - 0.051461 * v[2],
-            -0.250268 * v[0] + 1.204414 * v[1] + 0.045854 * v[2],
-            -0.002079 * v[0] + 0.048952 * v[1] + 0.953127 * v[2],
-        };
 
         private static double Compress(double component, double fl)
         {

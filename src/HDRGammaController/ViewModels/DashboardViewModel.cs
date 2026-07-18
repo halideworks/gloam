@@ -671,6 +671,12 @@ namespace HDRGammaController.ViewModels
                 && a.Algorithm == b.Algorithm
                 && a.UseUltraWarmMode == b.UseUltraWarmMode
                 && Math.Abs(a.PerceptualStrength - b.PerceptualStrength) < 0.000001
+                && a.PreserveLuminance == b.PreserveLuminance
+                && Math.Abs(a.MelanopicEdiCeiling - b.MelanopicEdiCeiling) < 0.000001
+                && a.HdrHighlightPolicy == b.HdrHighlightPolicy
+                && a.OptimizeHardwareRamp == b.OptimizeHardwareRamp
+                && a.HarvestSubJndBudget == b.HarvestSubJndBudget
+                && a.ContentAdaptiveDose == b.ContentAdaptiveDose
                 && a.FadeMinutes == b.FadeMinutes;
             // Schedule list intentionally excluded: the editor mutates it in place and
             // comparing list contents would force a swap on every programmatic refresh.

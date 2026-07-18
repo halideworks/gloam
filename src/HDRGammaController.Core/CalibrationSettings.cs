@@ -129,6 +129,15 @@ namespace HDRGammaController.Core
         /// </summary>
         public double NightLuminanceCeiling { get; set; } = 1.0;
 
+        /// <summary>Runtime night-mode HDR highlight policy.</summary>
+        public NightHdrHighlightPolicy NightHdrHighlightPolicy { get; set; } = NightHdrHighlightPolicy.Creative;
+
+        /// <summary>Run the final curves through the quantization-aware hardware compiler.</summary>
+        public bool OptimizeNightHardwareRamp { get; set; } = false;
+
+        /// <summary>Allow conservative sub-JND melanopic optimization in the hardware compiler.</summary>
+        public bool HarvestNightSubJndBudget { get; set; } = false;
+
         /// <summary>
         /// Returns true if any adjustments are applied (non-default values).
         /// </summary>
@@ -179,7 +188,10 @@ namespace HDRGammaController.Core
             UseUltraWarmMode = this.UseUltraWarmMode,
             PerceptualStrength = this.PerceptualStrength,
             PreserveNightLuminance = this.PreserveNightLuminance,
-            NightLuminanceCeiling = this.NightLuminanceCeiling
+            NightLuminanceCeiling = this.NightLuminanceCeiling,
+            NightHdrHighlightPolicy = this.NightHdrHighlightPolicy,
+            OptimizeNightHardwareRamp = this.OptimizeNightHardwareRamp,
+            HarvestNightSubJndBudget = this.HarvestNightSubJndBudget
         };
 
         /// <summary>
@@ -208,7 +220,12 @@ namespace HDRGammaController.Core
             UseUltraWarmMode = UseUltraWarmMode,
             PerceptualStrength = ClampFinite(PerceptualStrength, 0.0, 1.0, ColorAdjustments.DefaultPerceptualStrength),
             PreserveNightLuminance = PreserveNightLuminance,
-            NightLuminanceCeiling = ClampFinite(NightLuminanceCeiling, 1.0, 4.0, 1.0)
+            NightLuminanceCeiling = ClampFinite(NightLuminanceCeiling, 1.0, 4.0, 1.0),
+            NightHdrHighlightPolicy = Enum.IsDefined(typeof(NightHdrHighlightPolicy), NightHdrHighlightPolicy)
+                ? NightHdrHighlightPolicy
+                : NightHdrHighlightPolicy.Comfort,
+            OptimizeNightHardwareRamp = OptimizeNightHardwareRamp,
+            HarvestNightSubJndBudget = HarvestNightSubJndBudget
         };
 
         private static bool IsAdjusted(double value, double neutral, double tolerance) =>
@@ -255,7 +272,8 @@ namespace HDRGammaController.Core
                 HashCode.Combine(brightnessKey, tempKey, tempOffsetKey, tintKey),
                 HashCode.Combine(rGainKey, gGainKey, bGainKey),
                 HashCode.Combine(rOffsetKey, gOffsetKey, bOffsetKey, PreserveNightLuminance, ceilingKey),
-                HashCode.Combine((int)Algorithm, UseLinearBrightness, UseUltraWarmMode, strengthKey, lutKey, lutInstanceKey, nightCcssKey)
+                HashCode.Combine((int)Algorithm, UseLinearBrightness, UseUltraWarmMode, strengthKey, lutKey, lutInstanceKey, nightCcssKey),
+                HashCode.Combine((int)NightHdrHighlightPolicy, OptimizeNightHardwareRamp, HarvestNightSubJndBudget)
             );
         }
     }

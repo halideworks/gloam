@@ -17,11 +17,13 @@ namespace HDRGammaController.Core
         private readonly DispwinRunner _dispwinRunner;
         private readonly SettingsManager _settingsManager;
         private readonly NightModeService _nightModeService;
+        private readonly NightContentFeedbackService? _contentFeedbackService;
 
         // Ramp guard: periodically verify the hardware still holds what we applied
         // and restore it when a fullscreen game or driver event stomps the VCGT.
         // Readback is ~free, so a 10s cadence costs nothing measurable.
-        private readonly System.Timers.Timer _rampGuard;
+        private readonly System.Threading.Timer _rampGuard;
+        private int _rampGuardActive;
 
         // Per-monitor coalescer: rapid slider drags collapse to one dispwin call per
         // completed invocation instead of queueing a backlog. See LatestValueCoalescer
@@ -34,11 +36,16 @@ namespace HDRGammaController.Core
         /// <summary>Hotkey override: forces day mode regardless of the schedule.</summary>
         public bool NightModeManuallyDisabled { get; set; }
 
-        public GammaApplyService(DispwinRunner dispwinRunner, SettingsManager settingsManager, NightModeService nightModeService)
+        public GammaApplyService(
+            DispwinRunner dispwinRunner,
+            SettingsManager settingsManager,
+            NightModeService nightModeService,
+            NightContentFeedbackService? contentFeedbackService = null)
         {
             _dispwinRunner = dispwinRunner ?? throw new ArgumentNullException(nameof(dispwinRunner));
             _settingsManager = settingsManager ?? throw new ArgumentNullException(nameof(settingsManager));
             _nightModeService = nightModeService ?? throw new ArgumentNullException(nameof(nightModeService));
+            _contentFeedbackService = contentFeedbackService;
 
             _coalescer = new LatestValueCoalescer<IntPtr, (MonitorInfo, GammaMode, CalibrationSettings, double)>(
                 (_, item, cancellationToken) =>
@@ -75,20 +82,38 @@ namespace HDRGammaController.Core
                 // fast enough to stall the compositor and hang the machine.
                 minIntervalMs: 250);
 
-            _rampGuard = new System.Timers.Timer(10000) { AutoReset = true };
-            _rampGuard.Elapsed += (_, _) =>
+            _rampGuard = new System.Threading.Timer(
+                OnRampGuardTick, null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10));
+        }
+
+        private void OnRampGuardTick(object? state)
+        {
+            if (Volatile.Read(ref _disposed) != 0 ||
+                Interlocked.CompareExchange(ref _rampGuardActive, 1, 0) != 0)
+                return;
+            try
             {
-                try { _dispwinRunner.VerifyAndRestoreRamps(); }
-                catch (Exception ex) { Log.Error($"GammaApplyService: ramp guard tick failed: {ex.Message}"); }
-            };
-            _rampGuard.Start();
+                if (Volatile.Read(ref _disposed) == 0)
+                    _dispwinRunner.VerifyAndRestoreRamps();
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"GammaApplyService: ramp guard tick failed: {ex.Message}");
+            }
+            finally
+            {
+                Volatile.Write(ref _rampGuardActive, 0);
+            }
         }
 
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
 
-            _rampGuard.Stop();
+            _rampGuard.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            using var rampGuardDrained = new ManualResetEvent(false);
+            if (_rampGuard.Dispose(rampGuardDrained))
+                rampGuardDrained.WaitOne(TimeSpan.FromSeconds(1));
             _rampGuard.Dispose();
             _coalescer.Dispose();
         }
@@ -111,6 +136,8 @@ namespace HDRGammaController.Core
             int? nightKelvinOverride = null,
             NightModeSettings? nightModeSettingsOverride = null)
         {
+            if (Volatile.Read(ref _disposed) != 0) return;
+
             // Mid-calibration guard: a calibration has bypassed this display's corrections so
             // the colorimeter measures the raw panel. The live apply path (slider, night mode,
             // app exclusions, display-change / resume re-apply) must not stomp that in-flight
@@ -294,6 +321,22 @@ namespace HDRGammaController.Core
                 int effectiveKelvin = ColorAdjustments.TemperatureScaleToKelvin(
                     ColorAdjustments.ComposeTemperatureScaleMired(calibration.Temperature, calibration.TemperatureOffset));
 
+                // SDR uses its diffuse-white level. HDR uses the display-reported maximum
+                // full-frame luminance (peak as the next-best fallback), because a dose-bound
+                // highlight policy must price the photons above diffuse white too. A missing
+                // DXGI report falls back to 1000 nits: deliberately conservative, but still a
+                // realistic desktop HDR envelope instead of pretending highlights stop at SDR.
+                double doseReferenceNits = sdrWhite;
+                if (monitor.IsHdrActive)
+                {
+                    double fullFrameNits = MonitorInfo.SanitizeNonNegativeNits(monitor.HdrMaxFullFrameNits);
+                    double peakNits = MonitorInfo.SanitizeNonNegativeNits(monitor.HdrPeakNits);
+                    double reportedHdrNits = fullFrameNits > 0
+                        ? fullFrameNits
+                        : peakNits > 0 ? peakNits : 1000.0;
+                    doseReferenceNits = Math.Max(sdrWhite, reportedHdrNits);
+                }
+
                 var solution = CircadianDoseGovernor.Solve(
                     spectra,
                     calibration.Algorithm,
@@ -305,7 +348,15 @@ namespace HDRGammaController.Core
                     sdrWhite,
                     MelanopicCalculator.DefaultViewingSolidAngleSr,
                     ceiling,
-                    calibration.NightMelanopicCoefficients);
+                    calibration.NightMelanopicCoefficients,
+                    monitor.IsHdrActive ? NightBasis.Rec2020 : NightBasis.Srgb,
+                    calibration.NightLuminanceCeiling,
+                    calibration.UseLinearBrightness,
+                    !monitor.IsHdrActive && nightSettings.ContentAdaptiveDose &&
+                    _contentFeedbackService?.TryGetContentLinearRgb(monitor.HMonitor, out var contentRgb) == true
+                        ? contentRgb
+                        : null,
+                    doseReferenceNits: doseReferenceNits);
 
                 if (!solution.Adjusted) return;
 
@@ -323,6 +374,7 @@ namespace HDRGammaController.Core
                 Log.Info($"GammaApplyService: dose ceiling {ceiling:F1} mel-lx on {monitor.FriendlyName}: " +
                          $"{effectiveKelvin}K → {solution.Kelvin}K, brightness → {solution.BrightnessPercent:F0}% " +
                          $"(est. {solution.MelanopicEdiLux:F1} mel-lx, ΔE′ {solution.DeltaEPrimeFromScheduled:F1}" +
+                         $"{(monitor.IsHdrActive ? $", HDR reference {doseReferenceNits:F0} nit" : string.Empty)}" +
                          $"{(solution.CeilingMet ? string.Empty : "; ceiling unreachable, best effort")})");
             }
             catch (Exception ex)
@@ -345,6 +397,11 @@ namespace HDRGammaController.Core
             calibration.UseUltraWarmMode = nightModeSettings.UseUltraWarmMode;
             calibration.PerceptualStrength = nightModeSettings.PerceptualStrength;
             calibration.PreserveNightLuminance = nightModeSettings.PreserveLuminance;
+            calibration.NightHdrHighlightPolicy = nightModeSettings.MelanopicEdiCeiling > 0
+                ? NightHdrHighlightPolicy.DoseBound
+                : nightModeSettings.HdrHighlightPolicy;
+            calibration.OptimizeNightHardwareRamp = nightModeSettings.OptimizeHardwareRamp;
+            calibration.HarvestNightSubJndBudget = nightModeSettings.HarvestSubJndBudget;
         }
 
         public void ApplyAll(IEnumerable<MonitorInfo> monitors)

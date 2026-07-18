@@ -98,6 +98,16 @@ namespace HDRGammaController.Core.Calibration
 
             double melanopic = TrapezoidIntegrate(wavelengths, spectralValues, MelanopicSensitivity);
             double photopic = TrapezoidIntegrate(wavelengths, spectralValues, PhotopicSensitivity);
+            return MelanopicDerFromIntegrals(melanopic, photopic);
+        }
+
+        /// <summary>
+        /// Converts integrations made with this class's exact S 026 and V(λ) tables to
+        /// melanopic DER. Internal callers can fuse several spectra into one pass without
+        /// duplicating constants or changing the standardized calculation.
+        /// </summary>
+        internal static double MelanopicDerFromIntegrals(double melanopic, double photopic)
+        {
             if (!(photopic > 0.0) || !double.IsFinite(melanopic))
                 return double.NaN;
 
@@ -461,6 +471,11 @@ namespace HDRGammaController.Core.Calibration
 
         private static double PhotopicSensitivity(double nm) => InterpolateTable(VLambda1924, nm);
         private static double MelanopicSensitivity(double nm) => InterpolateTable(SMelS026, nm);
+
+        // Allocation-free spectral evaluators for fused hot paths in the dose governor.
+        // Keeping these here guarantees there is still one authoritative set of tables.
+        internal static double PhotopicSensitivityAt(double nm) => PhotopicSensitivity(nm);
+        internal static double MelanopicSensitivityAt(double nm) => MelanopicSensitivity(nm);
 
         private const double TableStartNm = 380.0;
         private const double TableStepNm = 5.0;

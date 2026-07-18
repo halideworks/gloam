@@ -192,7 +192,9 @@ namespace HDRGammaController.Tests
         [Fact]
         public void HdrLut_WithBoost_IsMonotoneAndEndsAtPassthrough()
         {
-            var lut = LutGenerator.GenerateLut(GammaMode.Gamma22, 200.0, HdrBoostSettings(), isHdr: true);
+            var settings = HdrBoostSettings();
+            settings.NightHdrHighlightPolicy = NightHdrHighlightPolicy.Creative;
+            var lut = LutGenerator.GenerateLut(GammaMode.Gamma22, 200.0, settings, isHdr: true);
 
             foreach (var (channel, name) in new[] { (lut.R, "R"), (lut.G, "G"), (lut.B, "B"), (lut.Grey, "Grey") })
             {

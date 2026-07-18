@@ -267,7 +267,9 @@ namespace HDRGammaController
                 if (elapsed < fade && fade > 0)
                 {
                     double p = elapsed / fade;
-                    return NightModeService.InterpolateKelvinInMired(str, trg, p);
+                    return NightFadeTrajectory.InterpolateKelvin(
+                        str, trg, p, Vm.Algorithm, Vm.PerceptualStrengthPercent / 100.0,
+                        Vm.UseUltraWarmMode, Vm.PreserveLuminance);
                 }
                 return trg;
             };

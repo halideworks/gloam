@@ -157,6 +157,48 @@
                            FontFamily="{DynamicResource BodyFont}" FontSize="12"
                            VerticalAlignment="Center" Margin="6,0,0,0"/>
             </StackPanel>
+
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="24,8,0,0"
+                        IsEnabled="{Binding DoseCeilingEnabled}"
+                        ToolTip="Uses a 48×27 SDR screen sample reduced immediately to aggregate linear RGB. No screenshot, window title, process, or pixel data is retained. HDR, black, and protected captures use the conservative full-white estimate.">
+                <CheckBox IsChecked="{Binding ContentAdaptiveDose}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <TextBlock Foreground="{DynamicResource ThemeText}" FontFamily="{DynamicResource BodyFont}"
+                           FontSize="12" VerticalAlignment="Center">
+                    <Run Text="Content-aware dose" FontWeight="Bold"/>
+                    <Run Text=" - opt-in local aggregate; no images stored" Foreground="{DynamicResource ThemeTextDim}"/>
+                </TextBlock>
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,10,0,0"
+                        ToolTip="Controls how warmth extends above HDR diffuse white. A live melanopic ceiling always forces dose-bound highlights.">
+                <TextBlock Text="HDR highlights" Style="{StaticResource FieldLabel}"
+                           VerticalAlignment="Center" Margin="0,0,10,0"/>
+                <ComboBox MinWidth="220" ItemsSource="{Binding AvailableHighlightPolicies}"
+                          DisplayMemberPath="Label" SelectedValuePath="Value"
+                          SelectedValue="{Binding HdrHighlightPolicy}"
+                          IsEnabled="{Binding CanChooseHdrHighlightPolicy}"/>
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,10,0,0"
+                        ToolTip="Compiles the transform directly for the 256-entry, 16-bit hardware ramp. Candidate changes are accepted only when monotonicity, plateau, step-size, and appearance gates pass.">
+                <CheckBox IsChecked="{Binding OptimizeHardwareRamp}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <TextBlock Foreground="{DynamicResource ThemeText}" FontFamily="{DynamicResource BodyFont}"
+                           FontSize="12" VerticalAlignment="Center">
+                    <Run Text="Hardware-aware optimizer" FontWeight="Bold"/>
+                    <Run Text=" - quantization-aware 256-knot compiler" Foreground="{DynamicResource ThemeTextDim}"/>
+                </TextBlock>
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="24,8,0,0"
+                        IsEnabled="{Binding CanHarvestSubJndBudget}"
+                        ToolTip="Uses at most 0.20 CAM16-UCS JND in a locally least-visible direction to shave additional melanopic energy, with stronger protection in shadows.">
+                <CheckBox IsChecked="{Binding HarvestSubJndBudget}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <TextBlock Foreground="{DynamicResource ThemeText}" FontFamily="{DynamicResource BodyFont}"
+                           FontSize="12" VerticalAlignment="Center">
+                    <Run Text="Sub-JND blue budget" FontWeight="Bold"/>
+                    <Run Text=" - spend invisible error on additional blue reduction" Foreground="{DynamicResource ThemeTextDim}"/>
+                </TextBlock>
+            </StackPanel>
         </StackPanel>
 
         <!-- List -->

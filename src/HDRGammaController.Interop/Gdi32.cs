@@ -10,6 +10,34 @@ namespace HDRGammaController.Interop
     /// </summary>
     public static class Gdi32
     {
+        public const uint Srccopy = 0x00CC0020;
+        public const uint CaptureBlt = 0x40000000;
+        public const uint DibRgbColors = 0;
+        public const int ColorOnColor = 3;
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct BitmapInfoHeader
+        {
+            public uint Size;
+            public int Width;
+            public int Height;
+            public ushort Planes;
+            public ushort BitCount;
+            public uint Compression;
+            public uint SizeImage;
+            public int XPelsPerMeter;
+            public int YPelsPerMeter;
+            public uint ClrUsed;
+            public uint ClrImportant;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct BitmapInfo
+        {
+            public BitmapInfoHeader Header;
+            public uint Colors;
+        }
+
         /// <summary>
         /// Hardware gamma ramp: 256 16-bit entries per channel, the fixed size of the
         /// GDI gamma ramp interface.
@@ -38,6 +66,34 @@ namespace HDRGammaController.Interop
         [DllImport("gdi32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool DeleteDC(IntPtr hdc);
+
+        [DllImport("gdi32.dll", SetLastError = true)]
+        public static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+
+        [DllImport("gdi32.dll", SetLastError = true)]
+        public static extern IntPtr CreateCompatibleBitmap(IntPtr hdc, int width, int height);
+
+        [DllImport("gdi32.dll", SetLastError = true)]
+        public static extern IntPtr SelectObject(IntPtr hdc, IntPtr hObject);
+
+        [DllImport("gdi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool DeleteObject(IntPtr hObject);
+
+        [DllImport("gdi32.dll", SetLastError = true)]
+        public static extern int SetStretchBltMode(IntPtr hdc, int mode);
+
+        [DllImport("gdi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool StretchBlt(
+            IntPtr hdcDest, int xDest, int yDest, int widthDest, int heightDest,
+            IntPtr hdcSrc, int xSrc, int ySrc, int widthSrc, int heightSrc,
+            uint rasterOperation);
+
+        [DllImport("gdi32.dll", SetLastError = true)]
+        public static extern int GetDIBits(
+            IntPtr hdc, IntPtr hBitmap, uint start, uint scanLines,
+            [Out] byte[] bits, ref BitmapInfo bitmapInfo, uint usage);
 
         [DllImport("gdi32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]

@@ -40,6 +40,7 @@ namespace HDRGammaController.ViewModels
 
         private readonly AppDetectionService _appDetectionService;
         private readonly MelanopicMonitorService? _melanopicService;
+        private readonly NightContentFeedbackService? _contentFeedbackService;
         // Guarded by _activeMonitorsLock: RefreshMonitors (UI thread) mutates this while
         // OnForegroundAppChanged can enumerate it from the foreground-app hook thread.
         private List<MonitorInfo> _activeMonitors = new List<MonitorInfo>();
@@ -71,6 +72,7 @@ namespace HDRGammaController.ViewModels
             UpdateService updateService,
             IToastService? toastService = null,
             MelanopicMonitorService? melanopicService = null,
+            NightContentFeedbackService? contentFeedbackService = null,
             HotkeyManager? hotkeyManager = null)
         {
             // Dependencies are constructed by the DI container (App.ConfigureServices)
@@ -89,6 +91,7 @@ namespace HDRGammaController.ViewModels
             _updateService = updateService;
             _toastService = toastService;
             _melanopicService = melanopicService;
+            _contentFeedbackService = contentFeedbackService;
 
             _dispwinRunner.DispwinUnavailable += () =>
                 OnUiThread(() =>
@@ -105,6 +108,8 @@ namespace HDRGammaController.ViewModels
             _settingsManager.NightModeChanged += (newSettings) => _nightModeService.UpdateSettings(newSettings);
 
             _appDetectionService.ForegroundAppChanged += OnForegroundAppChanged;
+            if (_contentFeedbackService != null)
+                _contentFeedbackService.ContentEstimateChanged += OnContentEstimateChanged;
 
             ExitCommand = new RelayCommand(() => Application.Current.Shutdown());
             RefreshCommand = new RelayCommand(RefreshMonitors);
@@ -459,6 +464,7 @@ namespace HDRGammaController.ViewModels
                 // footgun where night mode silently never returns); the toast makes the current
                 // state visible on every press.
                 bool nowDisabled = (_applyService.NightModeManuallyDisabled = !_applyService.NightModeManuallyDisabled);
+                _contentFeedbackService?.SetSuspended(nowDisabled);
                 ApplyAll(); // Re-apply all calibrations with night mode toggled
                 _toastService?.Show("Gloam",
                     nowDisabled ? "Night warmth disabled - day mode" : "Night warmth enabled",
@@ -567,6 +573,13 @@ namespace HDRGammaController.ViewModels
             {
                 Log.Error($"TrayViewModel.HandleDisplayEvent: {ex.Message}");
             }
+        }
+
+        private void OnContentEstimateChanged()
+        {
+            // The sampler runs on a ThreadPool timer. ApplyAll reads WPF-owned collections,
+            // so marshal once; the per-monitor coalescer then rate-limits the hardware write.
+            OnUiThread(ApplyAll);
         }
 
 
@@ -874,6 +887,8 @@ namespace HDRGammaController.ViewModels
             // Stops the night-mode and ramp-guard timers and unhooks the
             // foreground-window event hook.
             _updateCheckTimer.Stop();
+            if (_contentFeedbackService != null)
+                _contentFeedbackService.ContentEstimateChanged -= OnContentEstimateChanged;
             _applyService.Dispose();
             _nightModeService.Dispose();
             _appDetectionService.Dispose();
@@ -892,6 +907,7 @@ namespace HDRGammaController.ViewModels
                 _activeMonitors = enumerated;
             }
             var monitors = enumerated;
+            _contentFeedbackService?.UpdateMonitors(monitors);
             Log.Info($"TrayViewModel: Enumerated {monitors.Count} monitors.");
             
             if (monitors.Count == 0)

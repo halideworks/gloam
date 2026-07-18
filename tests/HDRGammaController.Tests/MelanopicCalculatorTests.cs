@@ -220,6 +220,55 @@ namespace HDRGammaController.Tests
                 Assert.InRange(der, 0.4, 1.6); // plausible display white, not garbage
             }
         }
+
+        [Fact]
+        public void ComputeHotPath_ReusesFallbackAndIsEffectivelyAllocationFreeAfterWarmup()
+        {
+            var spectra = MelanopicCalculator.GenericPrimaries();
+            Assert.Same(spectra, MelanopicCalculator.GenericPrimaries());
+            var gains = ColorAdjustments.GetPerceptualMultipliers(2700, 0.8, NightBasis.Srgb);
+            for (int i = 0; i < 64; i++)
+                _ = MelanopicCalculator.Compute(spectra, gains, 180.0);
+
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            double checksum = 0.0;
+            for (int i = 0; i < 2048; i++)
+                checksum += MelanopicCalculator.Compute(spectra, gains, 180.0).MelanopicEdiLux;
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.True(checksum > 0.0);
+            Assert.True(allocated < 16 * 1024,
+                $"melanopic hot path allocated {allocated:N0} bytes after warmup");
+        }
+
+        [Fact]
+        public void FusedCompute_MatchesIndependentStandardIntegrals()
+        {
+            var spectra = MelanopicCalculator.GenericPrimaries(wideGamut: true);
+            var gains = (R: 0.91, G: 0.67, B: 0.23);
+            var state = new double[spectra.Wavelengths.Count];
+            var baseline = new double[state.Length];
+            for (int i = 0; i < state.Length; i++)
+            {
+                double r = Math.Max(0.0, spectra.Red[i]);
+                double g = Math.Max(0.0, spectra.Green[i]);
+                double b = Math.Max(0.0, spectra.Blue[i]);
+                state[i] = gains.R * r + gains.G * g + gains.B * b;
+                baseline[i] = r + g + b;
+            }
+
+            double stateDer = CcssMelanopicEstimator.MelanopicDer(spectra.Wavelengths, state);
+            double baselineDer = CcssMelanopicEstimator.MelanopicDer(spectra.Wavelengths, baseline);
+            double stateY = CcssMelanopicEstimator.Photopic(spectra.Wavelengths, state);
+            double baselineY = CcssMelanopicEstimator.Photopic(spectra.Wavelengths, baseline);
+            double yRel = stateY / baselineY;
+            var fused = MelanopicCalculator.Compute(spectra, gains, 183.0, 0.23);
+
+            Assert.Equal(stateDer, fused.MelDerState, 11);
+            Assert.Equal(baselineDer, fused.MelDerBaseline, 11);
+            Assert.Equal(yRel, fused.RelativePhotopicLuminance, 11);
+            Assert.Equal(183.0 * yRel * 0.23 * stateDer, fused.MelanopicEdiLux, 10);
+        }
     }
 
     public class MelanopicDoseStoreTests : IDisposable

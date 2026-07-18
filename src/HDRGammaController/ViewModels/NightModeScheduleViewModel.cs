@@ -64,6 +64,7 @@ namespace HDRGammaController.ViewModels
         /// Rendering algorithms offered in the dashboard, ordered best-perceptual-first.
         /// </summary>
         public IReadOnlyList<NightModeAlgorithmOption> AvailableAlgorithms { get; } = NightModeAlgorithmOption.DefaultOptions;
+        public IReadOnlyList<HdrHighlightPolicyOption> AvailableHighlightPolicies { get; } = HdrHighlightPolicyOption.DefaultOptions;
 
         private NightModeAlgorithm _algorithm = NightModeAlgorithm.Perceptual;
         public NightModeAlgorithm Algorithm
@@ -117,6 +118,8 @@ namespace HDRGammaController.ViewModels
             {
                 if (SetProperty(ref _doseCeilingEnabled, value))
                 {
+                    OnPropertyChanged(nameof(CanChooseHdrHighlightPolicy));
+                    OnPropertyChanged(nameof(HdrHighlightPolicy));
                     WriteDoseCeiling();
                 }
             }
@@ -147,6 +150,71 @@ namespace HDRGammaController.ViewModels
             }
             _settings.MelanopicEdiCeiling = ceiling;
             SettingsEdited?.Invoke();
+        }
+
+        public bool CanChooseHdrHighlightPolicy => !_doseCeilingEnabled;
+
+        private NightHdrHighlightPolicy _hdrHighlightPolicy = NightHdrHighlightPolicy.Comfort;
+        public NightHdrHighlightPolicy HdrHighlightPolicy
+        {
+            get => _doseCeilingEnabled ? NightHdrHighlightPolicy.DoseBound : _hdrHighlightPolicy;
+            set
+            {
+                if (SetProperty(ref _hdrHighlightPolicy, value))
+                {
+                    if (_settings == null) return;
+                    _settings.HdrHighlightPolicy = value;
+                    SettingsEdited?.Invoke();
+                }
+            }
+        }
+
+        private bool _optimizeHardwareRamp = true;
+        public bool OptimizeHardwareRamp
+        {
+            get => _optimizeHardwareRamp;
+            set
+            {
+                if (SetProperty(ref _optimizeHardwareRamp, value))
+                {
+                    OnPropertyChanged(nameof(CanHarvestSubJndBudget));
+                    if (_settings == null) return;
+                    _settings.OptimizeHardwareRamp = value;
+                    SettingsEdited?.Invoke();
+                }
+            }
+        }
+
+        public bool CanHarvestSubJndBudget => _optimizeHardwareRamp;
+
+        private bool _harvestSubJndBudget = true;
+        public bool HarvestSubJndBudget
+        {
+            get => _harvestSubJndBudget;
+            set
+            {
+                if (SetProperty(ref _harvestSubJndBudget, value))
+                {
+                    if (_settings == null) return;
+                    _settings.HarvestSubJndBudget = value;
+                    SettingsEdited?.Invoke();
+                }
+            }
+        }
+
+        private bool _contentAdaptiveDose;
+        public bool ContentAdaptiveDose
+        {
+            get => _contentAdaptiveDose;
+            set
+            {
+                if (SetProperty(ref _contentAdaptiveDose, value))
+                {
+                    if (_settings == null) return;
+                    _settings.ContentAdaptiveDose = value;
+                    SettingsEdited?.Invoke();
+                }
+            }
         }
 
         /// <summary>The intensity slider only applies to the Perceptual algorithm.</summary>
@@ -226,6 +294,12 @@ namespace HDRGammaController.ViewModels
             _doseCeilingEnabled = _settings.MelanopicEdiCeiling > 0;
             if (_settings.MelanopicEdiCeiling > 0)
                 _doseCeilingText = _settings.MelanopicEdiCeiling.ToString("0.#");
+            _hdrHighlightPolicy = Enum.IsDefined(typeof(NightHdrHighlightPolicy), _settings.HdrHighlightPolicy)
+                ? _settings.HdrHighlightPolicy
+                : NightHdrHighlightPolicy.Comfort;
+            _optimizeHardwareRamp = _settings.OptimizeHardwareRamp;
+            _harvestSubJndBudget = _settings.HarvestSubJndBudget;
+            _contentAdaptiveDose = _settings.ContentAdaptiveDose;
 
             OnPropertyChanged(nameof(Algorithm));
             OnPropertyChanged(nameof(AlgorithmDescription));
@@ -237,6 +311,12 @@ namespace HDRGammaController.ViewModels
             OnPropertyChanged(nameof(PreserveLuminance));
             OnPropertyChanged(nameof(DoseCeilingEnabled));
             OnPropertyChanged(nameof(DoseCeilingText));
+            OnPropertyChanged(nameof(CanChooseHdrHighlightPolicy));
+            OnPropertyChanged(nameof(HdrHighlightPolicy));
+            OnPropertyChanged(nameof(OptimizeHardwareRamp));
+            OnPropertyChanged(nameof(CanHarvestSubJndBudget));
+            OnPropertyChanged(nameof(HarvestSubJndBudget));
+            OnPropertyChanged(nameof(ContentAdaptiveDose));
         }
 
         /// <summary>
@@ -448,6 +528,26 @@ namespace HDRGammaController.ViewModels
 
         // The Brutalist ComboBox template renders the collapsed selection box via ToString()
         // rather than DisplayMemberPath, so without this it shows the type name until opened.
+        public override string ToString() => Label;
+    }
+
+    public sealed class HdrHighlightPolicyOption
+    {
+        public static IReadOnlyList<HdrHighlightPolicyOption> DefaultOptions { get; } = new List<HdrHighlightPolicyOption>
+        {
+            new(NightHdrHighlightPolicy.Comfort, "Comfort (warm highlights)"),
+            new(NightHdrHighlightPolicy.DoseBound, "Dose-bound (fully warm)"),
+            new(NightHdrHighlightPolicy.Creative, "Creative (neutral highlights)")
+        };
+
+        public HdrHighlightPolicyOption(NightHdrHighlightPolicy value, string label)
+        {
+            Value = value;
+            Label = label;
+        }
+
+        public NightHdrHighlightPolicy Value { get; }
+        public string Label { get; }
         public override string ToString() => Label;
     }
 }

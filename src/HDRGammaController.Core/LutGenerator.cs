@@ -38,6 +38,8 @@ namespace HDRGammaController.Core
             NightModeAlgorithm Algorithm, bool LinearBrightness, bool UltraWarm,
             double PerceptualStrength,
             bool PreserveNightLuminance, double NightLuminanceCeiling,
+            NightHdrHighlightPolicy HdrHighlightPolicy,
+            bool OptimizeNightHardwareRamp, bool HarvestNightSubJndBudget,
             string? NightModeCcssPath,
             double NightRedMel, double NightGreenMel, double NightBlueMel,
             double NightRedLum, double NightGreenLum, double NightBlueLum,
@@ -50,6 +52,8 @@ namespace HDRGammaController.Core
                 value.Algorithm, value.UseLinearBrightness, value.UseUltraWarmMode,
                 value.PerceptualStrength,
                 value.PreserveNightLuminance, value.NightLuminanceCeiling,
+                value.NightHdrHighlightPolicy,
+                value.OptimizeNightHardwareRamp, value.HarvestNightSubJndBudget,
                 value.NightModeCcssPath,
                 value.NightMelanopicCoefficients?.RedMelanopic ?? 0.0,
                 value.NightMelanopicCoefficients?.GreenMelanopic ?? 0.0,
@@ -192,7 +196,7 @@ namespace HDRGammaController.Core
                     // gamma-encoded signals is not the signal for the mean light.
                     lutGrey[i] = Math.Pow((r + g + b) / 3.0, 1.0 / 2.2);
                 }
-                return (lutR, lutG, lutB, lutGrey);
+                return FinishForHardware(lutR, lutG, lutB, lutGrey, calibration, isHdr: false, sdrWhiteLevel);
             }
 
             double gamma = gammaMode switch
@@ -298,6 +302,30 @@ namespace HDRGammaController.Core
                     // specular) while still honoring the brightness slider — so a
                     // user dimming the screen sees highlights come down too.
                     double headroomSignal = ComputeHeadroomTarget(linear, calibration, sdrWhiteLevel, boostAnchorNits);
+                    var spectralTarget = ComputeSpectralHeadroomTarget(linear, calibration, sdrWhiteLevel);
+
+                    double targetR, targetG, targetB;
+                    switch (calibration.NightHdrHighlightPolicy)
+                    {
+                        case NightHdrHighlightPolicy.DoseBound:
+                            targetR = spectralTarget.R;
+                            targetG = spectralTarget.G;
+                            targetB = spectralTarget.B;
+                            break;
+                        case NightHdrHighlightPolicy.Comfort:
+                            // Retain one quarter of the spectral shift at the top of PQ. The
+                            // smoothstep below still starts from the exact diffuse-white value,
+                            // so this changes no boundary continuity and preserves most of the
+                            // original grade while preventing a fully neutral highlight flash.
+                            const double retainedWarmth = 0.25;
+                            targetR = headroomSignal + (spectralTarget.R - headroomSignal) * retainedWarmth;
+                            targetG = headroomSignal + (spectralTarget.G - headroomSignal) * retainedWarmth;
+                            targetB = headroomSignal + (spectralTarget.B - headroomSignal) * retainedWarmth;
+                            break;
+                        default:
+                            targetR = targetG = targetB = headroomSignal;
+                            break;
+                    }
 
                     // Blend in PQ-signal space (perceptually uniform) with a smoothstep
                     // for C¹ continuity at the SDR/HDR boundary, eliminating the visible
@@ -306,14 +334,61 @@ namespace HDRGammaController.Core
                     t = Clamp01(t);
                     double blendFactor = t * t * (3.0 - 2.0 * t);
 
-                    lutR[i] = pqR + (headroomSignal - pqR) * blendFactor;
-                    lutG[i] = pqG + (headroomSignal - pqG) * blendFactor;
-                    lutB[i] = pqB + (headroomSignal - pqB) * blendFactor;
-                    lutGrey[i] = pqGrey + (headroomSignal - pqGrey) * blendFactor;
+                    lutR[i] = pqR + (targetR - pqR) * blendFactor;
+                    lutG[i] = pqG + (targetG - pqG) * blendFactor;
+                    lutB[i] = pqB + (targetB - pqB) * blendFactor;
+                    double targetGrey = TransferFunctions.PqInverseEotf(
+                        (TransferFunctions.PqEotf(targetR) +
+                         TransferFunctions.PqEotf(targetG) +
+                         TransferFunctions.PqEotf(targetB)) / 3.0);
+                    lutGrey[i] = pqGrey + (targetGrey - pqGrey) * blendFactor;
                 }
             }
 
-            return (lutR, lutG, lutB, lutGrey);
+            return FinishForHardware(lutR, lutG, lutB, lutGrey, calibration, isHdr: true, sdrWhiteLevel);
+        }
+
+        private static (double R, double G, double B) ComputeSpectralHeadroomTarget(
+            double linearNits, CalibrationSettings calibration, double sdrWhiteLevel)
+        {
+            double dimmed = ColorAdjustments.ApplyDimmingNits(
+                linearNits, calibration.Brightness, sdrWhiteLevel, calibration.UseLinearBrightness);
+            var shape = ColorAdjustments.GetAppliedWhiteShapeMultipliers(calibration, NightBasis.Rec2020);
+            return (
+                TransferFunctions.PqInverseEotf(Math.Clamp(dimmed * shape.R, 0.0, 10000.0)),
+                TransferFunctions.PqInverseEotf(Math.Clamp(dimmed * shape.G, 0.0, 10000.0)),
+                TransferFunctions.PqInverseEotf(Math.Clamp(dimmed * shape.B, 0.0, 10000.0)));
+        }
+
+        private static (double[] R, double[] G, double[] B, double[] Grey) FinishForHardware(
+            double[] r, double[] g, double[] b, double[] grey,
+            CalibrationSettings calibration, bool isHdr, double sdrWhiteLevel)
+        {
+            if (!calibration.OptimizeNightHardwareRamp ||
+                Math.Abs(calibration.Temperature) < 0.01 && Math.Abs(calibration.TemperatureOffset) < 0.01)
+                return (r, g, b, grey);
+
+            var compiled = NightModeRampCompiler.Compile(
+                r, g, b, calibration, isHdr, sdrWhiteLevel);
+            var compiledGrey = new double[compiled.R.Length];
+            for (int i = 0; i < compiledGrey.Length; i++)
+            {
+                if (isHdr)
+                {
+                    double nr = TransferFunctions.PqEotf(compiled.R[i]);
+                    double ng = TransferFunctions.PqEotf(compiled.G[i]);
+                    double nb = TransferFunctions.PqEotf(compiled.B[i]);
+                    compiledGrey[i] = TransferFunctions.PqInverseEotf((nr + ng + nb) / 3.0);
+                }
+                else
+                {
+                    double lr = Math.Pow(compiled.R[i], 2.2);
+                    double lg = Math.Pow(compiled.G[i], 2.2);
+                    double lb = Math.Pow(compiled.B[i], 2.2);
+                    compiledGrey[i] = Math.Pow((lr + lg + lb) / 3.0, 1.0 / 2.2);
+                }
+            }
+            return (compiled.R, compiled.G, compiled.B, compiledGrey);
         }
 
         /// <summary>

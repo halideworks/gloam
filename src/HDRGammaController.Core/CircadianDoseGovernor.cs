@@ -15,9 +15,10 @@ namespace HDRGammaController.Core
     /// <remarks>
     /// The governor never brightens and never cools: candidates range from the scheduled
     /// kelvin down to 1900 K and from the scheduled brightness down to a 10% floor. For a
-    /// fixed kelvin, mel-EDI is linear in white luminance, so the minimum dimming that
-    /// meets the ceiling is computed in closed form rather than searched. Results are
-    /// memoized (the apply path re-evaluates on every fade tick).
+    /// fixed kelvin the constraint is monotone after the content estimate is lifted to a
+    /// conservative dimming-domain envelope, so maximum compliant brightness is found by
+    /// deterministic bisection. Results are memoized (the apply path re-evaluates on every
+    /// fade tick).
     /// </remarks>
     public static class CircadianDoseGovernor
     {
@@ -36,8 +37,11 @@ namespace HDRGammaController.Core
 
         private sealed record CacheKey(
             int ScheduledKelvin, int BrightnessKey, NightModeAlgorithm Algorithm,
-            int StrengthKey, bool UltraWarm, bool Preserve, double CeilingKey,
-            int WhiteNitsKey, double OmegaKey, string SpectraSource);
+            double Strength, bool UltraWarm, bool Preserve, double Ceiling,
+            double DoseReferenceNits, double Omega, CcssMelanopicEstimator.CcssSpectra Spectra,
+            NightMelanopicCoefficients? Melanopic, NightBasis Basis,
+            double LuminanceCeiling, bool LinearBrightness,
+            int ContentRKey, int ContentGKey, int ContentBKey);
 
         private static readonly ConcurrentDictionary<CacheKey, Solution> Cache = new();
         private const int MaxCacheEntries = 512;
@@ -57,72 +61,171 @@ namespace HDRGammaController.Core
             double sdrWhiteNits,
             double viewingSolidAngleSr,
             double ceilingMelLux,
-            NightMelanopicCoefficients? melanopic = null)
+            NightMelanopicCoefficients? melanopic = null,
+            NightBasis basis = NightBasis.Srgb,
+            double luminanceCeiling = 1.0,
+            bool useLinearBrightness = false,
+            (double R, double G, double B)? contentLinearRgb = null,
+            double? doseReferenceNits = null)
         {
             ArgumentNullException.ThrowIfNull(spectra);
             scheduledKelvin = Math.Clamp(scheduledKelvin, MinKelvin, 10000);
-            scheduledBrightnessPercent = Math.Clamp(scheduledBrightnessPercent, MinBrightnessPercent, 100.0);
-            sdrWhiteNits = Math.Clamp(sdrWhiteNits, 1.0, 10000.0);
+            scheduledBrightnessPercent = double.IsFinite(scheduledBrightnessPercent)
+                ? Math.Clamp(scheduledBrightnessPercent, MinBrightnessPercent, 100.0)
+                : 100.0;
+            sdrWhiteNits = double.IsFinite(sdrWhiteNits)
+                ? Math.Clamp(sdrWhiteNits, 1.0, 10000.0)
+                : 200.0;
+            double doseNits = doseReferenceNits.HasValue && double.IsFinite(doseReferenceNits.Value)
+                ? Math.Clamp(doseReferenceNits.Value, 1.0, 10000.0)
+                : sdrWhiteNits;
+            perceptualStrength = NightModeSettings.ClampPerceptualStrength(perceptualStrength);
+            viewingSolidAngleSr = double.IsFinite(viewingSolidAngleSr)
+                ? Math.Clamp(viewingSolidAngleSr, 0.0, 4.0)
+                : MelanopicCalculator.DefaultViewingSolidAngleSr;
             if (!double.IsFinite(ceilingMelLux) || ceilingMelLux <= 0)
                 throw new ArgumentOutOfRangeException(nameof(ceilingMelLux));
+            luminanceCeiling = double.IsFinite(luminanceCeiling)
+                ? Math.Clamp(luminanceCeiling, 1.0, 4.0)
+                : 1.0;
+            var content = contentLinearRgb ?? (1.0, 1.0, 1.0);
+            content = (
+                double.IsFinite(content.R) ? Math.Clamp(content.R, 0.0, 1.0) : 1.0,
+                double.IsFinite(content.G) ? Math.Clamp(content.G, 0.0, 1.0) : 1.0,
+                double.IsFinite(content.B) ? Math.Clamp(content.B, 0.0, 1.0) : 1.0);
 
-            // Quantize the scheduled inputs so a night-mode fade (which changes kelvin every
-            // step) mostly HITS the memo instead of re-running the CAM16 scan per tick on the
-            // apply/UI thread. 25 K and 2% steps are imperceptible in the governed trajectory.
-            scheduledKelvin = (int)(Math.Round(scheduledKelvin / (double)KelvinCacheBucket) * KelvinCacheBucket);
+            // Never let memoization decide compliance. Evaluate the precise scheduled state
+            // first; only an actual violation enters the bucketed correction solver below.
+            // This closes the near-threshold case where rounding to a slightly warmer/dimmer
+            // cache key could otherwise understate dose and return Adjusted=false.
+            var exactReading = EvaluateReading(
+                spectra, algorithm, perceptualStrength, useUltraWarmMode, preserveLuminance,
+                scheduledKelvin, scheduledBrightnessPercent, doseNits,
+                viewingSolidAngleSr, melanopic, basis, luminanceCeiling,
+                useLinearBrightness, content);
+            if (exactReading.MelanopicEdiLux <= ceilingMelLux)
+            {
+                return new Solution(scheduledKelvin, scheduledBrightnessPercent,
+                    exactReading.MelanopicEdiLux, 0.0, CeilingMet: true, Adjusted: false);
+            }
+
+            // Floor temperature and brightness so a cached correction can never COOL or
+            // BRIGHTEN the requested state. Content is rounded upward so reuse within its
+            // 5% bucket can only overestimate dose. The exact check above preserves truly
+            // compliant states unchanged.
+            scheduledKelvin = scheduledKelvin / KelvinCacheBucket * KelvinCacheBucket;
             scheduledKelvin = Math.Clamp(scheduledKelvin, MinKelvin, 10000);
-            scheduledBrightnessPercent = Math.Round(scheduledBrightnessPercent / 2.0) * 2.0;
+            scheduledBrightnessPercent = Math.Floor(scheduledBrightnessPercent / 2.0) * 2.0;
+            scheduledBrightnessPercent = Math.Max(MinBrightnessPercent, scheduledBrightnessPercent);
+            content = (
+                Math.Ceiling(content.R * 20.0) / 20.0,
+                Math.Ceiling(content.G * 20.0) / 20.0,
+                Math.Ceiling(content.B * 20.0) / 20.0);
 
             var key = new CacheKey(
                 scheduledKelvin, (int)Math.Round(scheduledBrightnessPercent), algorithm,
-                (int)Math.Round(perceptualStrength * 100), useUltraWarmMode, preserveLuminance,
-                Math.Round(ceilingMelLux, 2), (int)Math.Round(sdrWhiteNits),
-                Math.Round(viewingSolidAngleSr, 3), spectra.SourceName);
+                perceptualStrength, useUltraWarmMode, preserveLuminance,
+                ceilingMelLux, doseNits, viewingSolidAngleSr, spectra, melanopic, basis,
+                luminanceCeiling, useLinearBrightness,
+                (int)Math.Round(content.R * 20), (int)Math.Round(content.G * 20),
+                (int)Math.Round(content.B * 20));
             if (Cache.TryGetValue(key, out var cached))
                 return cached;
 
             var solution = SolveCore(spectra, algorithm, perceptualStrength, useUltraWarmMode,
-                preserveLuminance, scheduledKelvin, scheduledBrightnessPercent, sdrWhiteNits,
-                viewingSolidAngleSr, ceilingMelLux, melanopic);
+                preserveLuminance, scheduledKelvin, scheduledBrightnessPercent, doseNits,
+                viewingSolidAngleSr, ceilingMelLux, melanopic, basis, luminanceCeiling,
+                useLinearBrightness, content);
+
+            // The floored bucket itself can comply even though the precise requested state
+            // did not. It is still a real correction and must be applied.
+            if (!solution.Adjusted)
+                solution = solution with { Adjusted = true };
 
             if (Cache.Count >= MaxCacheEntries) Cache.Clear();
             Cache[key] = solution;
             return solution;
         }
 
+        private static MelanopicReading EvaluateReading(
+            CcssMelanopicEstimator.CcssSpectra spectra,
+            NightModeAlgorithm algorithm, double strength, bool ultraWarm, bool preserve,
+            int kelvin, double brightness, double doseReferenceNits, double omega,
+            NightMelanopicCoefficients? melanopic, NightBasis basis,
+            double luminanceCeiling, bool useLinearBrightness,
+            (double R, double G, double B) content)
+        {
+            double scale = (kelvin - 6500) / 70.0;
+            var gains = ColorAdjustments.GetTemperatureMultipliers(
+                scale, algorithm, ultraWarm, strength, melanopic, basis);
+            if (preserve && algorithm != NightModeAlgorithm.UltraNight)
+            {
+                double dimmedWhite = ColorAdjustments.ApplyDimming(1.0, brightness, useLinearBrightness);
+                gains = ColorAdjustments.RescaleToConstantLuminance(
+                    gains, basis, luminanceCeiling, dimmedWhite);
+            }
+            var dimmedContent = ConservativeContentAfterDimming(
+                content, brightness, useLinearBrightness);
+            return MelanopicCalculator.Compute(
+                spectra,
+                (gains.R * dimmedContent.R, gains.G * dimmedContent.G, gains.B * dimmedContent.B),
+                doseReferenceNits * brightness / 100.0, omega, hasSpectra: true);
+        }
+
         private static Solution SolveCore(
             CcssMelanopicEstimator.CcssSpectra spectra,
             NightModeAlgorithm algorithm, double strength, bool ultraWarm, bool preserve,
-            int scheduledKelvin, double scheduledBrightness, double sdrWhiteNits,
-            double omega, double ceiling, NightMelanopicCoefficients? melanopic)
+            int scheduledKelvin, double scheduledBrightness, double doseReferenceNits,
+            double omega, double ceiling, NightMelanopicCoefficients? melanopic,
+            NightBasis basis, double luminanceCeiling, bool useLinearBrightness,
+            (double R, double G, double B) content)
         {
             // At the white point every dimming curve reduces to brightness/100 (see
             // ApplyDimming: value=1 → brightness), so white luminance is linear in the
             // brightness percent regardless of the perceptual/linear dimming choice.
-            double WhiteNitsAt(double brightnessPercent) => sdrWhiteNits * brightnessPercent / 100.0;
+            double WhiteNitsAt(double brightnessPercent) => doseReferenceNits * brightnessPercent / 100.0;
+
+            // For x in [0,1], x^p is largest at the smallest brightness because the app's
+            // shadow-lift exponent p rises with brightness. Holding that maximum across the
+            // solve is an upper envelope for every candidate. Combined with constant-Y's
+            // min(ideal gain, headroom/brightness) form, dose is monotone in brightness and
+            // bisection remains both fast and valid.
+            var contentEnvelope = ConservativeContentAfterDimming(
+                content, MinBrightnessPercent, useLinearBrightness);
 
             MelanopicReading ReadingAt(int kelvin, double brightnessPercent)
-                => MelanopicCalculator.Compute(
-                    spectra, GainsAt(kelvin), WhiteNitsAt(brightnessPercent), omega, hasSpectra: true);
+            {
+                var gains = GainsAt(kelvin, brightnessPercent);
+                return MelanopicCalculator.Compute(
+                    spectra,
+                    (gains.R * contentEnvelope.R, gains.G * contentEnvelope.G, gains.B * contentEnvelope.B),
+                    WhiteNitsAt(brightnessPercent), omega, hasSpectra: true);
+            }
 
-            (double R, double G, double B) GainsAt(int kelvin)
+            (double R, double G, double B) GainsAt(int kelvin, double brightnessPercent)
             {
                 double scale = (kelvin - 6500) / 70.0;
                 var m = ColorAdjustments.GetTemperatureMultipliers(
-                    scale, algorithm, ultraWarm, strength, melanopic, NightBasis.Srgb);
+                    scale, algorithm, ultraWarm, strength, melanopic, basis);
                 if (preserve && algorithm != NightModeAlgorithm.UltraNight)
                 {
-                    // Nominal ceiling for the estimate; per-monitor exactness is not
-                    // warranted for a scheduling decision (same convention as JndPacedFade).
-                    m = ColorAdjustments.RescaleToConstantLuminance(m, NightBasis.Srgb, 2.0, 1.0);
+                    // Match the actual apply path exactly. In particular, dimming creates
+                    // representable headroom, so the white-shape gains are brightness-dependent
+                    // and the old closed-form brightness solve was not valid in constant-Y mode.
+                    double dimmedWhite = ColorAdjustments.ApplyDimming(
+                        1.0, brightnessPercent, useLinearBrightness);
+                    m = ColorAdjustments.RescaleToConstantLuminance(
+                        m, basis, luminanceCeiling, dimmedWhite);
                 }
                 return m;
             }
 
             CieXyz StateXyz(int kelvin, double brightnessPercent)
             {
-                var g = GainsAt(kelvin);
-                var xyz = ColorMath.LinearSrgbToXyz(new LinearRgb(g.R, g.G, g.B));
+                var g = GainsAt(kelvin, brightnessPercent);
+                var xyz = basis == NightBasis.Rec2020
+                    ? ColorMath.LinearRec2020ToXyz(new LinearRgb(g.R, g.G, g.B))
+                    : ColorMath.LinearSrgbToXyz(new LinearRgb(g.R, g.G, g.B));
                 double nits = WhiteNitsAt(brightnessPercent);
                 return new CieXyz(xyz.X * nits, xyz.Y * nits, xyz.Z * nits);
             }
@@ -144,23 +247,50 @@ namespace HDRGammaController.Core
             Solution? best = null;
             for (int kelvin = scheduledKelvin; kelvin >= MinKelvin; kelvin -= KelvinStep)
             {
-                // Mel-EDI is linear in white nits at fixed kelvin: solve the minimum dimming
-                // in closed form from a probe at the scheduled brightness.
-                var probe = ReadingAt(kelvin, scheduledBrightness);
-                if (!double.IsFinite(probe.MelanopicEdiLux) || probe.MelanopicEdiLux <= 0)
+                var scheduledProbe = ReadingAt(kelvin, scheduledBrightness);
+                if (!double.IsFinite(scheduledProbe.MelanopicEdiLux) || scheduledProbe.MelanopicEdiLux <= 0)
                     continue;
 
-                double neededBrightness = scheduledBrightness * ceiling / probe.MelanopicEdiLux;
-                bool feasible = neededBrightness >= MinBrightnessPercent;
-                double brightness = Math.Min(scheduledBrightness,
-                    Math.Max(neededBrightness, MinBrightnessPercent));
+                double brightness;
+                if (scheduledProbe.MelanopicEdiLux <= ceiling)
+                {
+                    brightness = scheduledBrightness;
+                }
+                else
+                {
+                    var floorProbe = ReadingAt(kelvin, MinBrightnessPercent);
+                    if (!double.IsFinite(floorProbe.MelanopicEdiLux)) continue;
+                    if (floorProbe.MelanopicEdiLux > ceiling)
+                    {
+                        brightness = MinBrightnessPercent;
+                    }
+                    else
+                    {
+                        // Maximum compliant brightness. The content upper envelope above and
+                        // constant-Y's capped gain make this exact evaluator monotone. Eighteen
+                        // iterations resolves far below the 0.1% output precision.
+                        double low = MinBrightnessPercent;
+                        double high = scheduledBrightness;
+                        for (int iteration = 0; iteration < 18; iteration++)
+                        {
+                            double mid = (low + high) * 0.5;
+                            if (ReadingAt(kelvin, mid).MelanopicEdiLux <= ceiling) low = mid;
+                            else high = mid;
+                        }
+                        brightness = low;
+                    }
+                }
 
-                double edi = probe.MelanopicEdiLux * brightness / scheduledBrightness;
+                // Low from the bisection is known compliant. Quantize downward so display
+                // precision cannot round that proof point across the hard ceiling.
+                brightness = Math.Floor(brightness * 10.0 + 1e-9) / 10.0;
+                double edi = ReadingAt(kelvin, brightness).MelanopicEdiLux;
+                bool feasible = double.IsFinite(edi) && edi <= ceiling + 1e-9;
                 double cost = Cam16Ucs.DeltaEPrime(
                     scheduledJab, Cam16Ucs.ToJabPrime(StateXyz(kelvin, brightness), vc));
 
-                var candidate = new Solution(kelvin, Math.Round(brightness, 1), edi, cost,
-                    CeilingMet: feasible || edi <= ceiling + 1e-9, Adjusted: true);
+                var candidate = new Solution(kelvin, brightness, edi, cost,
+                    CeilingMet: feasible, Adjusted: true);
 
                 // Prefer ceiling-met candidates; among them, minimum ΔE′. Among unmet ones
                 // (ceiling unreachable), minimum residual dose.
@@ -175,6 +305,26 @@ namespace HDRGammaController.Core
 
             return best ?? new Solution(scheduledKelvin, scheduledBrightness,
                 scheduledReading.MelanopicEdiLux, 0.0, CeilingMet: false, Adjusted: false);
+        }
+
+        private static (double R, double G, double B) ConservativeContentAfterDimming(
+            (double R, double G, double B) meanLinearContent,
+            double brightnessPercent,
+            bool useLinearBrightness)
+        {
+            if (useLinearBrightness || brightnessPercent >= 100.0)
+                return meanLinearContent;
+
+            // Perceptual dimming maps each channel as brightness·x^p, p < 1. We retain
+            // brightness in WhiteNitsAt and need E[x^p] here. x^p is concave, so Jensen
+            // gives E[x^p] <= E[x]^p: transforming the captured mean is a rigorous upper
+            // bound on emitted content dose, without retaining a histogram or any pixels.
+            double brightness = Math.Clamp(brightnessPercent / 100.0, 0.0, 1.0);
+            double exponent = 1.0 / (1.0 + (1.0 - brightness) * 0.3);
+            return (
+                Math.Pow(meanLinearContent.R, exponent),
+                Math.Pow(meanLinearContent.G, exponent),
+                Math.Pow(meanLinearContent.B, exponent));
         }
     }
 }

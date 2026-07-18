@@ -31,13 +31,16 @@ namespace HDRGammaController
             services.AddSingleton<DispwinRunner>(); // Auto-detects
             services.AddSingleton(sp =>
                 new NightModeService(sp.GetRequiredService<SettingsManager>().NightMode));
+            services.AddSingleton<IScreenContentSampler, GdiScreenContentSampler>();
+            services.AddSingleton<NightContentFeedbackService>();
             // Assumes template is in the same directory (needs to be sourced by user)
             services.AddSingleton(_ => new ProfileManager(
                 System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "srgb_to_gamma2p2_100_mhc2.icm")));
             services.AddSingleton(sp => new GammaApplyService(
                 sp.GetRequiredService<DispwinRunner>(),
                 sp.GetRequiredService<SettingsManager>(),
-                sp.GetRequiredService<NightModeService>()));
+                sp.GetRequiredService<NightModeService>(),
+                sp.GetRequiredService<NightContentFeedbackService>()));
             // Live melanopic evaluation (roadmap 3.1): listens to the apply pipeline's
             // state snapshots and feeds the dashboard card + nightly dose store.
             services.AddSingleton(sp => new MelanopicMonitorService(

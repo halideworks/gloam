@@ -114,7 +114,7 @@ namespace HDRGammaController.Tests
         {
             // An absurd ceiling no display state can reach: the governor floors out at the
             // warm/dim corner and says so honestly.
-            var solution = Solve(kelvin: 6400, brightness: 100, ceiling: 0.5);
+            var solution = Solve(kelvin: 6400, brightness: 100, ceiling: 0.01);
 
             Assert.True(solution.Adjusted);
             Assert.False(solution.CeilingMet);
@@ -140,8 +140,8 @@ namespace HDRGammaController.Tests
         [Fact]
         public void Solve_IsMemoized()
         {
-            var a = Solve(kelvin: 3800, brightness: 90, ceiling: 12.0);
-            var b = Solve(kelvin: 3800, brightness: 90, ceiling: 12.0);
+            var a = Solve(kelvin: 3800, brightness: 90, ceiling: 5.0);
+            var b = Solve(kelvin: 3800, brightness: 90, ceiling: 5.0);
             Assert.Same(a, b);
         }
 
@@ -151,13 +151,59 @@ namespace HDRGammaController.Tests
             // Nearby kelvins within a 25 K bucket must share the cached solution — this is
             // what keeps a night-mode fade (kelvin changing every step) from re-running the
             // CAM16 scan per tick on the apply/UI thread (the freeze this prevents).
-            var a = Solve(kelvin: 3810, brightness: 90, ceiling: 12.0);
-            var b = Solve(kelvin: 3799, brightness: 90, ceiling: 12.0); // same 3800 bucket
+            var a = Solve(kelvin: 3810, brightness: 90, ceiling: 5.0);
+            var b = Solve(kelvin: 3801, brightness: 90, ceiling: 5.0); // same 3800 floor bucket
             Assert.Same(a, b);
 
             // A kelvin a full bucket away is a different (but still valid) solve.
-            var far = Solve(kelvin: 3700, brightness: 90, ceiling: 12.0);
+            var far = Solve(kelvin: 3700, brightness: 90, ceiling: 5.0);
             Assert.NotSame(a, far);
+        }
+
+        [Fact]
+        public void Cache_DoesNotMergeDistinctHardCeilings()
+        {
+            var higher = Solve(kelvin: 3800, brightness: 90, ceiling: 5.004);
+            var lower = Solve(kelvin: 3800, brightness: 90, ceiling: 4.996);
+
+            Assert.NotSame(higher, lower);
+            Assert.True(!lower.CeilingMet || lower.MelanopicEdiLux <= 4.996 + 1e-9);
+        }
+
+        [Fact]
+        public void Cache_DoesNotMergeDifferentSpectraWithSameSourceName()
+        {
+            var original = Spectra;
+            var alteredBlue = original.Blue.Select(value => value * 0.5).ToArray();
+            var altered = new CcssMelanopicEstimator.CcssSpectra(
+                original.Wavelengths, original.White, original.Red, original.Green, alteredBlue,
+                original.SourceName, original.WhiteResidualFraction);
+
+            var a = CircadianDoseGovernor.Solve(
+                original, NightModeAlgorithm.Perceptual, 0.8, false, false,
+                3800, 90, 200, 0.2, 5.0);
+            var b = CircadianDoseGovernor.Solve(
+                altered, NightModeAlgorithm.Perceptual, 0.8, false, false,
+                3800, 90, 200, 0.2, 5.0);
+
+            Assert.NotSame(a, b);
+        }
+
+        [Fact]
+        public void HdrDoseReference_PricesPhotonsAboveDiffuseWhite()
+        {
+            var diffuse = CircadianDoseGovernor.Solve(
+                Spectra, NightModeAlgorithm.Perceptual, 0.8, false, false,
+                3800, 90, 200, 0.2, 50.0,
+                basis: NightBasis.Rec2020);
+            var hdrEnvelope = CircadianDoseGovernor.Solve(
+                Spectra, NightModeAlgorithm.Perceptual, 0.8, false, false,
+                3800, 90, 200, 0.2, 50.0,
+                basis: NightBasis.Rec2020, doseReferenceNits: 1000.0);
+
+            Assert.False(diffuse.Adjusted);
+            Assert.True(hdrEnvelope.Adjusted);
+            Assert.True(!hdrEnvelope.CeilingMet || hdrEnvelope.MelanopicEdiLux <= 50.0 + 1e-9);
         }
 
         [Fact]
