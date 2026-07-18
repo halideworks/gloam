@@ -45,11 +45,23 @@ namespace HDRGammaController.Tests
                         ProofCertificate = new Mhc2ProofCertificate
                         {
                             CorrectabilityFraction = double.PositiveInfinity,
-                            Compiled = new Mhc2ErrorStatistics { P95DeltaE = 1.1, MaxDeltaE = double.NaN },
+                            OrderConflictRed = double.PositiveInfinity,
+                            ContinuousEnvelopeGapDeltaE = double.NaN,
+                            MatrixQuantizationMaxAbs = double.NegativeInfinity,
+                            Compiled = new Mhc2ErrorStatistics
+                            {
+                                P95DeltaE = 1.1, MaxDeltaE = double.NaN,
+                                MaxNeutralChroma = double.PositiveInfinity,
+                            },
                             Counterexamples = new List<Mhc2Counterexample>
                             {
                                 new() { Name = "proof", R = 0.25, G = double.NaN, B = 0.75,
                                     PredictedDeltaE = 1.0, EmpiricalUpperEstimate = 1.8 },
+                            },
+                            PhysicalObservations = new List<Mhc2PhysicalObservation>
+                            {
+                                new(0.2, 0.3, 0.4, double.NaN, 0.2, 0.3),
+                                new(0.4, 0.5, 0.6, 0.1, 0.2, 0.3),
                             },
                         }
                     }
@@ -79,7 +91,11 @@ namespace HDRGammaController.Tests
                 Assert.Equal(0, loaded.ReportSummary.ProofCertificate!.CorrectabilityFraction);
                 Assert.Equal(1.1, loaded.ReportSummary.ProofCertificate.Compiled.P95DeltaE);
                 Assert.Equal(0, loaded.ReportSummary.ProofCertificate.Compiled.MaxDeltaE);
+                Assert.Equal(0, loaded.ReportSummary.ProofCertificate.Compiled.MaxNeutralChroma);
+                Assert.Equal(0, loaded.ReportSummary.ProofCertificate.OrderConflictRed);
+                Assert.Equal(0, loaded.ReportSummary.ProofCertificate.ContinuousEnvelopeGapDeltaE);
                 Assert.Equal(0, Assert.Single(loaded.ReportSummary.ProofCertificate.Counterexamples).G);
+                Assert.Single(loaded.ReportSummary.ProofCertificate.PhysicalObservations);
             }
             finally
             {

@@ -1364,6 +1364,10 @@ namespace HDRGammaController
         // closed-loop "Refine HDR" pass, which must refine what is really on the wire.
         private HdrMhc2LutBuilder.Result? _installedHdrLuts;
 
+        // Exact serialized SDR payload returned by the MHC2 compiler. Closed-loop CEGIS
+        // refines and, on regression, restores this object byte-for-byte through the installer.
+        private Mhc2CompileResult? _installedMhc2Payload;
+
         /// <summary>
         /// One button, three states: Apply Profile (not yet installed) → Disable Profile
         /// (installed + active) ↔ Enable Profile (installed + toggled off for comparison).
@@ -1500,6 +1504,7 @@ namespace HDRGammaController
                     _profileEnabled = true;
                     _installedHdrLuts = result.HdrLuts;
                     _proofCertificate = result.ProofCertificate;
+                    _installedMhc2Payload = result.CompiledPayload;
                     Vm.ApplyButtonContent = "Disable Profile";
                     ctx.OnInstalled?.Invoke(result.ProfileName, previousDefaultProfile);
 
@@ -3050,6 +3055,206 @@ namespace HDRGammaController
         private static string PatchLabel(ColorPatch patch) =>
             string.IsNullOrEmpty(patch.Name) ? CalibrationWindow.GetPatchDescription(patch) : patch.Name;
 
+        private sealed record Mhc2ClosedLoopMeasurements(
+            IReadOnlyList<MeasurementResult> Standard,
+            IReadOnlyList<MeasurementResult> Proof);
+
+        private async Task<Mhc2ClosedLoopMeasurements> TryRunMhc2ClosedLoopAsync(
+            PatchDisplayWindow patchWindow,
+            ColorimeterService colorimeter,
+            ApplyContext ctx,
+            CalibrationTarget target,
+            IReadOnlyList<ColorPatch> standardPatches,
+            IReadOnlyList<ColorPatch> proofPatches,
+            IReadOnlyList<MeasurementResult> beforeStandard,
+            IReadOnlyList<MeasurementResult> beforeProof,
+            Mhc2CompileResult current,
+            System.Threading.CancellationToken token)
+        {
+            double beforeWhite = VerificationWhiteY(beforeStandard);
+            current.Certificate.RecordMeasurements(beforeStandard.Concat(beforeProof).ToList(), target, beforeWhite);
+            IReadOnlyList<ModelResidual> residuals;
+            try
+            {
+                residuals = _measurements is { Count: > 0 }
+                    ? new Lut3DGenerator(target, _measurements).ComputeModelResiduals()
+                    : Array.Empty<ModelResidual>();
+            }
+            catch
+            {
+                residuals = Array.Empty<ModelResidual>();
+            }
+
+            Vm.StatusText = "Proof-Calibrate: synthesizing a physically informed candidate…";
+            var proposal = Mhc2ClosedLoopRefiner.Propose(current, _correctionLut!,
+                _activeCharacterization!, target, beforeStandard.Concat(beforeProof).ToList(), beforeWhite,
+                _measurements, residuals);
+            if (!proposal.ShouldInstall)
+            {
+                current.Certificate.ClosedLoopDecision = proposal.Reason;
+                return new Mhc2ClosedLoopMeasurements(beforeStandard, beforeProof);
+            }
+
+            MonitorInfo monitor = ResolveCurrentMonitor(ctx.Monitor) ?? ctx.Monitor;
+            string? savedPrevious = null;
+            if (monitor.MonitorDevicePath.Length > 0)
+            {
+                var saved = ctx.SettingsManager?.GetMonitorProfile(monitor.MonitorDevicePath);
+                savedPrevious = CalibrationProfileInstaller.SelectPreviousProfileBackup(
+                    CalibrationProfileInstaller.GetCurrentDefaultProfile(monitor, hdrMode: false),
+                    saved?.Mhc2ProfileName, saved?.PreviousColorProfileName);
+            }
+
+            string candidateName = BuildCegisProfileName(
+                _installedProfileName ?? "Gloam Proof-Calibrate.icm", "candidate");
+            Vm.StatusText = "Proof-Calibrate: installing provisional candidate…";
+            var installed = CalibrationProfileInstaller.Install(monitor, _activeCharacterization!, target,
+                ctx.LutR, ctx.LutG, ctx.LutB, ctx.WhiteLevel, hdrMode: false, measurements: _measurements,
+                profileNameOverride: candidateName, idealCorrectionLut: _correctionLut,
+                compiledOverride: proposal.Payload);
+            if (!installed.Success)
+            {
+                current.Certificate.ClosedLoopDecision = "candidate install failed; previous payload remained active";
+                Log.Info($"CalibrationReportWindow: physical CEGIS candidate install failed: {installed.Error}");
+                return new Mhc2ClosedLoopMeasurements(beforeStandard, beforeProof);
+            }
+
+            // Record immediately: if the process exits during the A/B sweep, startup knows
+            // which profile Windows is actually applying.
+            _installedProfileName = installed.ProfileName;
+            _installedMhc2Payload = proposal.Payload;
+            _proofCertificate = proposal.Payload.Certificate;
+            ctx.OnInstalled?.Invoke(installed.ProfileName, savedPrevious);
+            IReadOnlyList<ColorPatch> candidateProofPatches = proposal.Payload.Certificate
+                .BuildVerificationPatches(target)
+                .Where(proofPatch => !standardPatches.Any(standardPatch =>
+                    Math.Abs(standardPatch.DisplayRgb.R - proofPatch.DisplayRgb.R) <= 1e-6 &&
+                    Math.Abs(standardPatch.DisplayRgb.G - proofPatch.DisplayRgb.G) <= 1e-6 &&
+                    Math.Abs(standardPatch.DisplayRgb.B - proofPatch.DisplayRgb.B) <= 1e-6))
+                .ToList();
+            Mhc2ClosedLoopMeasurements after;
+            try
+            {
+                await Task.Delay(1000, token);
+                after = await MeasureMhc2GuardSetAsync(patchWindow, colorimeter, ctx,
+                    standardPatches, candidateProofPatches, token);
+            }
+            catch
+            {
+                // Cancellation and meter failures are not an acceptance decision. Restore
+                // synchronously before propagating so an unverified candidate can never be
+                // left active just because Escape was pressed during the A/B sweep.
+                var emergency = CalibrationProfileInstaller.Install(monitor, _activeCharacterization!, target,
+                    ctx.LutR, ctx.LutG, ctx.LutB, ctx.WhiteLevel, hdrMode: false, measurements: _measurements,
+                    profileNameOverride: BuildCegisProfileName(candidateName, "emergency-restore"),
+                    idealCorrectionLut: _correctionLut, compiledOverride: current);
+                if (emergency.Success)
+                {
+                    current.Certificate.ClosedLoopDecision = "restored previous payload after interrupted A/B gate";
+                    current.Certificate.ClosedLoopRound = Mhc2ClosedLoopRefiner.MaximumRounds;
+                    _installedProfileName = emergency.ProfileName;
+                    _installedMhc2Payload = current;
+                    _proofCertificate = current.Certificate;
+                    ctx.OnInstalled?.Invoke(emergency.ProfileName, savedPrevious);
+                    try { CalibrationProfileInstaller.Uninstall(monitor, installed.ProfileName); } catch { }
+                }
+                else
+                {
+                    Log.Error("CalibrationReportWindow: emergency MHC2 restore failed: " + emergency.Error);
+                }
+                throw;
+            }
+            double afterWhite = VerificationWhiteY(after.Standard);
+            proposal.Payload.Certificate.RecordMeasurements(
+                after.Standard.Concat(after.Proof).ToList(), target, afterWhite);
+            double expandedUncertainty = ComputeUncertainty(beforeStandard, target)?.ExpandedU ?? 0;
+            var decision = Mhc2ClosedLoopRefiner.DecidePhysicalAcceptance(
+                beforeStandard, after.Standard, target, current.Certificate.MeasuredWorstDeltaE,
+                proposal.Payload.Certificate.MeasuredWorstDeltaE, expandedUncertainty);
+
+            if (decision.Accepted)
+            {
+                proposal.Payload.Certificate.ClosedLoopDecision = decision.Reason;
+                _installedMhc2Payload = proposal.Payload;
+                _proofCertificate = proposal.Payload.Certificate;
+                Vm.StatusText = "Proof-Calibrate accepted the physically verified candidate.";
+                Log.Info("CalibrationReportWindow: " + decision.Reason);
+                return after;
+            }
+
+            // Transaction rollback: serialize the exact prior matrix/LUT under a fresh name
+            // (reusing a name can make Windows keep cached bytes), then remove only the rejected
+            // throwaway after the previous payload is active again.
+            string rejectedName = installed.ProfileName;
+            current.Certificate.ClosedLoopRound = Mhc2ClosedLoopRefiner.MaximumRounds;
+            current.Certificate.ClosedLoopDecision = "restored previous payload";
+            Vm.StatusText = "Proof-Calibrate: a sentinel regressed; restoring the previous payload…";
+            var restored = CalibrationProfileInstaller.Install(monitor, _activeCharacterization!, target,
+                ctx.LutR, ctx.LutG, ctx.LutB, ctx.WhiteLevel, hdrMode: false, measurements: _measurements,
+                profileNameOverride: BuildCegisProfileName(rejectedName, "restore"), idealCorrectionLut: _correctionLut,
+                compiledOverride: current);
+            if (!restored.Success)
+                throw new InvalidOperationException("Closed-loop candidate regressed and automatic restore failed: " +
+                                                    restored.Error);
+            _installedProfileName = restored.ProfileName;
+            _installedMhc2Payload = current;
+            _proofCertificate = current.Certificate;
+            ctx.OnInstalled?.Invoke(restored.ProfileName, savedPrevious);
+            await Task.Delay(1000, token);
+            try { CalibrationProfileInstaller.Uninstall(monitor, rejectedName); }
+            catch (Exception ex) { Log.Info($"CalibrationReportWindow: rejected CEGIS profile cleanup failed: {ex.Message}"); }
+            Vm.StatusText = decision.Reason;
+            Log.Info("CalibrationReportWindow: " + decision.Reason);
+            return new Mhc2ClosedLoopMeasurements(beforeStandard, beforeProof);
+        }
+
+        private async Task<Mhc2ClosedLoopMeasurements> MeasureMhc2GuardSetAsync(
+            PatchDisplayWindow patchWindow,
+            ColorimeterService colorimeter,
+            ApplyContext ctx,
+            IReadOnlyList<ColorPatch> standard,
+            IReadOnlyList<ColorPatch> proof,
+            System.Threading.CancellationToken token)
+        {
+            int total = standard.Count + proof.Count;
+            var standardResults = new List<MeasurementResult>();
+            var proofResults = new List<MeasurementResult>();
+            for (int i = 0; i < total; i++)
+            {
+                bool isProof = i >= standard.Count;
+                var set = isProof ? proof : standard;
+                int local = isProof ? i - standard.Count : i;
+                var patch = set[local];
+                ColorPatch? next = i + 1 < total
+                    ? (i + 1 < standard.Count ? standard[i + 1] : proof[i + 1 - standard.Count])
+                    : null;
+                Vm.VerifyButtonContent = $"A/B guarding {i + 1}/{total}…";
+                patchWindow.SetProgress(i + 1, total, PatchLabel(patch),
+                    next == null ? null : PatchLabel(next), phase: "Physical keep-best gate");
+                patchWindow.SetColor(patch.DisplayRgb.R, patch.DisplayRgb.G, patch.DisplayRgb.B);
+                await Task.Delay(i == 0 ? 1200 : 500, token);
+                var reading = await colorimeter.MeasureAsync(patch, ctx.HdrMode, token);
+                (isProof ? proofResults : standardResults).Add(reading);
+                if (ctx.CaptureSounds) CalibrationSounds.PlayCapture();
+            }
+            return new Mhc2ClosedLoopMeasurements(standardResults, proofResults);
+        }
+
+        private static string BuildCegisProfileName(string installedProfileName, string phase)
+        {
+            string stem = Path.GetFileNameWithoutExtension(installedProfileName);
+            stem = System.Text.RegularExpressions.Regex.Replace(stem,
+                @" (?:refined \d{6}|cegis [a-z-]+ \d{17})$", "",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            return $"{stem} cegis {phase} {DateTime.Now:yyyyMMddHHmmssfff}.icm";
+        }
+
+        private static double VerificationWhiteY(IEnumerable<MeasurementResult> measurements) =>
+            measurements.Where(r => r.IsValid && r.Patch.Category == PatchCategory.Grayscale &&
+                                    r.Patch.DisplayRgb.R >= 0.99 && r.Patch.DisplayRgb.G >= 0.99 &&
+                                    r.Patch.DisplayRgb.B >= 0.99)
+                .Select(r => r.Xyz.Y).DefaultIfEmpty(0).Max();
+
         /// <summary>
         /// The verify sweep itself (no prompts): measures the verification patches through
         /// whatever Windows is currently applying and fills the "after" row + grade.
@@ -3155,6 +3360,25 @@ namespace HDRGammaController
                     proofResults.Add(await colorimeter.MeasureAsync(p, ctx.HdrMode, verifyCts.Token));
                     if (ctx.CaptureSounds)
                         CalibrationSounds.PlayCapture();
+                }
+
+                // PHYSICAL CEGIS CLOSURE (SDR): the adversarial readings are not just a
+                // report. They become high-weight constraints for one provisional compile;
+                // that exact payload is installed and the independent standard sentinels +
+                // adversarial set are remeasured. A lexicographic physical gate either keeps
+                // it or restores the previous payload automatically.
+                if (!ctx.HdrMode && _installedMhc2Payload is { } installedPayload &&
+                    _correctionLut != null && _activeCharacterization != null &&
+                    installedPayload.Certificate.ClosedLoopRound < Mhc2ClosedLoopRefiner.MaximumRounds &&
+                    (installedPayload.Certificate.ClosedLoopDecision == null ||
+                     installedPayload.Certificate.ClosedLoopDecision.StartsWith(
+                         "accepted:", StringComparison.Ordinal)))
+                {
+                    var closed = await TryRunMhc2ClosedLoopAsync(patchWindow, colorimeter, ctx,
+                        verificationTarget, patches, proofPatches, results, proofResults,
+                        installedPayload, verifyCts.Token);
+                    results = closed.Standard.ToList();
+                    proofResults = closed.Proof.ToList();
                 }
                 // HDR PQ-TRACKING SWEEP: when the applied profile was built from the FP16
                 // wire ladder, verify it the same way - wire-exact FP16 patches THROUGH the

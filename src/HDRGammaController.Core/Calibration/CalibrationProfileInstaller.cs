@@ -26,7 +26,8 @@ namespace HDRGammaController.Core.Calibration
         /// </param>
         public sealed record InstallResult(bool Success, string ProfileName, string? Error,
             HdrMhc2LutBuilder.Result? HdrLuts = null,
-            Mhc2ProofCertificate? ProofCertificate = null);
+            Mhc2ProofCertificate? ProofCertificate = null,
+            Mhc2CompileResult? CompiledPayload = null);
 
         /// <summary>
         /// Chooses the Windows profile backup to preserve before activating a Gloam profile.
@@ -135,6 +136,12 @@ namespace HDRGammaController.Core.Calibration
         /// and monotone per-channel LUT primitives. Null retains the established direct
         /// matrix/tone path and produces no proof certificate.
         /// </param>
+        /// <param name="compiledOverride">
+        /// SDR closed-loop only: an exact, already model-gated MHC2 payload to serialize.
+        /// This bypasses recompilation so physical A/B verification tests precisely the
+        /// candidate proposed by <see cref="Mhc2ClosedLoopRefiner"/>. The installer still
+        /// validates dimensions, finiteness, bounds and monotonicity before touching Windows.
+        /// </param>
         public static InstallResult Install(
             MonitorInfo monitor,
             DisplayCharacterization characterization,
@@ -146,7 +153,8 @@ namespace HDRGammaController.Core.Calibration
             string? profileNameOverride = null,
             HdrMhc2LutBuilder.Result? hdrLutsOverride = null,
             double[,]? xyzCorrectionOverride = null,
-            Lut3D? idealCorrectionLut = null)
+            Lut3D? idealCorrectionLut = null,
+            Mhc2CompileResult? compiledOverride = null)
         {
             if (string.IsNullOrEmpty(monitor.MonitorDevicePath))
                 return new InstallResult(false, "", "Monitor has no device path; cannot associate a profile.");
@@ -273,7 +281,21 @@ namespace HDRGammaController.Core.Calibration
                     !ReferenceEquals(toneR, lutR) || !ReferenceEquals(toneG, lutG) || !ReferenceEquals(toneB, lutB);
             }
             Mhc2ProofCertificate? proofCertificate = null;
-            if (!hdrMode && idealCorrectionLut != null)
+            Mhc2CompileResult? compiledPayload = null;
+            if (!hdrMode && compiledOverride != null)
+            {
+                string? invalid = ValidateCompiledOverride(compiledOverride, toneR.Length);
+                if (invalid != null)
+                    return new InstallResult(false, "", "Closed-loop payload validation failed: " + invalid);
+                scaledMatrix = (double[,])compiledOverride.Matrix.Clone();
+                (toneR, toneG, toneB) = ((double[])compiledOverride.LutR.Clone(),
+                    (double[])compiledOverride.LutG.Clone(), (double[])compiledOverride.LutB.Clone());
+                proofCertificate = compiledOverride.Certificate;
+                compiledPayload = compiledOverride;
+                Log.Info("CalibrationProfileInstaller: installing exact closed-loop payload: " +
+                         proofCertificate.Describe());
+            }
+            else if (!hdrMode && idealCorrectionLut != null)
             {
                 try
                 {
@@ -288,6 +310,7 @@ namespace HDRGammaController.Core.Calibration
                     scaledMatrix = compiled.Matrix;
                     (toneR, toneG, toneB) = (compiled.LutR, compiled.LutG, compiled.LutB);
                     proofCertificate = compiled.Certificate;
+                    compiledPayload = compiled;
                     Log.Info("CalibrationProfileInstaller: " + proofCertificate.Describe());
                 }
                 catch (Exception ex)
@@ -428,7 +451,7 @@ namespace HDRGammaController.Core.Calibration
                 }
 
                 Log.Info($"CalibrationProfileInstaller: Installed + set default '{profileName}' for {monitor.FriendlyName} ({(hdrMode ? "advanced color" : "SDR")} association).");
-                return new InstallResult(true, profileName, null, installedHdrLuts, proofCertificate);
+                return new InstallResult(true, profileName, null, installedHdrLuts, proofCertificate, compiledPayload);
             }
             catch (Exception ex)
             {
@@ -731,6 +754,30 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public static string BuildProfileNamePrefix(MonitorInfo monitor)
             => SanitizeProfileNameComponent(string.IsNullOrWhiteSpace(monitor.FriendlyName) ? "Display" : monitor.FriendlyName) + " - ";
+
+        private static string? ValidateCompiledOverride(Mhc2CompileResult payload, int expectedLutLength)
+        {
+            if (payload.Matrix == null || payload.Matrix.GetLength(0) != 3 || payload.Matrix.GetLength(1) != 3)
+                return "matrix is not 3×3";
+            if (payload.LutR == null || payload.LutG == null || payload.LutB == null ||
+                payload.LutR.Length != expectedLutLength || payload.LutG.Length != expectedLutLength ||
+                payload.LutB.Length != expectedLutLength)
+                return $"LUTs must each contain exactly {expectedLutLength} entries";
+            foreach (double value in payload.Matrix)
+                if (!double.IsFinite(value) || value < -32768 || value >= 32768)
+                    return "matrix contains a non-finite or non-s15Fixed16-representable coefficient";
+            foreach (var lut in new[] { payload.LutR, payload.LutG, payload.LutB })
+            {
+                double previous = -1;
+                foreach (double value in lut)
+                {
+                    if (!double.IsFinite(value) || value < 0 || value > 1 || value + 1e-12 < previous)
+                        return "LUTs must be finite, [0,1], and monotone non-decreasing";
+                    previous = value;
+                }
+            }
+            return payload.Certificate == null ? "proof certificate is missing" : null;
+        }
 
         private static string ShortTargetName(CalibrationTarget t)
         {
