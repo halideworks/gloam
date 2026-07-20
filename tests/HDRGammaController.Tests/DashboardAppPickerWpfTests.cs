@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using HDRGammaController.Core;
 using HDRGammaController.Services;
@@ -28,6 +29,7 @@ namespace HDRGammaController.Tests
                 string root = Path.Combine(Path.GetTempPath(), $"gloam-picker-wpf-{Guid.NewGuid():N}");
                 Application? app = null;
                 DashboardWindow? window = null;
+                GameLabWindow? gameLabWindow = null;
                 NightModeService? nightMode = null;
                 try
                 {
@@ -87,9 +89,152 @@ namespace HDRGammaController.Tests
 
                     Assert.Equal("Photoshop.exe", Assert.Single(exclusionItem.ExcludedApps).AppName);
                     Assert.Equal("Photoshop.exe", Assert.Single(settings.ExcludedApps).AppName);
+
+                    var gamerPicker = Assert.IsType<ComboBox>(window.FindName("GamerAppPicker"));
+                    var gamerAdd = Assert.IsType<Button>(window.FindName("AddGamerProfileButton"));
+                    gamerPicker.Text = @"C:\Games\Arena\arena";
+                    gamerPicker.GetBindingExpression(ComboBox.TextProperty)?.UpdateSource();
+                    Assert.NotNull(gamerAdd.Command);
+                    gamerAdd.Command.Execute(gamerAdd.CommandParameter);
+                    Pump(TimeSpan.FromMilliseconds(50));
+
+                    GamerProfileEditorItem editor = Assert.Single(viewModel.GamerMode.Profiles);
+                    GamerProfileRule stored = Assert.Single(settings.GamerProfiles);
+                    Assert.Equal("arena.exe", stored.AppName);
+                    Assert.Equal(GamerPictureIntent.CompetitiveClarity, stored.PictureIntent);
+
+                    editor.PictureIntent = GamerPictureIntent.NightOps;
+                    Pump(TimeSpan.FromMilliseconds(350));
+                    stored = Assert.Single(settings.GamerProfiles);
+                    Assert.Equal(GamerPictureIntent.NightOps, stored.PictureIntent);
+                    Assert.Equal(GamerNightPolicy.NightOps, stored.NightPolicy);
+                    Assert.True(stored.ShadowDetailStrength > 0);
+                    Assert.Equal(0.0, stored.NightOpsMelanopicCeiling);
+                    editor.SetExecutablePath(Path.Combine(root, "games", "arena.exe"));
+                    editor.Enabled = true;
+                    Pump(TimeSpan.FromMilliseconds(350));
+
+                    Assert.Equal("Night Play", editor.AvailablePictureIntents[3].ToString());
+
+                    var largeLibrary = settings.GamerProfiles;
+                    for (int i = 0; i < 120; i++)
+                    {
+                        largeLibrary.Add(new GamerProfileRule
+                        {
+                            AppName = $"game-{i:000}.exe",
+                            ExecutablePath = Path.Combine(root, "games", $"game-{i:000}.exe"),
+                            DisplayName = $"Game {i:000}",
+                            LastUsedUtc = i < 8 ? DateTime.UtcNow.AddMinutes(-i) : null
+                        });
+                    }
+                    settings.SetGamerProfiles(largeLibrary);
+
+                    gameLabWindow = new GameLabWindow(
+                        new MonitorManager(), settings, nightMode, update,
+                        (_, _, _, _, _) => { },
+                        suggestedGameApp: "teardown.exe")
+                    {
+                        WindowStartupLocation = WindowStartupLocation.Manual,
+                        Left = -10000,
+                        Top = -10000,
+                        ShowActivated = false
+                    };
+                    gameLabWindow.Show();
+                    Pump(TimeSpan.FromMilliseconds(100));
+
+                    Assert.Equal("Gloam - Game Lab", gameLabWindow.Title);
+                    Assert.False(gameLabWindow.Topmost);
+                    Assert.True(gameLabWindow.ShowInTaskbar);
+                    Assert.InRange(gameLabWindow.ActualHeight, 640, 660);
+                    var viewport = Assert.IsType<Grid>(gameLabWindow.FindName("GameLabViewport"));
+                    var workspace = Assert.IsType<Grid>(gameLabWindow.FindName("LibraryWorkspace"));
+                    Assert.Equal(Visibility.Visible, workspace.Visibility);
+                    Assert.True(viewport.ActualHeight <= gameLabWindow.ActualHeight);
+                    var profileList = Assert.IsType<ListBox>(gameLabWindow.FindName("GameProfileList"));
+                    Assert.Equal(5, profileList.Items.Count);
+                    ScrollViewer profileScroll = Assert.Single(
+                        FindVisualChildren<ScrollViewer>(profileList));
+                    Assert.Equal(Visibility.Collapsed, profileScroll.ComputedVerticalScrollBarVisibility);
+                    Assert.All(FindVisualChildren<ScrollViewer>(viewport), scroll =>
+                        Assert.True(
+                            HasVisualAncestor<ItemsControl>(scroll) ||
+                            HasVisualAncestor<TextBox>(scroll),
+                            "Game Lab must not have a window-level ScrollViewer."));
+                    var gameLabViewModel = Assert.IsType<DashboardViewModel>(gameLabWindow.DataContext);
+                    Assert.Equal("teardown.exe", gameLabViewModel.GamerMode.NewAppText);
+
+                    Assert.NotNull(gameLabViewModel.GamerMode.SelectedProfile);
+                    gameLabViewModel.GamerMode.SelectedProfile!.PictureIntent =
+                        GamerPictureIntent.CompetitiveClarity;
+                    Pump(TimeSpan.FromMilliseconds(260));
+                    SaveScreenshotIfRequested(gameLabWindow, "game-lab-compact.png");
+
+                    gameLabViewModel.GamerMode.SelectedProfile.PictureIntent = GamerPictureIntent.NightOps;
+                    Expander advanced = Assert.Single(
+                        FindVisualChildren<Expander>(viewport),
+                        expander => Equals(expander.Header, "Advanced signal & display controls"));
+                    advanced.IsExpanded = true;
+                    Pump(TimeSpan.FromMilliseconds(260));
+                    Assert.True(advanced.ActualHeight < workspace.ActualHeight);
+
+                    Rect profileBounds = BoundsIn(
+                        Assert.IsType<TextBox>(FindVisualChild<TextBox>(viewport, "AdvancedProfileNameBox")),
+                        workspace);
+                    Rect expectedSignalBounds = BoundsIn(
+                        Assert.IsType<ComboBox>(FindVisualChild<ComboBox>(viewport, "AdvancedExpectedSignalBox")),
+                        workspace);
+                    Rect targetDisplaysBounds = BoundsIn(
+                        Assert.IsType<ComboBox>(FindVisualChild<ComboBox>(viewport, "AdvancedTargetDisplaysBox")),
+                        workspace);
+                    Rect nightBehaviorBounds = BoundsIn(
+                        Assert.IsType<ComboBox>(FindVisualChild<ComboBox>(viewport, "AdvancedNightBehaviorBox")),
+                        workspace);
+                    Rect gammaBounds = BoundsIn(
+                        Assert.IsType<ComboBox>(FindVisualChild<ComboBox>(viewport, "AdvancedGammaModeBox")),
+                        workspace);
+                    Rect paperWhiteBounds = BoundsIn(
+                        Assert.IsType<TextBox>(FindVisualChild<TextBox>(viewport, "AdvancedPaperWhiteBox")),
+                        workspace);
+                    Rect peakNitsBounds = BoundsIn(
+                        Assert.IsType<TextBox>(FindVisualChild<TextBox>(viewport, "AdvancedPeakNitsBox")),
+                        workspace);
+                    Rect melanopicBounds = BoundsIn(
+                        Assert.IsType<TextBox>(FindVisualChild<TextBox>(viewport, "AdvancedMelanopicCeilingBox")),
+                        workspace);
+
+                    AssertAligned(profileBounds.Top, expectedSignalBounds.Top, targetDisplaysBounds.Top);
+                    AssertAligned(nightBehaviorBounds.Top, gammaBounds.Top, paperWhiteBounds.Top, peakNitsBounds.Top);
+                    AssertAligned(profileBounds.Left, nightBehaviorBounds.Left);
+                    AssertAligned(profileBounds.Right, nightBehaviorBounds.Right);
+                    AssertAligned(expectedSignalBounds.Left, gammaBounds.Left);
+                    AssertAligned(expectedSignalBounds.Right, gammaBounds.Right);
+                    AssertAligned(targetDisplaysBounds.Left, paperWhiteBounds.Left, melanopicBounds.Left);
+                    AssertAligned(targetDisplaysBounds.Right, peakNitsBounds.Right, melanopicBounds.Right);
+                    Assert.True(paperWhiteBounds.Right < peakNitsBounds.Left);
+                    SaveScreenshotIfRequested(gameLabWindow, "game-lab-advanced.png");
+                    advanced.IsExpanded = false;
+
+                    var discovered = Enumerable.Range(0, 80)
+                        .Select(i => new DiscoveredGame(
+                            $"Found Game {i:000}",
+                            $"found-{i:000}.exe",
+                            Path.Combine(root, "found", $"found-{i:000}.exe"),
+                            i % 2 == 0 ? "Steam" : "Epic"))
+                        .ToArray();
+                    gameLabViewModel.GamerMode.SetDiscoveryResults(
+                        discovered, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+                    foreach (DiscoveredGameItem item in gameLabViewModel.GamerMode.DiscoveredGames.Take(3))
+                        item.IsSelected = true;
+                    Pump(TimeSpan.FromMilliseconds(80));
+                    Assert.Equal(Visibility.Visible,
+                        Assert.IsType<Border>(gameLabWindow.FindName("GameScanPanel")).Visibility);
+                    Assert.Equal(80,
+                        Assert.IsType<ListBox>(gameLabWindow.FindName("DiscoveredGamesList")).Items.Count);
+                    SaveScreenshotIfRequested(gameLabWindow, "game-lab-scan-review.png");
                 }
                 finally
                 {
+                    try { gameLabWindow?.Close(); } catch { }
                     try { window?.Close(); } catch { }
                     nightMode?.Dispose();
                     try { app?.Shutdown(); } catch { }
@@ -126,6 +271,63 @@ namespace HDRGammaController.Tests
                 if (nested != null) return nested;
             }
             return null;
+        }
+
+        private static System.Collections.Generic.IEnumerable<T> FindVisualChildren<T>(DependencyObject root)
+            where T : DependencyObject
+        {
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+            {
+                DependencyObject child = VisualTreeHelper.GetChild(root, i);
+                if (child is T match) yield return match;
+                foreach (T nested in FindVisualChildren<T>(child))
+                    yield return nested;
+            }
+        }
+
+        private static bool HasVisualAncestor<T>(DependencyObject child)
+            where T : DependencyObject
+        {
+            DependencyObject? current = VisualTreeHelper.GetParent(child);
+            while (current != null)
+            {
+                if (current is T) return true;
+                current = VisualTreeHelper.GetParent(current);
+            }
+            return false;
+        }
+
+        private static Rect BoundsIn(FrameworkElement element, Visual ancestor)
+        {
+            Point origin = element.TransformToAncestor(ancestor).Transform(new Point(0, 0));
+            return new Rect(origin, new Size(element.ActualWidth, element.ActualHeight));
+        }
+
+        private static void AssertAligned(params double[] coordinates)
+        {
+            Assert.NotEmpty(coordinates);
+            double expected = coordinates[0];
+            foreach (double coordinate in coordinates.Skip(1))
+                Assert.InRange(coordinate, expected - 0.75, expected + 0.75);
+        }
+
+        private static void SaveScreenshotIfRequested(Window window, string fileName)
+        {
+            string? outputDirectory = Environment.GetEnvironmentVariable("GLOAM_UI_SCREENSHOT_DIR");
+            if (string.IsNullOrWhiteSpace(outputDirectory)) return;
+
+            Directory.CreateDirectory(outputDirectory);
+            DpiScale dpi = VisualTreeHelper.GetDpi(window);
+            int width = Math.Max(1, (int)Math.Ceiling(window.ActualWidth * dpi.DpiScaleX));
+            int height = Math.Max(1, (int)Math.Ceiling(window.ActualHeight * dpi.DpiScaleY));
+            var bitmap = new RenderTargetBitmap(
+                width, height, 96 * dpi.DpiScaleX, 96 * dpi.DpiScaleY, PixelFormats.Pbgra32);
+            bitmap.Render(window);
+
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(bitmap));
+            using FileStream output = File.Create(Path.Combine(outputDirectory, fileName));
+            encoder.Save(output);
         }
 
         private static void RunSta(Action body)

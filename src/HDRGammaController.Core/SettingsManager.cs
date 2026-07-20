@@ -338,7 +338,7 @@ namespace HDRGammaController.Core
         /// by a newer build: it is loaded best-effort but this manager refuses to Save so an
         /// old binary can never clobber a newer file.
         /// </summary>
-        public const int CurrentSchemaVersion = 2;
+        public const int CurrentSchemaVersion = 4;
 
         // Use LocalApplicationData to avoid Resilio Sync corruption
         private static string AppDataPath => AppPaths.DataDir;
@@ -526,6 +526,7 @@ namespace HDRGammaController.Core
                     try
                     {
                         loaded = JsonSerializer.Deserialize<SettingsData>(json, options) ?? new SettingsData();
+                        MigrateSettings(loaded);
                         ValidateAndClampSettings(loaded);
                         Log.Info($"SettingsManager: Loaded {loaded.MonitorProfiles.Count} monitor profiles.");
 
@@ -555,6 +556,7 @@ namespace HDRGammaController.Core
                                     NightMode = legacy.NightMode,
                                     ExcludedApps = legacy.ExcludedApps?.Select(path => new AppExclusionRule { AppName = path, FullDisable = false }).ToList() ?? new List<AppExclusionRule>()
                                 };
+                                MigrateSettings(loaded);
                                 ValidateAndClampSettings(loaded);
                                 Log.Info("SettingsManager: Legacy migration successful.");
                                 Log.Info($"SettingsManager: Loaded {loaded.MonitorProfiles.Count} monitor profiles.");
@@ -891,6 +893,120 @@ namespace HDRGammaController.Core
             Save();
         }
 
+        /// <summary>Global gate for automatic per-game profile activation.</summary>
+        public bool GamerModeEnabled
+        {
+            get { lock (_dataLock) { return _data.GamerModeEnabled; } }
+        }
+
+        /// <summary>A deep snapshot of persistent per-game profiles.</summary>
+        public List<GamerProfileRule> GamerProfiles
+        {
+            get
+            {
+                lock (_dataLock)
+                {
+                    return _data.GamerProfiles.Select(profile => profile.Clone()).ToList();
+                }
+            }
+        }
+
+        public void SetGamerModeEnabled(bool enabled)
+        {
+            lock (_dataLock)
+            {
+                if (_data.GamerModeEnabled == enabled) return;
+                _data.GamerModeEnabled = enabled;
+                _dataVersion++;
+            }
+            Save();
+            NotifyGamerSettingsChanged();
+        }
+
+        public void SetGamerProfiles(IEnumerable<GamerProfileRule>? profiles)
+        {
+            lock (_dataLock)
+            {
+                _data.GamerProfiles = NormalizeGamerProfiles(profiles);
+                _dataVersion++;
+            }
+            Save();
+            NotifyGamerSettingsChanged();
+        }
+
+        /// <summary>
+        /// Records a genuine foreground activation for recent-game ordering. This uses a
+        /// separate event from GamerSettingsChanged so the tray does not re-run foreground
+        /// policy recursively for metadata that cannot affect rendering.
+        /// </summary>
+        public void MarkGamerProfileUsed(string appName, DateTime usedUtc)
+        {
+            string normalized = AppExclusionRule.NormalizeAppName(appName);
+            usedUtc = usedUtc.ToUniversalTime();
+            bool changed = false;
+            lock (_dataLock)
+            {
+                GamerProfileRule? profile = _data.GamerProfiles.FirstOrDefault(profile =>
+                    profile.AppName.Equals(normalized, StringComparison.OrdinalIgnoreCase));
+                if (profile == null) return;
+                if (profile.LastUsedUtc.HasValue && usedUtc - profile.LastUsedUtc.Value < TimeSpan.FromMinutes(1))
+                    return;
+
+                profile.LastUsedUtc = usedUtc;
+                _dataVersion++;
+                changed = true;
+            }
+
+            if (!changed) return;
+            Save();
+            try { GamerProfileUsed?.Invoke(normalized, usedUtc); }
+            catch (Exception ex) { Log.Info($"SettingsManager: gamer-recency subscriber failed: {ex.Message}"); }
+        }
+
+        public event Action<string, DateTime>? GamerProfileUsed;
+
+        public event Action? GamerSettingsChanged;
+
+        private void NotifyGamerSettingsChanged()
+        {
+            try { GamerSettingsChanged?.Invoke(); }
+            catch (Exception ex) { Log.Info($"SettingsManager: gamer-settings subscriber failed: {ex.Message}"); }
+        }
+
+        internal static List<GamerProfileRule> NormalizeGamerProfiles(
+            IEnumerable<GamerProfileRule>? profiles)
+        {
+            var normalized = new List<GamerProfileRule>();
+            if (profiles == null) return normalized;
+
+            foreach (var source in profiles)
+            {
+                if (source == null) continue;
+                GamerProfileRule profile = source.Sanitized();
+                if (profile.AppName.Length == 0) continue;
+                if (!GamerExecutableSafety.IsSafeProfileTarget(profile.AppName, profile.DisplayName))
+                {
+                    Log.Info($"SettingsManager: removed unsafe game-profile target '{profile.AppName}' ({profile.DisplayName}).");
+                    continue;
+                }
+
+                int duplicate = normalized.FindIndex(existing =>
+                    existing.AppName.Equals(profile.AppName, StringComparison.OrdinalIgnoreCase));
+                if (duplicate >= 0)
+                {
+                    // Last writer wins. The dashboard edits one canonical row per executable;
+                    // this also makes hand-edited JSON resolve predictably.
+                    normalized[duplicate] = profile;
+                }
+                else
+                {
+                    normalized.Add(profile);
+                }
+            }
+
+            return normalized;
+        }
+
         /// <summary>
         /// Atomically replaces the recorded native profile only when it still names the
         /// profile the migration inspected. The in-memory value is restored if the durable
@@ -1110,6 +1226,25 @@ namespace HDRGammaController.Core
         /// <summary>
         /// Validates and clamps all settings to safe ranges to prevent malicious/corrupted values.
         /// </summary>
+        private static void MigrateSettings(SettingsData data)
+        {
+            // Schema 3 introduced Game Lab with a mandatory 10 mel-lx Night Ops ceiling.
+            // Schema 4 makes that governor opt-in. The exact old default can be identified
+            // without disturbing profiles where the user chose another explicit value.
+            if (data.SchemaVersion <= 3 && data.GamerProfiles != null)
+            {
+                foreach (GamerProfileRule profile in data.GamerProfiles)
+                {
+                    if (profile != null &&
+                        profile.NightPolicy == GamerNightPolicy.NightOps &&
+                        Math.Abs(profile.NightOpsMelanopicCeiling - 10.0) < 0.0001)
+                    {
+                        profile.NightOpsMelanopicCeiling = 0.0;
+                    }
+                }
+            }
+        }
+
         private static void ValidateAndClampSettings(SettingsData data)
         {
             if (data == null) return;
@@ -1118,6 +1253,7 @@ namespace HDRGammaController.Core
             // hand-edited or legacy settings. Canonicalize them before the foreground hook
             // starts reading this list.
             data.ExcludedApps = NormalizeExcludedApps(data.ExcludedApps);
+            data.GamerProfiles = NormalizeGamerProfiles(data.GamerProfiles);
 
             // Validate monitor profiles
             foreach (var profile in data.MonitorProfiles.Values)
@@ -1222,6 +1358,8 @@ namespace HDRGammaController.Core
             public Dictionary<string, MonitorProfileData> MonitorProfiles { get; set; } = new Dictionary<string, MonitorProfileData>();
             public NightModeSettingsData NightMode { get; set; } = new NightModeSettingsData();
             public List<AppExclusionRule> ExcludedApps { get; set; } = new List<AppExclusionRule>();
+            public bool GamerModeEnabled { get; set; }
+            public List<GamerProfileRule> GamerProfiles { get; set; } = new List<GamerProfileRule>();
             // Brutalist UI theme: true = dark, false = light, null = follow OS.
             public bool? DarkTheme { get; set; } = null;
             public bool StartupDefaultApplied { get; set; }

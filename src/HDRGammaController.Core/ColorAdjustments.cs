@@ -535,7 +535,7 @@ namespace HDRGammaController.Core
 
         /// <summary>
         /// Applies only user-facing adjustments to linear-light RGB.
-        /// Order: Dimming → Temperature → Tint → RGB Gains → RGB Offsets.
+        /// Order: gamer visibility toe → Dimming → Temperature → Tint → RGB Gains → RGB Offsets.
         /// </summary>
         /// <param name="temperatureBasis">
         /// Wire RGB basis the temperature multipliers are derived in. Must match the container
@@ -552,7 +552,29 @@ namespace HDRGammaController.Core
             g = double.IsFinite(g) ? Math.Clamp(g, 0.0, 1.0) : 0.0;
             b = double.IsFinite(b) ? Math.Clamp(b, 0.0, 1.0) : 0.0;
 
-            // 1. Apply perceptual dimming
+            // 1. Apply the gamer visibility toe to wire-basis luminance in linear light,
+            // then scale RGB together. This keeps dark colored details on the same hue ray;
+            // the headroom clamp prevents any channel from clipping.
+            if (settings.ShadowDetailStrength > 0.0)
+            {
+                double shadowLuminance = temperatureBasis == NightBasis.Rec2020
+                    ? 0.2627 * r + 0.6780 * g + 0.0593 * b
+                    : 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                double liftedLuminance = GamerShadowVisibility.Apply(
+                    shadowLuminance, settings.ShadowDetailStrength, settings.ShadowDetailPivot);
+                if (shadowLuminance > 1e-12 && liftedLuminance > shadowLuminance)
+                {
+                    double requestedGain = liftedLuminance / shadowLuminance;
+                    double maxChannel = Math.Max(r, Math.Max(g, b));
+                    double headroomGain = maxChannel > 1e-12 ? 1.0 / maxChannel : 1.0;
+                    double visibilityGain = Math.Min(requestedGain, headroomGain);
+                    r *= visibilityGain;
+                    g *= visibilityGain;
+                    b *= visibilityGain;
+                }
+            }
+
+            // 2. Apply perceptual dimming
             if (settings.Brightness < 100.0)
             {
                 r = ApplyDimming(r, settings.Brightness, settings.UseLinearBrightness);
@@ -560,7 +582,7 @@ namespace HDRGammaController.Core
                 b = ApplyDimming(b, settings.Brightness, settings.UseLinearBrightness);
             }
             
-            // 2. Apply temperature. Manual temperature, per-monitor white trim, and
+            // 3. Apply temperature. Manual temperature, per-monitor white trim, and
             // scheduled night-mode shifts all live on the same scale and must compose before
             // converting to Kelvin; otherwise direct LUT-generation paths ignore the offset.
             double effectiveTemperature = EffectiveTemperatureScale(settings);
@@ -594,7 +616,7 @@ namespace HDRGammaController.Core
                 b *= temp.B;
             }
             
-            // 3. Apply tint
+            // 4. Apply tint
             if (Math.Abs(settings.Tint) > 0.01)
             {
                 var tint = GetTintMultipliers(settings.Tint);
@@ -603,17 +625,17 @@ namespace HDRGammaController.Core
                 b *= tint.B;
             }
             
-            // 4. Apply RGB gains
+            // 5. Apply RGB gains
             r *= settings.RedGain;
             g *= settings.GreenGain;
             b *= settings.BlueGain;
             
-            // 5. Apply RGB offsets (lift)
+            // 6. Apply RGB offsets (lift)
             r += settings.RedOffset;
             g += settings.GreenOffset;
             b += settings.BlueOffset;
             
-            // 6. Clamp to valid range. Constant-Y raises the ceiling above 1.0 ONLY when the
+            // 7. Clamp to valid range. Constant-Y raises the ceiling above 1.0 ONLY when the
             // apply service granted real HDR headroom (NightLuminanceCeiling stays 1.0 on the
             // SDR path, whose 256-entry GDI ramp clips at 1.0 and cannot represent boost).
             double upper = settings.PreserveNightLuminance &&

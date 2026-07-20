@@ -18,7 +18,7 @@
     <!-- Default version for local builds; CI overrides via /p:Version=<tag>. Velopack
          compares the installed package version (vpk pack -v) to the release feed, so
          keep this in sync with the tag the release is cut from. -->
-    <Version>1.7.8</Version>
+    <Version>1.8.0</Version>
     <AssemblyVersion>$(Version).0</AssemblyVersion>
     <FileVersion>$(Version).0</FileVersion>
     <InformationalVersion>$(Version)</InformationalVersion>

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using HDRGammaController.Core.Calibration;
 
@@ -28,8 +29,18 @@ namespace HDRGammaController.Core
         // for the concurrency contract and its tests for the proof.
         private readonly LatestValueCoalescer<IntPtr, (MonitorInfo Monitor, GammaMode Mode, CalibrationSettings Calibration, double WhiteLevel)> _coalescer;
 
+        private readonly object _policyLock = new();
         private HashSet<IntPtr> _blockedMonitors = new HashSet<IntPtr>();
+        private Dictionary<IntPtr, ActiveGamerSession> _activeGamerSessions = new();
         private int _disposed;
+
+        private sealed record ActiveGamerSession(
+            MonitorInfo Monitor,
+            GamerProfileRule Profile,
+            int LockedKelvin,
+            DateTime StartedUtc,
+            int SignalKey,
+            IReadOnlyList<GamerSignalDiagnostic> Diagnostics);
 
         /// <summary>Hotkey override: forces day mode regardless of the schedule.</summary>
         public bool NightModeManuallyDisabled { get; set; }
@@ -99,10 +110,162 @@ namespace HDRGammaController.Core
         /// </summary>
         public bool UpdateBlockedMonitors(HashSet<IntPtr> blocked)
         {
-            if (_blockedMonitors.SetEquals(blocked)) return false;
-            _blockedMonitors = blocked;
+            ArgumentNullException.ThrowIfNull(blocked);
+            lock (_policyLock)
+            {
+                if (_blockedMonitors.SetEquals(blocked)) return false;
+                _blockedMonitors = new HashSet<IntPtr>(blocked);
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// Atomically replaces foreground-game assignments. A semantically identical update
+        /// preserves each session's captured kelvin/start time, so focus-hook duplicates cannot
+        /// move a Gameplay Lock underneath the player.
+        /// </summary>
+        public bool UpdateActiveGamerSessions(IEnumerable<GamerSessionAssignment>? assignments)
+        {
+            var eligible = (assignments ?? Array.Empty<GamerSessionAssignment>())
+                .Where(a => a?.Monitor != null && a.Profile != null && a.Profile.Enabled)
+                .Select(a => new GamerSessionAssignment(a.Monitor, a.Profile.Sanitized()))
+                .Where(a => GamerExecutableSafety.IsSafeProfileTarget(
+                    a.Profile.AppName, a.Profile.DisplayName))
+                .ToList();
+
+            // A game may own several displays, but several games may never own the display
+            // pipeline together. This is a hard Core invariant rather than a UI convention:
+            // even a buggy caller, stale settings file, or racing foreground event is reduced
+            // to one executable before any output state is built.
+            string? owner = eligible.Select(a => a.Profile.AppName).FirstOrDefault();
+            int ownerCount = eligible.Select(a => a.Profile.AppName)
+                .Distinct(StringComparer.OrdinalIgnoreCase).Count();
+            if (ownerCount > 1)
+                Log.Info($"GammaApplyService: rejected {ownerCount - 1} competing gamer-session owner(s); '{owner}' retained.");
+
+            var incoming = owner == null
+                ? new List<GamerSessionAssignment>()
+                : eligible
+                    .Where(a => a.Profile.AppName.Equals(owner, StringComparison.OrdinalIgnoreCase))
+                    .GroupBy(a => a.Monitor.HMonitor)
+                    .Select(g => g.Last())
+                    .ToList();
+
+            bool changed;
+            IReadOnlyList<GamerSessionSnapshot> snapshots;
+            lock (_policyLock)
+            {
+                var next = new Dictionary<IntPtr, ActiveGamerSession>();
+                int scheduledKelvin = _nightModeService.CurrentNightKelvin;
+
+                foreach (var assignment in incoming)
+                {
+                    MonitorInfo monitor = assignment.Monitor;
+                    GamerProfileRule profile = assignment.Profile.Sanitized();
+                    int signalKey = GamerSignalKey(monitor);
+
+                    if (_activeGamerSessions.TryGetValue(monitor.HMonitor, out var previous) &&
+                        previous.Profile.SemanticallyEquals(profile) &&
+                        previous.SignalKey == signalKey &&
+                        string.Equals(previous.Monitor.MonitorDevicePath, monitor.MonitorDevicePath,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Refresh the monitor object while preserving the locked session facts.
+                        next[monitor.HMonitor] = previous with { Monitor = monitor };
+                        continue;
+                    }
+
+                    var monitorProfile = _settingsManager.GetMonitorProfile(monitor.MonitorDevicePath);
+                    var diagnostics = GamerSignalDiagnostics.Evaluate(profile, monitor, monitorProfile).ToArray();
+                    next[monitor.HMonitor] = new ActiveGamerSession(
+                        monitor,
+                        profile,
+                        scheduledKelvin,
+                        DateTime.UtcNow,
+                        signalKey,
+                        diagnostics);
+                }
+
+                changed = !GamerSessionMapsEqual(_activeGamerSessions, next);
+                if (!changed) return false;
+                _activeGamerSessions = next;
+                snapshots = SnapshotGamerSessionsLocked();
+            }
+
+            try { GamerSessionsChanged?.Invoke(snapshots); }
+            catch (Exception ex) { Log.Info($"GammaApplyService: gamer-session subscriber failed: {ex.Message}"); }
             return true;
         }
+
+        public IReadOnlyList<GamerSessionSnapshot> ActiveGamerSessions
+        {
+            get { lock (_policyLock) { return SnapshotGamerSessionsLocked(); } }
+        }
+
+        public string? ActiveGamerOwner
+        {
+            get
+            {
+                lock (_policyLock)
+                    return _activeGamerSessions.Values.Select(session => session.Profile.AppName).FirstOrDefault();
+            }
+        }
+
+        public event Action<IReadOnlyList<GamerSessionSnapshot>>? GamerSessionsChanged;
+
+        private IReadOnlyList<GamerSessionSnapshot> SnapshotGamerSessionsLocked() =>
+            _activeGamerSessions.Values
+                .OrderBy(s => s.Monitor.FriendlyName, StringComparer.OrdinalIgnoreCase)
+                .Select(CreateGamerSessionSnapshot)
+                .ToArray();
+
+        private GamerSessionSnapshot CreateGamerSessionSnapshot(ActiveGamerSession session)
+        {
+            GammaMode effectiveGamma = session.Profile.OverrideGamma
+                ? session.Profile.GammaMode
+                : _settingsManager.GetMonitorProfile(session.Monitor.MonitorDevicePath)?.GammaMode
+                    ?? session.Monitor.CurrentGamma;
+            return new GamerSessionSnapshot(
+                session.Monitor.HMonitor,
+                session.Monitor.MonitorDevicePath,
+                session.Monitor.FriendlyName,
+                session.Profile.AppName,
+                session.Profile.DisplayName,
+                session.Profile.PictureIntent,
+                session.Profile.GameplayLock,
+                ResolveGamerKelvin(session, _nightModeService.CurrentNightKelvin),
+                effectiveGamma,
+                session.Profile.ShadowDetailStrength,
+                session.Profile.ShadowDetailPivot,
+                session.Profile.NightPolicy,
+                session.StartedUtc,
+                session.Diagnostics);
+        }
+
+        private static bool GamerSessionMapsEqual(
+            IReadOnlyDictionary<IntPtr, ActiveGamerSession> left,
+            IReadOnlyDictionary<IntPtr, ActiveGamerSession> right)
+        {
+            if (left.Count != right.Count) return false;
+            foreach (var pair in right)
+            {
+                if (!left.TryGetValue(pair.Key, out var existing)) return false;
+                if (!existing.Profile.SemanticallyEquals(pair.Value.Profile) ||
+                    existing.SignalKey != pair.Value.SignalKey ||
+                    !string.Equals(existing.Monitor.MonitorDevicePath, pair.Value.Monitor.MonitorDevicePath,
+                        StringComparison.OrdinalIgnoreCase))
+                    return false;
+            }
+            return true;
+        }
+
+        private static int GamerSignalKey(MonitorInfo monitor) => HashCode.Combine(
+            monitor.IsHdrActive,
+            monitor.DxgiColorSpace,
+            monitor.BitsPerColor,
+            (int)Math.Round(monitor.SdrWhiteLevel),
+            (int)Math.Round(monitor.HdrPeakNits),
+            monitor.MonitorDevicePath?.GetHashCode(StringComparison.OrdinalIgnoreCase) ?? 0);
 
         public void RequestApply(
             MonitorInfo monitor,
@@ -123,11 +286,39 @@ namespace HDRGammaController.Core
             }
 
             // Resolve the effective calibration synchronously on the caller's thread. This
-            // keeps us reading fresh state (settings, night mode, exclusions) right at the
-            // moment of the request, even if the actual apply is delayed by coalescing.
+            // keeps us reading fresh state (settings, game session, night mode, exclusions)
+            // at the request boundary even if coalesced hardware work runs later.
+            ActiveGamerSession? gamerSession;
+            bool nightModeBlocked;
+            lock (_policyLock)
+            {
+                _activeGamerSessions.TryGetValue(monitor.HMonitor, out gamerSession);
+                nightModeBlocked = _blockedMonitors.Contains(monitor.HMonitor);
+            }
+
+            // Explicit Settings-window previews own the wire temporarily. The persistent
+            // gamer session returns on the next normal ApplyAll; this prevents a foreground
+            // game from making monitor controls appear broken.
+            bool explicitPreview = manualCalibration != null || nightKelvinOverride.HasValue;
+            if (explicitPreview) gamerSession = null;
+
             int currentKelvin = nightKelvinOverride ?? _nightModeService.CurrentNightKelvin;
+            if (nightModeBlocked) currentKelvin = 6500;
+
+            GammaMode effectiveMode = mode;
+            NightModeSettings nightSettings = nightModeSettingsOverride ?? _settingsManager.NightMode;
+            if (gamerSession != null)
+            {
+                currentKelvin = ResolveGamerKelvin(gamerSession, currentKelvin);
+                if (gamerSession.Profile.OverrideGamma)
+                    effectiveMode = gamerSession.Profile.GammaMode;
+                if (gamerSession.Profile.NightPolicy == GamerNightPolicy.NightOps)
+                    nightSettings = BuildNightOpsSettings(nightSettings, gamerSession.Profile);
+            }
+
+            // The global hotkey is the final authority and can always recover neutral output,
+            // including from a Night Ops game profile.
             if (NightModeManuallyDisabled) currentKelvin = 6500;
-            if (_blockedMonitors.Contains(monitor.HMonitor)) currentKelvin = 6500;
 
             bool nightModeActive = nightKelvinOverride.HasValue || currentKelvin < 6450;
 
@@ -151,9 +342,14 @@ namespace HDRGammaController.Core
                 calibration = profile.ToCalibrationSettings();
             }
 
+            if (gamerSession != null)
+            {
+                calibration.ShadowDetailStrength = gamerSession.Profile.ShadowDetailStrength;
+                calibration.ShadowDetailPivot = gamerSession.Profile.ShadowDetailPivot;
+            }
+
             if (nightModeActive)
             {
-                var nightSettings = nightModeSettingsOverride ?? _settingsManager.NightMode;
                 ApplyNightModeToCalibration(calibration, currentKelvin, nightSettings);
                 calibration.NightMelanopicCoefficients = CcssMelanopicEstimator.TryLoad(calibration.NightModeCcssPath);
 
@@ -191,7 +387,7 @@ namespace HDRGammaController.Core
 
             PublishSnapshot(monitor, calibration);
 
-            _coalescer.Submit(monitor.HMonitor, (monitor, mode, calibration, MonitorInfo.SanitizeSdrWhiteLevel(monitor.SdrWhiteLevel)));
+            _coalescer.Submit(monitor.HMonitor, (monitor, effectiveMode, calibration, MonitorInfo.SanitizeSdrWhiteLevel(monitor.SdrWhiteLevel)));
         }
 
         /// <summary>
@@ -345,6 +541,61 @@ namespace HDRGammaController.Core
             calibration.UseUltraWarmMode = nightModeSettings.UseUltraWarmMode;
             calibration.PerceptualStrength = nightModeSettings.PerceptualStrength;
             calibration.PreserveNightLuminance = nightModeSettings.PreserveLuminance;
+        }
+
+        private static int ResolveGamerKelvin(ActiveGamerSession session, int scheduledKelvin)
+        {
+            GamerProfileRule profile = session.Profile;
+            int baseline = profile.GameplayLock
+                ? NightModeSettings.ClampKelvin(session.LockedKelvin)
+                : NightModeSettings.ClampKelvin(scheduledKelvin);
+
+            return profile.NightPolicy switch
+            {
+                GamerNightPolicy.ForceDaylight => 6500,
+                // Night Ops never cools an already-warmer schedule. This preserves a user's
+                // stricter late-night state while applying the profile during daytime.
+                GamerNightPolicy.NightOps => Math.Min(baseline, profile.NightOpsKelvin),
+                _ => baseline
+            };
+        }
+
+        internal static NightModeSettings BuildNightOpsSettings(
+            NightModeSettings source,
+            GamerProfileRule profile)
+        {
+            ArgumentNullException.ThrowIfNull(source);
+            ArgumentNullException.ThrowIfNull(profile);
+            profile = profile.Sanitized();
+
+            return new NightModeSettings
+            {
+                Enabled = true,
+                ManualOverrideEnabled = true,
+                UseAutoSchedule = source.UseAutoSchedule,
+                Latitude = source.Latitude,
+                Longitude = source.Longitude,
+                StartTime = source.StartTime,
+                EndTime = source.EndTime,
+                TemperatureKelvin = profile.NightOpsKelvin,
+                FadeMinutes = source.FadeMinutes,
+                Algorithm = NightModeAlgorithm.Perceptual,
+                UseUltraWarmMode = false,
+                PerceptualStrength = profile.NightOpsStrength,
+                PreserveLuminance = false,
+                MelanopicEdiCeiling = profile.NightOpsMelanopicCeiling,
+                Schedule = (source.Schedule ?? new List<NightModeSchedulePoint>())
+                    .Where(point => point != null)
+                    .Select(point => new NightModeSchedulePoint
+                    {
+                        TriggerType = point.TriggerType,
+                        Time = point.Time,
+                        OffsetMinutes = point.OffsetMinutes,
+                        TargetKelvin = point.TargetKelvin,
+                        FadeMinutes = point.FadeMinutes
+                    })
+                    .ToList()
+            };
         }
 
         public void ApplyAll(IEnumerable<MonitorInfo> monitors)

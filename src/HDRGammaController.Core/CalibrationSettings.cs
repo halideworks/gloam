@@ -130,6 +130,16 @@ namespace HDRGammaController.Core
         public double NightLuminanceCeiling { get; set; } = 1.0;
 
         /// <summary>
+        /// Gamer visibility toe strength, 0..1. The curve is black-anchored, monotonic and
+        /// rejoins the underlying measured response at <see cref="ShadowDetailPivot"/>.
+        /// Runtime-only: per-game profiles own persistence.
+        /// </summary>
+        public double ShadowDetailStrength { get; set; } = 0.0;
+
+        /// <summary>Linear-light point where the gamer visibility toe becomes identity.</summary>
+        public double ShadowDetailPivot { get; set; } = 0.10;
+
+        /// <summary>
         /// Returns true if any adjustments are applied (non-default values).
         /// </summary>
         public bool HasAdjustments =>
@@ -138,6 +148,7 @@ namespace HDRGammaController.Core
             IsAdjusted(Temperature, 0.0, 0.01) ||
             IsAdjusted(TemperatureOffset, 0.0, 0.01) ||
             IsAdjusted(Tint, 0.0, 0.01) ||
+            IsAdjusted(ShadowDetailStrength, 0.0, 0.0001) ||
             IsAdjusted(RedGain, 1.0, 0.001) ||
             IsAdjusted(GreenGain, 1.0, 0.001) ||
             IsAdjusted(BlueGain, 1.0, 0.001) ||
@@ -179,7 +190,9 @@ namespace HDRGammaController.Core
             UseUltraWarmMode = this.UseUltraWarmMode,
             PerceptualStrength = this.PerceptualStrength,
             PreserveNightLuminance = this.PreserveNightLuminance,
-            NightLuminanceCeiling = this.NightLuminanceCeiling
+            NightLuminanceCeiling = this.NightLuminanceCeiling,
+            ShadowDetailStrength = this.ShadowDetailStrength,
+            ShadowDetailPivot = this.ShadowDetailPivot
         };
 
         /// <summary>
@@ -208,7 +221,9 @@ namespace HDRGammaController.Core
             UseUltraWarmMode = UseUltraWarmMode,
             PerceptualStrength = ClampFinite(PerceptualStrength, 0.0, 1.0, ColorAdjustments.DefaultPerceptualStrength),
             PreserveNightLuminance = PreserveNightLuminance,
-            NightLuminanceCeiling = ClampFinite(NightLuminanceCeiling, 1.0, 4.0, 1.0)
+            NightLuminanceCeiling = ClampFinite(NightLuminanceCeiling, 1.0, 4.0, 1.0),
+            ShadowDetailStrength = ClampFinite(ShadowDetailStrength, 0.0, 1.0, 0.0),
+            ShadowDetailPivot = ClampFinite(ShadowDetailPivot, 0.02, 0.25, 0.10)
         };
 
         private static bool IsAdjusted(double value, double neutral, double tolerance) =>
@@ -250,11 +265,13 @@ namespace HDRGammaController.Core
             int strengthKey = (int)Math.Round(PerceptualStrength * 100);
             // Constant-Y flag and ceiling change the multipliers/clamp — same cache rule.
             int ceilingKey = (int)Math.Round(NightLuminanceCeiling * 100);
+            int shadowStrengthKey = (int)Math.Round(ShadowDetailStrength * 1000);
+            int shadowPivotKey = (int)Math.Round(ShadowDetailPivot * 1000);
 
             return HashCode.Combine(
                 HashCode.Combine(brightnessKey, tempKey, tempOffsetKey, tintKey),
                 HashCode.Combine(rGainKey, gGainKey, bGainKey),
-                HashCode.Combine(rOffsetKey, gOffsetKey, bOffsetKey, PreserveNightLuminance, ceilingKey),
+                HashCode.Combine(rOffsetKey, gOffsetKey, bOffsetKey, PreserveNightLuminance, ceilingKey, shadowStrengthKey, shadowPivotKey),
                 HashCode.Combine((int)Algorithm, UseLinearBrightness, UseUltraWarmMode, strengthKey, lutKey, lutInstanceKey, nightCcssKey)
             );
         }

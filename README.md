@@ -9,6 +9,8 @@ Formerly HDR Gamma Controller.
 - Fixes the Windows SDR-in-HDR gamma mismatch with per-monitor Gamma 2.2, Gamma 2.4, or Windows Default modes.
 - Restores corrections automatically on startup, display changes, resume, and driver or game ramp resets.
 - Provides a perceptual night mode built on CAT16 chromatic adaptation, with fixed-time or sun-position schedules, a manual override, perceptually uniform mired-space fades, and an Ultra Night profile for maximum blue suppression.
+- Adds per-game Game Lab profiles with calibrated shadow visibility, Reference, Competitive Clarity, Cinematic HDR, and spectral Night Ops intents, multi-display window targeting, and a Gameplay Lock that holds schedule-derived output steady during play.
+- Checks the Windows-visible game signal chain at launch, including SDR/HDR expectation, DXGI color space, output bit depth, HDR headroom, and measured-calibration status. The dashboard keeps a live receipt of the active intent and every finding.
 - Auto-disables night mode for chosen applications while they are in the foreground, either on every monitor or only on the displays the application's window covers. Gamma correction and installed calibration profiles stay active.
 - Supports SDR and HDR colorimeter calibration through ArgyllCMS, including native Windows MHC2 profile installation and verification.
 - Remembers calibration setup per monitor, including target, preset, meter correction, display type, and window position.
@@ -55,6 +57,17 @@ If SmartScreen says "Windows protected your PC", click **More info** and confirm
 4. Enable **Start with Windows** if you want corrections restored at login.
 5. Open the dashboard for monitor status, night mode, calibration, and diagnostics.
 
+Game Lab:
+
+1. Press `Win + Shift + G` from a game to open the compact Game Lab window. The dashboard section remains available for desktop setup.
+2. The foreground game's executable is prefilled. Running-game choices refresh while the window is open.
+3. Add the game and choose a picture intent. Competitive Clarity lifts the deepest shadows while protecting midtones; Cinematic HDR preserves PQ and checks the Windows signal; Night Ops uses Gloam's spectral renderer.
+4. Edits save and apply automatically. Toggle **Profile enabled** to compare the profile with the calibrated baseline.
+5. Leave **Gameplay Lock** enabled to hold schedule-derived color temperature steady during the session. The panic and manual night-mode hotkeys remain authoritative.
+6. The active-session receipt lists the gamma, shadow treatment, night policy, target display, and signal findings that Gloam can verify.
+
+The implementation and measurement boundaries are documented in [Game Lab design](docs/gamer-mode-design.md).
+
 Hotkeys:
 
 - `Win + Shift + F1`: Gamma 2.2 on the focused monitor.
@@ -62,6 +75,7 @@ Hotkeys:
 - `Win + Shift + F3`: Windows Default.
 - `Win + Shift + F4`: Panic mode, clears gamma ramps immediately.
 - `Win + Shift + N`: Toggle night mode.
+- `Win + Shift + G`: Open or dismiss the dedicated Game Lab window for the active game.
 
 ## Calibration
 

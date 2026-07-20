@@ -1,5 +1,4 @@
 using System;
-using System.Linq;
 using System.Windows;
 using System.Windows.Input;
 using HDRGammaController.Core;
@@ -20,19 +19,20 @@ namespace HDRGammaController
         private readonly MelanopicMonitorService? _melanopicService;
         private readonly System.Windows.Threading.DispatcherTimer _melanopicThrottle;
         private System.Collections.Generic.Dictionary<string, string> _monitorNamesByPath = new();
-
         public DashboardWindow(
             MonitorManager monitorManager,
             SettingsManager settingsManager,
             NightModeService nightModeService,
             UpdateService updateService,
             ApplyCalibrationRequest applyCallback,
-            MelanopicMonitorService? melanopicService = null)
+            MelanopicMonitorService? melanopicService = null,
+            GammaApplyService? gamerApplyService = null)
         {
             InitializeComponent();
             WindowBoundsPersistence.Attach(this, settingsManager, "Dashboard");
 
-            _viewModel = new DashboardViewModel(monitorManager, settingsManager, nightModeService, updateService, applyCallback);
+            _viewModel = new DashboardViewModel(
+                monitorManager, settingsManager, nightModeService, updateService, applyCallback, gamerApplyService);
             _viewModel.ConfigureRequested += OnConfigureRequested;
             DataContext = _viewModel;
 
@@ -88,6 +88,7 @@ namespace HDRGammaController
 
             // Reflect the current app-wide brutalist theme on the toggle glyph.
             ThemeToggleButton.Content = BrutalistTheme.IsDark ? "◐" : "◑";
+
         }
 
         // The brutalist light/dark palette is app-wide (App.BrutalistTheme): the toggle

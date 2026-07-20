@@ -2,8 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Collections.ObjectModel;
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
 using HDRGammaController.Core;
+using HDRGammaController.Services;
 using HDRGammaController.ViewModels;
+using Velopack;
 using Xunit;
 
 namespace HDRGammaController.Tests
@@ -148,6 +153,144 @@ namespace HDRGammaController.Tests
             Assert.Equal(string.Empty, exclusionCard.NewAppText);
         }
 
+        [Fact]
+        public void TryAddGamerProfile_UnverifiedTypedNameStartsDisabled()
+        {
+            var gamerMode = new GamerModeItem
+            {
+                NewAppText = @" C:\Games\Arena\arena "
+            };
+
+            bool added = DashboardViewModel.TryAddGamerProfile(gamerMode);
+
+            GamerProfileRule profile = Assert.Single(gamerMode.Profiles).ToRule();
+            Assert.True(added);
+            Assert.Equal("arena.exe", profile.AppName);
+            Assert.Equal(GamerPictureIntent.CompetitiveClarity, profile.PictureIntent);
+            Assert.True(profile.GameplayLock);
+            Assert.True(profile.ShadowDetailStrength > 0);
+            Assert.False(profile.Enabled);
+            Assert.Null(profile.ExecutablePath);
+            Assert.Contains("disabled", gamerMode.EditorStatus, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(string.Empty, gamerMode.NewAppText);
+        }
+
+        [Fact]
+        public void TryAddGamerProfile_RunningChoiceCapturesVerifiedPathAndStaysVisible()
+        {
+            string root = Path.Combine(Path.GetTempPath(), $"gloam-running-game-{Guid.NewGuid():N}");
+            string executable = Path.Combine(root, "Arena.exe");
+            try
+            {
+                Directory.CreateDirectory(root);
+                File.WriteAllText(executable, string.Empty);
+                var gamerMode = new GamerModeItem { NewAppText = "arena.exe" };
+                for (int i = 0; i < 10; i++)
+                {
+                    gamerMode.Profiles.Add(new GamerProfileEditorItem(new GamerProfileRule
+                    {
+                        AppName = $"existing-{i}.exe",
+                        DisplayName = $"Existing {i}",
+                        ExecutablePath = Path.Combine(root, $"existing-{i}.exe")
+                    }));
+                }
+                gamerMode.SetRunningAppPaths(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["arena.exe"] = executable
+                });
+
+                bool added = DashboardViewModel.TryAddGamerProfile(gamerMode);
+
+                GamerProfileEditorItem editor = Assert.IsType<GamerProfileEditorItem>(gamerMode.SelectedProfile);
+                GamerProfileRule profile = editor.ToRule();
+                Assert.True(added);
+                Assert.True(profile.Enabled);
+                Assert.Equal(Path.GetFullPath(executable), profile.ExecutablePath);
+                Assert.Contains(editor, gamerMode.FilteredProfiles);
+                Assert.Equal(5, gamerMode.FilteredProfiles.Count);
+            }
+            finally
+            {
+                try { Directory.Delete(root, recursive: true); } catch { }
+            }
+        }
+
+        [Fact]
+        public void TryAddGamerProfile_DuplicateIsCaseInsensitive()
+        {
+            var gamerMode = new GamerModeItem { NewAppText = "ARENA" };
+            gamerMode.Profiles.Add(new GamerProfileEditorItem(
+                GamerPresetCatalog.Create("arena.exe", GamerPictureIntent.Reference)));
+
+            bool added = DashboardViewModel.TryAddGamerProfile(gamerMode);
+
+            Assert.False(added);
+            Assert.Single(gamerMode.Profiles);
+            Assert.Equal(string.Empty, gamerMode.NewAppText);
+        }
+
+        [Fact]
+        public void SuggestGamerApp_SelectsSavedGameAndRejectsDesktopProcesses()
+        {
+            string originalData = AppPaths.DataDir;
+            string originalRoaming = AppPaths.RoamingDataDir;
+            string root = Path.Combine(Path.GetTempPath(), $"gloam-suggest-game-{Guid.NewGuid():N}");
+            NightModeService? nightMode = null;
+            DashboardViewModel? viewModel = null;
+            try
+            {
+                AppPaths.UseDataDirectoriesForCurrentProcess(
+                    Path.Combine(root, "data"), Path.Combine(root, "roaming"));
+                var settings = new SettingsManager();
+                settings.SetGamerProfiles(new[]
+                {
+                    new GamerProfileRule
+                    {
+                        AppName = "arena.exe",
+                        ExecutablePath = Path.Combine(root, "Arena.exe"),
+                        DisplayName = "Arena"
+                    }
+                });
+                nightMode = new NightModeService(settings.NightMode);
+                viewModel = new DashboardViewModel(
+                    new MonitorManager(), settings, nightMode,
+                    new UpdateService(new DashboardUpdateManager()), (_, _, _, _, _) => { });
+
+                viewModel.SuggestGamerApp("explorer.exe");
+                Assert.Equal(string.Empty, viewModel.GamerMode.NewAppText);
+
+                viewModel.SuggestGamerApp("ARENA.EXE");
+                Assert.Equal("arena.exe", viewModel.GamerMode.SelectedProfile?.AppName);
+                Assert.Equal(string.Empty, viewModel.GamerMode.NewAppText);
+            }
+            finally
+            {
+                viewModel?.Dispose();
+                nightMode?.Dispose();
+                AppPaths.UseDataDirectoriesForCurrentProcess(originalData, originalRoaming);
+                try { Directory.Delete(root, recursive: true); } catch { }
+            }
+        }
+
+        [Fact]
+        public void SyncGamerDisplays_RemovesDisconnectedAndRefreshesFriendlyName()
+        {
+            var displays = new ObservableCollection<GamerDisplayOption>
+            {
+                new("display-b", "Old name"),
+                new("stale", "Disconnected")
+            };
+
+            DashboardViewModel.SyncGamerDisplays(displays, new[]
+            {
+                new MonitorInfo { MonitorDevicePath = "display-a", FriendlyName = "Alpha" },
+                new MonitorInfo { MonitorDevicePath = "DISPLAY-B", FriendlyName = "Bravo" }
+            });
+
+            Assert.Equal(new[] { "display-a", "DISPLAY-B" }, displays.Select(d => d.DevicePath));
+            Assert.Equal(new[] { "Alpha", "Bravo" }, displays.Select(d => d.Label));
+        }
+
         private static DashboardItem MonitorCard(string devicePath, string temperatureText) => new DashboardItem
         {
             Model = new MonitorInfo
@@ -158,5 +301,18 @@ namespace HDRGammaController.Tests
             FriendlyName = devicePath,
             CurrentTemperatureText = temperatureText
         };
+
+        private sealed class DashboardUpdateManager : IUpdateManagerAdapter
+        {
+            public bool IsInstalled => false;
+            public bool IsPortable => true;
+            public SemanticVersion? CurrentVersion => null;
+            public VelopackAsset? UpdatePendingRestart => null;
+            public Task<UpdateInfo?> CheckForUpdatesAsync() => Task.FromResult<UpdateInfo?>(null);
+            public Task DownloadUpdatesAsync(UpdateInfo info) => Task.CompletedTask;
+            public void ApplyUpdatesAndRestart(UpdateInfo info) { }
+            public void WaitExitThenApplyUpdates(VelopackAsset asset, bool silent, bool restart) { }
+            public string? GetLocalPackagePath(VelopackAsset asset) => null;
+        }
     }
 }

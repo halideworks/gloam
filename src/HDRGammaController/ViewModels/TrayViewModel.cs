@@ -37,6 +37,7 @@ namespace HDRGammaController.ViewModels
         private readonly Dictionary<int, Action<MonitorInfo>> _hotkeyActions = new Dictionary<int, Action<MonitorInfo>>();
         private int _panicId = -1;
         private int _nightModeToggleId = -1;
+        private int _gamerControlsId = -1;
 
         private readonly AppDetectionService _appDetectionService;
         private readonly MelanopicMonitorService? _melanopicService;
@@ -44,6 +45,12 @@ namespace HDRGammaController.ViewModels
         // OnForegroundAppChanged can enumerate it from the foreground-app hook thread.
         private List<MonitorInfo> _activeMonitors = new List<MonitorInfo>();
         private readonly object _activeMonitorsLock = new();
+        private readonly object _lastExternalForegroundLock = new();
+        private string _lastExternalForegroundApp = string.Empty;
+        private string? _lastExternalForegroundPath;
+        private Dxgi.RECT? _lastExternalForegroundBounds;
+        private readonly object _foregroundPolicyLock = new();
+        private CancellationTokenSource? _foregroundPolicyCancellation;
 
         private Dictionary<string, MonitorInfo> _savedConfigs = new Dictionary<string, MonitorInfo>();
 
@@ -57,6 +64,8 @@ namespace HDRGammaController.ViewModels
         public ICommand TrustCheckCommand { get; }
         public ICommand MatchDisplaysCommand { get; }
         public ICommand ExportDiagnosticsCommand { get; }
+        public ICommand GameLabCommand { get; }
+        public ICommand ToggleGamerModeCommand { get; }
         public string AppVersion => _updateService.DisplayVersion;
         public string TrayToolTipText => $"Gloam {AppVersion}";
 
@@ -103,6 +112,7 @@ namespace HDRGammaController.ViewModels
                 OnUiThread(() => ApplyAll());
             };
             _settingsManager.NightModeChanged += (newSettings) => _nightModeService.UpdateSettings(newSettings);
+            _settingsManager.GamerSettingsChanged += OnGamerSettingsChanged;
 
             _appDetectionService.ForegroundAppChanged += OnForegroundAppChanged;
 
@@ -114,6 +124,8 @@ namespace HDRGammaController.ViewModels
             TrustCheckCommand = new RelayCommand(OpenTrustCheck);
             MatchDisplaysCommand = new RelayCommand(OpenMatchDisplays);
             ExportDiagnosticsCommand = new RelayCommand(ExportDiagnostics);
+            GameLabCommand = new RelayCommand(ToggleGameLabWindow);
+            ToggleGamerModeCommand = new RelayCommand(ToggleGamerMode);
 
             RefreshMonitors();
 
@@ -443,6 +455,11 @@ namespace HDRGammaController.ViewModels
             
             // Night Mode Toggle: Win+Shift+N
             _nightModeToggleId = _hotkeyManager.Register(Key.N, ModifierKeys.Windows | ModifierKeys.Shift);
+
+            // Game Lab: Win+Shift+G. Opens the controls without any game-process hook or overlay.
+            _gamerControlsId = _hotkeyManager.Register(Key.G, ModifierKeys.Windows | ModifierKeys.Shift);
+            if (_gamerControlsId <= 0)
+                Log.Info("TrayViewModel: Win+Shift+G registration failed; another app may own the shortcut.");
         }
 
         private void OnHotkeyPressed(int id)
@@ -463,6 +480,12 @@ namespace HDRGammaController.ViewModels
                 _toastService?.Show("Gloam",
                     nowDisabled ? "Night warmth disabled - day mode" : "Night warmth enabled",
                     nowDisabled ? ToastKind.Info : ToastKind.Success);
+                return;
+            }
+
+            if (id == _gamerControlsId)
+            {
+                ToggleGameLabWindow();
                 return;
             }
 
@@ -555,6 +578,9 @@ namespace HDRGammaController.ViewModels
                 // dedupe skip the re-apply.
                 _applyService.InvalidateAppliedState();
                 RefreshMonitors();
+                // HMONITOR handles and output facts can change across HDR/display events.
+                // Re-run foreground assignment so Gameplay Lock follows the refreshed path.
+                _appDetectionService.Refresh();
                 // Re-evaluate the night-mode schedule for 'now' BEFORE re-applying: after a
                 // suspend/resume (or a display-change burst that straddled a trigger) the
                 // service's cached kelvin can be hours stale, and ApplyAll would re-assert
@@ -570,7 +596,77 @@ namespace HDRGammaController.ViewModels
         }
 
 
-        private void OnForegroundAppChanged(string appName, Dxgi.RECT? appBounds)
+        private void OnForegroundAppChanged(string appName, string? executablePath, Dxgi.RECT? appBounds)
+        {
+            // Opening Gloam from the in-game hotkey must leave the active game receipt
+            // intact while its controls have focus.
+            if (appName.Equals("Gloam.exe", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            lock (_lastExternalForegroundLock)
+            {
+                _lastExternalForegroundApp = appName;
+                _lastExternalForegroundPath = executablePath;
+                _lastExternalForegroundBounds = appBounds;
+            }
+
+            bool candidateIsGame = _settingsManager.GamerModeEnabled &&
+                GamerExecutableSafety.IsSafeProfileTarget(appName) &&
+                _settingsManager.GamerProfiles.Any(profile =>
+                    profile.Enabled && GamerProfileMatchesForeground(profile, appName, executablePath));
+            bool gameAlreadyActive = _applyService.ActiveGamerOwner != null;
+
+            // Foreground events bounce through shells, launchers and overlays while a game
+            // starts or while Alt-Tab is animating. Do not write display ramps for those
+            // transient states. A competing game must remain foreground before it can replace
+            // the one serialized owner; leaving a game gets a slightly longer grace period.
+            TimeSpan delay = candidateIsGame
+                ? TimeSpan.FromMilliseconds(350)
+                : gameAlreadyActive
+                    ? TimeSpan.FromMilliseconds(900)
+                    : TimeSpan.FromMilliseconds(250);
+
+            CancellationTokenSource cancellation;
+            lock (_foregroundPolicyLock)
+            {
+                _foregroundPolicyCancellation?.Cancel();
+                cancellation = new CancellationTokenSource();
+                _foregroundPolicyCancellation = cancellation;
+            }
+
+            _ = EvaluateForegroundPolicyAfterDelayAsync(
+                appName, executablePath, appBounds, delay, cancellation);
+        }
+
+        private async Task EvaluateForegroundPolicyAfterDelayAsync(
+            string appName,
+            string? executablePath,
+            Dxgi.RECT? appBounds,
+            TimeSpan delay,
+            CancellationTokenSource cancellation)
+        {
+            try
+            {
+                await Task.Delay(delay, cancellation.Token).ConfigureAwait(false);
+                if (!cancellation.IsCancellationRequested)
+                    EvaluateForegroundPolicy(appName, executablePath, appBounds);
+            }
+            catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException)
+            {
+                // A newer foreground owner replaced this candidate before it stabilized.
+            }
+            finally
+            {
+                lock (_foregroundPolicyLock)
+                {
+                    if (ReferenceEquals(_foregroundPolicyCancellation, cancellation))
+                        _foregroundPolicyCancellation = null;
+                }
+                cancellation.Dispose();
+            }
+        }
+
+        private void EvaluateForegroundPolicy(string appName, string? executablePath, Dxgi.RECT? appBounds)
         {
             try
             {
@@ -583,8 +679,10 @@ namespace HDRGammaController.ViewModels
                     activeMonitors = _activeMonitors;
                 }
 
-                // Check if app is in exclusion list
-                var rule = _settingsManager.ExcludedApps.FirstOrDefault(r => r.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase));
+                // The legacy app list controls night-mode exclusions only. Gamer profiles are
+                // resolved independently below and take precedence when both name the same app.
+                var rule = _settingsManager.ExcludedApps.FirstOrDefault(r =>
+                    r.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase));
 
                 var newBlocked = new HashSet<IntPtr>();
 
@@ -601,10 +699,8 @@ namespace HDRGammaController.ViewModels
                         var r1 = appBounds.Value;
                         foreach (var monitor in activeMonitors)
                         {
-                            var r2 = monitor.MonitorBounds;
-                            bool intersects = r1.Left < r2.Right && r2.Left < r1.Right &&
-                                              r1.Top < r2.Bottom && r2.Top < r1.Bottom;
-                            if (intersects) newBlocked.Add(monitor.HMonitor);
+                            if (Intersects(r1, monitor.MonitorBounds))
+                                newBlocked.Add(monitor.HMonitor);
                         }
                     }
                     else
@@ -616,16 +712,180 @@ namespace HDRGammaController.ViewModels
                     }
                 }
                 
-                // Diff check (in the service) avoids spamming updates
-                if (_applyService.UpdateBlockedMonitors(newBlocked))
+                var assignments = new List<GamerSessionAssignment>();
+                GamerProfileRule? gamerProfile = null;
+                if (_settingsManager.GamerModeEnabled)
                 {
-                    Log.Info($"TrayViewModel: Block state changed. App={appName}, Blocked Count={newBlocked.Count}");
-                    OnUiThread(() => ApplyAll());
+                    gamerProfile = _settingsManager.GamerProfiles.FirstOrDefault(profile =>
+                        profile.Enabled &&
+                        GamerExecutableSafety.IsSafeProfileTarget(profile.AppName, profile.DisplayName) &&
+                        GamerProfileMatchesForeground(profile, appName, executablePath));
+                    if (gamerProfile != null)
+                    {
+                        foreach (var monitor in activeMonitors)
+                        {
+                            if (GamerProfileTargetsMonitor(gamerProfile, monitor, appBounds, activeMonitors.Count))
+                                assignments.Add(new GamerSessionAssignment(monitor, gamerProfile));
+                        }
+                    }
+                }
+
+                bool blockChanged = _applyService.UpdateBlockedMonitors(newBlocked);
+                bool gamerChanged = _applyService.UpdateActiveGamerSessions(assignments);
+                if (gamerChanged && gamerProfile != null && assignments.Count > 0)
+                {
+                    string activatedApp = appName;
+                    _ = Task.Run(() => _settingsManager.MarkGamerProfileUsed(activatedApp, DateTime.UtcNow));
+                }
+                if (blockChanged || gamerChanged)
+                {
+                    Log.Info($"TrayViewModel: foreground policy changed. App={appName}, " +
+                             $"night-blocked={newBlocked.Count}, gamer-displays={assignments.Count}");
+
+                    var critical = _applyService.ActiveGamerSessions
+                        .SelectMany(session => session.Diagnostics.Select(diagnostic => (session, diagnostic)))
+                        .FirstOrDefault(pair => pair.diagnostic.Severity == GamerDiagnosticSeverity.Critical);
+                    OnUiThread(() =>
+                    {
+                        ApplyAll();
+                        if (gamerChanged && critical.diagnostic != null)
+                        {
+                            _toastService?.Show(
+                                $"{critical.session.DisplayName}: signal check",
+                                critical.diagnostic.Message,
+                                ToastKind.Warning);
+                        }
+                    });
                 }
             }
             catch (Exception ex)
             {
-                Log.Error($"Error in OnForegroundAppChanged: {ex.Message}");
+                Log.Error($"Error evaluating foreground policy: {ex.Message}");
+            }
+        }
+
+        private void OnGamerSettingsChanged()
+        {
+            OnUiThread(() =>
+            {
+                if (_gameModeItem != null)
+                    _gameModeItem.Header = GamerModeLabel();
+
+                // The universal pause is an emergency boundary. It must clear an active
+                // session immediately rather than waiting for the normal focus grace period.
+                if (!_settingsManager.GamerModeEnabled)
+                {
+                    CancelPendingForegroundPolicy();
+                    string app;
+                    string? path;
+                    Dxgi.RECT? bounds;
+                    lock (_lastExternalForegroundLock)
+                    {
+                        app = _lastExternalForegroundApp;
+                        path = _lastExternalForegroundPath;
+                        bounds = _lastExternalForegroundBounds;
+                    }
+                    EvaluateForegroundPolicy(app, path, bounds);
+                    return;
+                }
+
+                bool controlsOpen = Application.Current?.Windows
+                    .OfType<GameLabWindow>()
+                    .Any() == true;
+
+                if (controlsOpen)
+                {
+                    string app;
+                    string? path;
+                    Dxgi.RECT? bounds;
+                    lock (_lastExternalForegroundLock)
+                    {
+                        app = _lastExternalForegroundApp;
+                        path = _lastExternalForegroundPath;
+                        bounds = _lastExternalForegroundBounds;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(app))
+                    {
+                        OnForegroundAppChanged(app, path, bounds);
+                        return;
+                    }
+                }
+
+                _appDetectionService.Refresh();
+            });
+        }
+
+        private string GamerModeLabel() => _settingsManager.GamerModeEnabled
+            ? "Pause Game Mode"
+            : "Resume Game Mode";
+
+        private void ToggleGamerMode()
+        {
+            bool enabled = !_settingsManager.GamerModeEnabled;
+            _settingsManager.SetGamerModeEnabled(enabled);
+            _toastService?.Show(
+                "Game Mode",
+                enabled ? "Saved game profiles are active." : "All game profiles are paused.",
+                enabled ? ToastKind.Success : ToastKind.Info);
+        }
+
+        private void CancelPendingForegroundPolicy()
+        {
+            CancellationTokenSource? pending;
+            lock (_foregroundPolicyLock)
+            {
+                pending = _foregroundPolicyCancellation;
+                _foregroundPolicyCancellation = null;
+            }
+            pending?.Cancel();
+            pending?.Dispose();
+        }
+
+        internal static bool GamerProfileTargetsMonitor(
+            GamerProfileRule profile,
+            MonitorInfo monitor,
+            Dxgi.RECT? appBounds,
+            int activeMonitorCount)
+        {
+            profile = profile.Sanitized();
+            return profile.DisplayScope switch
+            {
+                GamerDisplayScope.AllDisplays => true,
+                GamerDisplayScope.SpecificDisplay =>
+                    !string.IsNullOrWhiteSpace(profile.MonitorDevicePath) &&
+                    profile.MonitorDevicePath.Equals(monitor.MonitorDevicePath, StringComparison.OrdinalIgnoreCase),
+                _ => appBounds.HasValue
+                    ? Intersects(appBounds.Value, monitor.MonitorBounds)
+                    : activeMonitorCount == 1
+            };
+        }
+
+        private static bool Intersects(Dxgi.RECT left, Dxgi.RECT right) =>
+            left.Left < right.Right && right.Left < left.Right &&
+            left.Top < right.Bottom && right.Top < left.Bottom;
+
+        internal static bool GamerProfileMatchesForeground(
+            GamerProfileRule profile,
+            string appName,
+            string? executablePath)
+        {
+            profile = profile.Sanitized();
+            if (!profile.Enabled ||
+                !GamerExecutableSafety.IsSafeProfileTarget(profile.AppName, profile.DisplayName) ||
+                !profile.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            if (string.IsNullOrWhiteSpace(profile.ExecutablePath)) return true;
+            if (string.IsNullOrWhiteSpace(executablePath)) return false;
+            try
+            {
+                return Path.GetFullPath(profile.ExecutablePath).Equals(
+                    Path.GetFullPath(executablePath), StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
             }
         }
 
@@ -694,14 +954,28 @@ namespace HDRGammaController.ViewModels
 
         private void PanicAll()
         {
+            CancelPendingForegroundPolicy();
+            _applyService.NightModeManuallyDisabled = true;
+            _applyService.UpdateBlockedMonitors(new HashSet<IntPtr>());
+            _applyService.UpdateActiveGamerSessions(Array.Empty<GamerSessionAssignment>());
+            if (_settingsManager.GamerModeEnabled)
+                _settingsManager.SetGamerModeEnabled(false);
             _applyService.ClearAll(TrayItems.OfType<MonitorViewModel>().Select(vm => vm.Model));
+            foreach (GameLabWindow window in Application.Current.Windows
+                         .OfType<GameLabWindow>()
+                         .ToArray())
+                window.Close();
             // #22: replaced a parentless MessageBox.Show (called from the hotkey hook thread,
             // which could appear behind other windows / on the wrong monitor) with a themed,
             // non-modal toast. It confirms the recovery without stealing focus.
-            _toastService?.Show("Gloam", "Gamma cleared - safe mode", ToastKind.Warning);
+            _toastService?.Show(
+                "Gloam safe mode",
+                "Gamma cleared. Game Mode and night warmth are paused.",
+                ToastKind.Warning);
         }
 
         private ActionViewModel? _startupItem;
+        private ActionViewModel? _gameModeItem;
 
         private static string StartupLabel()
             => StartupManager.IsStartupEnabled ? "✓ Start with Windows" : "Start with Windows";
@@ -725,8 +999,69 @@ namespace HDRGammaController.ViewModels
 
         private void OpenDashboard()
         {
-            var dashboard = new DashboardWindow(_monitorManager, _settingsManager, _nightModeService, _updateService, RequestApply, _melanopicService);
-            dashboard.Show();
+            var dashboard = Application.Current.Windows.OfType<DashboardWindow>()
+                .FirstOrDefault();
+            if (dashboard == null)
+            {
+                dashboard = new DashboardWindow(
+                    _monitorManager,
+                    _settingsManager,
+                    _nightModeService,
+                    _updateService,
+                    RequestApply,
+                    _melanopicService,
+                    _applyService);
+                dashboard.Show();
+            }
+            else
+            {
+                if (dashboard.WindowState == WindowState.Minimized)
+                    dashboard.WindowState = WindowState.Normal;
+                dashboard.Show();
+            }
+
+            dashboard.Activate();
+        }
+
+        private void ToggleGameLabWindow()
+        {
+            var existing = Application.Current.Windows.OfType<GameLabWindow>()
+                .FirstOrDefault();
+            if (existing != null)
+            {
+                string foregroundApp;
+                lock (_lastExternalForegroundLock)
+                    foregroundApp = _lastExternalForegroundApp;
+                existing.SuggestGamerApp(foregroundApp);
+
+                // When the console has focus, the same chord dismisses it and returns to
+                // the game. If it lost focus, bring it back instead of destroying edits.
+                if (existing.IsActive)
+                    existing.Close();
+                else
+                {
+                    if (existing.WindowState == WindowState.Minimized)
+                        existing.WindowState = WindowState.Normal;
+                    existing.Show();
+                    existing.Activate();
+                }
+                return;
+            }
+
+            string suggestedApp;
+            lock (_lastExternalForegroundLock)
+                suggestedApp = _lastExternalForegroundApp;
+
+            var gameLab = new GameLabWindow(
+                _monitorManager,
+                _settingsManager,
+                _nightModeService,
+                _updateService,
+                RequestApply,
+                _applyService,
+                suggestedGameApp: suggestedApp);
+            gameLab.Show();
+            gameLab.Activate();
         }
 
         private void OpenCalibration()
@@ -874,6 +1209,8 @@ namespace HDRGammaController.ViewModels
             // Stops the night-mode and ramp-guard timers and unhooks the
             // foreground-window event hook.
             _updateCheckTimer.Stop();
+            CancelPendingForegroundPolicy();
+            _settingsManager.GamerSettingsChanged -= OnGamerSettingsChanged;
             _applyService.Dispose();
             _nightModeService.Dispose();
             _appDetectionService.Dispose();
@@ -904,6 +1241,9 @@ namespace HDRGammaController.ViewModels
                 TrayItems.Add(new ActionViewModel("Calibrate Display...", CalibrateCommand));
                 TrayItems.Add(new ActionViewModel("Trust Check...", TrustCheckCommand));
                 TrayItems.Add(new ActionViewModel("Match Displays...", MatchDisplaysCommand));
+                TrayItems.Add(new ActionViewModel("Open Game Lab    Win+Shift+G", GameLabCommand));
+                _gameModeItem = new ActionViewModel(GamerModeLabel(), ToggleGamerModeCommand, staysOpenOnClick: true);
+                TrayItems.Add(_gameModeItem);
                 TrayItems.Add(new ActionViewModel("───────────", null));
                 
                 int index = 1;

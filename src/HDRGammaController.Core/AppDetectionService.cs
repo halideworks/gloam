@@ -11,7 +11,7 @@ namespace HDRGammaController.Core
         private User32.WinEventDelegate? _winEventDelegate; // Keep ref to prevent GC
         private bool _isDisposed;
 
-        public event Action<string, Dxgi.RECT?>? ForegroundAppChanged;
+        public event Action<string, string?, Dxgi.RECT?>? ForegroundAppChanged;
 
         public void Start()
         {
@@ -41,6 +41,9 @@ namespace HDRGammaController.Core
             _winEventDelegate = null;
         }
 
+        /// <summary>Re-evaluates the current foreground window after profile/settings edits.</summary>
+        public void Refresh() => CheckForeground();
+
         private void WinEventProc(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime)
         {
             if (eventType == User32.EVENT_SYSTEM_FOREGROUND)
@@ -60,10 +63,13 @@ namespace HDRGammaController.Core
                 if (pid == 0) return;
 
                 string processName = "";
+                string? executablePath = null;
                 try
                 {
                     using var p = Process.GetProcessById((int)pid);
                     processName = p.ProcessName.ToLowerInvariant() + ".exe";
+                    try { executablePath = p.MainModule?.FileName; }
+                    catch { executablePath = null; }
                 }
                 catch 
                 {
@@ -75,7 +81,7 @@ namespace HDRGammaController.Core
                 Dxgi.RECT rect = new Dxgi.RECT();
                 bool hasRect = User32.GetWindowRect(hwnd, out rect);
 
-                ForegroundAppChanged?.Invoke(processName, hasRect ? rect : (Dxgi.RECT?)null);
+                ForegroundAppChanged?.Invoke(processName, executablePath, hasRect ? rect : (Dxgi.RECT?)null);
             }
             catch (Exception ex)
             {

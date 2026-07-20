@@ -305,10 +305,14 @@ Reset Trims. Honestly labeled MODEL-BASED: it runs on stored characterizations, 
 per-panel calibration error and inter-panel instrument metamerism are invisible to it; a
 probe-assisted measured matching pass is the natural second tier.
 
-**4.6 Per-app color intent.** The app-exclusion machinery already exists; extend it to per-app
-*rendering intent* (e.g. games get contrast-preserving gamut clip, photo apps get colorimetric)
-by swapping MHC2 LUT sets on foreground-app change. Windows can't do this; Gloam's architecture
-almost already can.
+**4.6 Per-app color intent.** `[DONE — Game Lab]` Foreground games now select a per-display
+rendering intent through the existing calibrated apply path. Reference, Competitive Clarity,
+Cinematic HDR, Night Ops, and Custom profiles can override gamma, add a black-anchored monotonic
+shadow toe in linear light, govern night rendering, target the displays covered by the game window,
+and hold schedule-derived output with Gameplay Lock. Launch diagnostics grade the Windows-visible
+SDR/HDR signal chain and measured-calibration status; the dashboard shows a live per-display receipt.
+The path remains external to the game process, which keeps it anti-cheat-safe and makes the limits
+explicit: private swap-chain state and in-game HDR controls cannot be verified from the desktop.
 
 ---
 
