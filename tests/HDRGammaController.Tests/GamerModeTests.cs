@@ -272,6 +272,28 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void SignalDiagnostics_DoesNotTreatStoredMhc2FilenameAsActive()
+        {
+            var profile = GamerPresetCatalog.Create("game.exe", GamerPictureIntent.Reference);
+            var monitor = new MonitorInfo { MonitorDevicePath = "display-1" };
+            var stored = new MonitorProfileData { Mhc2ProfileName = "gloam-test.icm" };
+
+            var unverified = GamerSignalDiagnostics.Evaluate(profile, monitor, stored);
+            Assert.Contains(unverified, finding =>
+                finding.Code == "DISPLAY_CALIBRATION_UNVERIFIED");
+
+            var active = GamerSignalDiagnostics.Evaluate(
+                profile,
+                monitor,
+                stored,
+                new GamerCalibrationStatus(true, true, true, "gloam-test.icm"));
+            Assert.DoesNotContain(active, finding =>
+                finding.Code is "DISPLAY_UNMEASURED" or
+                    "DISPLAY_CALIBRATION_UNVERIFIED" or
+                    "DISPLAY_CALIBRATION_INACTIVE");
+        }
+
+        [Fact]
         public void SettingsManager_GamerProfilesPersistAsDeepSanitizedSnapshots()
         {
             string oldData = AppPaths.DataDir;
@@ -302,6 +324,33 @@ namespace HDRGammaController.Tests
                 Assert.Equal(GamerPictureIntent.NightOps, stored.PictureIntent);
                 Assert.Equal(usedUtc, stored.LastUsedUtc);
                 Assert.Equal("GAME.EXE", recencyEventApp, ignoreCase: true);
+                Assert.Equal(4, SettingsManager.CurrentSchemaVersion);
+            }
+            finally
+            {
+                AppPaths.UseDataDirectoriesForCurrentProcess(oldData, oldRoaming);
+                try { if (Directory.Exists(root)) Directory.Delete(root, true); } catch { }
+            }
+        }
+
+        [Fact]
+        public void SettingsManager_UiSectionStatePersistsWithoutChangingReleaseSchema()
+        {
+            string oldData = AppPaths.DataDir;
+            string oldRoaming = AppPaths.RoamingDataDir;
+            string root = Path.Combine(Path.GetTempPath(), "GloamUiStateTests", Guid.NewGuid().ToString("N"));
+            try
+            {
+                AppPaths.UseDataDirectoriesForCurrentProcess(root, Path.Combine(root, "roaming"));
+                var manager = new SettingsManager();
+                Assert.True(manager.GetUiSectionExpanded("Dashboard.GameLab", true));
+
+                manager.SetUiSectionExpanded("Dashboard.GameLab", false);
+                manager.SetUiSectionExpanded("Dashboard.CircadianAdvanced", true);
+
+                var reloaded = new SettingsManager();
+                Assert.False(reloaded.GetUiSectionExpanded("Dashboard.GameLab", true));
+                Assert.True(reloaded.GetUiSectionExpanded("Dashboard.CircadianAdvanced", false));
                 Assert.Equal(4, SettingsManager.CurrentSchemaVersion);
             }
             finally
@@ -501,6 +550,148 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void ActiveGamerSession_RebuildsDiagnosticsWhenCalibrationActivationChanges()
+        {
+            string oldData = AppPaths.DataDir;
+            string oldRoaming = AppPaths.RoamingDataDir;
+            string root = Path.Combine(Path.GetTempPath(), "GloamGamerDiagnosticTests", Guid.NewGuid().ToString("N"));
+            try
+            {
+                AppPaths.UseDataDirectoriesForCurrentProcess(root, Path.Combine(root, "roaming"));
+                var settings = new SettingsManager();
+                settings.SetMhc2Calibration("display-1", "gloam-test.icm");
+                bool calibrationActive = false;
+                using var night = new NightModeService(new NightModeSettings());
+                using var apply = new GammaApplyService(
+                    new DispwinRunner(),
+                    settings,
+                    night,
+                    (_, _) => new GamerCalibrationStatus(
+                        true, calibrationActive, true, "gloam-test.icm"));
+                var monitor = new MonitorInfo
+                {
+                    HMonitor = (IntPtr)41,
+                    MonitorDevicePath = "display-1",
+                    FriendlyName = "Panel"
+                };
+                var profile = GamerPresetCatalog.Create("game.exe", GamerPictureIntent.Reference);
+
+                Assert.True(apply.UpdateActiveGamerSessions(new[]
+                    { new GamerSessionAssignment(monitor, profile) }));
+                Assert.Contains(Assert.Single(apply.ActiveGamerSessions).Diagnostics,
+                    finding => finding.Code == "DISPLAY_CALIBRATION_INACTIVE");
+
+                calibrationActive = true;
+                Assert.True(apply.UpdateActiveGamerSessions(new[]
+                    { new GamerSessionAssignment(monitor, profile.Clone()) }));
+                Assert.DoesNotContain(Assert.Single(apply.ActiveGamerSessions).Diagnostics,
+                    finding => finding.Code.StartsWith("DISPLAY_CALIBRATION_", StringComparison.Ordinal));
+            }
+            finally
+            {
+                AppPaths.UseDataDirectoriesForCurrentProcess(oldData, oldRoaming);
+                try { if (Directory.Exists(root)) Directory.Delete(root, true); } catch { }
+            }
+        }
+
+        [Fact]
+        public void GamerModeCoordinator_LatestForegroundWinsAndPauseClearsImmediately()
+        {
+            string oldData = AppPaths.DataDir;
+            string oldRoaming = AppPaths.RoamingDataDir;
+            string root = Path.Combine(Path.GetTempPath(), "GloamGamerCoordinatorTests", Guid.NewGuid().ToString("N"));
+            try
+            {
+                AppPaths.UseDataDirectoriesForCurrentProcess(root, Path.Combine(root, "roaming"));
+                var settings = new SettingsManager();
+                string firstPath = Path.GetFullPath(@"C:\Games\First\first.exe");
+                string secondPath = Path.GetFullPath(@"C:\Games\Second\second.exe");
+                var first = GamerPresetCatalog.Create("first.exe", GamerPictureIntent.Reference);
+                first.ExecutablePath = firstPath;
+                var second = GamerPresetCatalog.Create("second.exe", GamerPictureIntent.NightOps);
+                second.ExecutablePath = secondPath;
+                Assert.True(settings.TrySetGamerProfiles(new[] { first, second }));
+                Assert.True(settings.TrySetGamerModeEnabled(true));
+                using var night = new NightModeService(new NightModeSettings());
+                using var apply = new GammaApplyService(
+                    new DispwinRunner(), settings, night,
+                    (_, _) => GamerCalibrationStatus.None);
+                var monitor = new MonitorInfo
+                {
+                    HMonitor = (IntPtr)51,
+                    MonitorDevicePath = "display-1",
+                    FriendlyName = "Panel",
+                    MonitorBounds = new Dxgi.RECT { Left = 0, Top = 0, Right = 1920, Bottom = 1080 }
+                };
+                using var coordinator = new GamerModeCoordinator(
+                    settings, apply, () => new[] { monitor });
+
+                coordinator.ObserveForeground("first.exe", firstPath, monitor.MonitorBounds);
+                coordinator.ObserveForeground("second.exe", secondPath, monitor.MonitorBounds);
+
+                Assert.True(coordinator.WaitForIdle(TimeSpan.FromSeconds(3)));
+                Assert.Equal("second.exe", Assert.Single(coordinator.ActiveSessions).AppName);
+
+                Assert.True(coordinator.TrySetEnabled(false));
+                Assert.Empty(coordinator.ActiveSessions);
+            }
+            finally
+            {
+                AppPaths.UseDataDirectoriesForCurrentProcess(oldData, oldRoaming);
+                try { if (Directory.Exists(root)) Directory.Delete(root, true); } catch { }
+            }
+        }
+
+        [Fact]
+        public void GamerModeCoordinator_MonitorProfileChangeRefreshesActiveDiagnostics()
+        {
+            string oldData = AppPaths.DataDir;
+            string oldRoaming = AppPaths.RoamingDataDir;
+            string root = Path.Combine(Path.GetTempPath(), "GloamGamerProfileRefreshTests", Guid.NewGuid().ToString("N"));
+            try
+            {
+                AppPaths.UseDataDirectoriesForCurrentProcess(root, Path.Combine(root, "roaming"));
+                var settings = new SettingsManager();
+                string executablePath = Path.GetFullPath(@"C:\Games\Arena\arena.exe");
+                var profile = GamerPresetCatalog.Create("arena.exe", GamerPictureIntent.Reference);
+                profile.ExecutablePath = executablePath;
+                Assert.True(settings.TrySetGamerProfiles(new[] { profile }));
+                Assert.True(settings.TrySetGamerModeEnabled(true));
+                settings.SetMhc2Calibration("display-1", "gloam-test.icm");
+                bool calibrationActive = false;
+                using var night = new NightModeService(new NightModeSettings());
+                using var apply = new GammaApplyService(
+                    new DispwinRunner(), settings, night,
+                    (_, _) => new GamerCalibrationStatus(
+                        true, calibrationActive, true, "gloam-test.icm"));
+                var monitor = new MonitorInfo
+                {
+                    HMonitor = (IntPtr)61,
+                    MonitorDevicePath = "display-1",
+                    FriendlyName = "Panel",
+                    MonitorBounds = new Dxgi.RECT { Left = 0, Top = 0, Right = 1920, Bottom = 1080 }
+                };
+                using var coordinator = new GamerModeCoordinator(
+                    settings, apply, () => new[] { monitor });
+                coordinator.ObserveForeground("arena.exe", executablePath, monitor.MonitorBounds);
+                Assert.True(coordinator.WaitForIdle(TimeSpan.FromSeconds(3)));
+                Assert.Contains(Assert.Single(coordinator.ActiveSessions).Diagnostics,
+                    finding => finding.Code == "DISPLAY_CALIBRATION_INACTIVE");
+
+                calibrationActive = true;
+                settings.SetMhc2Calibration("display-1", "gloam-test.icm");
+
+                Assert.DoesNotContain(Assert.Single(coordinator.ActiveSessions).Diagnostics,
+                    finding => finding.Code == "DISPLAY_CALIBRATION_INACTIVE");
+            }
+            finally
+            {
+                AppPaths.UseDataDirectoriesForCurrentProcess(oldData, oldRoaming);
+                try { if (Directory.Exists(root)) Directory.Delete(root, true); } catch { }
+            }
+        }
+
+        [Fact]
         public void GamerWindowScope_TargetsOnlyIntersectingMonitor()
         {
             GamerProfileRule profile = GamerPresetCatalog.Create("game.exe", GamerPictureIntent.Reference);
@@ -515,8 +706,8 @@ namespace HDRGammaController.Tests
             };
             var window = new Dxgi.RECT { Left = 2100, Top = 100, Right = 3500, Bottom = 900 };
 
-            Assert.False(TrayViewModel.GamerProfileTargetsMonitor(profile, left, window, 2));
-            Assert.True(TrayViewModel.GamerProfileTargetsMonitor(profile, right, window, 2));
+            Assert.False(GamerModeCoordinator.TargetsMonitor(profile, left, window, 2));
+            Assert.True(GamerModeCoordinator.TargetsMonitor(profile, right, window, 2));
         }
 
         [Fact]
@@ -525,11 +716,11 @@ namespace HDRGammaController.Tests
             GamerProfileRule profile = GamerPresetCatalog.Create("game.exe", GamerPictureIntent.Reference);
             profile.ExecutablePath = @"C:\Games\Arena\game.exe";
 
-            Assert.True(TrayViewModel.GamerProfileMatchesForeground(
+            Assert.True(GamerModeCoordinator.MatchesForeground(
                 profile, "GAME.EXE", @"C:\Games\Arena\game.exe"));
-            Assert.False(TrayViewModel.GamerProfileMatchesForeground(
+            Assert.False(GamerModeCoordinator.MatchesForeground(
                 profile, "game.exe", @"D:\Other\game.exe"));
-            Assert.False(TrayViewModel.GamerProfileMatchesForeground(
+            Assert.False(GamerModeCoordinator.MatchesForeground(
                 profile, "game.exe", null));
         }
     }

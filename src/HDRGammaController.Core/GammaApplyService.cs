@@ -18,6 +18,7 @@ namespace HDRGammaController.Core
         private readonly DispwinRunner _dispwinRunner;
         private readonly SettingsManager _settingsManager;
         private readonly NightModeService _nightModeService;
+        private readonly Func<MonitorInfo, MonitorProfileData?, GamerCalibrationStatus> _calibrationStatusResolver;
 
         // Ramp guard: periodically verify the hardware still holds what we applied
         // and restore it when a fullscreen game or driver event stomps the VCGT.
@@ -46,10 +47,20 @@ namespace HDRGammaController.Core
         public bool NightModeManuallyDisabled { get; set; }
 
         public GammaApplyService(DispwinRunner dispwinRunner, SettingsManager settingsManager, NightModeService nightModeService)
+            : this(dispwinRunner, settingsManager, nightModeService, null)
+        {
+        }
+
+        internal GammaApplyService(
+            DispwinRunner dispwinRunner,
+            SettingsManager settingsManager,
+            NightModeService nightModeService,
+            Func<MonitorInfo, MonitorProfileData?, GamerCalibrationStatus>? calibrationStatusResolver)
         {
             _dispwinRunner = dispwinRunner ?? throw new ArgumentNullException(nameof(dispwinRunner));
             _settingsManager = settingsManager ?? throw new ArgumentNullException(nameof(settingsManager));
             _nightModeService = nightModeService ?? throw new ArgumentNullException(nameof(nightModeService));
+            _calibrationStatusResolver = calibrationStatusResolver ?? ResolveCalibrationStatus;
 
             _coalescer = new LatestValueCoalescer<IntPtr, (MonitorInfo, GammaMode, CalibrationSettings, double)>(
                 (_, item, cancellationToken) =>
@@ -162,7 +173,9 @@ namespace HDRGammaController.Core
                 {
                     MonitorInfo monitor = assignment.Monitor;
                     GamerProfileRule profile = assignment.Profile.Sanitized();
-                    int signalKey = GamerSignalKey(monitor);
+                    var monitorProfile = _settingsManager.GetMonitorProfile(monitor.MonitorDevicePath);
+                    GamerCalibrationStatus calibrationStatus = _calibrationStatusResolver(monitor, monitorProfile);
+                    int signalKey = GamerSignalKey(monitor, monitorProfile, calibrationStatus);
 
                     if (_activeGamerSessions.TryGetValue(monitor.HMonitor, out var previous) &&
                         previous.Profile.SemanticallyEquals(profile) &&
@@ -175,8 +188,8 @@ namespace HDRGammaController.Core
                         continue;
                     }
 
-                    var monitorProfile = _settingsManager.GetMonitorProfile(monitor.MonitorDevicePath);
-                    var diagnostics = GamerSignalDiagnostics.Evaluate(profile, monitor, monitorProfile).ToArray();
+                    var diagnostics = GamerSignalDiagnostics.Evaluate(
+                        profile, monitor, monitorProfile, calibrationStatus).ToArray();
                     next[monitor.HMonitor] = new ActiveGamerSession(
                         monitor,
                         profile,
@@ -259,13 +272,53 @@ namespace HDRGammaController.Core
             return true;
         }
 
-        private static int GamerSignalKey(MonitorInfo monitor) => HashCode.Combine(
-            monitor.IsHdrActive,
-            monitor.DxgiColorSpace,
-            monitor.BitsPerColor,
-            (int)Math.Round(monitor.SdrWhiteLevel),
-            (int)Math.Round(monitor.HdrPeakNits),
-            monitor.MonitorDevicePath?.GetHashCode(StringComparison.OrdinalIgnoreCase) ?? 0);
+        private static int GamerSignalKey(
+            MonitorInfo monitor,
+            MonitorProfileData? monitorProfile,
+            GamerCalibrationStatus calibrationStatus)
+        {
+            var hash = new HashCode();
+            hash.Add(monitor.IsHdrActive);
+            hash.Add(monitor.DxgiColorSpace);
+            hash.Add(monitor.BitsPerColor);
+            hash.Add((int)Math.Round(monitor.SdrWhiteLevel));
+            hash.Add((int)Math.Round(monitor.HdrPeakNits));
+            hash.Add(monitor.MonitorDevicePath, StringComparer.OrdinalIgnoreCase);
+            hash.Add(monitorProfile?.GammaMode);
+            hash.Add(monitorProfile?.CalibrationProfileId, StringComparer.OrdinalIgnoreCase);
+            hash.Add(monitorProfile?.Mhc2ProfileName, StringComparer.OrdinalIgnoreCase);
+            hash.Add(calibrationStatus.Fingerprint);
+            return hash.ToHashCode();
+        }
+
+        private GamerCalibrationStatus ResolveCalibrationStatus(
+            MonitorInfo monitor,
+            MonitorProfileData? monitorProfile)
+        {
+            if (monitorProfile == null) return GamerCalibrationStatus.None;
+
+            string? mhc2Name = monitorProfile.Mhc2ProfileName;
+            if (!string.IsNullOrWhiteSpace(mhc2Name))
+            {
+                bool verified = AdvancedColorProfileAssociation.TryIsVerifiedCurrentUserDefault(
+                    monitor, mhc2Name, out bool isActive, out string? error);
+                return new GamerCalibrationStatus(
+                    HasMeasuredCalibration: true,
+                    IsActive: verified && isActive,
+                    WasVerified: verified,
+                    ProfileIdentity: mhc2Name,
+                    VerificationError: error);
+            }
+
+            string? profileId = monitorProfile.CalibrationProfileId;
+            if (string.IsNullOrWhiteSpace(profileId)) return GamerCalibrationStatus.None;
+            bool usable = _settingsManager.GetActiveCalibrationProfile(monitor.MonitorDevicePath) != null;
+            return new GamerCalibrationStatus(
+                HasMeasuredCalibration: true,
+                IsActive: usable,
+                WasVerified: true,
+                ProfileIdentity: profileId);
+        }
 
         public void RequestApply(
             MonitorInfo monitor,

@@ -355,6 +355,7 @@ namespace HDRGammaController.Core
         // callers can't mutate shared state out from under us after the lock releases.
         private readonly object _dataLock = new();
         private readonly object _saveLock = new();
+        private readonly object _gamerWriteLock = new();
         private long _dataVersion;
 
         private SettingsData _data = new SettingsData();
@@ -749,7 +750,11 @@ namespace HDRGammaController.Core
                 _dataVersion++;
                 changed = true;
             }
-            if (changed) Save();
+            if (changed)
+            {
+                Save();
+                NotifyMonitorProfileChanged(monitorDevicePath);
+            }
         }
 
         public MonitorProfileData? GetMonitorProfile(string monitorDevicePath)
@@ -779,6 +784,7 @@ namespace HDRGammaController.Core
                 _dataVersion++;
             }
             Save();
+            NotifyMonitorProfileChanged(monitorDevicePath);
         }
 
         public void SetNightMode(NightModeSettings settings)
@@ -820,6 +826,7 @@ namespace HDRGammaController.Core
                 _dataVersion++;
             }
             Save();
+            NotifyMonitorProfileChanged(monitorDevicePath);
         }
 
         /// <summary>Clears the saved pre-Gloam Windows profile after it has been restored.</summary>
@@ -893,6 +900,31 @@ namespace HDRGammaController.Core
             Save();
         }
 
+        public bool GetUiSectionExpanded(string key, bool defaultValue)
+        {
+            if (string.IsNullOrWhiteSpace(key)) return defaultValue;
+            lock (_dataLock)
+            {
+                return _data.UiSectionExpanded.TryGetValue(key.Trim(), out bool expanded)
+                    ? expanded
+                    : defaultValue;
+            }
+        }
+
+        public void SetUiSectionExpanded(string key, bool expanded)
+        {
+            key = key?.Trim() ?? string.Empty;
+            if (key.Length == 0 || key.Length > 80) return;
+            lock (_dataLock)
+            {
+                if (_data.UiSectionExpanded.TryGetValue(key, out bool current) && current == expanded)
+                    return;
+                _data.UiSectionExpanded[key] = expanded;
+                _dataVersion++;
+            }
+            Save();
+        }
+
         /// <summary>Global gate for automatic per-game profile activation.</summary>
         public bool GamerModeEnabled
         {
@@ -912,26 +944,99 @@ namespace HDRGammaController.Core
         }
 
         public void SetGamerModeEnabled(bool enabled)
+            => TrySetGamerModeEnabled(enabled);
+
+        /// <summary>
+        /// Changes the global gamer gate only when the new value can be durably written.
+        /// A failed settings write restores the previous in-memory value and does not
+        /// publish a settings-changed event, so UI and foreground policy cannot claim a
+        /// state that will disappear on restart.
+        /// </summary>
+        public bool TrySetGamerModeEnabled(bool enabled)
         {
+            lock (_gamerWriteLock) return TrySetGamerModeEnabledCore(enabled);
+        }
+
+        private bool TrySetGamerModeEnabledCore(bool enabled)
+        {
+            bool previous;
             lock (_dataLock)
             {
-                if (_data.GamerModeEnabled == enabled) return;
+                if (_data.GamerModeEnabled == enabled) return true;
+                previous = _data.GamerModeEnabled;
                 _data.GamerModeEnabled = enabled;
                 _dataVersion++;
             }
-            Save();
+
+            if (!Save())
+            {
+                lock (_dataLock)
+                {
+                    if (_data.GamerModeEnabled == enabled)
+                    {
+                        _data.GamerModeEnabled = previous;
+                        _dataVersion++;
+                    }
+                }
+                return false;
+            }
+
             NotifyGamerSettingsChanged();
+            return true;
         }
 
         public void SetGamerProfiles(IEnumerable<GamerProfileRule>? profiles)
+            => TrySetGamerProfiles(profiles);
+
+        /// <summary>
+        /// Replaces game profiles transactionally. The authoritative in-memory snapshot is
+        /// rolled back when the atomic settings write fails; callers may therefore report
+        /// "Applied" only when this method returns true.
+        /// </summary>
+        public bool TrySetGamerProfiles(IEnumerable<GamerProfileRule>? profiles)
         {
+            lock (_gamerWriteLock) return TrySetGamerProfilesCore(profiles);
+        }
+
+        private bool TrySetGamerProfilesCore(IEnumerable<GamerProfileRule>? profiles)
+        {
+            List<GamerProfileRule> incoming = NormalizeGamerProfiles(profiles);
+            List<GamerProfileRule> previous;
             lock (_dataLock)
             {
-                _data.GamerProfiles = NormalizeGamerProfiles(profiles);
+                if (GamerProfileListsEqual(_data.GamerProfiles, incoming)) return true;
+                previous = _data.GamerProfiles.Select(profile => profile.Clone()).ToList();
+                _data.GamerProfiles = incoming;
                 _dataVersion++;
             }
-            Save();
+
+            if (!Save())
+            {
+                lock (_dataLock)
+                {
+                    if (GamerProfileListsEqual(_data.GamerProfiles, incoming))
+                    {
+                        _data.GamerProfiles = previous;
+                        _dataVersion++;
+                    }
+                }
+                return false;
+            }
+
             NotifyGamerSettingsChanged();
+            return true;
+        }
+
+        private static bool GamerProfileListsEqual(
+            IReadOnlyList<GamerProfileRule> left,
+            IReadOnlyList<GamerProfileRule> right)
+        {
+            if (left.Count != right.Count) return false;
+            for (int i = 0; i < left.Count; i++)
+            {
+                if (!left[i].SemanticallyEquals(right[i])) return false;
+            }
+            return true;
         }
 
         /// <summary>
@@ -941,9 +1046,16 @@ namespace HDRGammaController.Core
         /// </summary>
         public void MarkGamerProfileUsed(string appName, DateTime usedUtc)
         {
+            lock (_gamerWriteLock)
+                MarkGamerProfileUsedCore(appName, usedUtc);
+        }
+
+        private void MarkGamerProfileUsedCore(string appName, DateTime usedUtc)
+        {
             string normalized = AppExclusionRule.NormalizeAppName(appName);
             usedUtc = usedUtc.ToUniversalTime();
             bool changed = false;
+            DateTime? previousUsedUtc = null;
             lock (_dataLock)
             {
                 GamerProfileRule? profile = _data.GamerProfiles.FirstOrDefault(profile =>
@@ -952,13 +1064,27 @@ namespace HDRGammaController.Core
                 if (profile.LastUsedUtc.HasValue && usedUtc - profile.LastUsedUtc.Value < TimeSpan.FromMinutes(1))
                     return;
 
+                previousUsedUtc = profile.LastUsedUtc;
                 profile.LastUsedUtc = usedUtc;
                 _dataVersion++;
                 changed = true;
             }
 
             if (!changed) return;
-            Save();
+            if (!Save())
+            {
+                lock (_dataLock)
+                {
+                    GamerProfileRule? profile = _data.GamerProfiles.FirstOrDefault(profile =>
+                        profile.AppName.Equals(normalized, StringComparison.OrdinalIgnoreCase));
+                    if (profile?.LastUsedUtc == usedUtc)
+                    {
+                        profile.LastUsedUtc = previousUsedUtc;
+                        _dataVersion++;
+                    }
+                }
+                return;
+            }
             try { GamerProfileUsed?.Invoke(normalized, usedUtc); }
             catch (Exception ex) { Log.Info($"SettingsManager: gamer-recency subscriber failed: {ex.Message}"); }
         }
@@ -967,10 +1093,18 @@ namespace HDRGammaController.Core
 
         public event Action? GamerSettingsChanged;
 
+        public event Action<string>? MonitorProfileChanged;
+
         private void NotifyGamerSettingsChanged()
         {
             try { GamerSettingsChanged?.Invoke(); }
             catch (Exception ex) { Log.Info($"SettingsManager: gamer-settings subscriber failed: {ex.Message}"); }
+        }
+
+        private void NotifyMonitorProfileChanged(string monitorDevicePath)
+        {
+            try { MonitorProfileChanged?.Invoke(monitorDevicePath); }
+            catch (Exception ex) { Log.Info($"SettingsManager: monitor-profile subscriber failed: {ex.Message}"); }
         }
 
         internal static List<GamerProfileRule> NormalizeGamerProfiles(
@@ -1030,7 +1164,11 @@ namespace HDRGammaController.Core
                 _dataVersion++;
             }
 
-            if (Save()) return true;
+            if (Save())
+            {
+                NotifyMonitorProfileChanged(monitorDevicePath);
+                return true;
+            }
 
             lock (_dataLock)
             {
@@ -1342,6 +1480,14 @@ namespace HDRGammaController.Core
                     data.WindowBounds.Remove(key);
                 }
             }
+
+            if (data.UiSectionExpanded == null)
+                data.UiSectionExpanded = new Dictionary<string, bool>();
+            foreach (string key in data.UiSectionExpanded.Keys.ToList())
+            {
+                if (string.IsNullOrWhiteSpace(key) || key.Length > 80)
+                    data.UiSectionExpanded.Remove(key);
+            }
         }
 
         private static double ClampFinite(double value, double min, double max, double fallback) =>
@@ -1368,6 +1514,7 @@ namespace HDRGammaController.Core
             // Trust-check reminder cadence in days; 0 (the default for absent field) = off.
             public int TrustCheckReminderDays { get; set; }
             public Dictionary<string, WindowBoundsData> WindowBounds { get; set; } = new Dictionary<string, WindowBoundsData>();
+            public Dictionary<string, bool> UiSectionExpanded { get; set; } = new Dictionary<string, bool>();
         }
 
         private class LegacySettingsData

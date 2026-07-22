@@ -31,6 +31,19 @@ namespace HDRGammaController.Core
         RequireHdr
     }
 
+    /// <summary>
+    /// What Gloam knows about a title's ability to render HDR. This is deliberately separate
+    /// from <see cref="GamerHdrExpectation"/>: capability selects which games a bulk HDR look
+    /// may target, while expectation validates the signal after that game starts.
+    /// </summary>
+    public enum GamerHdrCapability
+    {
+        Unknown,
+        Detected,
+        UserConfirmed,
+        SdrOnly
+    }
+
     /// <summary>Which connected displays receive a foreground game's profile.</summary>
     public enum GamerDisplayScope
     {
@@ -127,6 +140,7 @@ namespace HDRGammaController.Core
         public GamerDisplayScope DisplayScope { get; set; } = GamerDisplayScope.WindowDisplays;
         public string? MonitorDevicePath { get; set; }
         public GamerHdrExpectation HdrExpectation { get; set; } = GamerHdrExpectation.Automatic;
+        public GamerHdrCapability HdrCapability { get; set; } = GamerHdrCapability.Unknown;
 
         public bool OverrideGamma { get; set; } = true;
         public GammaMode GammaMode { get; set; } = GammaMode.Gamma22;
@@ -174,6 +188,7 @@ namespace HDRGammaController.Core
             DisplayScope = DisplayScope,
             MonitorDevicePath = MonitorDevicePath,
             HdrExpectation = HdrExpectation,
+            HdrCapability = HdrCapability,
             OverrideGamma = OverrideGamma,
             GammaMode = GammaMode,
             ShadowDetailStrength = ShadowDetailStrength,
@@ -201,6 +216,8 @@ namespace HDRGammaController.Core
                 ? copy.DisplayScope : GamerDisplayScope.WindowDisplays;
             copy.HdrExpectation = Enum.IsDefined(typeof(GamerHdrExpectation), copy.HdrExpectation)
                 ? copy.HdrExpectation : GamerHdrExpectation.Automatic;
+            copy.HdrCapability = Enum.IsDefined(typeof(GamerHdrCapability), copy.HdrCapability)
+                ? copy.HdrCapability : GamerHdrCapability.Unknown;
             copy.GammaMode = Enum.IsDefined(typeof(GammaMode), copy.GammaMode)
                 ? copy.GammaMode : GammaMode.Gamma22;
             copy.NightPolicy = Enum.IsDefined(typeof(GamerNightPolicy), copy.NightPolicy)
@@ -235,6 +252,7 @@ namespace HDRGammaController.Core
                 && a.DisplayScope == b.DisplayScope
                 && string.Equals(a.MonitorDevicePath, b.MonitorDevicePath, StringComparison.OrdinalIgnoreCase)
                 && a.HdrExpectation == b.HdrExpectation
+                && a.HdrCapability == b.HdrCapability
                 && a.OverrideGamma == b.OverrideGamma
                 && a.GammaMode == b.GammaMode
                 && a.ShadowDetailStrength == b.ShadowDetailStrength
@@ -249,6 +267,10 @@ namespace HDRGammaController.Core
                 && a.BlackLevelNits == b.BlackLevelNits
                 && a.LastUsedUtc == b.LastUsedUtc;
         }
+
+        public bool IsHdrCapable() =>
+            HdrCapability is GamerHdrCapability.Detected or GamerHdrCapability.UserConfirmed ||
+            HdrExpectation == GamerHdrExpectation.RequireHdr;
 
         private static string SanitizeLabel(string? value, string fallback)
         {
@@ -382,13 +404,36 @@ namespace HDRGammaController.Core
         GamerDiagnosticSeverity Severity,
         string Message);
 
+    /// <summary>
+    /// Separates a saved calibration reference from a calibration proven to be active in
+    /// the output path. Native MHC2 profiles require a Windows association read-back;
+    /// legacy measured LUT profiles require a usable on-disk calibration payload.
+    /// </summary>
+    public sealed record GamerCalibrationStatus(
+        bool HasMeasuredCalibration,
+        bool IsActive,
+        bool WasVerified,
+        string? ProfileIdentity = null,
+        string? VerificationError = null)
+    {
+        public static GamerCalibrationStatus None { get; } = new(false, false, true);
+
+        internal int Fingerprint => HashCode.Combine(
+            HasMeasuredCalibration,
+            IsActive,
+            WasVerified,
+            ProfileIdentity?.GetHashCode(StringComparison.OrdinalIgnoreCase) ?? 0,
+            VerificationError?.GetHashCode(StringComparison.Ordinal) ?? 0);
+    }
+
     /// <summary>Launch-time checks over facts Gloam can verify from the Windows output path.</summary>
     public static class GamerSignalDiagnostics
     {
         public static IReadOnlyList<GamerSignalDiagnostic> Evaluate(
             GamerProfileRule profile,
             MonitorInfo monitor,
-            MonitorProfileData? monitorProfile)
+            MonitorProfileData? monitorProfile,
+            GamerCalibrationStatus? calibrationStatus = null)
         {
             ArgumentNullException.ThrowIfNull(profile);
             ArgumentNullException.ThrowIfNull(monitor);
@@ -438,13 +483,21 @@ namespace HDRGammaController.Core
                 }
             }
 
-            bool hasMeasuredProfile = monitorProfile != null &&
-                (!string.IsNullOrWhiteSpace(monitorProfile.CalibrationProfileId) ||
-                 !string.IsNullOrWhiteSpace(monitorProfile.Mhc2ProfileName));
-            if (!hasMeasuredProfile)
+            calibrationStatus ??= StoredCalibrationStatus(monitorProfile);
+            if (!calibrationStatus.HasMeasuredCalibration)
             {
                 findings.Add(new("DISPLAY_UNMEASURED", GamerDiagnosticSeverity.Information,
                     "This display has no active measured calibration; visibility and HDR guidance are model-based."));
+            }
+            else if (!calibrationStatus.IsActive && calibrationStatus.WasVerified)
+            {
+                findings.Add(new("DISPLAY_CALIBRATION_INACTIVE", GamerDiagnosticSeverity.Warning,
+                    "A measured calibration is saved for this display, but it is not active in the Windows output path."));
+            }
+            else if (!calibrationStatus.IsActive)
+            {
+                findings.Add(new("DISPLAY_CALIBRATION_UNVERIFIED", GamerDiagnosticSeverity.Information,
+                    "A measured calibration is saved, but Windows did not allow Gloam to verify that it is active."));
             }
 
             if (!profile.GameplayLock)
@@ -454,6 +507,21 @@ namespace HDRGammaController.Core
             }
 
             return findings;
+        }
+
+        private static GamerCalibrationStatus StoredCalibrationStatus(MonitorProfileData? monitorProfile)
+        {
+            if (monitorProfile == null) return GamerCalibrationStatus.None;
+            if (!string.IsNullOrWhiteSpace(monitorProfile.Mhc2ProfileName))
+            {
+                // Filename presence alone is never proof of an active Advanced Color
+                // association. GammaApplyService supplies the Windows-verified status.
+                return new GamerCalibrationStatus(true, false, false, monitorProfile.Mhc2ProfileName);
+            }
+
+            return string.IsNullOrWhiteSpace(monitorProfile.CalibrationProfileId)
+                ? GamerCalibrationStatus.None
+                : new GamerCalibrationStatus(true, true, true, monitorProfile.CalibrationProfileId);
         }
 
         private static string GammaLabel(GammaMode mode) => mode switch

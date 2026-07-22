@@ -23,14 +23,15 @@ namespace HDRGammaController
             UpdateService updateService,
             ApplyCalibrationRequest applyCallback,
             GammaApplyService? gamerApplyService = null,
-            string? suggestedGameApp = null)
+            string? suggestedGameApp = null,
+            GamerModeCoordinator? gamerModeCoordinator = null)
         {
             InitializeComponent();
             WindowBoundsPersistence.Attach(this, settingsManager, "GameLabCompact");
 
             _viewModel = new DashboardViewModel(
                 monitorManager, settingsManager, nightModeService, updateService,
-                applyCallback, gamerApplyService);
+                applyCallback, gamerApplyService, gamerModeCoordinator);
             _viewModel.SuggestGamerApp(suggestedGameApp);
             DataContext = _viewModel;
 

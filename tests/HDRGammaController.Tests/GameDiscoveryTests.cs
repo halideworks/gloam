@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Threading;
 using HDRGammaController.Core;
 using Xunit;
 
@@ -188,6 +189,50 @@ namespace HDRGammaController.Tests
                 DiscoveredGame result = Assert.Single(GameDiscoveryService.ScanSteamLibrary(root));
 
                 Assert.Equal("eurotrucks2.exe", result.ExecutableName);
+            }
+            finally
+            {
+                TryDelete(root);
+            }
+        }
+
+        [Fact]
+        public void SteamScanHonorsCancellationBeforeTouchingLibrary()
+        {
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+
+            Assert.Throws<OperationCanceledException>(() =>
+                GameDiscoveryService.ScanSteamLibrary(
+                    Path.Combine(Path.GetTempPath(), "does-not-need-to-exist"),
+                    cancellation.Token));
+        }
+
+        [Fact]
+        public void HdrCapabilityDetection_FindsStrongLocalConfigSignalWithoutGuessing()
+        {
+            string root = NewTempDirectory();
+            try
+            {
+                string binaries = Path.Combine(root, "Binaries", "Win64");
+                string config = Path.Combine(root, "Config");
+                Directory.CreateDirectory(binaries);
+                Directory.CreateDirectory(config);
+                string executable = Path.Combine(binaries, "Arena.exe");
+                File.WriteAllBytes(executable, new byte[32]);
+                File.WriteAllText(Path.Combine(config, "DefaultEngine.ini"),
+                    "r.HDR.EnableHDROutput=1\n");
+
+                var detected = GameDiscoveryService.DetectHdrCapability(executable);
+
+                Assert.Equal(GamerHdrCapability.Detected, detected.Capability);
+                Assert.Contains("DefaultEngine.ini", detected.Evidence);
+
+                File.Delete(Path.Combine(config, "DefaultEngine.ini"));
+                File.WriteAllText(Path.Combine(config, "readme.txt"),
+                    "This readme discusses HDR10 support.");
+                var unknown = GameDiscoveryService.DetectHdrCapability(executable);
+                Assert.Equal(GamerHdrCapability.Unknown, unknown.Capability);
             }
             finally
             {

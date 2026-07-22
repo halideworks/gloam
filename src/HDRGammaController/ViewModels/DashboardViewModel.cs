@@ -49,6 +49,7 @@ namespace HDRGammaController.ViewModels
         private readonly Action<double> _blendChangedHandler;
         private readonly AppExclusionItem _appExclusionItem;
         private readonly GammaApplyService? _gamerApplyService;
+        private readonly GamerModeCoordinator? _gamerModeCoordinator;
         private readonly Action<IReadOnlyList<GamerSessionSnapshot>>? _gamerSessionsChangedHandler;
         private NightModeSettings _editingNightMode;
 
@@ -78,6 +79,8 @@ namespace HDRGammaController.ViewModels
         private readonly Action _gamerSettingsChangedHandler;
         private readonly Action<string, DateTime> _gamerProfileUsedHandler;
         private readonly GameDiscoveryService _gameDiscoveryService = new();
+        private CancellationTokenSource? _gameDiscoveryCancellation;
+        private int _gameDiscoveryGeneration;
 
         public SettingsManager SettingsManager { get; }
 
@@ -105,6 +108,7 @@ namespace HDRGammaController.ViewModels
         public ICommand ClearGamerProfilesCommand { get; }
         public ICommand ToggleShowAllGamerProfilesCommand { get; }
         public ICommand DismissGameDiscoveryCommand { get; }
+        public ICommand ApplyGamerLibraryPresetCommand { get; }
 
         public IReadOnlyList<NightModeAlgorithmOption> AvailableNightModeAlgorithms { get; } = NightModeAlgorithmOption.DefaultOptions;
 
@@ -149,11 +153,18 @@ namespace HDRGammaController.ViewModels
 
         public bool IsGamerModeEnabled
         {
-            get => SettingsManager.GamerModeEnabled;
+            get => _gamerModeCoordinator?.Enabled ?? SettingsManager.GamerModeEnabled;
             set
             {
-                if (value == SettingsManager.GamerModeEnabled) return;
-                SettingsManager.SetGamerModeEnabled(value);
+                if (value == IsGamerModeEnabled) return;
+                bool saved = _gamerModeCoordinator?.TrySetEnabled(value)
+                    ?? SettingsManager.TrySetGamerModeEnabled(value);
+                if (!saved)
+                {
+                    GamerMode.ShowSaveFailed();
+                    RaiseGamerModeStateProperties();
+                    return;
+                }
                 RaiseGamerModeStateProperties();
             }
         }
@@ -166,13 +177,50 @@ namespace HDRGammaController.ViewModels
 
         public string GamerModeToggleLabel => IsGamerModeEnabled ? "Pause all profiles" : "Resume game mode";
 
+        public bool IsGameLabSectionExpanded
+        {
+            get => SettingsManager.GetUiSectionExpanded("Dashboard.GameLab", true);
+            set => SetSectionExpanded("Dashboard.GameLab", value, nameof(IsGameLabSectionExpanded));
+        }
+
+        public bool IsNightModeControlsExpanded
+        {
+            get => SettingsManager.GetUiSectionExpanded("Dashboard.NightModeControls", true);
+            set => SetSectionExpanded("Dashboard.NightModeControls", value, nameof(IsNightModeControlsExpanded));
+        }
+
+        public bool IsCircadianSectionExpanded
+        {
+            get => SettingsManager.GetUiSectionExpanded("Dashboard.Circadian", true);
+            set => SetSectionExpanded("Dashboard.Circadian", value, nameof(IsCircadianSectionExpanded));
+        }
+
+        public bool IsCircadianAdvancedExpanded
+        {
+            get => SettingsManager.GetUiSectionExpanded("Dashboard.CircadianAdvanced", false);
+            set => SetSectionExpanded("Dashboard.CircadianAdvanced", value, nameof(IsCircadianAdvancedExpanded));
+        }
+
+        public bool IsAddRunningGameExpanded
+        {
+            get => SettingsManager.GetUiSectionExpanded("GameLab.AddRunningGame", false);
+            set => SetSectionExpanded("GameLab.AddRunningGame", value, nameof(IsAddRunningGameExpanded));
+        }
+
+        public bool IsGameProfileAdvancedExpanded
+        {
+            get => SettingsManager.GetUiSectionExpanded("GameLab.ProfileAdvanced", false);
+            set => SetSectionExpanded("GameLab.ProfileAdvanced", value, nameof(IsGameProfileAdvancedExpanded));
+        }
+
         public DashboardViewModel(
             MonitorManager monitorManager,
             SettingsManager settingsManager,
             NightModeService nightModeService,
             UpdateService updateService,
             ApplyCalibrationRequest applyCallback,
-            GammaApplyService? gamerApplyService = null)
+            GammaApplyService? gamerApplyService = null,
+            GamerModeCoordinator? gamerModeCoordinator = null)
         {
             _monitorManager = monitorManager;
             SettingsManager = settingsManager;
@@ -180,6 +228,7 @@ namespace HDRGammaController.ViewModels
             _updateService = updateService;
             _applyCallback = applyCallback;
             _gamerApplyService = gamerApplyService;
+            _gamerModeCoordinator = gamerModeCoordinator;
 
             _appExclusionItem = new AppExclusionItem();
             foreach (var rule in settingsManager.ExcludedApps)
@@ -209,13 +258,14 @@ namespace HDRGammaController.ViewModels
             SaveExcludedAppsCommand = new RelayCommand(SaveExcludedApps);
             AddGamerProfileCommand = new RelayCommand(AddGamerProfile);
             RemoveGamerProfileCommand = new RelayCommand<GamerProfileEditorItem>(RemoveGamerProfile);
-            SaveGamerProfilesCommand = new RelayCommand(SaveGamerProfiles);
+            SaveGamerProfilesCommand = new RelayCommand(() => SaveGamerProfiles());
             ToggleGamerModeCommand = new RelayCommand(() => IsGamerModeEnabled = !IsGamerModeEnabled);
             ScanForGamesCommand = new AsyncRelayCommand(ScanForGamesAsync);
             AddDiscoveredGamesCommand = new RelayCommand(AddDiscoveredGames);
             ClearGamerProfilesCommand = new RelayCommand(ClearGamerProfiles);
             ToggleShowAllGamerProfilesCommand = new RelayCommand(GamerMode.ToggleShowAllProfiles);
             DismissGameDiscoveryCommand = new RelayCommand(DismissGameDiscovery);
+            ApplyGamerLibraryPresetCommand = new RelayCommand(ApplyGamerLibraryPreset);
 
             // Profile controls are live. A short debounce coalesces slider movement and a
             // preset's multi-property update into one settings write + one foreground
@@ -842,12 +892,32 @@ namespace HDRGammaController.ViewModels
         private async Task ScanForGamesAsync()
         {
             if (GamerMode.IsScanningForGames) return;
+            _gameDiscoveryCancellation?.Cancel();
+            _gameDiscoveryCancellation?.Dispose();
+            var cancellation = new CancellationTokenSource();
+            _gameDiscoveryCancellation = cancellation;
+            int generation = Interlocked.Increment(ref _gameDiscoveryGeneration);
             GamerMode.IsScanningForGames = true;
             GamerMode.DiscoveryStatus = "Checking your launcher libraries…";
             try
             {
-                IReadOnlyList<DiscoveredGame> games = await Task.Run(_gameDiscoveryService.Scan);
-                int pathRepairs = 0;
+                var progress = new Progress<GameDiscoveryProgress>(update =>
+                {
+                    if (_isDisposed || cancellation.IsCancellationRequested ||
+                        generation != Volatile.Read(ref _gameDiscoveryGeneration)) return;
+                    var saved = GamerMode.Profiles
+                        .Select(profile => profile.AppName)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    GamerMode.SetDiscoveryResults(update.Games, saved);
+                    string cacheText = update.UsedCache ? " · unchanged library reused" : string.Empty;
+                    GamerMode.DiscoveryStatus =
+                        $"Checking {update.Stage} · {GamerMode.DiscoveredGames.Count} new games found{cacheText}";
+                });
+                IReadOnlyList<DiscoveredGame> games = await Task.Run(
+                    () => _gameDiscoveryService.Scan(cancellation.Token, progress),
+                    cancellation.Token);
+                cancellation.Token.ThrowIfCancellationRequested();
+                int metadataUpdates = 0;
                 _suppressGamerProfileSave = true;
                 try
                 {
@@ -855,28 +925,39 @@ namespace HDRGammaController.ViewModels
                     {
                         GamerProfileEditorItem? existing = GamerMode.Profiles.FirstOrDefault(profile =>
                             profile.AppName.Equals(game.ExecutableName, StringComparison.OrdinalIgnoreCase));
-                        if (existing != null && existing.SetExecutablePath(game.ExecutablePath))
-                            pathRepairs++;
+                        if (existing == null) continue;
+                        bool updated = existing.SetExecutablePath(game.ExecutablePath);
+                        updated |= existing.SetHdrCapabilityFromDiscovery(game.HdrCapability);
+                        if (updated) metadataUpdates++;
                     }
                 }
                 finally
                 {
                     _suppressGamerProfileSave = false;
                 }
-                if (pathRepairs > 0) SaveGamerProfiles();
+                if (metadataUpdates > 0) SaveGamerProfiles();
 
                 var savedApps = GamerMode.Profiles
                     .Select(profile => profile.AppName)
                     .ToHashSet(StringComparer.OrdinalIgnoreCase);
                 GamerMode.SetDiscoveryResults(games, savedApps);
                 int newGames = GamerMode.DiscoveredGames.Count;
+                int hdrGames = games.Count(game => game.HdrCapability == GamerHdrCapability.Detected);
+                string hdrSuffix = hdrGames > 0
+                    ? $" HDR support was detected locally for {hdrGames}."
+                    : string.Empty;
                 GamerMode.DiscoveryStatus = newGames switch
                 {
-                    0 when games.Count > 0 => "Every game found by the scanner is already in your library.",
+                    0 when games.Count > 0 => "Every game found by the scanner is already in your library." + hdrSuffix,
                     0 => "No supported launcher games were found. You can still add the running game below.",
-                    1 => "Found 1 game. Review it before adding.",
-                    _ => $"Found {newGames} new games. Nothing is checked automatically; add only the profiles you want."
+                    1 => "Found 1 game. Review it before adding." + hdrSuffix,
+                    _ => $"Found {newGames} new games. Nothing is checked automatically; add only the profiles you want." + hdrSuffix
                 };
+            }
+            catch (OperationCanceledException)
+            {
+                if (!_isDisposed && generation == Volatile.Read(ref _gameDiscoveryGeneration))
+                    GamerMode.DiscoveryStatus = "Game scan stopped.";
             }
             catch (Exception ex)
             {
@@ -885,7 +966,13 @@ namespace HDRGammaController.ViewModels
             }
             finally
             {
-                GamerMode.IsScanningForGames = false;
+                if (generation == Volatile.Read(ref _gameDiscoveryGeneration))
+                {
+                    GamerMode.IsScanningForGames = false;
+                    if (ReferenceEquals(_gameDiscoveryCancellation, cancellation))
+                        _gameDiscoveryCancellation = null;
+                }
+                cancellation.Dispose();
             }
         }
 
@@ -925,6 +1012,7 @@ namespace HDRGammaController.ViewModels
                         item.ExecutableName, GamerPictureIntent.CompetitiveClarity);
                     rule.ExecutablePath = item.ExecutablePath;
                     rule.DisplayName = item.DisplayName;
+                    rule.HdrCapability = item.HdrCapability;
                     var editor = new GamerProfileEditorItem(rule);
                     GamerMode.Profiles.Add(editor);
                     firstAdded ??= editor;
@@ -994,6 +1082,8 @@ namespace HDRGammaController.ViewModels
             GamerProfileRule rule = GamerPresetCatalog.Create(
                 app, GamerPictureIntent.CompetitiveClarity);
             rule.ExecutablePath = executablePath;
+            if (executablePath != null)
+                rule.HdrCapability = GameDiscoveryService.DetectHdrCapability(executablePath).Capability;
             if (executablePath == null)
                 rule.Enabled = false;
 
@@ -1009,6 +1099,10 @@ namespace HDRGammaController.ViewModels
 
         private void DismissGameDiscovery()
         {
+            Interlocked.Increment(ref _gameDiscoveryGeneration);
+            _gameDiscoveryCancellation?.Cancel();
+            _gameDiscoveryCancellation = null;
+            GamerMode.IsScanningForGames = false;
             GamerMode.DiscoveredGames.Clear();
             GamerMode.DiscoverySearchText = string.Empty;
             GamerMode.ResetLargeAddConfirmation();
@@ -1021,6 +1115,46 @@ namespace HDRGammaController.ViewModels
             if (profile == null) return;
             if (GamerMode.Profiles.Remove(profile))
                 SaveGamerProfiles();
+        }
+
+        private void ApplyGamerLibraryPreset()
+        {
+            GamerLibraryPresetOption? selection = GamerMode.SelectedLibraryPreset;
+            if (selection == null)
+            {
+                GamerMode.ShowMessage("Choose a library default first.");
+                return;
+            }
+
+            List<GamerProfileEditorItem> targets = GamerMode.Profiles
+                .Where(profile => !selection.HdrCapableOnly || profile.IsHdrCapable)
+                .ToList();
+            if (targets.Count == 0)
+            {
+                GamerMode.ShowMessage(
+                    "No HDR-capable games are known yet. Scan your libraries or mark HDR support in Advanced.");
+                return;
+            }
+
+            _gamerAutoSaveTimer.Stop();
+            _suppressGamerProfileSave = true;
+            try
+            {
+                foreach (GamerProfileEditorItem profile in targets)
+                    profile.PictureIntent = selection.Intent;
+            }
+            finally
+            {
+                _suppressGamerProfileSave = false;
+            }
+
+            if (SaveGamerProfiles())
+            {
+                string targetDescription = selection.HdrCapableOnly ? "HDR-capable games" : "games";
+                GamerMode.ShowMessage(
+                    $"Applied {selection.Label.Split('·')[0].Trim()} to {targets.Count} {targetDescription}.");
+                GamerMode.SelectedLibraryPreset = null;
+            }
         }
 
         private void ClearGamerProfiles()
@@ -1044,6 +1178,13 @@ namespace HDRGammaController.ViewModels
             }
             SaveGamerProfiles();
             GamerMode.ShowMessage("Game library cleared.");
+        }
+
+        private void SetSectionExpanded(string key, bool expanded, string propertyName)
+        {
+            if (SettingsManager.GetUiSectionExpanded(key, !expanded) == expanded) return;
+            SettingsManager.SetUiSectionExpanded(key, expanded);
+            OnPropertyChanged(propertyName);
         }
 
         private void OnGamerProfilesCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -1085,16 +1226,22 @@ namespace HDRGammaController.ViewModels
             _gamerAutoSaveTimer.Start();
         }
 
-        private void SaveGamerProfiles()
+        private bool SaveGamerProfiles()
         {
-            if (_savingGamerProfiles) return;
+            if (_savingGamerProfiles) return false;
             _gamerAutoSaveTimer.Stop();
             _savingGamerProfiles = true;
             try
             {
-                SettingsManager.SetGamerProfiles(
-                    GamerMode.Profiles.Select(profile => profile.ToRule()));
-                GamerMode.ShowSaved();
+                bool saved = _gamerModeCoordinator?.TrySetProfiles(
+                        GamerMode.Profiles.Select(profile => profile.ToRule()))
+                    ?? SettingsManager.TrySetGamerProfiles(
+                        GamerMode.Profiles.Select(profile => profile.ToRule()));
+                if (saved)
+                    GamerMode.ShowSaved();
+                else
+                    GamerMode.ShowSaveFailed();
+                return saved;
             }
             finally
             {
@@ -1184,6 +1331,10 @@ namespace HDRGammaController.ViewModels
             if (_gamerAutoSaveTimer.IsEnabled)
                 SaveGamerProfiles();
             _isDisposed = true;
+            Interlocked.Increment(ref _gameDiscoveryGeneration);
+            _gameDiscoveryCancellation?.Cancel();
+            _gameDiscoveryCancellation?.Dispose();
+            _gameDiscoveryCancellation = null;
             if (_gamerApplyService != null && _gamerSessionsChangedHandler != null)
                 _gamerApplyService.GamerSessionsChanged -= _gamerSessionsChangedHandler;
             Interlocked.Increment(ref _runningAppScanGeneration);

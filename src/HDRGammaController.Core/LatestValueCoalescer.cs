@@ -87,6 +87,22 @@ namespace HDRGammaController.Core
         }
 
         /// <summary>
+        /// Cancels active work and drops a pending value for one key. Future submissions
+        /// remain valid. This is used by immediate safety boundaries such as pausing Game
+        /// Mode, where an older stabilized foreground candidate must never re-activate.
+        /// </summary>
+        public void Cancel(TKey key)
+        {
+            if (!_slots.TryGetValue(key, out var slot)) return;
+            lock (slot)
+            {
+                slot.Pending = default;
+                slot.HasPending = false;
+                slot.ActiveCts?.Cancel();
+            }
+        }
+
+        /// <summary>
         /// Waits (up to timeout) until no runner is actively holding the gate for the given key
         /// AND no Pending value remains. Useful for tests; not intended for production use.
         /// </summary>

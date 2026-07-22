@@ -37,6 +37,7 @@ namespace HDRGammaController.ViewModels
         private bool _largeAddArmed;
         private bool _clearProfilesArmed;
         private bool _showAllProfiles;
+        private GamerLibraryPresetOption? _selectedLibraryPreset;
 
         public GamerModeItem()
         {
@@ -49,13 +50,20 @@ namespace HDRGammaController.ViewModels
         public bool HasDiscoveryResults => DiscoveredGames.Count > 0;
         public bool HasFilteredProfiles => FilteredProfiles.Count > 0;
         public string FilteredProfileCountText => !string.IsNullOrWhiteSpace(ProfileSearchText)
-            ? $"{FilteredProfiles.Count} SEARCH RESULTS"
+            ? $"{FilteredProfiles.Count} RESULTS"
             : _showAllProfiles
-                ? ProfileCountText
-                : $"RECENT · {FilteredProfiles.Count} OF {Profiles.Count}";
+                ? $"ALL · {Profiles.Count}"
+                : $"RECENT · {FilteredProfiles.Count}";
         public string ShowAllProfilesLabel => _showAllProfiles
-            ? "Back to recent"
-            : $"Show all {Profiles.Count} games";
+            ? "Recent only"
+            : "View all";
+        public IReadOnlyList<GamerLibraryPresetOption> AvailableLibraryPresets { get; } =
+        [
+            new("Accurate · all games", GamerPictureIntent.Reference, false),
+            new("Competitive · all games", GamerPictureIntent.CompetitiveClarity, false),
+            new("Night Play · all games", GamerPictureIntent.NightOps, false),
+            new("HDR Cinema · detected HDR games", GamerPictureIntent.CinematicHdr, true)
+        ];
         public int SelectedDiscoveryCount => DiscoveredGames.Count(item => item.IsSelected && !item.AlreadyAdded);
         public string AddDiscoveredButtonLabel => _largeAddArmed
             ? $"Confirm adding {SelectedDiscoveryCount} games"
@@ -68,6 +76,18 @@ namespace HDRGammaController.ViewModels
         public string ClearProfilesLabel => _clearProfilesArmed
             ? $"Confirm remove all {Profiles.Count}"
             : "Clear game library";
+
+        public GamerLibraryPresetOption? SelectedLibraryPreset
+        {
+            get => _selectedLibraryPreset;
+            set
+            {
+                if (SetProperty(ref _selectedLibraryPreset, value))
+                    OnPropertyChanged(nameof(HasSelectedLibraryPreset));
+            }
+        }
+
+        public bool HasSelectedLibraryPreset => SelectedLibraryPreset != null;
 
         public string ProfileSearchText
         {
@@ -188,6 +208,9 @@ namespace HDRGammaController.ViewModels
         public void ShowSaved() =>
             EditorStatus = $"Applied · {DateTime.Now:h:mm:ss tt}";
 
+        public void ShowSaveFailed() =>
+            EditorStatus = "Not saved · check that Gloam can write its settings file";
+
         public void SetSessions(IReadOnlyList<GamerSessionSnapshot>? sessions)
         {
             sessions ??= Array.Empty<GamerSessionSnapshot>();
@@ -226,12 +249,22 @@ namespace HDRGammaController.ViewModels
 
         public void SetDiscoveryResults(IReadOnlyList<DiscoveredGame> games, ISet<string> savedApps)
         {
+            var selectedPaths = DiscoveredGames
+                .Where(item => item.IsSelected)
+                .Select(item => item.ExecutablePath)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
             DiscoveredGames.Clear();
             foreach (DiscoveredGame game in games)
             {
                 bool alreadyAdded = savedApps.Contains(game.ExecutableName);
                 if (!alreadyAdded)
-                    DiscoveredGames.Add(new DiscoveredGameItem(game, alreadyAdded: false));
+                {
+                    var item = new DiscoveredGameItem(game, alreadyAdded: false)
+                    {
+                        IsSelected = selectedPaths.Contains(game.ExecutablePath)
+                    };
+                    DiscoveredGames.Add(item);
+                }
             }
             ResetLargeAddConfirmation();
             RefreshDiscoveryFilter();
@@ -428,6 +461,14 @@ namespace HDRGammaController.ViewModels
         public override string ToString() => Label;
     }
 
+    public sealed record GamerLibraryPresetOption(
+        string Label,
+        GamerPictureIntent Intent,
+        bool HdrCapableOnly)
+    {
+        public override string ToString() => Label;
+    }
+
     public sealed class DiscoveredGameItem : ObservableObject
     {
         private bool _isSelected;
@@ -443,6 +484,9 @@ namespace HDRGammaController.ViewModels
         public string ExecutableName => Game.ExecutableName;
         public string ExecutablePath => Game.ExecutablePath;
         public string Library => Game.Library;
+        public GamerHdrCapability HdrCapability => Game.HdrCapability;
+        public bool HasDetectedHdr => Game.HdrCapability == GamerHdrCapability.Detected;
+        public string? HdrEvidence => Game.HdrEvidence;
         public bool AlreadyAdded { get; }
 
         public bool IsSelected
@@ -492,6 +536,13 @@ namespace HDRGammaController.ViewModels
             new(GamerHdrExpectation.RequireSdr, "Require SDR"),
             new(GamerHdrExpectation.RequireHdr, "Require HDR")
         ];
+        public IReadOnlyList<GamerChoice<GamerHdrCapability>> AvailableHdrCapabilities { get; } =
+        [
+            new(GamerHdrCapability.Unknown, "Not detected", "Excluded from automatic HDR bulk changes."),
+            new(GamerHdrCapability.Detected, "Detected automatically", "A local game configuration advertises HDR output."),
+            new(GamerHdrCapability.UserConfirmed, "Yes, supports HDR", "Include this game in HDR bulk changes."),
+            new(GamerHdrCapability.SdrOnly, "No, SDR only", "Never include this game in HDR bulk changes.")
+        ];
         public IReadOnlyList<GamerChoice<GamerDisplayScope>> AvailableDisplayScopes { get; } =
         [
             new(GamerDisplayScope.WindowDisplays, "Game window display(s)"),
@@ -524,6 +575,18 @@ namespace HDRGammaController.ViewModels
             OnPropertyChanged(nameof(ExecutablePath));
             OnPropertyChanged(nameof(HasExecutablePath));
             OnPropertyChanged(nameof(ExecutableIdentityLabel));
+            return true;
+        }
+
+        public bool SetHdrCapabilityFromDiscovery(GamerHdrCapability capability)
+        {
+            if (capability != GamerHdrCapability.Detected ||
+                _profile.HdrCapability != GamerHdrCapability.Unknown)
+                return false;
+            _profile.HdrCapability = capability;
+            OnPropertyChanged(nameof(HdrCapability));
+            OnPropertyChanged(nameof(IsHdrCapable));
+            OnPropertyChanged(nameof(HdrSupportLabel));
             return true;
         }
 
@@ -628,8 +691,39 @@ namespace HDRGammaController.ViewModels
         public GamerHdrExpectation HdrExpectation
         {
             get => _profile.HdrExpectation;
-            set { if (_profile.HdrExpectation != value) { _profile.HdrExpectation = value; OnPropertyChanged(); } }
+            set
+            {
+                if (_profile.HdrExpectation == value) return;
+                _profile.HdrExpectation = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(IsHdrCapable));
+                OnPropertyChanged(nameof(HdrSupportLabel));
+            }
         }
+
+        public GamerHdrCapability HdrCapability
+        {
+            get => _profile.HdrCapability;
+            set
+            {
+                if (_profile.HdrCapability == value) return;
+                _profile.HdrCapability = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(IsHdrCapable));
+                OnPropertyChanged(nameof(HdrSupportLabel));
+            }
+        }
+
+        public bool IsHdrCapable => _profile.IsHdrCapable();
+
+        public string HdrSupportLabel => _profile.HdrCapability switch
+        {
+            GamerHdrCapability.Detected => "HDR detected",
+            GamerHdrCapability.UserConfirmed => "HDR confirmed",
+            GamerHdrCapability.SdrOnly => "SDR only",
+            _ when _profile.HdrExpectation == GamerHdrExpectation.RequireHdr => "HDR profile",
+            _ => "HDR unknown"
+        };
 
         public bool OverrideGamma
         {
@@ -795,6 +889,8 @@ namespace HDRGammaController.ViewModels
             OnPropertyChanged(nameof(NightOpsMelanopicCeiling));
             OnPropertyChanged(nameof(IsNightOpsMelanopicCeilingEnabled));
             OnPropertyChanged(nameof(HdrExpectation));
+            OnPropertyChanged(nameof(IsHdrCapable));
+            OnPropertyChanged(nameof(HdrSupportLabel));
             OnPropertyChanged(nameof(GameplayLock));
         }
 

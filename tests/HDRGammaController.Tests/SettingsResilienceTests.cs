@@ -126,6 +126,32 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void GamerChanges_RollBackWhenDurableSaveIsRefused()
+        {
+            string newer = """
+                {
+                  "SchemaVersion": 99,
+                  "GamerModeEnabled": false,
+                  "GamerProfiles": [
+                    { "AppName": "existing.exe", "DisplayName": "Existing" }
+                  ]
+                }
+                """;
+            File.WriteAllText(SettingsPath, newer);
+            var sm = new SettingsManager();
+
+            Assert.False(sm.TrySetGamerModeEnabled(true));
+            Assert.False(sm.TrySetGamerProfiles(new[]
+            {
+                GamerPresetCatalog.Create("replacement.exe", GamerPictureIntent.Reference)
+            }));
+
+            Assert.False(sm.GamerModeEnabled);
+            Assert.Equal("existing.exe", Assert.Single(sm.GamerProfiles).AppName);
+            Assert.Equal(newer, File.ReadAllText(SettingsPath));
+        }
+
+        [Fact]
         public void Save_StampsCurrentSchemaVersion()
         {
             var sm = new SettingsManager();
