@@ -352,78 +352,11 @@
             </Border>
         </Grid>
 
-        <!-- Positioning Panel (shown after clicking Start, before measurement begins) -->
-        <Grid Visibility="{Binding IsPositioningVisible, Converter={StaticResource BoolToVis}}"
-              Background="{StaticResource DarkSurround}"
-              MouseLeftButtonDown="PatchDrag_MouseDown" MouseMove="PatchDrag_MouseMove"
-              MouseLeftButtonUp="PatchDrag_MouseUp" Cursor="SizeAll">
-            <!-- Windowed Mode Warning Banner -->
-            <Border Background="{StaticResource WarningBackgroundBrush}"
-                    VerticalAlignment="Top" Padding="8,6" Panel.ZIndex="100"
-                    Visibility="{Binding ShowPositioningWindowedBanner, Converter={StaticResource BoolToVis}}">
-                <TextBlock HorizontalAlignment="Center" Foreground="#FFD699" FontSize="12">
-                    <Run FontWeight="SemiBold">Windowed Mode</Run>
-                    <Run> - Drag anywhere to position, resize window to scale patch</Run>
-                </TextBlock>
-            </Border>
-
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="*"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
-
-                <!-- Preview Patch Display - Scales with window size. The RenderTransform
-                     lets the user move the patch to wherever the probe hangs; the offset
-                     is shared with the measurement patch so placement carries over. -->
-                <Viewbox Grid.Row="0" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center"
-                         Margin="20">
-                    <Viewbox.RenderTransform>
-                        <TranslateTransform x:Name="PositioningPatchTransform"/>
-                    </Viewbox.RenderTransform>
-                    <Border x:Name="PositioningPatchBorder" Width="400" Height="400"
-                            Background="White" BorderThickness="0">
-                        <!-- Probe-placement target: align the colorimeter's sensor over the
-                             center ring. Muted gray so it guides placement without skewing
-                             the white reference; the actual measurement uses a clean patch. -->
-                        <Grid x:Name="ProbeTargetOverlay">
-                            <Ellipse Width="150" Height="150" Stroke="#9AA0A6" StrokeThickness="2"
-                                     StrokeDashArray="4 3" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                            <Ellipse Width="92" Height="92" Stroke="#7A7F85" StrokeThickness="2"
-                                     HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                            <Rectangle Width="2" Height="44" Fill="#7A7F85"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                            <Rectangle Width="44" Height="2" Fill="#7A7F85"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                            <Ellipse Width="8" Height="8" Fill="#5F6368"
-                                     HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Grid>
-                    </Border>
-                </Viewbox>
-
-                <!-- Positioning Instructions -->
-                <Border Grid.Row="1" Background="#CC1A1A1A" Padding="24,20">
-                    <StackPanel MaxWidth="600" HorizontalAlignment="Center">
-                        <TextBlock Text="Position Your Colorimeter" FontSize="18" FontWeight="SemiBold"
-                                   HorizontalAlignment="Center" Margin="0,0,0,12"/>
-                        <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextDim}" FontSize="13"
-                                   HorizontalAlignment="Center" TextAlignment="Center" Margin="0,0,0,16">
-                            Hang the colorimeter with its counterweight over the top of the
-                            display, then <Run FontWeight="SemiBold">drag the target</Run> (or use the
-                            <Run FontWeight="SemiBold">arrow keys</Run>) so the crosshair sits directly
-                            under the sensor, flush against the screen. This position carries into
-                            measurement, so click Begin Measurement once it's aligned.
-                        </TextBlock>
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                            <Button Content="Back" Style="{StaticResource SubtleButton}"
-                                    Click="PositioningBack_Click" Margin="0,0,12,0" Padding="20,10"/>
-                            <Button Content="Begin Measurement"
-                                    Style="{StaticResource ModernButton}" Click="BeginMeasurement_Click" Padding="24,10"/>
-                        </StackPanel>
-                    </StackPanel>
-                </Border>
-            </Grid>
-        </Grid>
+        <!-- One shared placement surface is used here and by every follow-up probe flow. -->
+        <local:ProbePlacementControl x:Name="ProbePlacement"
+                                     Visibility="{Binding IsPositioningVisible, Converter={StaticResource BoolToVis}}"
+                                     BeginRequested="BeginMeasurement_Click"
+                                     SecondaryRequested="PositioningBack_Click"/>
 
         <!-- Measurement Panel (shown during calibration) -->
         <Grid Visibility="{Binding IsMeasurementVisible, Converter={StaticResource BoolToVis}}"

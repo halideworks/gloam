@@ -373,7 +373,42 @@ namespace HDRGammaController.Core.Calibration
                 DetailedGrayscaleDeltaE = FiniteOrNull(summary.DetailedGrayscaleDeltaE),
                 DetailedPrimariesDeltaE = FiniteOrNull(summary.DetailedPrimariesDeltaE),
                 DetailedSaturationDeltaE = FiniteOrNull(summary.DetailedSaturationDeltaE),
-                DetailedMemoryColorsDeltaE = FiniteOrNull(summary.DetailedMemoryColorsDeltaE)
+                DetailedMemoryColorsDeltaE = FiniteOrNull(summary.DetailedMemoryColorsDeltaE),
+                VerificationDetailText = summary.VerificationDetailText,
+                PqTrackingDetailText = summary.PqTrackingDetailText,
+                ColoredHdrDetailText = summary.ColoredHdrDetailText,
+                ToneMapping = SanitizeToneMapping(summary.ToneMapping)
+            };
+        }
+
+        private static ToneMappingCharacterization? SanitizeToneMapping(ToneMappingCharacterization? value)
+        {
+            if (value == null) return null;
+
+            static double NonNegative(double v) => double.IsFinite(v) && v >= 0 ? v : 0;
+            static double? OptionalNonNegative(double? v) =>
+                v is { } d && double.IsFinite(d) && d >= 0 ? d : null;
+
+            return new ToneMappingCharacterization
+            {
+                SchemaVersion = Math.Max(1, value.SchemaVersion),
+                ClaimedPeakNits = NonNegative(value.ClaimedPeakNits),
+                ClaimedMaxFullFrameNits = NonNegative(value.ClaimedMaxFullFrameNits),
+                MeasuredPeakNits = NonNegative(value.MeasuredPeakNits),
+                MeasuredFullFramePeakNits = OptionalNonNegative(value.MeasuredFullFramePeakNits),
+                KneeNits = NonNegative(value.KneeNits),
+                KneeObserved = value.KneeObserved,
+                Ladder = (value.Ladder ?? Array.Empty<ToneMapLadderPoint>())
+                    .Where(p => double.IsFinite(p.RequestedNits) && p.RequestedNits > 0 &&
+                                double.IsFinite(p.MeasuredNits) && p.MeasuredNits >= 0)
+                    .ToList(),
+                AplSweep = (value.AplSweep ?? Array.Empty<AplPoint>())
+                    .Where(p => double.IsFinite(p.WindowPercent) && p.WindowPercent > 0 && p.WindowPercent <= 100 &&
+                                double.IsFinite(p.MeasuredNits) && p.MeasuredNits >= 0)
+                    .ToList(),
+                HgigPeakNits = NonNegative(value.HgigPeakNits),
+                SuggestedMaxCllNits = NonNegative(value.SuggestedMaxCllNits),
+                SuggestedMaxFallNits = OptionalNonNegative(value.SuggestedMaxFallNits),
             };
         }
 
@@ -504,6 +539,11 @@ namespace HDRGammaController.Core.Calibration
         public double? DetailedPrimariesDeltaE { get; set; }
         public double? DetailedSaturationDeltaE { get; set; }
         public double? DetailedMemoryColorsDeltaE { get; set; }
+
+        /// <summary>Verification diagnostics shown below the headline accuracy table.</summary>
+        public string? VerificationDetailText { get; set; }
+        public string? PqTrackingDetailText { get; set; }
+        public string? ColoredHdrDetailText { get; set; }
 
         /// <summary>HDR tone-mapping characterization (roadmap 2.3), when one ran.
         /// Nullable so pre-feature report JSONs load unchanged.</summary>

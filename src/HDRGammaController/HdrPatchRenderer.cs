@@ -68,7 +68,7 @@ namespace HDRGammaController
         private static extern bool ShowWindow(IntPtr hWnd, int cmd);
         [DllImport("user32.dll")]
         private static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
-        [DllImport("kernel32.dll")]
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
         private static extern IntPtr GetModuleHandle(string? name);
 
         private const uint WS_POPUP = 0x80000000;

@@ -1,4 +1,6 @@
 using System;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -27,10 +29,9 @@ namespace HDRGammaController
         private static readonly Brush BarBg = new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33));
         private static readonly Brush Accent = new SolidColorBrush(Color.FromRgb(0xFF, 0x3C, 0x2F));
         private static readonly Brush TextDim = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88));
-        private static readonly Brush ButtonBg = new SolidColorBrush(Color.FromRgb(0x44, 0x44, 0x44));
-        private static readonly Brush ButtonHoverBg = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55));
 
         private readonly Border _patch;
+        private readonly double _patchSize;
         private readonly ProgressBar _progress;
         private readonly TextBlock _patchInfo;
         private readonly TextBlock _phase;
@@ -39,8 +40,8 @@ namespace HDRGammaController
         private readonly TextBlock _nextPatch;
         private readonly Grid _currentNextRow;
         private readonly StackPanel _controlsRow;
-        private readonly StackPanel _placementRow;
-        private readonly TextBlock _placementInstruction;
+        private readonly Border _sweepOverlay;
+        private readonly ProbePlacementControl _placement;
         private readonly Button _muteButton;
         private Action? _cancelRequested;
 
@@ -57,54 +58,15 @@ namespace HDRGammaController
         public double OffsetX { get; private set; }
         public double OffsetY { get; private set; }
 
-        private bool _dragEnabled;
-        private bool _dragging;
-        private Point _dragStart;
-        private double _dragStartX, _dragStartY;
-
-        /// <summary>
-        /// Lets the user drag the patch to the probe position — the same interaction as the
-        /// calibration window's positioning step. Read the result from OffsetX/OffsetY.
-        /// </summary>
-        public void EnableDrag()
-        {
-            if (_dragEnabled) return;
-            _dragEnabled = true;
-            Cursor = System.Windows.Input.Cursors.SizeAll;
-
-            MouseLeftButtonDown += (_, e) =>
-            {
-                if (!_dragEnabled) return;
-                _dragging = true;
-                _dragStart = e.GetPosition(this);
-                _dragStartX = OffsetX;
-                _dragStartY = OffsetY;
-                CaptureMouse();
-            };
-            MouseMove += (_, e) =>
-            {
-                if (!_dragging) return;
-                var p = e.GetPosition(this);
-                OffsetX = _dragStartX + (p.X - _dragStart.X);
-                OffsetY = _dragStartY + (p.Y - _dragStart.Y);
-                _patch.RenderTransform = new TranslateTransform(OffsetX, OffsetY);
-            };
-            MouseLeftButtonUp += (_, _) =>
-            {
-                if (!_dragging) return;
-                _dragging = false;
-                ReleaseMouseCapture();
-            };
-        }
-
-        public void DisableDrag()
-        {
-            _dragEnabled = false;
-            Cursor = null;
-        }
-
         public PatchDisplayWindow(MonitorInfo monitor, double patchSize = 600, double offsetX = 0, double offsetY = 0)
         {
+            Resources.MergedDictionaries.Add(new ResourceDictionary
+            {
+                Source = new Uri("pack://application:,,,/Gloam;component/Themes/Brutalist.xaml", UriKind.Absolute),
+            });
+            _placement = new ProbePlacementControl { Visibility = Visibility.Collapsed };
+            _placement.BeginRequested += (_, _) => CompletePlacement();
+            _placement.SecondaryRequested += (_, _) => AbortRequested?.Invoke();
             WindowStyle = WindowStyle.None;
             ResizeMode = ResizeMode.NoResize;
             ShowInTaskbar = false;
@@ -124,14 +86,19 @@ namespace HDRGammaController
                     e.Handled = true;
                     AbortRequested?.Invoke();
                 }
-                else if (e.Key is System.Windows.Input.Key.Enter or System.Windows.Input.Key.Space)
+                else if (_placement.Visibility == Visibility.Visible &&
+                         e.Key is System.Windows.Input.Key.Enter or System.Windows.Input.Key.Space)
                 {
                     e.Handled = true;
-                    ContinueRequested?.Invoke();
+                    CompletePlacement();
                 }
             };
             MouseDown += (_, _) => Focus();
-            MouseDoubleClick += (_, _) => ContinueRequested?.Invoke();
+            MouseDoubleClick += (_, _) =>
+            {
+                if (_placement.Visibility == Visibility.Visible)
+                    CompletePlacement();
+            };
 
             // Place via raw Win32 pixels once the HWND exists. Feeding the DXGI pixel rect
             // into WPF's DIP-based Left/Width on a hidden window gets reinterpreted against
@@ -163,6 +130,7 @@ namespace HDRGammaController
 
             OffsetX = offsetX;
             OffsetY = offsetY;
+            _patchSize = patchSize;
             _patch = new Border
             {
                 Width = patchSize,
@@ -250,49 +218,13 @@ namespace HDRGammaController
             _controlsRow.Children.Add(cancelButton);
             _controlsRow.Children.Add(_muteButton);
 
-            // Placement prompt: a clear instruction + a big Begin button, shown before a
-            // refine/characterize run so the user drags the patch onto the probe and starts
-            // deliberately (mirrors the calibration positioning step). Hidden during the sweep.
-            _placementInstruction = new TextBlock
-            {
-                Foreground = Brushes.White,
-                FontSize = 16,
-                FontWeight = FontWeights.SemiBold,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                TextAlignment = TextAlignment.Center,
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 0, 0, 12),
-            };
-            var beginButton = new Button
-            {
-                Content = "Begin measurement",
-                Padding = new Thickness(30, 12, 30, 12),
-                FontSize = 15,
-                FontWeight = FontWeights.Bold,
-                Foreground = Brushes.White,
-                Background = Accent,
-                BorderThickness = new Thickness(0),
-                Cursor = System.Windows.Input.Cursors.Hand,
-                HorizontalAlignment = HorizontalAlignment.Center,
-            };
-            beginButton.Click += (_, _) => ContinueRequested?.Invoke();
-            _placementRow = new StackPanel
-            {
-                HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(0, 4, 0, 4),
-                Visibility = Visibility.Collapsed,
-            };
-            _placementRow.Children.Add(_placementInstruction);
-            _placementRow.Children.Add(beginButton);
-
             var overlayContent = new StackPanel { MaxWidth = 600 };
-            overlayContent.Children.Add(_placementRow);
             overlayContent.Children.Add(_progress);
             overlayContent.Children.Add(infoRow);
             overlayContent.Children.Add(_currentNextRow);
             overlayContent.Children.Add(_controlsRow);
 
-            var overlay = new Border
+            _sweepOverlay = new Border
             {
                 Background = OverlayBg,
                 Padding = new Thickness(20, 16, 20, 16),
@@ -302,7 +234,9 @@ namespace HDRGammaController
 
             var root = new Grid();
             root.Children.Add(_patch);
-            root.Children.Add(overlay);
+            root.Children.Add(_sweepOverlay);
+
+            root.Children.Add(_placement);
             Content = root;
         }
 
@@ -370,29 +304,67 @@ namespace HDRGammaController
         }
 
         /// <summary>
-        /// Shows the placement prompt (drag instruction + big Begin button) and enables
-        /// dragging the patch, hiding the progress strip. The caller awaits ContinueRequested
-        /// (Begin button / Enter / double-click), then calls <see cref="HidePlacementPrompt"/>.
+        /// Shows the exact same placement surface used by the initial calibration.
         /// </summary>
-        public void ShowPlacementPrompt(string instruction)
+        public void ShowPlacementPrompt(string operationLabel)
         {
-            _placementInstruction.Text = instruction;
-            _placementRow.Visibility = Visibility.Visible;
-            _progress.Visibility = Visibility.Collapsed;
-            _percent.Visibility = Visibility.Collapsed;
-            _patchInfo.Visibility = Visibility.Collapsed;
-            _phase.Visibility = Visibility.Collapsed;
-            EnableDrag();
+            _placement.Configure(
+                _patchSize,
+                OffsetX,
+                OffsetY,
+                operationLabel,
+                secondaryLabel: "Cancel");
+            _patch.Visibility = Visibility.Collapsed;
+            _sweepOverlay.Visibility = Visibility.Collapsed;
+            _placement.Visibility = Visibility.Visible;
+            _placement.Focus();
         }
 
         public void HidePlacementPrompt()
         {
-            _placementRow.Visibility = Visibility.Collapsed;
-            _progress.Visibility = Visibility.Visible;
-            _percent.Visibility = Visibility.Visible;
-            _patchInfo.Visibility = Visibility.Visible;
-            _phase.Visibility = Visibility.Visible;
-            DisableDrag();
+            _placement.Visibility = Visibility.Collapsed;
+            _patch.Visibility = Visibility.Visible;
+            _sweepOverlay.Visibility = Visibility.Visible;
+            Focus();
+        }
+
+        /// <summary>
+        /// Displays the shared placement surface and asynchronously waits for Begin. Escape,
+        /// Cancel, window teardown, or caller cancellation all use the caller's token.
+        /// </summary>
+        public async Task WaitForPlacementAsync(string operationLabel, CancellationToken token)
+        {
+            var positioned = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            void OnContinue() => positioned.TrySetResult(true);
+            void OnAbort() => positioned.TrySetCanceled(token);
+            void OnClosed(object? _, EventArgs __) => positioned.TrySetCanceled(token);
+
+            ContinueRequested += OnContinue;
+            AbortRequested += OnAbort;
+            Closed += OnClosed;
+            try
+            {
+                ShowPlacementPrompt(operationLabel);
+                using (token.Register(() => positioned.TrySetCanceled(token)))
+                    await positioned.Task;
+            }
+            finally
+            {
+                ContinueRequested -= OnContinue;
+                AbortRequested -= OnAbort;
+                Closed -= OnClosed;
+                if (IsLoaded)
+                    HidePlacementPrompt();
+            }
+        }
+
+        private void CompletePlacement()
+        {
+            if (_placement.Visibility != Visibility.Visible) return;
+            OffsetX = _placement.OffsetX;
+            OffsetY = _placement.OffsetY;
+            _patch.RenderTransform = new TranslateTransform(OffsetX, OffsetY);
+            ContinueRequested?.Invoke();
         }
 
         private void SetProgressBar(int current, int total)
@@ -418,33 +390,14 @@ namespace HDRGammaController
         private void UpdateMuteLabel() =>
             _muteButton.Content = CalibrationSounds.Muted ? "Sound: Muted" : "Sound: On";
 
-        /// <summary>Code-built twin of CalibrationWindow.xaml's SubtleButton style.</summary>
-        private static Button MakeSubtleButton(string label)
+        private Button MakeSubtleButton(string label) => new()
         {
-            var border = new System.Windows.FrameworkElementFactory(typeof(Border), "border");
-            border.SetValue(Border.CornerRadiusProperty, new CornerRadius(4));
-            border.SetValue(Border.BackgroundProperty, ButtonBg);
-            border.SetValue(Border.PaddingProperty, new Thickness(12, 6, 12, 6));
-            var presenter = new System.Windows.FrameworkElementFactory(typeof(ContentPresenter));
-            presenter.SetValue(HorizontalAlignmentProperty, HorizontalAlignment.Center);
-            presenter.SetValue(VerticalAlignmentProperty, VerticalAlignment.Center);
-            border.AppendChild(presenter);
-
-            var template = new ControlTemplate(typeof(Button)) { VisualTree = border };
-            var hover = new System.Windows.Trigger { Property = IsMouseOverProperty, Value = true };
-            hover.Setters.Add(new Setter(Border.BackgroundProperty, ButtonHoverBg, "border"));
-            template.Triggers.Add(hover);
-
-            return new Button
-            {
-                Content = label,
-                Template = template,
-                Foreground = Brushes.White,
-                Cursor = System.Windows.Input.Cursors.Hand,
-                // Keep keyboard focus on the window so Escape/Enter still land there and
-                // Space can't accidentally re-click a focused button mid-sweep.
-                Focusable = false,
-            };
-        }
+            Content = label,
+            Style = (Style)FindResource("BrutBtnSecondary"),
+            Padding = new Thickness(12, 6, 12, 6),
+            // Keep keyboard focus on the window so Escape/Enter still land there and
+            // Space can't accidentally re-click a focused button mid-sweep.
+            Focusable = false,
+        };
     }
 }

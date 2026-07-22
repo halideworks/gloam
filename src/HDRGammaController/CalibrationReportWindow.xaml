@@ -586,7 +586,7 @@
                     <Button x:Name="VerifyButton"
                             Content="{Binding VerifyButtonContent}"
                             IsEnabled="{Binding IsVerifyEnabled}"
-                            ToolTip="Re-measure a quick patch sweep through the applied profile to refresh the 'after' numbers. Place the probe on the display first."
+                            ToolTip="Re-measure a quick patch sweep through the applied profile to refresh the 'after' numbers. Includes guided probe positioning."
                             Style="{StaticResource BrutBtnSecondary}"
                             Margin="0,0,10,0"
                             Click="VerifyButton_Click"/>
@@ -595,7 +595,7 @@
                          applied) and white point tools. Item state is set in code-behind. -->
                     <Button x:Name="RefineMenuButton"
                             Content="Refine ▾"
-                            ToolTip="Closed-loop HDR tone + color refinement, or white point tools. Place the probe on the display first."
+                            ToolTip="Closed-loop HDR tone + color refinement, or white point tools. Includes guided probe positioning."
                             Style="{StaticResource BrutBtnSecondary}"
                             Margin="0,0,10,0"
                             Click="RefineMenu_Click">
@@ -617,7 +617,7 @@
                             Content="Characterize HDR"
                             Visibility="Collapsed"
                             IsEnabled="False"
-                            ToolTip="Measures a dense near-peak PQ ladder plus white windows from 1% to full-frame to find the panel's TRUE tone-mapping knee, peak and ABL behavior versus its claimed metadata, and suggests HGIG game-calibration values. Place the probe on the display first."
+                            ToolTip="Measures a dense near-peak PQ ladder plus white windows from 1% to full-frame to find the panel's TRUE tone-mapping knee, peak and ABL behavior versus its claimed metadata, and suggests HGIG game-calibration values. Includes guided probe positioning."
                             Style="{StaticResource BrutBtnSecondary}"
                             Margin="0,0,10,0"
                             Click="CharacterizeHdrButton_Click"/>

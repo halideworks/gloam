@@ -480,26 +480,16 @@ namespace HDRGammaController
                 Log.Info($"CcssBrowserWindow: spectral capture starting on '{monitor.FriendlyName}' " +
                          $"with '{colorimeter.ConnectedColorimeter?.Model}'.");
 
-                // Positioning phase: white square, draggable, Enter/double-click to start.
+                // The shared placement surface keeps capture aligned with calibration and
+                // every report/refinement sweep.
                 patchWindow = new PatchDisplayWindow(monitor, patchSize: 400);
                 patchWindow.SetColor(1, 1, 1);
-                patchWindow.EnableDrag();
-                patchWindow.SetProgress(0, SpectralCaptureService.Patches.Count * 3, "White", "Red",
-                    phase: "Drag the square under the spectrometer, then press Enter");
 
                 using var cts = new CancellationTokenSource();
-                var positioned = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-                patchWindow.ContinueRequested += () => positioned.TrySetResult(true);
-                patchWindow.AbortRequested += () => { positioned.TrySetResult(false); cts.Cancel(); };
-                patchWindow.Closed += (_, _) => { positioned.TrySetResult(false); cts.Cancel(); };
+                patchWindow.AbortRequested += () => cts.Cancel();
+                patchWindow.Closed += (_, _) => cts.Cancel();
                 patchWindow.Show();
-
-                if (!await positioned.Task)
-                {
-                    _status.Text = "Spectral capture cancelled.";
-                    return;
-                }
-                patchWindow.DisableDrag();
+                await patchWindow.WaitForPlacementAsync("Emission spectrum capture", cts.Token);
 
                 _status.Text = "Measuring emission spectra… watch the patch window.";
                 await colorimeter.BeginSpectralSessionAsync(cts.Token);
@@ -592,16 +582,13 @@ namespace HDRGammaController
                 Log.Info($"CcssBrowserWindow: two-instrument CCMX capture starting on '{monitor.FriendlyName}' " +
                          $"with '{firstInfo.Model}' as the first instrument.");
 
-                // Positioning phase: white square, draggable, Enter/double-click to start.
+                // Reuse the same placement surface as full calibration and refinement.
                 patchWindow = new PatchDisplayWindow(monitor, patchSize: 400);
                 patchWindow.SetColor(1, 1, 1);
-                patchWindow.EnableDrag();
 
                 using var cts = new CancellationTokenSource();
-                var positioned = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-                patchWindow.ContinueRequested += () => positioned.TrySetResult(true);
-                patchWindow.AbortRequested += () => { positioned.TrySetResult(false); cts.Cancel(); };
-                patchWindow.Closed += (_, _) => { positioned.TrySetResult(false); cts.Cancel(); };
+                patchWindow.AbortRequested += () => cts.Cancel();
+                patchWindow.Closed += (_, _) => cts.Cancel();
                 patchWindow.Show();
 
                 var window = patchWindow; // non-null capture for the delegates
@@ -657,15 +644,8 @@ namespace HDRGammaController
                         window.SetProgress(done, total, name, null, phase: $"{phase}: measuring {name}"),
                 };
 
-                patchWindow.SetProgress(0, capture.TotalReads, "White", "Red",
-                    phase: $"Drag the square under the {firstInfo.Model}, then press Enter");
-
-                if (!await positioned.Task)
-                {
-                    _status.Text = "Correction-matrix capture cancelled.";
-                    return;
-                }
-                patchWindow.DisableDrag();
+                await patchWindow.WaitForPlacementAsync(
+                    $"Correction matrix · {firstInfo.Model}", cts.Token);
 
                 _status.Text = $"Phase 1: measuring with {firstInfo.Model}… watch the patch window.";
                 await first.BeginMeasurementSessionAsync(hdrMode: false, cts.Token);

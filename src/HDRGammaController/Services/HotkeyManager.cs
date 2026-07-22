@@ -8,8 +8,10 @@ namespace HDRGammaController.Services
 {
     public class HotkeyManager : IDisposable
     {
-        private IntPtr _hwnd;
-        private HwndSource? _source;
+        private readonly IntPtr _hwnd;
+        // HwndSource.FromHwnd returns the window owner's source. We borrow it to install a
+        // hook but must not Dispose it (that would tear down a window we do not own).
+        private readonly WeakReference<HwndSource>? _source;
         private int _currentId;
         private readonly List<int> _registeredIds = new();
 
@@ -18,8 +20,12 @@ namespace HDRGammaController.Services
         public HotkeyManager(IntPtr hwnd)
         {
             _hwnd = hwnd;
-            _source = HwndSource.FromHwnd(_hwnd);
-            _source?.AddHook(WndProc);
+            var source = HwndSource.FromHwnd(_hwnd);
+            if (source != null)
+            {
+                _source = new WeakReference<HwndSource>(source);
+                source.AddHook(WndProc);
+            }
         }
 
         public int Register(Key key, ModifierKeys modifiers)
@@ -69,7 +75,8 @@ namespace HDRGammaController.Services
                 User32.UnregisterHotKey(_hwnd, id);
             }
             _registeredIds.Clear();
-            _source?.RemoveHook(WndProc);
+            if (_source?.TryGetTarget(out var source) == true)
+                source.RemoveHook(WndProc);
         }
     }
 }

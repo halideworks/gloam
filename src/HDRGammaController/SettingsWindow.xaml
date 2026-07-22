@@ -291,20 +291,12 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- Night Mode Section -->
+                        <!-- Per-monitor night-mode controls -->
                         <Border Style="{StaticResource SectionCard}">
                             <StackPanel>
-                                <TextBlock Text="Night mode" Style="{StaticResource SectionHeader}"/>
-
-                                <!-- Global Settings Moved to Dashboard -->
-                                <TextBlock Text="Global Night Mode settings are now managed in the Dashboard."
-                                           Foreground="{DynamicResource ThemeTextDim}" FontSize="12" Margin="0,0,0,16" TextWrapping="Wrap"/>
-
-                                <!-- Per Monitor Settings -->
-                                <Separator Margin="0,16,0,16" Background="{DynamicResource ThemeBorder}"/>
-                                <TextBlock Text="Per-monitor override" Style="{StaticResource SectionHeader}" FontSize="11" Margin="0,0,0,8" Foreground="{DynamicResource ThemeTextDim}"/>
+                                <TextBlock Text="Night mode override" Style="{StaticResource SectionHeader}"/>
                                 <TextBlock Text="Fine-tune this monitor's temperature relative to the global setting."
-                                           Foreground="{DynamicResource ThemeTextDim}" FontSize="11" Margin="0,-4,0,12" TextWrapping="Wrap"/>
+                                           Foreground="{DynamicResource ThemeTextDim}" FontSize="11" Margin="0,0,0,12" TextWrapping="Wrap"/>
 
                                 <TextBlock Text="Temperature offset" Style="{StaticResource FieldLabel}"/>
                                 <Grid>

@@ -412,7 +412,7 @@ namespace HDRGammaController
             catch {}
         }
 
-        private async void GraphCanvas_MouseMove(object sender, MouseEventArgs e)
+        private void GraphCanvas_MouseMove(object sender, MouseEventArgs e)
         {
             if (_isDragging && _dragItem != null)
             {

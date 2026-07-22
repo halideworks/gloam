@@ -98,7 +98,6 @@ namespace HDRGammaController.ViewModels
 
         private readonly List<MonitorInfo> _monitors;
         private readonly SettingsManager? _settingsManager;
-        private bool _loadingPrefs;
         private bool _colorimeterReady;
         private bool _updatingTargetSelection;
 
@@ -516,33 +515,25 @@ namespace HDRGammaController.ViewModels
 
             DetectedDisplayType = monitor != null ? DetectPanelType(monitor) : null;
 
-            _loadingPrefs = true;
-            try
+            if (Enum.TryParse(prefs?.CalibDisplayType, out DisplayType savedType))
             {
-                if (Enum.TryParse(prefs?.CalibDisplayType, out DisplayType savedType))
-                {
-                    // A saved explicit choice wins over detection.
-                    SetDisplayType(savedType);
-                }
-                else if (DetectedDisplayType is DisplayType detected)
-                {
-                    SetDisplayType(detected);
-                }
-
-                // A saved explicit white-point-only choice wins over the OLED suggestion.
-                if (prefs?.CalibWhitePointOnly is bool savedWpOnly)
-                {
-                    WhitePointOnly = savedWpOnly;
-                }
-
-                if (Enum.TryParse(prefs?.CalibPreset, out CalibrationPreset savedPreset))
-                {
-                    SetPreset(savedPreset);
-                }
+                // A saved explicit choice wins over detection.
+                SetDisplayType(savedType);
             }
-            finally
+            else if (DetectedDisplayType is DisplayType detected)
             {
-                _loadingPrefs = false;
+                SetDisplayType(detected);
+            }
+
+            // A saved explicit white-point-only choice wins over the OLED suggestion.
+            if (prefs?.CalibWhitePointOnly is bool savedWpOnly)
+            {
+                WhitePointOnly = savedWpOnly;
+            }
+
+            if (Enum.TryParse(prefs?.CalibPreset, out CalibrationPreset savedPreset))
+            {
+                SetPreset(savedPreset);
             }
         }
 

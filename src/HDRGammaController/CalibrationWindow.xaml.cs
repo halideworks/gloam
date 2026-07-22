@@ -363,10 +363,16 @@ namespace HDRGammaController
 
         private void Window_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
         {
-            // Arrow keys nudge the patch while positioning or measuring, so the user can
-            // fine-tune alignment to a fixed-hanging probe without the mouse.
-            bool placingPatch = Vm.IsPositioningVisible || Vm.IsMeasurementVisible;
-            if (placingPatch && TryNudgePatch(e.Key, (Keyboard.Modifiers & ModifierKeys.Shift) != 0))
+            // The shared placement surface owns its own keyboard behavior. During the
+            // measurement itself, preserve the ability to fine-tune the live patch.
+            if (Vm.IsPositioningVisible &&
+                ProbePlacement.TryNudge(e.Key, (Keyboard.Modifiers & ModifierKeys.Shift) != 0))
+            {
+                e.Handled = true;
+                return;
+            }
+            if (Vm.IsMeasurementVisible &&
+                TryNudgePatch(e.Key, (Keyboard.Modifiers & ModifierKeys.Shift) != 0))
             {
                 e.Handled = true;
                 return;
@@ -896,29 +902,29 @@ namespace HDRGammaController
             // Update positioning patch size based on selected patch size
             UpdatePositioningPatchSize();
 
-            // Show windowed mode banner if applicable
-            if (Vm.IsWindowedMode)
-            {
-                Vm.ShowPositioningWindowedBanner = true;
-            }
-
             // Show positioning panel for user to place colorimeter
             Vm.IsSetupVisible = false;
             Vm.IsPositioningVisible = true;
+            ProbePlacement.Focus();
         }
 
         private void UpdatePositioningPatchSize()
         {
-            // Set positioning patch size - user can resize window to scale it
-            PositioningPatchBorder.Width = _patchSize;
-            PositioningPatchBorder.Height = _patchSize;
+            ProbePlacement.Configure(
+                _patchSize,
+                _patchOffsetX,
+                _patchOffsetY,
+                operationLabel: "Calibration",
+                secondaryLabel: "Back",
+                showWindowedBanner: Vm.IsWindowedMode);
         }
 
         private void PositioningBack_Click(object sender, RoutedEventArgs e)
         {
+            _patchOffsetX = ProbePlacement.OffsetX;
+            _patchOffsetY = ProbePlacement.OffsetY;
             // Go back to setup panel
             Vm.IsPositioningVisible = false;
-            Vm.ShowPositioningWindowedBanner = false;
             Vm.IsSetupVisible = true;
             RestoreWindowMode();
         }
@@ -932,6 +938,11 @@ namespace HDRGammaController
                     "The calibration setup is incomplete. Go back and select a meter and target before measuring.");
                 return;
             }
+
+            // The reusable placement control owns drag/nudge state until the user commits
+            // it. Measurement and all follow-up report operations receive these coordinates.
+            _patchOffsetX = ProbePlacement.OffsetX;
+            _patchOffsetY = ProbePlacement.OffsetY;
 
             // MEASUREMENT-START GATE: Windows Night Light warms the whole output at the
             // compositor — every reading through it is corrupted. Detection is a heuristic
@@ -1045,7 +1056,6 @@ namespace HDRGammaController
 
             // Hide positioning, show measurement panel
             Vm.IsPositioningVisible = false;
-            Vm.ShowPositioningWindowedBanner = false;
             Vm.IsMeasurementVisible = true;
             UpdateMuteButton();
 
@@ -1549,7 +1559,6 @@ namespace HDRGammaController
             Vm.IsCompletionVisible = false;
             Vm.IsPauseOverlayVisible = false;
             Vm.IsPositioningVisible = false;
-            Vm.ShowPositioningWindowedBanner = false;
             Vm.ShowWindowedModeBanner = false;
             Vm.IsSetupVisible = true;
 
@@ -1603,24 +1612,9 @@ namespace HDRGammaController
             }
         }
 
-        private void PositioningPatch_MouseDown(object sender, MouseButtonEventArgs e)
-        {
-            if (e.ChangedButton == MouseButton.Left)
-            {
-                DragMove();
-            }
-        }
-
-        // Patch placement: the user moves the patch (not the window) to wherever the
-        // probe hangs. The offset is shared between the positioning and measurement
-        // patches via two TranslateTransforms, so placement carries straight through.
+        // Patch placement chosen by ProbePlacement carries into the live measurement patch.
         private void ApplyPatchOffset()
         {
-            if (PositioningPatchTransform != null)
-            {
-                PositioningPatchTransform.X = _patchOffsetX;
-                PositioningPatchTransform.Y = _patchOffsetY;
-            }
             if (MeasurementPatchTransform != null)
             {
                 MeasurementPatchTransform.X = _patchOffsetX;
@@ -1698,7 +1692,9 @@ namespace HDRGammaController
                 MeasurementTime = _calibrationResult.TotalTime,
                 ColorimeterModel = _colorimeterService?.ConnectedColorimeter?.Model,
                 LastCalibratedAt = DateTime.UtcNow,
-                PostCalibrationDeltaE = _calibrationMetrics?.AverageDeltaE,
+                // These measurements describe the native panel. The verified correction
+                // fills PostCalibrationDeltaE after Apply/Verify (and after every refine).
+                PreCalibrationDeltaE = _calibrationMetrics?.AverageDeltaE,
                 QualityGrade = _calibrationMetrics?.GetGrade(),
                 CorrectionLut = _generatedLut
             };
@@ -2080,8 +2076,10 @@ namespace HDRGammaController
                 _isPaused = false;
 
                 // Restart calibration by going back to positioning
+                UpdatePositioningPatchSize();
                 Vm.IsPositioningVisible = true;
                 Vm.IsMeasurementVisible = false;
+                ProbePlacement.Focus();
             }
             else
             {

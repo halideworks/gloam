@@ -37,6 +37,10 @@ namespace HDRGammaController
         private readonly bool _driftCompensationApplied;
 
         private IReadOnlyList<MeasurementResult>? _verifyMeasurements;
+        // Last complete verification result shown in the accuracy table. Report updates
+        // from other tools (for example HDR characterization) must preserve this rather
+        // than replacing the after-correction column with nulls.
+        private CalibrationMetrics? _latestVerificationMetrics;
         private System.Threading.CancellationTokenSource? _verifyCts;
 
         // Single probe-busy gate: set for the whole duration of every op that holds the one
@@ -93,6 +97,7 @@ namespace HDRGammaController
         // Where this report's snapshot was written, so the post-verification re-save
         // updates the same file instead of creating a sibling.
         private string? _reportSavePath;
+        private bool _lastReportSnapshotSaved;
 
         // HDR tone-mapping characterization (roadmap 2.3), when one ran this session.
         private ToneMappingCharacterization? _toneMapping;
@@ -111,29 +116,20 @@ namespace HDRGammaController
         }
 
         /// <summary>
-        /// Probe-placement gate: shows a gray aim patch and waits for the user to position
-        /// the probe and confirm (Enter / double-click) before the first measurement, so a
-        /// refine/characterize run never just hopes the probe is still where it was. Honors
-        /// cancellation (Escape / the abort control).
+        /// Opens the shared calibration placement surface and remembers the committed
+        /// coordinates for every later sweep in this report session.
         /// </summary>
-        private static async Task WaitForProbePlacementAsync(
+        private async Task WaitForProbePlacementAsync(
             PatchDisplayWindow patchWindow, string phase, System.Threading.CancellationToken token)
         {
-            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            void OnContinue() => tcs.TrySetResult(true);
-            patchWindow.ContinueRequested += OnContinue;
-            try
+            await patchWindow.WaitForPlacementAsync(phase, token);
+            if (_applyContext is { } context)
             {
-                patchWindow.SetColor(0.5, 0.5, 0.5); // visible gray target to drag onto the probe
-                patchWindow.ShowPlacementPrompt(
-                    $"{phase}: drag the gray patch onto the probe, then press Begin.");
-                using (token.Register(() => tcs.TrySetCanceled(token)))
-                    await tcs.Task;
-            }
-            finally
-            {
-                patchWindow.ContinueRequested -= OnContinue;
-                patchWindow.HidePlacementPrompt();
+                _applyContext = context with
+                {
+                    PatchOffsetX = patchWindow.OffsetX,
+                    PatchOffsetY = patchWindow.OffsetY,
+                };
             }
         }
 
@@ -386,6 +382,14 @@ namespace HDRGammaController
                 if (!string.IsNullOrEmpty(s.SummaryText))
                     Vm.SummaryText = s.SummaryText;
 
+                Vm.VerifyDetailText = s.VerificationDetailText ?? string.Empty;
+                Vm.IsVerifyDetailVisible = !string.IsNullOrWhiteSpace(s.VerificationDetailText);
+                Vm.PqTrackingDetailText = s.PqTrackingDetailText ?? string.Empty;
+                Vm.IsPqTrackingDetailVisible = !string.IsNullOrWhiteSpace(s.PqTrackingDetailText);
+                Vm.ColoredHdrDetailText = s.ColoredHdrDetailText ?? string.Empty;
+                Vm.IsColoredHdrDetailVisible = !string.IsNullOrWhiteSpace(s.ColoredHdrDetailText);
+                _toneMapping = s.ToneMapping;
+
                 // Detailed verification survives into history: the persisted per-patch list
                 // is enough to rebuild the histogram, per-patch chart, worst-10 and the
                 // category breakdown (unlike the tone/gamut charts, which need raw XYZ).
@@ -501,8 +505,13 @@ namespace HDRGammaController
         private void PersistReportSummary(CalibrationMetrics? after)
         {
             if (_profile == null) return;
+            _lastReportSnapshotSaved = false;
             try
             {
+                if (after != null)
+                    _latestVerificationMetrics = after;
+                after ??= _latestVerificationMetrics;
+
                 // Detailed sweep results (when one ran): per-patch list capped at the
                 // detailed set size, plus the derived histogram and category breakdown so
                 // the saved JSON is self-describing.
@@ -539,6 +548,9 @@ namespace HDRGammaController
                     DetailedPrimariesDeltaE = breakdown?.PrimariesDeltaE,
                     DetailedSaturationDeltaE = breakdown?.SaturationDeltaE,
                     DetailedMemoryColorsDeltaE = breakdown?.MemoryColorsDeltaE,
+                    VerificationDetailText = Vm.IsVerifyDetailVisible ? Vm.VerifyDetailText : null,
+                    PqTrackingDetailText = Vm.IsPqTrackingDetailVisible ? Vm.PqTrackingDetailText : null,
+                    ColoredHdrDetailText = Vm.IsColoredHdrDetailVisible ? Vm.ColoredHdrDetailText : null,
                     ToneMapping = _toneMapping,
                 };
 
@@ -551,6 +563,7 @@ namespace HDRGammaController
                 }
                 _profile.SaveToFile(_reportSavePath);
                 PersistRawMeasurementCsvs();
+                _lastReportSnapshotSaved = true;
                 Log.Info($"CalibrationReportWindow: report snapshot saved to {_reportSavePath}");
             }
             catch (Exception ex)
@@ -1594,16 +1607,17 @@ namespace HDRGammaController
         {
             if (_applyContext is not { Colorimeter: { } colorimeter } ctx) return;
             if (!ConfirmDialog.Confirm(this, "Validate HDR Renderer",
-                    "Place the probe on the display, then press Yes.\n\n" +
-                    "Three short measurements: SDR white, the FP16 renderer at the same level, " +
-                    "and the FP16 renderer at double that level (briefly bright).",
-                    confirmLabel: "Yes", cancelLabel: "Cancel"))
+                    "Gloam will open the probe-positioning surface, then take three short measurements: " +
+                    "SDR white, the FP16 renderer at the same level, and the FP16 renderer at double " +
+                    "that level (briefly bright).",
+                    confirmLabel: "Position probe", cancelLabel: "Cancel"))
                 return;
 
             EnterProbeBusy();
             PatchDisplayWindow? surround = null;
             HdrPatchRenderer? renderer = null;
             bool bypassed = false;
+            using var validationCts = new System.Threading.CancellationTokenSource();
             var whitePatch = new ColorPatch { Name = "White", DisplayRgb = new LinearRgb(1, 1, 1), Category = PatchCategory.Grayscale };
             try
             {
@@ -1614,38 +1628,38 @@ namespace HDRGammaController
                 }
 
                 surround = new PatchDisplayWindow(ctx.Monitor, ctx.PatchSize, ctx.PatchOffsetX, ctx.PatchOffsetY);
+                surround.AbortRequested += () => validationCts.Cancel();
                 surround.Show();
-                await colorimeter.BeginMeasurementSessionAsync(hdrMode: true);
+                await WaitForProbePlacementAsync(surround, "HDR renderer validation", validationCts.Token);
+                await colorimeter.BeginMeasurementSessionAsync(hdrMode: true, validationCts.Token);
 
                 // 1) SDR baseline through the normal window.
                 surround.SetProgress(1, 3, "SDR white (baseline)");
                 surround.SetColor(1, 1, 1);
-                await Task.Delay(1500);
-                var sdr = await colorimeter.MeasureAsync(whitePatch, true);
+                await Task.Delay(1500, validationCts.Token);
+                var sdr = await colorimeter.MeasureAsync(whitePatch, true, validationCts.Token);
 
                 // Patch rectangle in pixels (same placement as the surround's patch).
-                var b = ctx.Monitor.MonitorBounds;
-                int size = (int)ctx.PatchSize;
-                int px = b.Left + (b.Right - b.Left - size) / 2 + (int)ctx.PatchOffsetX;
-                int py = b.Top + (b.Bottom - b.Top - size) / 2 + (int)ctx.PatchOffsetY;
+                Int32Rect patchRect = surround.GetPatchPixelRect();
 
                 surround.SetColor(0, 0, 0); // black behind the FP16 window
-                renderer = new HdrPatchRenderer(px, py, size, size);
+                renderer = new HdrPatchRenderer(
+                    patchRect.X, patchRect.Y, patchRect.Width, patchRect.Height);
                 Log.Info($"HDR renderer created; scRGB colorspace support reported: {renderer.ScRgbSupported}");
 
                 // 2) FP16 at the SDR white level - must match the SDR baseline.
                 surround.SetProgress(2, 3, "FP16 at SDR white level");
                 renderer.PresentNits(sdr.Xyz.Y, sdr.Xyz.Y, sdr.Xyz.Y);
-                await Task.Delay(1500);
-                var hdrSame = await colorimeter.MeasureAsync(whitePatch, true);
+                await Task.Delay(1500, validationCts.Token);
+                var hdrSame = await colorimeter.MeasureAsync(whitePatch, true, validationCts.Token);
 
                 // 3) FP16 at 2x - must exceed the SDR ceiling (capped below panel peak).
                 double targetHigh = Math.Min(sdr.Xyz.Y * 2.0,
                     ctx.Monitor.HdrPeakNits > 50 ? ctx.Monitor.HdrPeakNits * 0.9 : sdr.Xyz.Y * 2.0);
                 surround.SetProgress(3, 3, $"FP16 at {targetHigh:F0} nits");
                 renderer.PresentNits(targetHigh, targetHigh, targetHigh);
-                await Task.Delay(1500);
-                var hdrHigh = await colorimeter.MeasureAsync(whitePatch, true);
+                await Task.Delay(1500, validationCts.Token);
+                var hdrHigh = await colorimeter.MeasureAsync(whitePatch, true, validationCts.Token);
 
                 // Verdicts.
                 double sameRatio = hdrSame.Xyz.Y / Math.Max(sdr.Xyz.Y, 1e-6);
@@ -1671,6 +1685,11 @@ namespace HDRGammaController
                 surround?.Close();
                 surround = null;
                 ConfirmDialog.Info(this, "HDR Renderer Validation", report);
+            }
+            catch (OperationCanceledException)
+            {
+                Vm.StatusText = "HDR renderer validation cancelled.";
+                Vm.StatusBrush = CalibrationReportViewModel.DimBrush;
             }
             catch (Exception ex)
             {
@@ -1969,8 +1988,8 @@ namespace HDRGammaController
             if (_applyContext is not { Colorimeter: { } colorimeter } ctx || _activeCharacterization is not { } ch)
                 return;
             if (!ConfirmDialog.Confirm(this, "Re-anchor White",
-                    "Place the probe on the display, then press Yes to re-measure white.",
-                    confirmLabel: "Yes", cancelLabel: "Cancel"))
+                    "Gloam will open the probe-positioning surface, then re-measure the display's white anchor.",
+                    confirmLabel: "Position probe", cancelLabel: "Cancel"))
                 return;
 
             EnterProbeBusy();
@@ -1986,6 +2005,9 @@ namespace HDRGammaController
 
                 patchWindow = new PatchDisplayWindow(ctx.Monitor, ctx.PatchSize, ctx.PatchOffsetX, ctx.PatchOffsetY);
                 patchWindow.Show();
+                using var placementCts = new System.Threading.CancellationTokenSource();
+                patchWindow.AbortRequested += () => placementCts.Cancel();
+                await WaitForProbePlacementAsync(patchWindow, "White re-anchor", placementCts.Token);
                 patchWindow.SetColor(1, 1, 1);
                 patchWindow.SetProgress(1, 1, "White (re-anchor)");
                 await colorimeter.BeginMeasurementSessionAsync(hdrMode: ctx.HdrMode);
@@ -2093,7 +2115,22 @@ namespace HDRGammaController
             // global crash dialog.
             try
             {
-                await RefineHdrJointAsync();
+                bool refreshReport = await RefineHdrJointAsync();
+                if (refreshReport && IsLoaded)
+                {
+                    var previousVerification = _verifyMeasurements;
+                    Vm.StatusText = "HDR refinement complete - refreshing report measurements…";
+                    await RunVerificationAsync();
+                    if (_operationNotice is { } notice)
+                    {
+                        string refreshNote = !ReferenceEquals(previousVerification, _verifyMeasurements)
+                            ? _lastReportSnapshotSaved
+                                ? "The accuracy numbers, charts, saved report, and future PDF exports now reflect the final correction."
+                                : "The on-screen numbers, charts, and future PDF exports were refreshed, but the saved report could not be updated. Use Re-verify to retry saving it."
+                            : "The correction was installed, but report verification did not complete. Use Re-verify to refresh the numbers, charts, and saved report.";
+                        _operationNotice = (notice.Title, notice.Body + "\n\n" + refreshNote);
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -2119,24 +2156,24 @@ namespace HDRGammaController
         /// rebased PQ LUT are installed together. The core loop keeps a joint score and
         /// restores the best state if either objective materially regresses.
         /// </summary>
-        private async Task RefineHdrJointAsync()
+        private async Task<bool> RefineHdrJointAsync()
         {
             if (_applyContext is not { Colorimeter: { } colorimeter, HdrMode: true } ctx ||
                 _activeCharacterization is not { } characterization)
             {
                 ConfirmDialog.Info(this, "Refine HDR Tone + Color",
                     "HDR refinement needs the live HDR calibration session (open this report right after an HDR calibration).");
-                return;
+                return false;
             }
             if (!_profileApplied || !_profileEnabled || _installedHdrLuts is not { } currentLuts ||
                 _installedProfileName is not { } installedName)
             {
                 ConfirmDialog.Info(this, "Refine HDR Tone + Color",
                     "Apply the profile first - refinement measures the display through the installed correction.");
-                return;
+                return false;
             }
             if (_verifyCts != null || !Vm.IsVerifyEnabled)
-                return;
+                return false;
 
             var target = EffectiveTarget(ctx);
             var rungs = RefinementLadderNits
@@ -2146,7 +2183,7 @@ namespace HDRGammaController
             {
                 Vm.StatusText = "HDR refinement unavailable: the measured peak leaves too few PQ rungs.";
                 Vm.StatusBrush = CalibrationReportViewModel.DimBrush;
-                return;
+                return false;
             }
 
             var stimuli = ColoredHdrVerificationSet.BuildForMatrixRefinement(
@@ -2155,18 +2192,18 @@ namespace HDRGammaController
             {
                 Vm.StatusText = "HDR refinement unavailable: the measured peak leaves too few usable color patches.";
                 Vm.StatusBrush = CalibrationReportViewModel.DimBrush;
-                return;
+                return false;
             }
 
             int patchesPerSweep = rungs.Count + stimuli.Count;
             if (!ConfirmDialog.Confirm(this, "Refine HDR Tone + Color",
-                    "Place the probe on the display, then press Yes.\n\n" +
-                    $"Gloam measures {patchesPerSweep} HDR patches through the active profile, then tunes " +
+                    $"Gloam will open the probe-positioning surface, then measure {patchesPerSweep} HDR patches " +
+                    "through the active profile and tune " +
                     "brightness tracking and color together. It runs at most 2 passes, stops early when both " +
                     "are accurate, and automatically keeps the best measured result.\n\n" +
                     "Tip: turn night mode off first - it tints and dims the measurements.",
-                    confirmLabel: "Yes", cancelLabel: "Cancel"))
-                return;
+                    confirmLabel: "Position probe", cancelLabel: "Cancel"))
+                return false;
 
             EnterProbeBusy();
             PatchDisplayWindow? patchWindow = null;
@@ -2313,7 +2350,7 @@ namespace HDRGammaController
                         outcome.Converged
                             ? $"Already on target — no change needed.\n\nTone error {start.ToneAverageAbsError:P1}; color ΔE ITP {start.ColorAverageDeltaEItp:F1}."
                             : $"No change applied.\n\n{outcome.StopReason}\n\nTone error {start.ToneAverageAbsError:P1}; color ΔE ITP {start.ColorAverageDeltaEItp:F1}.");
-                    return;
+                    return true;
                 }
 
                 bool improved = finish.JointScore < start.JointScore - 1e-9;
@@ -2344,6 +2381,7 @@ namespace HDRGammaController
                           $"Tone error {finish.ToneAverageAbsError:P1}; color ΔE ITP {finish.ColorAverageDeltaEItp:F1}.");
                 CalibrationSounds.PlayCompletion();
                 Log.Info($"CalibrationReportWindow: {line}");
+                return true;
             }
             catch (OperationCanceledException)
             {
@@ -2354,6 +2392,7 @@ namespace HDRGammaController
                 _operationNotice = ("Refine HDR Tone + Color", installedRefined
                     ? "Cancelled — the best measured tone + color state was restored."
                     : "Cancelled — the profile is unchanged.");
+                return installedRefined;
             }
             catch (GamutLimitException)
             {
@@ -2362,6 +2401,7 @@ namespace HDRGammaController
                 _operationNotice = ("Refine HDR Tone + Color",
                     "No change applied. The fitted color correction would require output beyond what this panel can physically produce. " +
                     "Gloam left the existing profile untouched rather than introducing clipping or a color cast.");
+                return false;
             }
             finally
             {
@@ -2383,242 +2423,6 @@ namespace HDRGammaController
             message?.Contains("physically produce", StringComparison.OrdinalIgnoreCase) == true;
 
         /// <summary>
-        /// Closed-loop refinement of the installed HDR tone LUT — the single biggest HDR
-        /// accuracy step after the open-loop install, and what Calman/ColourSpace-grade EOTF
-        /// tracking does: re-measure the PQ ladder THROUGH the active matrix+LUT correction
-        /// and iterate multiplicative corrections (<see cref="HdrRefinementLoop"/> over
-        /// <see cref="HdrMhc2LutBuilder.Refine"/>) with keep-best discipline until the ladder
-        /// converges below 1% average error or 3 passes are spent — the display always ends
-        /// on the best measured pass. Every install is recorded via the same OnInstalled path
-        /// as the original, so reapply-on-boot picks the final profile up.
-        /// </summary>
-        private async Task RefineHdrTrackingAsync()
-        {
-            if (_applyContext is not { Colorimeter: { } colorimeter, HdrMode: true } ctx ||
-                _activeCharacterization is not { } characterization)
-            {
-                ConfirmDialog.Info(this, "Refine HDR Tracking",
-                    "HDR refinement needs the live HDR calibration session (open this report right after an HDR calibration).");
-                return;
-            }
-            if (!_profileApplied || !_profileEnabled || _installedHdrLuts is not { } currentLuts ||
-                _installedProfileName is not { } installedName)
-            {
-                ConfirmDialog.Info(this, "Refine HDR Tracking",
-                    "Apply the profile first - refinement measures the display through the installed correction.");
-                return;
-            }
-            // Another sweep is running (or a tool has the probe): refuse instead of fighting
-            // over the single colorimeter.
-            if (_verifyCts != null || !Vm.IsVerifyEnabled)
-                return;
-
-            var rungs = RefinementLadderNits
-                .Where(n => n <= currentLuts.MeasuredPeakNits * 0.85)
-                .ToList();
-            if (rungs.Count < 4)
-            {
-                Vm.StatusText = "HDR refinement unavailable: the measured peak leaves too few PQ rungs to refine against.";
-                Vm.StatusBrush = CalibrationReportViewModel.DimBrush;
-                return;
-            }
-
-            if (!ConfirmDialog.Confirm(this, "Refine HDR Tracking",
-                    "Place the probe on the display, then press Yes.\n\n" +
-                    $"Gloam re-measures {rungs.Count} PQ ladder levels through the installed profile and runs up to " +
-                    "3 closed-loop correction passes (~1 minute per pass), keeping whichever pass measured best. " +
-                    "It stops early once the ladder converges below 1% average error.\n\n" +
-                    "Tip: turn night mode off first - it tints and dims the measurements.",
-                    confirmLabel: "Yes", cancelLabel: "Cancel"))
-                return;
-
-            EnterProbeBusy();
-            PatchDisplayWindow? patchWindow = null;
-            using var refineCts = new System.Threading.CancellationTokenSource();
-            _verifyCts = refineCts;
-
-            // Same ramp quiescence as the verify sweep: gamma preference / night mode must
-            // not ride the GPU ramp while we measure the profile's own tracking.
-            bool bypassed = false;
-            if (ctx.StateManager != null)
-            {
-                try
-                {
-                    ctx.StateManager.EnterBypassMode(ctx.Monitor, ctx.PreviousGammaMode, ctx.PreviousSettings);
-                    bypassed = true;
-                }
-                catch (Exception ex)
-                {
-                    Log.Info($"CalibrationReportWindow: refine bypass failed (continuing): {ex.Message}");
-                }
-            }
-
-            bool installedRefined = false;
-            try
-            {
-                patchWindow = new PatchDisplayWindow(ctx.Monitor, ctx.PatchSize, ctx.PatchOffsetX, ctx.PatchOffsetY);
-                patchWindow.AbortRequested += () => refineCts.Cancel();
-                patchWindow.EnableSweepControls(() =>
-                {
-                    if (_verifyCts is { IsCancellationRequested: false } cts)
-                        cts.Cancel();
-                });
-                patchWindow.Show();
-                await colorimeter.BeginMeasurementSessionAsync(hdrMode: true, refineCts.Token);
-                await WaitForProbePlacementAsync(patchWindow, "HDR refine", refineCts.Token);
-
-                // The "previous default" recorded with every OnInstalled must be the TRUE
-                // pre-refinement default — computed per pass it would capture this session's
-                // own pass-1 profile as the thing to restore.
-                MonitorInfo installMonitor = ResolveCurrentMonitor(ctx.Monitor) ?? ctx.Monitor;
-                string? previousDefaultProfile = null;
-                if (installMonitor.MonitorDevicePath.Length > 0)
-                {
-                    var saved = ctx.SettingsManager?.GetMonitorProfile(installMonitor.MonitorDevicePath);
-                    previousDefaultProfile = CalibrationProfileInstaller.SelectPreviousProfileBackup(
-                        CalibrationProfileInstaller.GetCurrentDefaultProfile(installMonitor, ctx.HdrMode),
-                        saved?.Mhc2ProfileName,
-                        saved?.PreviousColorProfileName);
-                }
-
-                string? supersededThisSession = null;
-
-                // Measure/install delegates around the Core keep-best loop. Each install goes
-                // through the exact path of the original single pass: distinct filename (a
-                // reused name would silently keep the OLD profile bytes), OnInstalled
-                // recording for reapply-on-boot, and a compositor settle.
-                var loopConfig = new HdrRefinementLoop.Config
-                {
-                    InitialLuts = currentLuts,
-                    RungNits = rungs,
-                    MeasureLadderAsync = async (ladder, sequenceOffset, token) =>
-                    {
-                        var readings = await MeasurePqRungsAsync(
-                            patchWindow!, colorimeter, ctx, ladder, "HDR refine", sequenceOffset, token);
-                        return (IReadOnlyList<MeasurementResult>)readings.Select(r => r.M).ToList();
-                    },
-                    InstallAsync = async (candidate, token) =>
-                    {
-                        var result = CalibrationProfileInstaller.Install(
-                            installMonitor, characterization, EffectiveTarget(ctx),
-                            ctx.LutR, ctx.LutG, ctx.LutB, ctx.WhiteLevel,
-                            hdrMode: true, measurements: _measurements,
-                            profileNameOverride: BuildRefinedProfileName(_installedProfileName ?? installedName),
-                            hdrLutsOverride: candidate);
-                        if (!result.Success)
-                            throw new InvalidOperationException($"Refined profile install failed: {result.Error}");
-
-                        installedRefined = true;
-                        // This session's previous refined profile is now superseded — clean it
-                        // up (never the original calibration profile).
-                        if (supersededThisSession is { } stale && stale != result.ProfileName)
-                        {
-                            try { CalibrationProfileInstaller.Uninstall(installMonitor, stale); }
-                            catch (Exception ex)
-                            {
-                                Log.Info($"CalibrationReportWindow: superseded refined profile cleanup failed: {ex.Message}");
-                            }
-                        }
-                        supersededThisSession = result.ProfileName;
-
-                        _installedProfileName = result.ProfileName;
-                        _profileApplied = true;
-                        _profileEnabled = true;
-                        _installedHdrLuts = result.HdrLuts ?? candidate;
-                        Vm.ApplyButtonContent = "Disable Profile";
-                        // Same recording path as the original install: the tray retires the
-                        // old association and remembers the refined name for reapply-on-boot.
-                        ctx.OnInstalled?.Invoke(result.ProfileName, previousDefaultProfile);
-
-                        // The compositor needs a moment to pick the new profile up.
-                        await Task.Delay(1000, token);
-                        return (result.HdrLuts ?? candidate, result.ProfileName);
-                    },
-                    Progress = new Progress<HdrRefinementLoop.PassProgress>(p =>
-                    {
-                        Vm.StatusText = p.Pass == 0
-                            ? "Measuring PQ tracking through the installed profile…"
-                            : $"Refine pass {p.Pass}/{p.MaxPasses}: {p.Phase}…";
-                    }),
-                };
-
-                var outcome = await HdrRefinementLoop.RunAsync(loopConfig, refineCts.Token);
-
-                if (!outcome.AnyInstall)
-                {
-                    // Converged before any pass, or pass 1 refused — the profile is unchanged.
-                    Vm.StatusText = $"HDR refinement skipped: {outcome.StopReason}.";
-                    Vm.StatusBrush = outcome.Converged
-                        ? CalibrationReportViewModel.GreenBrush
-                        : CalibrationReportViewModel.AmberBrush;
-                    _operationNotice = ("Refine HDR",
-                        outcome.Converged
-                            ? $"Already on target — no change needed.\n\nAverage PQ luminance error {outcome.InitialAvgAbsError:P1}, which is below the 1% threshold where a reinstall would help."
-                            : $"No change applied.\n\n{outcome.StopReason}\n\n(Starting average PQ luminance error {outcome.InitialAvgAbsError:P1}.)");
-                    Log.Info($"CalibrationReportWindow: HDR refinement made no install: {outcome.StopReason} " +
-                             $"(initial avg |error| {outcome.InitialAvgAbsError:P2}).");
-                    return;
-                }
-
-                // Error trajectory across passes, e.g. "4.2% → 1.6% → 0.7%". The final figure
-                // is the BEST pass's measured ladder (the loop ends with it installed).
-                var trajectory = new List<string> { $"{outcome.InitialAvgAbsError:P1}" };
-                trajectory.AddRange(outcome.Passes
-                    .Where(p => p.AvgAbsErrorAfter is not null)
-                    .Select(p => $"{p.AvgAbsErrorAfter:P1}"));
-                string bestNote = outcome.EndedOnBest
-                    ? " — final numbers are the best pass's measured ladder, reinstalled"
-                    : string.Empty;
-                string line = $"Closed-loop HDR refinement: avg PQ luminance error {string.Join(" → ", trajectory)} " +
-                              $"({rungs.Count} rungs to {rungs[^1]:F0} nits; {outcome.StopReason}{bestNote}).";
-                Vm.VerifyDetailText = string.IsNullOrEmpty(Vm.VerifyDetailText)
-                    ? line
-                    : Vm.VerifyDetailText + "\n" + line;
-                Vm.IsVerifyDetailVisible = true;
-
-                Vm.StatusText = $"HDR tracking refined: avg PQ luminance error " +
-                                $"{outcome.InitialAvgAbsError:P1} → {outcome.FinalAvgAbsError:P1}" +
-                                $"{(outcome.Converged ? " (converged)" : string.Empty)}.";
-                Vm.StatusBrush = CalibrationReportViewModel.GreenBrush;
-                _operationNotice = ("Refine HDR",
-                    $"Done. Average PQ luminance error {outcome.InitialAvgAbsError:P1} → {outcome.FinalAvgAbsError:P1}" +
-                    $"{(outcome.Converged ? " (converged)" : string.Empty)} over {outcome.Passes.Count} pass(es).");
-                CalibrationSounds.PlayCompletion();
-                Log.Info($"CalibrationReportWindow: {line}");
-            }
-            catch (OperationCanceledException)
-            {
-                Vm.StatusText = installedRefined
-                    ? "HDR refinement cancelled - the best measured pass was restored to the display."
-                    : "HDR refinement cancelled - the profile is unchanged.";
-                Vm.StatusBrush = CalibrationReportViewModel.DimBrush;
-                _operationNotice = ("Refine HDR", installedRefined
-                    ? "Cancelled — the best measured pass was restored to the display."
-                    : "Cancelled — the profile is unchanged.");
-            }
-            catch (Exception ex)
-            {
-                Log.Error($"CalibrationReportWindow: HDR refinement failed: {ex}");
-                Vm.StatusText = $"HDR refinement failed: {ex.Message}";
-                Vm.StatusBrush = CalibrationReportViewModel.AmberBrush;
-                _operationNotice = ("Refine HDR", $"Failed:\n\n{ex.Message}");
-            }
-            finally
-            {
-                _verifyCts = null;
-                try { await colorimeter.EndMeasurementSessionAsync(); } catch { }
-                patchWindow?.Close();
-                if (bypassed)
-                {
-                    try { ctx.StateManager!.RestorePreviousState(); }
-                    catch (Exception ex) { Log.Info($"CalibrationReportWindow: refine bypass restore failed: {ex.Message}"); }
-                }
-                Vm.VerifyButtonContent = "Re-verify";
-                ExitProbeBusy();
-            }
-        }
-
-        /// <summary>
         /// Filename for the refined re-install: the original profile name with a
         /// millisecond-precision "refined" suffix (a fresh name forces Windows to load the new
         /// bytes — InstallColorProfile keeps existing content under a reused name). Repeated
@@ -2632,261 +2436,9 @@ namespace HDRGammaController
             return $"{stem} refined {DateTime.Now:HHmmssfff}.icm";
         }
 
-        // ---- Closed-loop HDR COLOR refinement (roadmap 2.2) --------------------------------
-
         /// <summary>Signals that the fitted color correction would exceed the panel's
         /// gamut — a graceful "no improvement possible", not an error.</summary>
         private sealed class GamutLimitException : Exception { }
-
-        private async void RefineHdrColorButton_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                await RefineHdrColorAsync();
-            }
-            catch (Exception ex)
-            {
-                Log.Error($"CalibrationReportWindow: HDR color refinement failed: {ex}");
-                Vm.StatusText = $"HDR color refinement failed: {ex.Message}";
-                Vm.StatusBrush = CalibrationReportViewModel.AmberBrush;
-                _operationNotice = ("Refine HDR Color", $"Failed:\n\n{ex.Message}");
-            }
-            ShowOperationNotice();
-        }
-
-        /// <summary>
-        /// Closed-loop refinement of the MHC2 gamut MATRIX (roadmap 2.2): colored + neutral
-        /// stimuli measured at multiple luminance levels through the installed correction,
-        /// a luminance-weighted matrix fit (<see cref="HdrColorMatrixRefiner"/>), keep-best
-        /// reinstall (<see cref="HdrColorMatrixLoop"/>). Catches panels whose gamut rotates
-        /// with brightness — the open-loop matrix only ever saw one drive level.
-        /// Note: installing a changed matrix changes the neutral scale, so the HDR tone
-        /// LUTs are rebuilt open-loop at the new scale from the calibration measurements
-        /// (re-run Refine HDR afterwards for closed-loop tone on top).
-        /// </summary>
-        private async Task RefineHdrColorAsync()
-        {
-            if (_applyContext is not { Colorimeter: { } colorimeter, HdrMode: true } ctx ||
-                _activeCharacterization is not { } characterization)
-            {
-                ConfirmDialog.Info(this, "Refine HDR Color",
-                    "HDR color refinement needs the live HDR calibration session (open this report right after an HDR calibration).");
-                return;
-            }
-            if (!_profileApplied || !_profileEnabled || _installedHdrLuts is not { } currentLuts ||
-                _installedProfileName is not { } installedName)
-            {
-                ConfirmDialog.Info(this, "Refine HDR Color",
-                    "Apply the profile first - refinement measures the display through the installed correction.");
-                return;
-            }
-            if (_verifyCts != null || !Vm.IsVerifyEnabled)
-                return;
-
-            var stimuli = ColoredHdrVerificationSet.BuildForMatrixRefinement(
-                currentLuts.MeasuredPeakNits, EffectiveTarget(ctx).RgbToXyzMatrix);
-            if (stimuli.Count < HdrColorMatrixRefiner.MinValidPatches)
-            {
-                Vm.StatusText = "HDR color refinement unavailable: the measured peak leaves too few colored rungs.";
-                Vm.StatusBrush = CalibrationReportViewModel.DimBrush;
-                return;
-            }
-
-            if (!ConfirmDialog.Confirm(this, "Refine HDR Color",
-                    "Place the probe on the display, then press Yes.\n\n" +
-                    $"Gloam measures {stimuli.Count} colored and neutral HDR stimuli through the installed profile " +
-                    "and runs up to 2 closed-loop corrections of the gamut matrix (~2 minutes per pass), keeping " +
-                    "whichever pass measured best. The HDR tone curve is rebuilt for the corrected matrix — run " +
-                    "Refine HDR again afterwards for the final tone polish.\n\n" +
-                    "Tip: turn night mode off first - it tints and dims the measurements.",
-                    confirmLabel: "Yes", cancelLabel: "Cancel"))
-                return;
-
-            EnterProbeBusy();
-            PatchDisplayWindow? patchWindow = null;
-            using var refineCts = new System.Threading.CancellationTokenSource();
-            _verifyCts = refineCts;
-
-            bool bypassed = false;
-            if (ctx.StateManager != null)
-            {
-                try
-                {
-                    ctx.StateManager.EnterBypassMode(ctx.Monitor, ctx.PreviousGammaMode, ctx.PreviousSettings);
-                    bypassed = true;
-                }
-                catch (Exception ex)
-                {
-                    Log.Info($"CalibrationReportWindow: color-refine bypass failed (continuing): {ex.Message}");
-                }
-            }
-
-            bool installedRefined = false;
-            try
-            {
-                patchWindow = new PatchDisplayWindow(ctx.Monitor, ctx.PatchSize, ctx.PatchOffsetX, ctx.PatchOffsetY);
-                patchWindow.AbortRequested += () => refineCts.Cancel();
-                patchWindow.EnableSweepControls(() =>
-                {
-                    if (_verifyCts is { IsCancellationRequested: false } cts)
-                        cts.Cancel();
-                });
-                patchWindow.Show();
-                await colorimeter.BeginMeasurementSessionAsync(hdrMode: true, refineCts.Token);
-                await WaitForProbePlacementAsync(patchWindow, "HDR color refine", refineCts.Token);
-
-                MonitorInfo installMonitor = ResolveCurrentMonitor(ctx.Monitor) ?? ctx.Monitor;
-                string? previousDefaultProfile = null;
-                if (installMonitor.MonitorDevicePath.Length > 0)
-                {
-                    var saved = ctx.SettingsManager?.GetMonitorProfile(installMonitor.MonitorDevicePath);
-                    previousDefaultProfile = CalibrationProfileInstaller.SelectPreviousProfileBackup(
-                        CalibrationProfileInstaller.GetCurrentDefaultProfile(installMonitor, ctx.HdrMode),
-                        saved?.Mhc2ProfileName,
-                        saved?.PreviousColorProfileName);
-                }
-
-                string? supersededThisSession = null;
-
-                var outcome = await HdrColorMatrixLoop.RunAsync(new HdrColorMatrixLoop.Config
-                {
-                    Stimuli = stimuli,
-                    MeasureSweepAsync = async (set, sequenceOffset, token) =>
-                        await MeasureColoredStimuliAsync(patchWindow!, colorimeter, ctx, set,
-                            "HDR color refine", sequenceOffset, token),
-                    InstallAsync = async (correction, token) =>
-                    {
-                        var result = CalibrationProfileInstaller.Install(
-                            installMonitor, characterization, EffectiveTarget(ctx),
-                            ctx.LutR, ctx.LutG, ctx.LutB, ctx.WhiteLevel,
-                            hdrMode: true, measurements: _measurements,
-                            profileNameOverride: BuildRefinedProfileName(_installedProfileName ?? installedName),
-                            xyzCorrectionOverride: correction);
-                        if (!result.Success)
-                        {
-                            // The fitted correction would push a primary beyond the panel's
-                            // gamut: not a failure, just the panel's limit. Surface it
-                            // gracefully instead of as a scary "install failed" error.
-                            if (result.Error is { } err &&
-                                (err.Contains("wider gamut", StringComparison.OrdinalIgnoreCase) ||
-                                 err.Contains("physically produce", StringComparison.OrdinalIgnoreCase)))
-                                throw new GamutLimitException();
-                            throw new InvalidOperationException($"Corrected-matrix install failed: {result.Error}");
-                        }
-
-                        installedRefined = true;
-                        if (supersededThisSession is { } stale && stale != result.ProfileName)
-                        {
-                            try { CalibrationProfileInstaller.Uninstall(installMonitor, stale); }
-                            catch (Exception ex)
-                            {
-                                Log.Info($"CalibrationReportWindow: superseded color-refined profile cleanup failed: {ex.Message}");
-                            }
-                        }
-                        supersededThisSession = result.ProfileName;
-
-                        _installedProfileName = result.ProfileName;
-                        _profileApplied = true;
-                        _profileEnabled = true;
-                        if (result.HdrLuts != null) _installedHdrLuts = result.HdrLuts;
-                        Vm.ApplyButtonContent = "Disable Profile";
-                        ctx.OnInstalled?.Invoke(result.ProfileName, previousDefaultProfile);
-
-                        await Task.Delay(1000, token);
-                        return result.ProfileName;
-                    },
-                    Progress = new Progress<HdrRefinementLoop.PassProgress>(p =>
-                    {
-                        Vm.StatusText = p.Pass == 0
-                            ? "Measuring colored HDR stimuli through the installed profile…"
-                            : $"Color pass {p.Pass}/{p.MaxPasses}: {p.Phase}…";
-                    }),
-                }, refineCts.Token);
-
-                if (!outcome.AnyInstall)
-                {
-                    Vm.StatusText = $"HDR color refinement skipped: {outcome.StopReason}.";
-                    Vm.StatusBrush = outcome.Converged
-                        ? CalibrationReportViewModel.GreenBrush
-                        : CalibrationReportViewModel.AmberBrush;
-                    _operationNotice = ("Refine HDR Color",
-                        outcome.Converged
-                            ? $"Colors already on target — no change needed.\n\nAverage colored ΔE ITP {outcome.InitialAvgItp:F1}."
-                            : $"No change applied.\n\n{outcome.StopReason}\n\n(Starting average colored ΔE ITP {outcome.InitialAvgItp:F1}. A large value here usually means the colored stimuli sit outside what the panel can display for this target's gamut.)");
-                    Log.Info($"CalibrationReportWindow: HDR color refinement made no install: {outcome.StopReason} " +
-                             $"(initial avg ΔE ITP {outcome.InitialAvgItp:F1}).");
-                    return;
-                }
-
-                var trajectory = new List<string> { $"{outcome.InitialAvgItp:F1}" };
-                trajectory.AddRange(outcome.Passes
-                    .Where(p => p.AvgItpAfter is not null)
-                    .Select(p => $"{p.AvgItpAfter:F1}"));
-                string bestNote = outcome.EndedOnBest
-                    ? " — final numbers are the best pass's measured sweep, reinstalled"
-                    : string.Empty;
-                string line = $"Closed-loop HDR color: avg ΔE ITP {string.Join(" → ", trajectory)} " +
-                              $"({stimuli.Count} colored+neutral stimuli; {outcome.StopReason}{bestNote}). " +
-                              "Tone LUTs rebuilt for the corrected matrix — run Refine HDR for the final tone pass.";
-                Vm.VerifyDetailText = string.IsNullOrEmpty(Vm.VerifyDetailText)
-                    ? line
-                    : Vm.VerifyDetailText + "\n" + line;
-                Vm.IsVerifyDetailVisible = true;
-
-                Vm.StatusText = $"HDR color refined: avg ΔE ITP {outcome.InitialAvgItp:F1} → {outcome.FinalAvgItp:F1}" +
-                                $"{(outcome.Converged ? " (converged)" : string.Empty)}.";
-                Vm.StatusBrush = CalibrationReportViewModel.GreenBrush;
-                _operationNotice = ("Refine HDR Color",
-                    $"Done. Average colored ΔE ITP {outcome.InitialAvgItp:F1} → {outcome.FinalAvgItp:F1}" +
-                    $"{(outcome.Converged ? " (converged)" : string.Empty)}.\n\n" +
-                    "The HDR tone curve was rebuilt for the corrected matrix — run Refine HDR next for the final tone pass.");
-                CalibrationSounds.PlayCompletion();
-                Log.Info($"CalibrationReportWindow: {line}");
-            }
-            catch (OperationCanceledException)
-            {
-                Vm.StatusText = installedRefined
-                    ? "HDR color refinement cancelled - the best measured pass was restored to the display."
-                    : "HDR color refinement cancelled - the profile is unchanged.";
-                Vm.StatusBrush = CalibrationReportViewModel.DimBrush;
-                _operationNotice = ("Refine HDR Color", installedRefined
-                    ? "Cancelled — the best measured pass was restored to the display."
-                    : "Cancelled — the profile is unchanged.");
-            }
-            catch (GamutLimitException)
-            {
-                // Nothing was installed (the guard fires before the profile is written), so
-                // the existing calibration is untouched.
-                Vm.StatusText = "HDR color: already at the panel's gamut limit — no change applied.";
-                Vm.StatusBrush = CalibrationReportViewModel.DimBrush;
-                _operationNotice = ("Refine HDR Color",
-                    "No change applied — your colors are already at the edge of what this panel can display " +
-                    "for the sRGB-gamut target.\n\nThe fitted correction would need primaries brighter than the " +
-                    "panel can physically produce, so applying it would clip and cast color. This is a panel " +
-                    "gamut limit, not a calibration error — your color is as accurate as this display allows.");
-            }
-            catch (Exception ex)
-            {
-                Log.Error($"CalibrationReportWindow: HDR color refinement failed: {ex}");
-                Vm.StatusText = $"HDR color refinement failed: {ex.Message}";
-                Vm.StatusBrush = CalibrationReportViewModel.AmberBrush;
-                _operationNotice = ("Refine HDR Color", $"Failed:\n\n{ex.Message}");
-            }
-            finally
-            {
-                _verifyCts = null;
-                try { await colorimeter.EndMeasurementSessionAsync(); } catch { }
-                patchWindow?.Close();
-                if (bypassed)
-                {
-                    try { ctx.StateManager!.RestorePreviousState(); }
-                    catch (Exception ex) { Log.Info($"CalibrationReportWindow: color-refine bypass restore failed: {ex.Message}"); }
-                }
-                Vm.VerifyButtonContent = "Re-verify";
-                ExitProbeBusy();
-            }
-        }
-
         /// <summary>
         /// Measures colored/neutral wire stimuli through the active correction — the
         /// parameterized core of <see cref="RunColoredHdrSweepAsync"/>, returning
@@ -2990,12 +2542,12 @@ namespace HDRGammaController
                 .ToList();
 
             if (!ConfirmDialog.Confirm(this, "Characterize HDR",
-                    "Place the probe on the display, then press Yes.\n\n" +
-                    $"Gloam measures {rungs.Count} PQ rungs concentrated near the claimed {ladderBase:F0}-nit peak, " +
+                    $"Gloam will open the probe-positioning surface, then measure {rungs.Count} PQ rungs " +
+                    $"concentrated near the claimed {ladderBase:F0}-nit peak, " +
                     $"then the same white through window sizes from 1% to full-frame (~3 minutes total), and reports " +
                     "the panel's TRUE tone-mapping knee, peak and ABL behavior with suggested HGIG game settings.\n\n" +
                     "Tip: turn night mode off first.",
-                    confirmLabel: "Yes", cancelLabel: "Cancel"))
+                    confirmLabel: "Position probe", cancelLabel: "Cancel"))
                 return;
 
             EnterProbeBusy();
@@ -3109,18 +2661,10 @@ namespace HDRGammaController
                     : Vm.VerifyDetailText + "\n" + line;
                 Vm.IsVerifyDetailVisible = true;
 
-                // Persist without clobbering earlier verify results: mutate the existing
-                // summary when there is one, else write a fresh snapshot.
-                if (_profile?.ReportSummary != null && _reportSavePath != null)
-                {
-                    _profile.ReportSummary.ToneMapping = characterizationResult;
-                    try { _profile.SaveToFile(_reportSavePath); }
-                    catch (Exception ex) { Log.Info($"CalibrationReportWindow: tone-map persist failed: {ex.Message}"); }
-                }
-                else
-                {
-                    PersistReportSummary(after: null);
-                }
+                // Persist the whole current presentation. PersistReportSummary retains the
+                // last verification metrics, so adding characterization cannot erase the
+                // after-correction column or its diagnostics.
+                PersistReportSummary(after: null);
 
                 Vm.StatusText = $"HDR characterized: true peak {characterizationResult.MeasuredPeakNits:F0} nits " +
                                 $"(claimed {claimedPeak:F0}), knee ~{characterizationResult.KneeNits:F0} nits.";
@@ -3288,16 +2832,15 @@ namespace HDRGammaController
             }
 
             string prompt = _profileApplied
-                ? "Place the probe on the display, then press Yes to start.\n\n" +
+                ? "Gloam will open the probe-positioning surface, then measure the active correction.\n\n" +
                   "Tip: turn night mode off while verifying - it tints the measurements."
                 : "The profile hasn't been applied from this window yet, so Verify will measure " +
-                  "whatever is currently active on the display.\n\n" +
-                  "Place the probe on the display, then press Yes to start.";
+                  "whatever is currently active on the display. The probe-positioning surface opens next.";
             if (!ConfirmDialog.Confirm(this, "Verify Calibration", prompt,
-                    confirmLabel: "Yes", cancelLabel: "Cancel"))
+                    confirmLabel: "Position probe", cancelLabel: "Cancel"))
                 return;
 
-            await RunVerificationAsync();
+            await RunVerificationAsync(requestPlacement: true);
         }
 
         /// <summary>Strip label for a sweep patch: its name, or an RGB-derived description.</summary>
@@ -3309,11 +2852,12 @@ namespace HDRGammaController
         /// whatever Windows is currently applying and fills the "after" row + grade.
         /// Runs automatically after Apply Profile, and from the Verify button for re-runs.
         /// </summary>
-        private async Task RunVerificationAsync()
+        private async Task RunVerificationAsync(bool requestPlacement = false)
         {
             if (_applyContext?.Colorimeter is not { } colorimeter || _applyContext is not { } ctx)
                 return;
 
+            _lastReportSnapshotSaved = false;
             EnterProbeBusy();
             PatchDisplayWindow? patchWindow = null;
             using var verifyCts = new System.Threading.CancellationTokenSource();
@@ -3351,6 +2895,8 @@ namespace HDRGammaController
                         cts.Cancel();
                 });
                 patchWindow.Show();
+                if (requestPlacement)
+                    await WaitForProbePlacementAsync(patchWindow, "Calibration verification", verifyCts.Token);
 
                 // Detailed mode swaps in the extended patch set (fine grayscale, saturation
                 // ramps, memory colors); everything downstream - progress, settle delays,
@@ -3511,7 +3057,9 @@ namespace HDRGammaController
                 // grade the disc now shows) survive into the saved-reports browser.
                 if (_metrics != null && _profile != null)
                 {
+                    _profile.PostCalibrationDeltaE = after.AverageDeltaE;
                     _profile.QualityGrade = afterGrade;
+                    _profile.ModifiedAt = DateTime.UtcNow;
                     PersistReportSummary(after);
                 }
             }

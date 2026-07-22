@@ -289,7 +289,8 @@ namespace HDRGammaController
                 patchWindow.EnableSweepControls(() => cts.Cancel());
                 patchWindow.Show();
 
-                _status.Text = "Place the probe on the marked patch area…";
+                _status.Text = "Position the probe on the marked target…";
+                await patchWindow.WaitForPlacementAsync("Calibration trust check", cts.Token);
                 await colorimeter.BeginMeasurementSessionAsync(hdrMode, cts.Token);
 
                 var patches = TrustCheck.BuildPatches();

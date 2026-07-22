@@ -97,9 +97,6 @@ namespace HDRGammaController.ViewModels
         private bool _isMeasurementVisible;
         public bool IsMeasurementVisible { get => _isMeasurementVisible; set => SetProperty(ref _isMeasurementVisible, value); }
 
-        private bool _showPositioningWindowedBanner;
-        public bool ShowPositioningWindowedBanner { get => _showPositioningWindowedBanner; set => SetProperty(ref _showPositioningWindowedBanner, value); }
-
         private bool _showWindowedModeBanner;
         public bool ShowWindowedModeBanner { get => _showWindowedModeBanner; set => SetProperty(ref _showWindowedModeBanner, value); }
 

@@ -41,7 +41,28 @@ namespace HDRGammaController.Tests
                             new VerifiedPatchResult { Name = "bad", DeltaE = double.PositiveInfinity },
                             new VerifiedPatchResult { Name = "ok", Category = "Grayscale", DeltaE = 1.25 }
                         },
-                        DetailedGrayscaleDeltaE = double.NegativeInfinity
+                        DetailedGrayscaleDeltaE = double.NegativeInfinity,
+                        VerificationDetailText = "Verified diagnostics",
+                        PqTrackingDetailText = "PQ diagnostics",
+                        ColoredHdrDetailText = "Color diagnostics",
+                        ToneMapping = new ToneMappingCharacterization
+                        {
+                            ClaimedPeakNits = 1000,
+                            MeasuredPeakNits = 742,
+                            KneeNits = 610,
+                            Ladder = new[]
+                            {
+                                new ToneMapLadderPoint(400, 398),
+                                new ToneMapLadderPoint(double.NaN, 500),
+                            },
+                            AplSweep = new[]
+                            {
+                                new AplPoint(10, 720),
+                                new AplPoint(101, 300),
+                            },
+                            HgigPeakNits = 742,
+                            SuggestedMaxCllNits = double.PositiveInfinity,
+                        }
                     }
                 };
 
@@ -65,6 +86,13 @@ namespace HDRGammaController.Tests
                 var patch = Assert.Single(loaded.ReportSummary.DetailedPatches!);
                 Assert.Equal("ok", patch.Name);
                 Assert.Equal(1.25, patch.DeltaE);
+                Assert.Equal("Verified diagnostics", loaded.ReportSummary.VerificationDetailText);
+                Assert.Equal("PQ diagnostics", loaded.ReportSummary.PqTrackingDetailText);
+                Assert.Equal("Color diagnostics", loaded.ReportSummary.ColoredHdrDetailText);
+                Assert.Equal(742, loaded.ReportSummary.ToneMapping!.MeasuredPeakNits);
+                Assert.Equal(0, loaded.ReportSummary.ToneMapping.SuggestedMaxCllNits);
+                Assert.Single(loaded.ReportSummary.ToneMapping.Ladder);
+                Assert.Single(loaded.ReportSummary.ToneMapping.AplSweep);
             }
             finally
             {

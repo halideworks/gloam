@@ -347,7 +347,7 @@ namespace HDRGammaController
         };
 
         /// <summary>Set by App to persist the user's manual choice. Initialize does not call it.</summary>
-        public static Action<bool>? Persist;
+        public static Action<bool>? Persist { get; set; }
 
         public static void Initialize(bool dark) { IsDark = dark; Apply(); }
         public static void Toggle() { IsDark = !IsDark; Apply(); Persist?.Invoke(IsDark); }
