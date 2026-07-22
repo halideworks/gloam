@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Technical Whitepaper - Gloam</title>
-  <meta name="description" content="The mathematics and engineering behind Gloam: the Windows SDR-in-HDR transfer function mismatch, PQ-domain correction LUTs, and the MHC2 colorimeter calibration pipeline.">
+  <meta name="description" content="The current mathematics and implementation of Gloam: live SDR-in-HDR correction, night and gamer policy, measured display characterization, Windows MHC2 profiles, joint HDR refinement, and verification.">
   <link rel="stylesheet" href="style.css">
   <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
 </head>
@@ -19,7 +19,6 @@
   </script>
 
   <div class="container">
-    <!-- Header -->
     <header class="site-header">
       <div class="wrap">
         <a class="brand" href="index.html">
@@ -36,1207 +35,807 @@
       </div>
     </header>
 
-  <main class="whitepaper-page paper-main">
-    <article class="whitepaper" id="top">
+    <main class="whitepaper-page paper-main">
+      <article class="whitepaper" id="top">
 
-      <section>
-        <h1>Gloam: A Technical Whitepaper</h1>
-        <p class="paper-meta">
-          HDR-native display calibration on Windows. Last updated July 4, 2026.
-        </p>
-        <blockquote>The machine promises fidelity but delivers translation, and every translation is a betrayal.</blockquote>
+        <section>
+          <h1>Gloam: A Technical Whitepaper</h1>
+          <p class="paper-meta">Windows display correction, measurement, and verification. Last updated July 22, 2026.</p>
+          <blockquote>A correction is trustworthy only when its signal domain, physical limits, and measured result are kept separate.</blockquote>
 
-        <h2 id="abstract">Abstract</h2>
-        <p>
-          Windows 11's HDR implementation employs piecewise sRGB as the transfer function for standard
-          dynamic range content displayed within an HDR composition space, a technical decision that,
-          while nominally compliant with the sRGB specification, introduces a fundamental perceptual
-          mismatch with the overwhelming majority of content mastered on gamma 2.2 displays, manifesting
-          as elevated shadow regions, reduced contrast, and the characteristic "washed out" appearance
-          that has plagued HDR adoption on the Windows platform since its inception.
-        </p>
-        <p>
-          This whitepaper documents the mathematical foundations, engineering decisions, and calibration
-          philosophy underlying Gloam, a tool that corrects this mismatch through the application of
-          per-channel 1D Look-Up Tables within the Windows Advanced Color pipeline; it examines the
-          relevant transfer functions, derives the correction algorithm from first principles, and
-          explores the additional calibration adjustments (color temperature, tint, brightness) that
-          enable fine-grained control over the visual output, with particular attention to why specific
-          mathematical choices were made, grounded always in the physics of light perception and the
-          engineering constraints of the Windows HDR compositor.
-        </p>
-        <p>
-          The current implementation also documents the hardened update path, the perceptual night
-          mode default, the Ultra Night spectral experiment, the three-state Night Mode control, and
-          the calibration wizard's persisted state model. Each of those details supports the same goal
-          as the color pipeline itself: keeping the correction trustworthy after reboot, app restart,
-          display topology changes, and repeated calibration runs.
-        </p>
+          <h2 id="abstract">Abstract</h2>
+          <p>
+            Gloam controls two related display-correction layers on Windows. Live controls such as gamma,
+            dimming, night mode, and per-game visibility are synthesized as per-channel one-dimensional
+            curves and loaded into the GPU's 256-entry hardware gamma ramp. A colorimeter calibration is
+            installed separately as a Windows color profile containing an MHC2 transform: a 3×3 color
+            matrix followed by three 1024-point tone curves. The live ramp can then compose with the
+            measured panel correction without rebuilding it.
+          </p>
+          <p>
+            In HDR, Gloam measures absolute FP16 scRGB patches at known ST.2084 wire positions. The MHC2
+            tone curves invert the measured PQ response while accounting for the neutral luminance scale
+            of the matrix that precedes them. Closed-loop refinement measures the installed matrix and
+            tone curves as one system, fits a small color residual and a neutral luminance residual, installs
+            both atomically, and retains the best jointly measured state.
+          </p>
+          <p>
+            This paper describes the current implementation. It distinguishes model-based live rendering
+            from instrument-based calibration, states the equations actually used, and records the limits
+            that the software enforces: finite LUT resolution, panel gamut and luminance reachability,
+            meter noise, display drift, Windows profile association, and the restricted form of correction
+            available through MHC2.
+          </p>
 
-        <nav class="toc" aria-label="Table of contents">
-          <h2>Contents</h2>
+          <nav class="toc" aria-label="Table of contents">
+            <h2>Contents</h2>
+            <ol>
+              <li><a href="#s1">Scope and Correction Layers</a></li>
+              <li><a href="#s2">The SDR-in-HDR Transfer Mismatch</a></li>
+              <li><a href="#s3">Transfer Functions and Color Spaces</a></li>
+              <li><a href="#s4">Live LUT Synthesis</a></li>
+              <li><a href="#s5">HDR Headroom</a></li>
+              <li><a href="#s6">Linear-Light Adjustments</a></li>
+              <li><a href="#s7">Night Mode and Melanopic Policy</a></li>
+              <li><a href="#s8">Gamer Mode</a></li>
+              <li><a href="#s9">Windows Application Architecture</a></li>
+              <li><a href="#s10">Measurement and Characterization</a></li>
+              <li><a href="#s11">MHC2 Profile Mathematics</a></li>
+              <li><a href="#s12">Joint HDR Refinement</a></li>
+              <li><a href="#s13">Verification, Uncertainty, and Reports</a></li>
+              <li><a href="#s14">Acknowledgements and References</a></li>
+            </ol>
+          </nav>
+        </section>
+
+        <section>
+          <h2 id="s1">1. Scope and Correction Layers</h2>
+          <p>
+            Gloam has two output mechanisms because one-dimensional ramps and measured color transforms
+            solve different problems.
+          </p>
+          <table>
+            <thead>
+              <tr><th>Layer</th><th>Representation</th><th>Purpose</th><th>Windows path</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Live policy</td>
+                <td>Three generated 1024-point curves, resampled to a 256-entry hardware ramp</td>
+                <td>Gamma preference, dimming, temperature, tint, RGB trims, night mode, gamer visibility</td>
+                <td><code>SetDeviceGammaRamp</code>, with ArgyllCMS <code>dispwin</code> as fallback</td>
+              </tr>
+              <tr>
+                <td>Measured calibration</td>
+                <td>3×3 matrix plus three 1024-point MHC2 LUTs</td>
+                <td>Panel gamut, white point, per-channel gray tracking, SDR tone response, HDR PQ tracking</td>
+                <td>Windows color profile; Advanced Color association in HDR</td>
+              </tr>
+            </tbody>
+          </table>
+          <p>
+            A hardware ramp cannot mix channels, so it cannot express a gamut rotation or a general
+            chromatic adaptation matrix. MHC2 can express one linear 3×3 transform and three separable
+            curves, but it is still not a three-dimensional LUT. Gloam therefore keeps color correction in
+            the matrix, neutral tone correction in the curves, and refuses fits that require unreachable
+            primaries or a large nonlinear color transform.
+          </p>
+          <p>
+            Calibration bypass is a third state, used only while measuring. It clears the live ramp and
+            prevents background reapplication from changing the display during a patch sequence.
+          </p>
+        </section>
+
+        <section>
+          <h2 id="s2">2. The SDR-in-HDR Transfer Mismatch</h2>
+          <h3 id="s2-1">2.1 sRGB and Power-Law Presentation</h3>
+          <p>
+            Windows presents ordinary SDR application content in its Advanced Color desktop using the
+            sRGB transfer function and a user-selected SDR reference-white luminance. A display workflow
+            may instead expect a simple power-law presentation such as gamma 2.2 or 2.4. Those curves are
+            close in the upper range and diverge in shadows, where sRGB's linear toe produces more light
+            than a 2.2 power law for the same encoded value.
+          </p>
+          <p>
+            Content is not universally mastered to one display gamma. sRGB imagery, Rec.709 video viewed
+            under different conditions, games, and color-managed applications have distinct assumptions.
+            Gloam therefore offers Windows Default, gamma 2.2, and gamma 2.4 as explicit rendering choices
+            rather than declaring one curve correct for every source.
+          </p>
+
+          <h3 id="s2-2">2.2 Size of the Difference</h3>
+          <p>The following values are relative linear light for the same encoded signal <em>v</em>.</p>
+          <table>
+            <thead>
+              <tr><th>Signal</th><th>sRGB EOTF</th><th>v<sup>2.2</sup></th><th>sRGB / gamma 2.2</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>0.05</td><td>0.00394</td><td>0.00137</td><td>2.87×</td></tr>
+              <tr><td>0.10</td><td>0.01002</td><td>0.00631</td><td>1.59×</td></tr>
+              <tr><td>0.25</td><td>0.05088</td><td>0.04737</td><td>1.07×</td></tr>
+              <tr><td>0.50</td><td>0.21404</td><td>0.21764</td><td>0.98×</td></tr>
+              <tr><td>1.00</td><td>1.00000</td><td>1.00000</td><td>1.00×</td></tr>
+            </tbody>
+          </table>
+          <p>
+            The correction reconstructs the SDR signal from the luminance assigned by Windows and then
+            applies the selected power law. It does not change the source file or ask applications to
+            render in a different color space.
+          </p>
+        </section>
+
+        <section>
+          <h2 id="s3">3. Transfer Functions and Color Spaces</h2>
+          <h3 id="s3-1">3.1 Power Law</h3>
+          <div class="formula">L = v<sup>γ</sup></div>
+          <p>
+            Here <em>v</em> is a normalized encoded value and <em>L</em> is normalized linear light. Gloam
+            uses γ = 2.2 or 2.4 for the selectable power-law modes.
+          </p>
+
+          <h3 id="s3-2">3.2 sRGB</h3>
+          <div class="formula">
+            E<sub>sRGB</sub>(v) = v / 12.92, &nbsp; v ≤ 0.04045<br>
+            E<sub>sRGB</sub>(v) = ((v + 0.055) / 1.055)<sup>2.4</sup>, &nbsp; v &gt; 0.04045
+          </div>
+          <p>
+            <em>E</em><sub>sRGB</sub> is the signal-to-linear-light direction. Its inverse is used to recover
+            an SDR signal from normalized linear luminance.
+          </p>
+
+          <h3 id="s3-3">3.3 SMPTE ST 2084 (PQ)</h3>
+          <div class="formula">
+            L = 10000 · ((max(V<sup>1/m₂</sup> − c₁, 0)) /
+            (c₂ − c₃V<sup>1/m₂</sup>))<sup>1/m₁</sup>
+          </div>
+          <p>
+            The implementation uses m₁ = 2610/16384, m₂ = 2523/32, c₁ = 3424/4096,
+            c₂ = 2413/128, and c₃ = 2392/128. PQ values are absolute: <em>V</em> = 1 represents
+            10,000 cd/m². Gloam uses the inverse function to encode an absolute luminance back to PQ.
+          </p>
+
+          <h3 id="s3-4">3.4 RGB Bases</h3>
+          <p>
+            Live SDR ramps operate in an sRGB/Rec.709 basis. The HDR10 wire is a Rec.2020 container.
+            A diagonal white-point scale depends on the primaries of the RGB basis, so the Accurate,
+            Perceptual, and Ultra Night temperature methods derive different channel ratios for SDR and
+            HDR. The colorimetry matrices are calculated from their chromaticities at full double
+            precision and normalized so reference white maps to Y = 1.
+          </p>
+        </section>
+
+        <section>
+          <h2 id="s4">4. Live LUT Synthesis</h2>
+          <h3 id="s4-1">4.1 SDR Output</h3>
+          <p>
+            For SDR output, Gloam assumes a native display response near gamma 2.2. At LUT input <em>x</em>,
+            it decodes with the selected target gamma, applies user controls in linear light, and encodes
+            for the assumed 2.2 display response:
+          </p>
+          <div class="formula">
+            ℓ = x<sup>γtarget</sup><br>
+            (r, g, b) = A(ℓ, ℓ, ℓ)<br>
+            LUT<sub>c</sub>(x) = c<sup>1/2.2</sup>
+          </div>
+          <p>
+            Windows Default and gamma 2.2 are therefore identity when no other adjustment is active.
+            Gamma 2.4 darkens the lower range. A measured calibration does not use this assumed response;
+            its own fitted tone curves live in the installed profile.
+          </p>
+
+          <h3 id="s4-2">4.2 HDR Output</h3>
+          <p>
+            Let <em>V</em> be the PQ wire value, <em>P</em>(<em>V</em>) its luminance in cd/m², and <em>W</em>
+            the Windows SDR white level. Within the SDR region, a selected power-law mode computes:
+          </p>
+          <div class="formula">
+            q = E<sub>sRGB</sub><sup>−1</sup>(P(V) / W)<br>
+            L<sub>γ</sub> = W · q<sup>γtarget</sup>
+          </div>
+          <p>
+            Windows Default keeps <em>L</em><sub>γ</sub> = <em>P</em>(<em>V</em>). The result is normalized
+            by <em>W</em>, adjusted in linear Rec.2020 RGB, returned to absolute luminance, and PQ-encoded
+            per channel. Values above SDR white transition toward the headroom target described in §5.
+          </p>
+
+          <h3 id="s4-3">4.3 SDR White</h3>
+          <p>
+            Gloam reads <code>DISPLAYCONFIG_SDR_WHITE_LEVEL</code> for each display target. Windows returns
+            a value in thousandths of the 80-nit reference, so the conversion is:
+          </p>
+          <div class="formula">W = raw · 80 / 1000 cd/m²</div>
+          <p>
+            Unavailable or non-finite readings fall back to 200 cd/m². Runtime values are bounded to
+            40–1000 cd/m² before LUT generation. A measured HDR profile records the SDR-white state used
+            during measurement, and preflight warns when that state has changed before installation.
+          </p>
+
+          <h3 id="s4-4">4.4 Neutral Reference Curve</h3>
+          <p>
+            The diagnostic gray curve is derived from mean linear light, then encoded. In SDR it is
+            ((r + g + b) / 3)<sup>1/2.2</sup>; in HDR it is PQ((R + G + B) / 3). Averaging encoded channel
+            values would not represent the signal for their mean emitted light.
+          </p>
+        </section>
+
+        <section>
+          <h2 id="s5">5. HDR Headroom</h2>
+          <h3 id="s5-1">5.1 PQ-Space Shoulder</h3>
+          <p>
+            Gamma and white-balance controls are intended mainly for the SDR desktop region. Applying
+            them unchanged to every HDR highlight would reshape mastered specular content. Above
+            <em>W</em>, Gloam blends the adjusted result toward a headroom target in PQ signal space:
+          </p>
+          <div class="formula">
+            t = clamp((V − PQ(W)) / (1 − PQ(W)), 0, 1)<br>
+            s(t) = t²(3 − 2t)<br>
+            output = corrected + s(t)(headroom − corrected)
+          </div>
+          <p>
+            Smoothstep gives zero first derivative at both ends. Blending in PQ space allocates the
+            transition more evenly by perceptual code distance than a linear-nit blend.
+          </p>
+
+          <h3 id="s5-2">5.2 Dimming and Constant-Luminance Night Mode</h3>
+          <p>
+            At full brightness, the ordinary headroom target is passthrough. When dimming is active, the
+            target uses the same white-anchored perceptual dimming curve as the SDR region, so a dimmed
+            desktop does not leave HDR highlights at full output.
+          </p>
+          <p>
+            Constant-luminance night mode can lift the adjusted SDR white above the ordinary dimmed white.
+            If that produces an anchor <em>A</em> &gt; 0, Gloam compresses the remaining headroom monotonically:
+          </p>
+          <div class="formula">
+            H(L) = A(L / W)<sup>γ′</sup>, &nbsp;
+            γ′ = ln(10000 / A) / ln(10000 / W)
+          </div>
+          <p>
+            This maps <em>W</em> to <em>A</em> and 10,000 nits to itself. Raising diffuse white consumes real
+            highlight headroom; the power remap preserves ordering rather than hiding that tradeoff.
+          </p>
+        </section>
+
+        <section>
+          <h2 id="s6">6. Linear-Light Adjustments</h2>
+          <h3 id="s6-1">6.1 Order of Operations</h3>
           <ol>
-            <li><a href="#s1">Introduction: The HDR Transition Problem</a></li>
-            <li><a href="#s2">The SDR Transfer Function Mismatch</a></li>
-            <li><a href="#s3">Mathematical Foundations</a></li>
-            <li><a href="#s4">The Transformation Pipeline</a></li>
-            <li><a href="#s5">HDR Headroom Preservation</a></li>
-            <li><a href="#s6">Calibration Adjustments</a></li>
-            <li><a href="#s7">Night Mode</a></li>
-            <li><a href="#s8">Implementation Architecture</a></li>
-            <li><a href="#s9">Windows HDR Pipeline Context</a></li>
-            <li><a href="#s10">Verification and Accuracy</a></li>
-            <li><a href="#s11">Colorimeter Calibration and the MHC2 Pipeline</a></li>
-            <li><a href="#s12">Acknowledgements</a></li>
-            <li><a href="#s13">References</a></li>
+            <li>Gamer shadow-visibility toe</li>
+            <li>Dimming</li>
+            <li>Color temperature, including the per-monitor trim and scheduled shift</li>
+            <li>Tint</li>
+            <li>RGB gains</li>
+            <li>RGB offsets</li>
+            <li>Range clamp</li>
           </ol>
-        </nav>
-      </section>
-
-      <!-- ================= Section 1 ================= -->
-      <section>
-        <h2 id="s1">1. Introduction: The HDR Transition Problem</h2>
-        <p>
-          The transition to High Dynamic Range displays represents one of the most significant advances
-          in visual reproduction since the shift from standard definition to high definition, expanding
-          the representable luminance range from the few hundred nits of SDR displays to peaks of 1,000,
-          4,000, or even 10,000 nits while simultaneously lowering the black floor to near-perfect
-          darkness on OLED and Mini-LED panels: an expansion that promises images approximating, for
-          the first time in consumer technology, the dynamic range of human vision itself.
-        </p>
-        <p>
-          The transition remains uneven. Windows 11 has made meaningful progress in streamlining HDR,
-          including workstation setups where HDR can remain enabled throughout the desktop. At the same
-          time, its handling of SDR content inside the HDR composition space introduces a subtle and
-          persistent error. The problem reveals itself most clearly in shadows and low mid-tones, where
-          the discrepancy between what the system assumes and what the content actually requires becomes
-          impossible to ignore.
-        </p>
-        <p>
-          The problem is translation: when an SDR application renders its content, Windows must lift
-          that content into the HDR10 composition space for display, a process that requires mapping
-          SDR code values to specific luminance levels within the broader HDR range according to a
-          <em>transfer function</em> whose choice determines how the original content appears on the
-          HDR-enabled display. Microsoft chose piecewise sRGB; the industry standard, the curve on which
-          virtually all content has been mastered for the past three decades, is gamma 2.2. The
-          difference between these two curves, concentrated as it is in the shadow and lower mid-tone
-          regions, produces a measurable, reproducible, and (provided one understands the mathematics
-          involved) correctable error that manifests as the very haziness and flatness that has driven
-          countless observers to disable HDR in frustration, wondering why the technology that promised
-          deeper blacks delivers instead a pervasive gray.
-        </p>
-      </section>
-
-      <!-- ================= Section 2 ================= -->
-      <section>
-        <h2 id="s2">2. The SDR Transfer Function Mismatch</h2>
-
-        <h3 id="s2-1">2.1 A Brief History of Display Gamma</h3>
-        <p>
-          The concept of "gamma" in display technology originates from the non-linear voltage-to-light
-          relationship inherent in cathode ray tubes, wherein a CRT receiving a voltage signal
-          <var>V</var> produces light output <var>L</var> following approximately a power law:
-        </p>
-        <div class="math"><var>L</var> = <var>V</var><sup>γ</sup></div>
-        <p>
-          For a typical CRT, γ ≈ 2.5. The phosphor excitation process created this non-linearity as a
-          physical characteristic of the display. Content producers adapted by <em>pre-compensating</em>
-          at the source, applying an inverse gamma encoding so that the roundtrip from camera to
-          display preserved perceptual linearity. A chain of practical engineering constraints became
-          the foundation upon which all SDR imaging would rest.<sup class="fn"><a href="#ref1">[1]</a></sup>
-        </p>
-        <p>
-          Over decades, practical standardization selected <strong>gamma 2.2</strong> as the de facto
-          standard for computer monitors and general content creation (though cinema is typically
-          gamma 2.4), representing a reasonable
-          approximation for viewing in uncontrolled lighting conditions exceeding 50 lux as specified in
-          various industry documents and adopted by virtually every computer monitor manufactured in the
-          past three decades.<sup class="fn"><a href="#ref2">[2]</a></sup>
-        </p>
-
-        <h3 id="s2-2">2.2 The sRGB Standard</h3>
-        <p>
-          In 1996, an attempt was made to formalize the color space of computer displays: the sRGB
-          standard (IEC 61966-2-1). Rather than specifying a pure power-law gamma, sRGB defines a
-          <em>piecewise</em> transfer function with a linear segment near black:
-        </p>
-        <div class="math">
-          <var>V</var><sub>sRGB</sub> =
-          <span class="cases">
-            <span>12.92 × <var>L</var> &emsp;&emsp; if <var>L</var> ≤ 0.0031308</span>
-            <span>1.055 × <var>L</var><sup>1/2.4</sup> − 0.055 &emsp;&emsp; if <var>L</var> &gt; 0.0031308</span>
-          </span>
-        </div>
-        <p>
-          The linear segment (<var>L</var> ≤ 0.0031308) exists for numerical stability near zero,
-          avoiding the infinite slope that a pure power law exhibits at the origin, while the exponent
-          1/2.4 in the non-linear segment, combined with the offset terms, produces a curve that
-          approximates gamma 2.2 over most of its range but diverges in precisely the shadow regions
-          where the human eye is most sensitive to error.<sup class="fn"><a href="#ref3">[3]</a></sup>
-        </p>
-
-        <h3 id="s2-3">2.3 Microsoft's Choice</h3>
-        <p>
-          When Windows 11 renders SDR content within the HDR desktop composition, it employs the
-          piecewise sRGB EOTF (Electro-Optical Transfer Function) to map SDR code values to linear
-          light values under the assumption that SDR content was encoded with the sRGB inverse EOTF and
-          therefore decoding with sRGB produces accurate linear light, an assumption that, while
-          technically correct according to the sRGB specification, proves practically wrong for
-          virtually all content because the monitors used by game developers, web designers,
-          photographers, and colorists overwhelmingly implement pure gamma 2.2 rather than piecewise
-          sRGB, because artists adjust their work until it <em>looks correct</em> on their gamma 2.2
-          display with the encoded values implicitly assuming gamma 2.2 decoding, and because the sRGB
-          piecewise curve produces more light below the mid-tones than gamma 2.2, manifesting as
-          elevated shadows, reduced contrast, and a loss of atmospheric depth when sRGB-decoded content
-          mastered for gamma 2.2 reaches the eye.
-        </p>
-        <p>
-          The visual discrepancy is obvious in the example cited in Dylan Raga's original research:
-          Diablo IV, a game celebrated for its dark, gritty aesthetic in SDR mode, appears washed out
-          in HDR mode. Its rich blacks turn to dull grays, and its atmosphere becomes hazy. The source
-          of that damage is Windows' SDR-in-HDR translation layer rather than the game's HDR
-          implementation.<sup class="fn"><a href="#ref4">[4]</a></sup>
-        </p>
-
-        <h3 id="s2-4">2.4 Quantifying the Difference</h3>
-        <p>
-          The discrepancy admits precise quantification when we plot the luminance output for identical
-          input values under sRGB versus gamma 2.2:
-        </p>
-        <table>
-          <thead>
-            <tr><th>Input Code Value</th><th>sRGB Linear Output</th><th>Gamma 2.2 Linear Output</th><th>Difference</th></tr>
-          </thead>
-          <tbody>
-            <tr><td>0.10</td><td>0.0100</td><td>0.0063</td><td>+58.9%</td></tr>
-            <tr><td>0.20</td><td>0.0331</td><td>0.0290</td><td>+14.2%</td></tr>
-            <tr><td>0.30</td><td>0.0732</td><td>0.0707</td><td>+3.5%</td></tr>
-            <tr><td>0.40</td><td>0.1329</td><td>0.1332</td><td>−0.3%</td></tr>
-            <tr><td>0.50</td><td>0.2140</td><td>0.2176</td><td>−1.7%</td></tr>
-          </tbody>
-        </table>
-        <p>
-          The sRGB curve produces significantly more light in the deep shadows: a
-          discrepancy approaching 60% at the 10% input level that constitutes the mathematical origin of
-          the washed-out appearance. The gap falls off steeply — roughly 14% at 20% input, under 4% at
-          30% — and the two curves cross near the 40% input level, after which pure gamma 2.2 produces
-          marginally more light than sRGB (about −1.7% at 50%). The visible error is therefore
-          concentrated almost entirely in the darkest tones, precisely the region where the eye is most
-          sensitive to lifted black detail.
-        </p>
-      </section>
-
-      <!-- ================= Section 3 ================= -->
-      <section>
-        <h2 id="s3">3. Mathematical Foundations</h2>
-        <p>
-          Correcting the transfer function mismatch requires operating within the HDR signal path
-          itself, which in turn requires understanding three distinct transfer functions and their
-          inverses: the gamma power law that governs legacy SDR displays, the piecewise sRGB
-          formulation that Windows assumes, and the ST.2084 Perceptual Quantizer that encodes HDR
-          signals for transmission and display.
-        </p>
-
-        <h3 id="s3-1">3.1 The Gamma Power Law</h3>
-        <p>The simplest transfer function relates signal to light via a single exponent:</p>
-        <p><strong>EOTF (Electro-Optical Transfer Function):</strong></p>
-        <div class="math"><var>L</var> = <var>V</var><sup>γ</sup></div>
-        <p><strong>Inverse EOTF (OETF, the Opto-Electronic Transfer Function):</strong></p>
-        <div class="math"><var>V</var> = <var>L</var><sup>1/γ</sup></div>
-        <p>Where:</p>
-        <ul>
-          <li><var>L</var> = Relative linear luminance [0, 1]</li>
-          <li><var>V</var> = Signal value [0, 1]</li>
-          <li>γ = Gamma exponent (2.2 for general PC use, 2.4 for dark room viewing per BT.1886)</li>
-        </ul>
-
-        <h3 id="s3-2">3.2 The sRGB Piecewise EOTF</h3>
-        <p>As introduced above, sRGB defines a piecewise function:</p>
-        <p><strong>EOTF:</strong></p>
-        <div class="math">
-          <var>L</var> =
-          <span class="cases">
-            <span><var>V</var> / 12.92 &emsp;&emsp; if <var>V</var> ≤ 0.04045</span>
-            <span>((<var>V</var> + 0.055) / 1.055)<sup>2.4</sup> &emsp;&emsp; if <var>V</var> &gt; 0.04045</span>
-          </span>
-        </div>
-        <p><strong>Inverse EOTF:</strong></p>
-        <div class="math">
-          <var>V</var> =
-          <span class="cases">
-            <span>12.92 × <var>L</var> &emsp;&emsp; if <var>L</var> ≤ 0.0031308</span>
-            <span>1.055 × <var>L</var><sup>1/2.4</sup> − 0.055 &emsp;&emsp; if <var>L</var> &gt; 0.0031308</span>
-          </span>
-        </div>
-        <p>
-          The threshold 0.04045 (signal domain) corresponds to 0.0031308 (linear domain) at the
-          junction point of the two segments.
-        </p>
-
-        <h3 id="s3-3">3.3 The ST.2084 PQ Transfer Function</h3>
-        <p>
-          The Perceptual Quantizer (PQ) defined in SMPTE ST.2084 and adopted by HDR10 is fundamentally
-          different from gamma-based functions. Rather than modeling CRT physics, PQ is designed to
-          match <strong>human perceptual response</strong> to luminance, enabling efficient encoding
-          across the full 0-10,000 nit range of HDR.<sup class="fn"><a href="#ref5">[5]</a></sup>
-        </p>
-        <p><strong>PQ EOTF (Signal to Nits):</strong></p>
-        <div class="math">
-          <var>L</var> = 10000 × ( max(<var>V</var><sup>1/m₂</sup> − c₁, 0) / (c₂ − c₃ × <var>V</var><sup>1/m₂</sup>) )<sup>1/m₁</sup>
-        </div>
-        <p><strong>PQ Inverse EOTF (Nits to Signal):</strong></p>
-        <div class="math">
-          <var>V</var> = ( (c₁ + c₂ × (<var>L</var>/10000)<sup>m₁</sup>) / (1 + c₃ × (<var>L</var>/10000)<sup>m₁</sup>) )<sup>m₂</sup>
-        </div>
-        <p>Where the constants are defined as:</p>
-        <table>
-          <thead>
-            <tr><th>Constant</th><th>Fractional Form</th><th>Decimal Value</th></tr>
-          </thead>
-          <tbody>
-            <tr><td>m₁</td><td>2610/4096/4</td><td>0.1593017578125</td></tr>
-            <tr><td>m₂</td><td>2523/4096 × 128</td><td>78.84375</td></tr>
-            <tr><td>c₁</td><td>3424/4096</td><td>0.8359375</td></tr>
-            <tr><td>c₂</td><td>2413/4096 × 32</td><td>18.8515625</td></tr>
-            <tr><td>c₃</td><td>2392/4096 × 32</td><td>18.6875</td></tr>
-          </tbody>
-        </table>
-        <p>
-          These constants derive from the Barten model of human contrast sensitivity, tuned to produce
-          approximately uniform perceptual steps across 12 bits of precision over the 10,000 nit
-          range.<sup class="fn"><a href="#ref6">[6]</a></sup>
-        </p>
-        <p>
-          What distinguishes PQ from gamma-based functions is its operation in <strong>absolute
-          luminance</strong> (nits, candelas per square meter) rather than relative luminance, so that
-          a PQ signal value corresponds to a specific physical light level regardless of the display's
-          peak brightness, making PQ the lingua franca of HDR signal processing and the domain in which
-          our correction must ultimately operate.
-        </p>
-      </section>
-
-      <!-- ================= Section 4 ================= -->
-      <section>
-        <h2 id="s4">4. The Transformation Pipeline</h2>
-
-        <h3 id="s4-1">4.1 The Problem in Signal-Domain Terms</h3>
-        <p>
-          Windows' SDR-in-HDR pipeline receives SDR content assumed to be sRGB-encoded, applies the
-          sRGB EOTF to produce linear light relative to the SDR white level, scales that linear light
-          to absolute nits according to the SDR Content Brightness setting, applies the PQ inverse EOTF
-          to produce the HDR signal, and composites the result into the HDR10 output: a chain in which
-          the error occurs at the sRGB EOTF step, where content mastered for gamma 2.2 decoding
-          encounters Windows' sRGB decoder and emerges with its shadows lifted and its contrast reduced.
-        </p>
-
-        <h3 id="s4-2">4.2 The Correction Algorithm</h3>
-        <p>
-          To correct this, we intercept the PQ signal and apply a LUT that effectively replaces sRGB
-          decoding with gamma decoding:
-        </p>
-<pre><code>For each PQ code value index i in [0, 1023]:
-
-    normalized = i / 1023
-
-    # Step 1: Decode PQ to get the linear nits Windows produced
-    linear_nits = PQ_EOTF(normalized)
-
-    # Step 2: If above SDR white level, we're in HDR headroom - handle separately
-    if linear_nits &gt; sdr_white_level:
-        # See Section 5: HDR Headroom Preservation
-        continue
-
-    # Step 3: Undo Windows' sRGB assumption
-    # Windows assumed: signal -&gt; sRGB EOTF -&gt; linear_nits_intended
-    # So we reverse: linear_nits -&gt; sRGB Inverse EOTF -&gt; original_signal
-    signal_reconstructed = sRGB_InverseEOTF(linear_nits / sdr_white_level)
-
-    # Step 4: Apply correct gamma decoding
-    # Now decode as the content was actually mastered: signal^g -&gt; linear_intended
-    linear_intended = signal_reconstructed^gamma
-
-    # Step 5: Scale back to absolute nits
-    output_nits = black_level + (sdr_white_level - black_level) * linear_intended
-
-    # Step 6: Encode back to PQ for the display
-    output_signal = PQ_InverseEOTF(output_nits)
-
-    LUT[i] = output_signal</code></pre>
-        <p>
-          The essential operation is a remapping that "undoes" the sRGB decoding and "redoes" it as
-          gamma 2.2 (or 2.4), all while preserving the absolute luminance scaling and PQ encoding
-          expected by the HDR display.
-        </p>
-
-        <h3 id="s4-3">4.3 The SDR White Level Parameter</h3>
-        <p>
-          The transformation depends critically on knowing the SDR white level: the luminance at which
-          Windows renders SDR code value 1.0. This is controlled by the <strong>"SDR Content
-          Brightness"</strong> slider in Windows Display settings and varies from 80 to 480 nits:
-        </p>
-        <table>
-          <thead>
-            <tr><th>Slider Position</th><th>SDR White Level</th></tr>
-          </thead>
-          <tbody>
-            <tr><td>0</td><td>80 nits</td></tr>
-            <tr><td>5</td><td>100 nits</td></tr>
-            <tr><td>30</td><td>200 nits</td></tr>
-            <tr><td>55</td><td>300 nits</td></tr>
-            <tr><td>80</td><td>400 nits</td></tr>
-            <tr><td>100</td><td>480 nits</td></tr>
-          </tbody>
-        </table>
-        <p>The formula is approximately: <strong>White Level = 80 + (Slider × 4) nits</strong></p>
-        <p>
-          If the tool assumes a different white level than Windows is actually using, the correction
-          will be miscalibrated: either crushing shadows (if the assumed white level is too low) or
-          elevating them (if too high). Rather than ask the user to transcribe the slider, Gloam reads
-          the level Windows is actually applying directly from the OS: for each HDR-active display it
-          queries <code>DISPLAYCONFIG_SDR_WHITE_LEVEL</code> and uses the returned nits (clamped to a
-          plausible 40–1000 nit range, defaulting to 200 nits when the query is unavailable). The
-          value is therefore self-synchronizing — it tracks changes to the Windows slider without
-          user intervention — and the mapping table above is the OS's, not a control surface Gloam
-          exposes.
-        </p>
-      </section>
-
-      <!-- ================= Section 5 ================= -->
-      <section>
-        <h2 id="s5">5. HDR Headroom Preservation</h2>
-
-        <h3 id="s5-1">5.1 The Headroom Problem</h3>
-        <p>
-          HDR's defining feature, its expansion of the luminance range, creates a complication for any
-          correction operating in the SDR region: while SDR content occupies roughly 80-480 nits
-          depending on the brightness setting, HDR content can utilize the full range up to the
-          display's peak luminance, commonly 1,000-4,000 nits for modern HDR displays, and some SDR
-          applications exploit this headroom by sending specular highlights and UI elements above the
-          nominal SDR white level, particularly games that use the HDR headroom for bright effects even
-          when rendering ostensibly SDR content.
-        </p>
-        <p>
-          Blindly applying the gamma correction across the entire signal range would darken these HDR
-          highlights inappropriately. What was intended as a 700-nit specularity would emerge crushed
-          according to the same shadow-adjustment curve designed for the 0-200 nit range, destroying
-          the very highlights that HDR was meant to liberate.
-        </p>
-
-        <h3 id="s5-2">5.2 The Shoulder Blend</h3>
-        <p>
-          The correction employs a smooth blend from the fully-corrected curve to a <em>dim-aware
-          passthrough</em> as the signal rises above the SDR white level. Two details in that phrase
-          are load-bearing and worth dwelling on, because a naive implementation gets both of them
-          subtly wrong.
-        </p>
-        <p>
-          <strong>Blend in PQ-signal space.</strong> A blend parameterized by
-          linear nits spends almost all of its range in a region the eye barely perceives, between
-          4,000 and 10,000 nits, while the region where content actually lives (200-2,000 nits) sees
-          only a tiny fraction of the fade. The result is a curve that stays almost fully corrected
-          across the entire useful HDR range and only lets go of the correction in the extreme peaks.
-          PQ signal values are perceptually uniform by construction, so the blend is instead
-          parameterized by the normalized PQ code value:
-        </p>
-        <div class="math">
-          <var>t</var> = (<var>N</var> − <var>N</var><sub>SDR</sub>) / (1 − <var>N</var><sub>SDR</sub>), &emsp; <var>t</var> ∈ [0, 1]
-        </div>
-        <p>
-          where <var>N</var> is the normalized PQ signal and <var>N</var><sub>SDR</sub> is the PQ
-          signal corresponding to the SDR white level. Stepping through <var>t</var> at uniform
-          intervals traverses equal perceptual steps through the highlight range.
-        </p>
-        <p>
-          <strong>Smoothstep for C¹ continuity.</strong> A linear blend produces a LUT that is
-          continuous in value but discontinuous in derivative at the SDR/HDR boundary, which shows up
-          as a visible kink in smooth gradients (skies, radial gradients in UI). A smoothstep remedies
-          this at no runtime cost:
-        </p>
-        <div class="math">blend_factor = <var>t</var><sup>2</sup>(3 − 2<var>t</var>)</div>
-        <p>
-          <strong>The blend target must follow the brightness slider.</strong> The correction we fade
-          <em>from</em> is the fully-calibrated signal. The question is what we fade <em>to</em>.
-          Fading to pure identity passthrough preserves the creative intent of HDR highlights (no
-          re-gamma, no temperature tint on a 2,000-nit specular), which is the right behavior for
-          almost every adjustment in the pipeline. But it is wrong for dimming: a user who slides
-          brightness to 50% expects everything to come down, including specular highlights. Fading to
-          identity leaves those highlights at full luminance and produces the counterintuitive effect
-          of a dimmed UI with undimmed highlights punching through.
-        </p>
-        <p>
-          The headroom target is the input signal after dimming only. That preserves the HDR creative
-          grade while still honoring the brightness setting:
-        </p>
-        <div class="math">headroom_target(<var>L</var>) = PQ<sub>OETF</sub>(dim(<var>L</var>))</div>
-        <p>
-          where the dimming function is the same power+scale defined in
-          <a href="#s6-4">Section 6.4</a>, extended to absolute nits by anchoring at the SDR white
-          level <var>W</var>:
-        </p>
-        <div class="math">dim(<var>L</var>) = (<var>L</var> / <var>W</var>)<sup>1/γ(b)</sup> · <var>b</var> · <var>W</var></div>
-        <p>
-          The choice of anchor matters. At the SDR/HDR boundary (<var>L</var> = <var>W</var>) this
-          expression evaluates to <var>b</var>·<var>W</var>, exactly the value the dimmed SDR portion
-          of the curve reaches at white, so the headroom target meets the corrected curve continuously.
-          An earlier formulation normalized against the 10,000-nit PQ ceiling. Applying the dimming
-          exponent to <var>L</var>/10000 instead of <var>L</var>/<var>W</var> made the headroom target
-          at the boundary ~1.7× brighter than the dimmed SDR white at 50% brightness. That left a
-          brightness shelf just above SDR white that the smoothstep could soften but could not remove.
-          When Brightness = 100%, the expression reduces exactly to
-          PQ<sub>OETF</sub>(<var>L</var>), the original identity passthrough, so the behavior is
-          unchanged for users who never touch the dimming slider.
-        </p>
-        <p>The final output is:</p>
-        <div class="math">output = corrected + (headroom_target − corrected) × blend_factor</div>
-        <p>
-          This produces a LUT that is smooth and monotonic across the full range, preserves creative
-          intent in the HDR region, and responds correctly to the brightness control throughout.
-        </p>
-      </section>
-
-      <!-- ================= Section 6 ================= -->
-      <section>
-        <h2 id="s6">6. Calibration Adjustments</h2>
-        <p>
-          Beyond the core gamma correction, Gloam provides calibration adjustments (color temperature,
-          tint, brightness) for fine-tuning the display to the user's environment and preferences,
-          adjustments that operate throughout on a philosophy of perceptual accuracy over mathematical
-          simplicity.
-        </p>
-
-        <h3 id="s6-1">6.1 Operating in Linear Light Space</h3>
-        <p>
-          All color adjustments are applied after decoding to linear light and before re-encoding, a
-          constraint essential for perceptual accuracy because operations like scaling, color mixing,
-          and temperature adjustment are meaningful only in linear space where physical mixing of light
-          occurs; applying a color temperature shift in gamma-encoded space produces incorrect results
-          because the encoding curve compresses different luminance regions non-uniformly, breaking the
-          proportional relationships that temperature adjustment assumes.
-        </p>
-
-        <h3 id="s6-2">6.2 Color Temperature</h3>
-        <p>
-          Color temperature describes the chromaticity of a light source in relation to the Planckian
-          locus: the curve in CIE color space traced by an ideal blackbody radiator as its temperature
-          varies from red-hot (low Kelvin) through white-hot to blue-white (high
-          Kelvin).<sup class="fn"><a href="#ref7">[7]</a></sup>
-        </p>
-        <p>
-          Human circadian rhythm is entrained to the color temperature of natural light, which shifts
-          from the warm ~2700K of candlelight and sunset through the neutral ~5500K of midday sun to
-          the cool ~7500K of overcast sky and twilight. Night mode features that reduce blue light
-          exposure are based on shifting the display toward warmer temperatures.
-        </p>
-
-        <h4>Tanner Helland's Approximation</h4>
-        <p>
-          For computational efficiency, Gloam implements Tanner Helland's widely-used approximation of
-          blackbody RGB values,<sup class="fn"><a href="#ref8">[8]</a></sup> which provides a visually
-          pleasing, if mathematically simplified, representation of color temperature. For temperature
-          <var>T</var> in Kelvin:
-        </p>
-        <p><strong>Red channel:</strong></p>
-        <div class="math">
-          <var>R</var> =
-          <span class="cases">
-            <span>255 &emsp;&emsp; if <var>T</var> ≤ 6600</span>
-            <span>329.698727446 × (<var>T</var>/100 − 60)<sup>−0.1332047592</sup> &emsp;&emsp; if <var>T</var> &gt; 6600</span>
-          </span>
-        </div>
-        <p><strong>Green channel:</strong></p>
-        <div class="math">
-          <var>G</var> =
-          <span class="cases">
-            <span>99.4708025861 × ln(<var>T</var>/100) − 161.1195681661 &emsp;&emsp; if <var>T</var> ≤ 6600</span>
-            <span>288.1221695283 × (<var>T</var>/100 − 60)<sup>−0.0755148492</sup> &emsp;&emsp; if <var>T</var> &gt; 6600</span>
-          </span>
-        </div>
-        <p><strong>Blue channel:</strong></p>
-        <div class="math">
-          <var>B</var> =
-          <span class="cases cases-3">
-            <span>0 &emsp;&emsp; if <var>T</var> ≤ 1900</span>
-            <span>138.5177312231 × ln(<var>T</var>/100 − 10) − 305.0447927307 &emsp;&emsp; if <var>T</var> &lt; 6600</span>
-            <span>255 &emsp;&emsp; if <var>T</var> ≥ 6600</span>
-          </span>
-        </div>
-        <p>
-          The resulting RGB values are normalized so that 6500 K yields exactly (1, 1, 1) and applied
-          as per-channel multipliers in linear space.
-        </p>
-
-        <h4>CIE 1931 Accurate Method</h4>
-        <p>
-          For users demanding higher fidelity, Gloam also implements a physically accurate conversion
-          based on the CIE 1931 color space. The chromaticity (x, y) of a blackbody radiator at a given
-          Kelvin temperature is read from a Planckian locus computed at startup by integrating Planck's
-          law against the CIE 1931 2° colour-matching functions (sampled at roughly 1% steps in CCT
-          from 1000 K to 25000 K and interpolated linearly in log-CCT), then transformed into XYZ and
-          projected into linear RGB (in the sRGB or Rec.2020 wire basis, whichever the target signal
-          uses) before normalizing the brightest channel to 1. Computing the locus from first
-          principles rather than from a closed-form fit keeps the same table mutually consistent with
-          the CCT/Duv inversion Gloam uses elsewhere (Ohno's 2014 method in CIE 1960
-          UCS)<sup class="fn"><a href="#ref12">[12]</a></sup>. The legacy
-          Kang et al. cubic approximation<sup class="fn"><a href="#ref10">[10]</a></sup> is retained
-          only as a fallback if the locus table should fail to build. This method ensures that the
-          white point shifts precisely along the Planckian locus, preserving the exact chromaticity
-          relationships defined by the laws of physics.
-        </p>
-        <p>
-          The accurate path supplies the Planckian target used by the current default. Gloam's default
-          night profile is <strong>Perceptual</strong>: it takes the warm and 6500 K neutral white
-          points on that same locus and models <em>incomplete chromatic adaptation</em> between them in
-          CAT16 sharpened-cone space<sup class="fn"><a href="#ref11">[11]</a></sup> (see
-          <a href="#perceptual-strength">Perceptual Strength</a>),
-          reducing the adapted white to per-channel multipliers only afterward. At strength 1.0 the
-          result matches the full colorimetric shift; at the shipped default of 0.8 the display remains
-          visibly warm while retaining more green and blue separation than a full 2700 K transform. The
-          older Helland approximation remains available as a simple reference curve.
-        </p>
-
-        <h4 id="perceptual-strength">Perceptual Strength</h4>
-        <p>
-          The display ramp is a per-channel 1D device. It can scale red, green, and blue
-          independently and curve each channel, but a full 3×3 chromatic adaptation matrix sits outside
-          the Windows ramp API and cannot be realized in it. Within that constraint, the lever that
-          best preserves colour is not the finished RGB multipliers but the <em>degree of
-          adaptation</em> <var>D</var> ∈ [0, 1] applied while computing the white point. Gloam models
-          incomplete adaptation as an illuminant blend in CAT16 sharpened-cone space (Li et al. 2017;
-          CIE 248:2022)<sup class="fn"><a href="#ref11">[11]</a></sup>: the effective adopted white is
-        </p>
-        <div class="math">
-          <var>w</var><sub>adopted</sub> = <var>D</var> · <var>w</var><sub>target</sub> +
-          (1 − <var>D</var>) · <var>w</var><sub>6500</sub>&nbsp;&nbsp;(in CAT16 cone space)
-        </div>
-        <p>
-          computed by a von Kries scaling toward that adopted white, converted back to XYZ, and only
-          then reduced to per-channel display ratios through the same-path normalization the
-          Accurate method uses. At <var>D</var> = 1 this reproduces the full colorimetric shift; at
-          <var>D</var> = 0 it is the identity (1, 1, 1); at intermediate strengths the neutral 6500 K
-          point stays an exact identity in every wire basis. This replaces an earlier display-RGB lerp
-          of the finished multipliers (<var>M</var> = 1 + <var>D</var> × (<var>M</var><sub>CIE</sub> −
-          1)), which was an incomplete von Kries transform in the display-RGB basis rather than in a
-          sharpened cone space, and so eased colours along a less perceptually faithful path. The
-          construction keeps the brightest channel at unity (no clipping or colour cast) and preserves
-          more chroma separation on ordinary desktop content.
-        </p>
-
-        <h4>Ultra Night and Spectral Weighting</h4>
-        <p>
-          Ultra Night prioritizes low melanopic output and low luminance. The base curve starts from
-          the CIE warm point, applies a luminance reduction, floors blue at a driver-safe value, and
-          preserves an amber ordering:
-        </p>
-        <div class="math">
-          <var>R</var> &gt; <var>G</var> ≥ <var>B</var> &gt; 0
-        </div>
-        <p>
-          The positive blue floor comes from driver behavior: Windows'
-          <code>SetDeviceGammaRamp</code> rejects flat or degenerate channel ramps on some drivers.
-          The green floor keeps text in an amber range that remains comfortable for reading.
-        </p>
-        <p>
-          When a monitor has an optional DisplayCAL/Argyll <code>.ccss</code> spectral sample selected
-          in Settings, Gloam estimates relative melanopic and photopic coefficients for the display's
-          red, green, and blue primaries. The estimator parses the spectral rows, infers the primary
-          samples by wavelength-band purity, and computes:
-        </p>
-<pre><code>mel_i = Σ P_i(λ) · s_mel(λ)
-Y_i   = Σ P_i(λ) · V(λ)</code></pre>
-        <p>
-          The ratio <code>mel_i / Y_i</code> is then used only inside Ultra Night. If the selected
-          spectrum says green carries a high melanopic cost per unit luminance relative to red, the
-          Ultra Night curve pushes green closer to its readability floor as the target warms. A
-          missing, invalid, or mismatched <code>.ccss</code> file simply falls back to the generic
-          amber curve. The sample is treated as an estimate of panel emission for night-mode weighting.
-        </p>
-        <p>
-          The dashboard exposes night mode as three states: Off, Schedule, and Manual. Off disables
-          both scheduled and manual warmth; Schedule follows the configured controls; Manual applies
-          the selected temperature immediately. The separate Night profile selector chooses between
-          Perceptual, Ultra Night, Accurate CIE 1931, and Classic.
-        </p>
-
-        <h4>Temperature Offset for Night Mode</h4>
-        <p>
-          Night mode uses a <strong>temperature offset</strong> from the base 6500K neutral. Applied on
-          its own, a −1500K offset warms the white point to 5000K and a +500K offset cools it to 7000K.
-          The subtlety is what happens when this offset stacks on top of an existing adjustment — a
-          per-monitor white trim, say, combined with a scheduled night shift. Correlated colour
-          temperature is a <em>reciprocal</em> quantity: the same nominal Kelvin step is a much larger
-          perceptual step at the warm end than the cool end, so naively summing two offsets on the
-          Kelvin axis over-warms. Gloam instead composes them in <strong>mired space</strong>
-          (reciprocal megakelvin, the perceptually uniform CCT axis): each component is converted to
-          its mired distance from the 6500K reference, the distances are summed, and the result is
-          converted back to Kelvin. A single non-zero component composes to itself exactly, so this is
-          behaviour-preserving whenever only one adjustment is active; it only changes the result when
-          two are stacked, and there it changes it correctly. The resulting Kelvin value is clamped to
-          a permissive 1900K–10000K range (the same deep-warm floor as individual schedule targets,
-          but with enough cooling headroom above daylight that stacked adjustments are not
-          prematurely truncated).
-        </p>
-
-        <h3 id="s6-3">6.3 Tint (Green/Magenta Axis)</h3>
-        <p>
-          Color temperature adjustments move along the Planckian locus (the blue-to-orange axis).
-          Many displays and environments also require adjustment along the
-          <strong>orthogonal</strong> green/magenta axis: the tint control familiar from video color
-          correction.
-        </p>
-        <p>
-          Tint is implemented as a differential scaling of the green channel relative to red and blue.
-          Let <var>τ</var> be the slider value in the range [−50, +50] and let
-          <var>t</var> = <var>τ</var> / 50 be the normalized value in [−1, +1].
-        </p>
-        <p>For <var>τ</var> &gt; 0 (shift toward magenta):</p>
-        <div class="math">
-          <var>M</var><sub>R</sub> = 1 + 0.08 <var>t</var>, &emsp;
-          <var>M</var><sub>G</sub> = 1 − 0.12 <var>t</var>, &emsp;
-          <var>M</var><sub>B</sub> = 1 + 0.08 <var>t</var>
-        </div>
-        <p>For <var>τ</var> &lt; 0 (shift toward green), with <var>t′</var> = −<var>t</var> ≥ 0:</p>
-        <div class="math">
-          <var>M</var><sub>R</sub> = 1 − 0.08 <var>t′</var>, &emsp;
-          <var>M</var><sub>G</sub> = 1 + 0.10 <var>t′</var>, &emsp;
-          <var>M</var><sub>B</sub> = 1 − 0.08 <var>t′</var>
-        </div>
-        <p>
-          The asymmetric magenta coefficient (12%) compensates for the greater perceptual weight green
-          carries in luminance; a symmetric multiplier would shift brightness noticeably when moving
-          the slider.
-        </p>
-
-        <h3 id="s6-4">6.4 Dimming</h3>
-        <p>
-          Reducing display brightness proves less straightforward than multiplying all values by a
-          single scalar. A pure linear dim preserves the ratio between shadow and highlight but is
-          perceptually <em>less uniform</em> than we would like: at low brightness levels the eye's
-          sensitivity to contrast in dark regions rises (Stevens' power law for luminance has an
-          exponent near 0.5),<sup class="fn"><a href="#ref9">[9]</a></sup> so what feels like "dim the
-          whole screen" actually collapses the visible shadow detail disproportionately. Gloam
-          compensates with a two-parameter curve that mirrors the "exposure + lift" interaction in
-          photo editing:
-        </p>
-        <div class="math"><var>L</var><sub>dimmed</sub> = <var>L</var><sup>1/γ(b)</sup> · <var>b</var></div>
-        <p>where <var>b</var> = brightness / 100 ∈ (0, 1] and γ grows as brightness falls:</p>
-        <div class="math">γ(<var>b</var>) = 1 + 0.3 (1 − <var>b</var>)</div>
-        <p>
-          At <var>b</var> = 1.0 the function reduces to the identity (γ = 1, factor = 1). At
-          <var>b</var> = 0.1 we have γ = 1.27, so a mid-gray input of 0.5 maps to
-          0.5<sup>0.787</sup> · 0.1 ≈ 0.058: brighter than the 0.05 a linear dim would produce,
-          precisely because the γ term lifts shadows before the multiplicative factor brings
-          everything down to the requested brightness. Near-black values are lifted more than
-          near-white ones, preserving shadow separation even at very low brightness settings. White
-          (<var>L</var> = 1) lands exactly at <var>b</var> so the user's "50%" slider maps to true 50%
-          output.
-        </p>
-        <p>
-          Users who prefer a straight linear dim (for calibration work or color-critical comparisons)
-          can disable the shadow lift via the "Preserve shadow detail" toggle, falling back to
-          <var>L</var><sub>dimmed</sub> = <var>L</var> · <var>b</var>.
-        </p>
-
-        <h3 id="s6-5">6.5 Order of Operations</h3>
-        <p>The calibration pipeline applies adjustments in a specific order:</p>
-        <ol>
-          <li><strong>Dimming</strong>: reduces overall luminance</li>
-          <li><strong>Temperature</strong>: shifts white point along the Planckian locus</li>
-          <li><strong>Tint</strong>: shifts white point orthogonal to the Planckian locus</li>
-          <li><strong>RGB Gain</strong>: per-channel multiplier (1.0 = unity)</li>
-          <li><strong>RGB Offset</strong>: per-channel addition (0.0 = none)</li>
-        </ol>
-        <p>
-          This order ensures that creative adjustments (temperature, tint) operate on the dimmed
-          luminance range, and low-level calibration (RGB gain/offset) can correct for display
-          non-uniformities independent of the artistic intent.
-        </p>
-
-      </section>
-
-      <!-- ================= Section 7 ================= -->
-      <section>
-        <h2 id="s7">7. Night Mode</h2>
-        <p>
-          A persistent challenge in Windows color management is the conflict between hardware gamma
-          tables (VCGT) and the system's native Night Light feature. When an external tool writes a
-          correction to the VCGT, it often overrides or gets overridden by Windows Night Light, leading
-          to a flickering battle for control or the complete disablement of the warming effect just
-          when it is needed.
-        </p>
-        <p>
-          Gloam solves this by <strong>integrating night mode directly into the correction
-          pipeline</strong>. The application calculates the sun's position for the user's geolocation,
-          determines the appropriate color temperature shift and rendering profile, and
-          <em>bakes it mathematically into the gamma LUTs</em> before they are ever sent to the
-          display.
-        </p>
-        <p>
-          This approach offers two profound advantages: first, it eliminates the resource contention
-          for the VCGT, ensuring that the gamma correction and the night mode warming coexist in
-          perfect harmony; second, it applies the warming effect in high-precision floating-point space
-          <em>before</em> quantization, resulting in a smoother, band-free transition that maintains
-          the integrity of the shadow details even as the screen warms to a deep amber.
-        </p>
-
-        <h4>The Schedule Model</h4>
-        <p>
-          A schedule is an ordered list of <em>points</em>, each of which defines a transition
-          <em>to</em> its own target. A point carries a trigger, a target color temperature (clamped to
-          the schedulable 1900K–6500K range; the shipped default night target is 2700K), and a fade
-          duration in minutes. The trigger is one of three kinds: a <strong>fixed wall-clock time</strong>,
-          or <strong>sunrise</strong> or <strong>sunset</strong> with a signed minute offset (so
-          &ldquo;30 minutes before sunset&rdquo; is a −30 offset on a sunset trigger). At each tick the
-          scheduler resolves every point to an absolute time for the current day, sorts them, finds the
-          most recent one that has fired, and fades from the previous point's target toward that
-          point's target over its fade duration. Because the list wraps at midnight, the &ldquo;previous&rdquo;
-          point for the first event of the day is the last event of the day before, so a fade that
-          begins before midnight and completes after it is handled without a discontinuity.
-        </p>
-        <p>
-          Resolving a sun trigger runs a full <strong>NOAA solar-position ephemeris</strong> — Julian
-          day and century, the sun's geometric mean longitude and anomaly, the equation of center,
-          apparent longitude, obliquity of the ecliptic, declination, and the equation of time — to a
-          claimed accuracy of one to two minutes, using a refraction-corrected horizon zenith of
-          90.833°. Latitudes where the sun never crosses that horizon are handled explicitly: polar
-          night and midnight sun are detected (the hour-angle cosine falls outside [−1, 1]) and the
-          affected sunrise/sunset points fall back to 07:00 / 19:00 rather than scheduling a transition
-          at a degenerate sentinel time. This ephemeris is expensive relative to a timer tick, so the
-          resolved, time-sorted schedule is cached and only recomputed when the settings change or the
-          calendar day rolls over.
-        </p>
-
-        <h4>Perceptually Uniform Fades</h4>
-        <p>
-          A fade interpolates between two color temperatures, and the axis it interpolates <em>on</em>
-          matters. Interpolating linearly in Kelvin front-loads the entire perceived change into the
-          cool half of the transition, because equal Kelvin steps shrink in perceptual size as the
-          temperature warms. Gloam interpolates in <strong>mired</strong> instead:
-        </p>
-        <div class="math">
-          mired(<var>p</var>) = mired<sub>start</sub> +
-          (mired<sub>end</sub> − mired<sub>start</sub>) · <var>p</var>,&nbsp;&nbsp;
-          mired = 10<sup>6</sup> / <var>T</var>
-        </div>
-        <p>
-          which advances the white point at a constant perceptual rate across the whole fade. The
-          timer's cadence is derived from that same principle. Rather than tick at a fixed interval,
-          it targets a constant perceptual step per update — 0.05 mired, about 1 K near 4500K — so the
-          interval is the fade's total mired distance divided into fixed-size steps, clamped between one
-          display-refresh period (≈16.7 ms at 60 Hz) and 500 ms. A short 6500→6000K fade (~13 mired)
-          and a deep 2400→1900K fade (~110 mired) over the same wall-clock duration therefore tick at
-          very different rates but produce the same visual smoothness. Outside a fade the timer sleeps
-          until the next scheduled trigger, capped at 60 seconds so a system-clock change can never
-          strand a stale temperature for longer than a minute.
-        </p>
-        <p>
-          The scheduler is event-disciplined: it emits exactly one change notification per effective
-          state change (the target color temperature is integral, so equality is the dedupe test — a
-          coarser threshold would turn a gradual fade into visible steps). During a fade each
-          notification produces at most one ramp write per display, and the deduplication described in
-          <a href="#s8-2">Section 8.2</a> suppresses any redundant ones. A three-state control governs
-          the whole system — <strong>Off</strong> disables both scheduled and manual warmth,
-          <strong>Schedule</strong> follows the points above, and <strong>Manual</strong> pins a chosen
-          temperature immediately, bypassing the schedule — and the settings object the timer
-          enumerates is deep-copied on every update so an in-progress edit can never mutate the list
-          mid-fade.
-        </p>
-      </section>
-
-      <!-- ================= Section 8 ================= -->
-      <section>
-        <h2 id="s8">8. Implementation Architecture</h2>
-
-        <h3 id="s8-1">8.1 LUT Structure</h3>
-        <p>
-          The correction takes the form of a 1024-point 1D Look-Up Table, a resolution derived from the
-          Windows MHC2 (Monitor Hardware Calibration) profile format which specifies precisely 1024
-          entries for its calibration LUT and maps input PQ signal values to output PQ signal values:
-        </p>
-        <div class="math">LUT : [0, 1023] → [0.0, 1.0]</div>
-        <p>
-          For calibration adjustments that affect color channels differently (temperature, tint, RGB
-          gain), <strong>per-channel LUTs</strong> are generated:
-        </p>
-        <ul>
-          <li><strong>LUT_R[1024]</strong>: red channel transform</li>
-          <li><strong>LUT_G[1024]</strong>: green channel transform</li>
-          <li><strong>LUT_B[1024]</strong>: blue channel transform</li>
-          <li><strong>LUT_Grey[1024]</strong>: reference (average of R, G, B)</li>
-        </ul>
-
-        <h3 id="s8-2">8.2 Application Methods</h3>
-        <p>
-          The controller loads the generated LUTs into the video card's hardware gamma ramp (VCGT, the
-          Video Card Gamma Table).
-        </p>
-
-        <h4>Direct Hardware Loading</h4>
-        <p>
-          The primary path calls the Win32 <code>SetDeviceGammaRamp</code> API directly: the 1024-point
-          LUT is resampled onto the 256-entry, 16-bit-per-channel hardware ramp by linear interpolation
-          and handed to the display driver in a single sub-millisecond call. This is precisely what the
-          <strong>ArgyllCMS <code>dispwin</code> utility</strong> does internally when loading a
-          <code>.cal</code> file, so the resulting hardware state is bit-identical to the dispwin path,
-          but without spawning an external process (~100-500 ms per invocation) or round-tripping the
-          LUT through a temp file. <code>dispwin</code> is retained as an automatic fallback should the
-          native call be rejected, and ArgyllCMS remains the measurement engine for colorimeter
-          calibration. This method is:
-        </p>
-        <ul>
-          <li><strong>Fast</strong>: updates apply near-instantly, allowing real-time preview and smooth scheduled transitions.</li>
-          <li><strong>Universal</strong>: works across most GPU vendors and driver versions.</li>
-          <li><strong>Precise</strong>: bypasses the Windows compositor's color management quirks by speaking directly to the hardware driver.</li>
-        </ul>
-        <p>
-          While VCGT loading is sometimes criticized for its volatility (it can be reset by system
-          events or fullscreen exclusive games), Gloam counters this with a <strong>ramp
-          guard</strong>: every 10 seconds it reads each display's hardware ramp back via
-          <code>GetDeviceGammaRamp</code> (an essentially free call), compares it against the ramp it
-          last applied, and silently restores the correction if anything overwrote it. Displays whose
-          drivers transform ramps on write (so a readback can never match) are detected and excluded
-          after one restore attempt, preventing a restore-flash loop. Combined with re-application on
-          display-configuration changes and resume-from-sleep, the correction is self-healing without
-          user intervention.
-        </p>
-
-        <h4>Apply Hygiene: Why Re-Apply Discipline Matters</h4>
-        <p>
-          Each <code>dispwin</code> invocation rewrites the GPU gamma ramp in a single step, and on an
-          HDR display that rewrite is <em>visible</em>: a momentary luminance discontinuity the user
-          perceives as flicker. The apply pipeline therefore treats ramp writes as a scarce resource.
-          Four mechanisms enforce this:
-        </p>
-        <ul>
-          <li><strong>Identical-LUT deduplication.</strong> Before spawning <code>dispwin</code>, the
-          generated per-channel LUTs are compared against the last set successfully applied to that
-          display; if nothing changed, the spawn is skipped entirely. This converts the many internal
-          triggers that converge on a re-apply (foreground-app changes, settings touches, night-mode
-          ticks) into no-ops whenever the output would be identical.</li>
-          <li><strong>Cache invalidation on external resets.</strong> Deduplication is only safe while
-          the application's record of the ramp state is accurate. Display configuration changes and
-          resume-from-sleep can reset the ramp behind the application's back, so both events invalidate
-          the dedupe cache before triggering a re-apply, guaranteeing the correction is restored even
-          though the LUT "hasn't changed."</li>
-          <li><strong>Event debouncing.</strong> Windows emits <code>WM_DISPLAYCHANGE</code> in bursts
-          during HDR mode transitions. Events are coalesced so that only the final event in a burst,
-          after a settling delay, performs the monitor re-enumeration and re-apply; superseded handlers
-          abandon their work rather than queueing overlapping ramp writes.</li>
-          <li><strong>Ramp guard.</strong> A 10-second readback poll detects external overwrites
-          (fullscreen exclusive games, driver events, other color tools) and restores the applied ramp,
-          writing only when the hardware state has actually diverged.</li>
-        </ul>
-        <p>
-          Together with the night-mode scheduler's single-event-per-state-change contract
-          (<a href="#s7">Section 7</a>), these ensure the ramp is written exactly once per genuine
-          change in desired output.
-        </p>
-
-        <h3 id="s8-3">8.3 SDR vs. HDR Processing Paths</h3>
-        <p>
-          For SDR displays, those without HDR enabled, the transformation pipeline simplifies
-          considerably, decoding input as gamma 2.2 to linear, applying calibration adjustments in
-          linear space, and encoding output as gamma 2.2 back to signal, with no PQ involvement
-          whatsoever because SDR displays expect no such encoding; the calibration adjustments
-          themselves (temperature, tint, dimming) apply identically in both cases, differing only in
-          the encode/decode stages that bracket them.
-        </p>
-
-        <h3 id="s8-4">8.4 Background Updates</h3>
-        <p>
-          The updater follows the same operational philosophy. Installed builds check the GitHub
-          release feed, reject non-newer or malformed candidates, download the update in the
-          background, and schedule it for the next normal app exit or restart. Users do not need to
-          click through a browser or manually replace an installer. Portable builds intentionally skip
-          this path because there is no managed Velopack install to update.
-        </p>
-
-      </section>
-
-      <!-- ================= Section 9 ================= -->
-      <section>
-        <h2 id="s9">9. Windows HDR Pipeline Context</h2>
-
-        <h3 id="s9-1">9.1 The Desktop Window Manager (DWM)</h3>
-        <p>
-          All visual output in modern Windows flows through the Desktop Window Manager, the compositor
-          responsible for rendering the desktop, windows, and effects, and when HDR is enabled, DWM
-          operates in a <strong>linear scRGB composition space</strong> (Canonical Composition Color
-          Space). This space uses BT.709 primaries but allows for unbounded floating-point values (far
-          exceeding 1.0) to represent high dynamic range and wide color gamut data, converting the
-          traditional sRGB surfaces of SDR applications into this linear space before final output to
-          the display's native format (typically HDR10/BT.2020).
-        </p>
-
-        <h3 id="s9-2">9.2 Where LUTs Are Applied</h3>
-        <p>
-          Color transforms apply in a hierarchy: application rendering first (sRGB for SDR apps, scRGB
-          or HDR10 for HDR apps), then DWM conversion from SDR to HDR10 using the sRGB EOTF and SDR
-          white level, and finally the display driver's VCGT gamma ramp where our correction resides.
-        </p>
-        <p>
-          By injecting the correction at the driver level (VCGT), we intercept the signal after the
-          Windows compositor has applied its SDR-in-HDR mapping and immediately ahead of display
-          scanout. That placement lets Gloam untwist the distorted tone curve and restore linearity
-          just before the photons are emitted. The integrated night mode ensures that this VCGT
-          injection handles both the gamma correction and the evening color transform in a single
-          mathematical pass.
-        </p>
-
-        <h3 id="s9-3">9.3 Night Light Interaction</h3>
-        <p>
-          Windows' native Night Light applies its filter at the compositor level, where it competes
-          with VCGT loading. Gloam's <strong>integrated night mode</strong> moves that work into the
-          correction pipeline. The application takes responsibility for the circadian adjustment,
-          rendering the system's native toggle redundant and keeping the color pipeline conflict-free
-          when the native feature is disabled.
-        </p>
-      </section>
-
-      <!-- ================= Section 10 ================= -->
-      <section>
-        <h2 id="s10">10. Verification and Accuracy</h2>
-
-        <h3 id="s10-1">10.1 Mathematical Validation</h3>
-        <p>
-          The LUT generation algorithm was validated against the reference implementation from Dylan
-          Raga's original project, with the JavaScript implementation using identical transfer function
-          constants and producing bitwise-comparable output when controlled for floating-point
-          precision differences, all calculations employing <strong>double precision</strong> (64-bit
-          IEEE 754) and specifying the ST.2084 constants to 14 decimal places to avoid accumulated
-          rounding error across the 1024-point LUT.
-        </p>
-
-        <h3 id="s10-2">10.2 Visual Verification</h3>
-        <p>
-          Correct gamma application manifests visually as rich, defined shadows rather than elevated
-          hazy gray; strong separation between light and dark elements; proper rendering of fog,
-          darkness, and volumetric lighting; and richer color saturation, since elevated shadows
-          desaturate the image. A/B comparison with the tool enabled and disabled on dark content
-          (games, films) reveals the difference immediately to any attentive observer.
-        </p>
-
-        <h3 id="s10-3">10.3 Common Failure Modes</h3>
-        <table>
-          <thead>
-            <tr><th>Symptom</th><th>Likely Cause</th></tr>
-          </thead>
-          <tbody>
-            <tr><td>Image appears too dark</td><td>SDR white level set higher than Windows setting</td></tr>
-            <tr><td>Shadows appear crushed</td><td>SDR white level set lower than Windows setting</td></tr>
-            <tr><td>No visible change</td><td>LUT failed to apply; check driver compatibility</td></tr>
-            <tr><td>Colors appear tinted</td><td>Calibration settings inadvertently modified</td></tr>
-          </tbody>
-        </table>
-      </section>
-
-      <!-- ================= Section 11 ================= -->
-      <section>
-        <h2 id="s11">11. Colorimeter Calibration and the MHC2 Pipeline</h2>
-        <p>
-          The per-channel ramp of Sections 4-7 corrects tone. Color correction needs a different
-          mechanism: moving primaries and rotating a white point require a cross-channel transform,
-          while independent 1D channel curves disturb those relationships and receive inconsistent
-          treatment from the Advanced Color compositor. Measurement-based calibration therefore required a second
-          application mechanism, and Windows offers exactly one OS-native hook for it: an ICC profile
-          carrying the <strong>MHC2 tag</strong>, from which the Desktop Window Manager extracts a 3×4
-          matrix and three regamma LUTs and applies them at composition: persistently, system-wide, and
-          in both SDR and HDR.
-        </p>
-
-        <h3 id="s11-1">11.1 The Matrix Slot Is an XYZ Transform</h3>
-        <p>
-          Windows applies the MHC2 matrix in CIE XYZ, after converting from the current wire RGB
-          primaries and before converting back to those primaries. In other words, the matrix is
-          <strong>sandwiched between fixed conversions to and from CIE XYZ</strong>, using sRGB in SDR
-          and BT.2020 in HDR:
-        </p>
-<pre><code>wire = LUT( XYZ-&gt;wire_fixed . M_tag . wire-&gt;XYZ_fixed . linear_content )</code></pre>
-        <p>
-          The reference generator (MHC2Gen) acknowledges this only in a code comment, left-multiplying
-          its matrix by sRGB-to-XYZ. Writing
-          a plain linear-RGB-to-RGB correction into the slot, as a naive implementation does, produces
-          dramatic damage: on the test display the engine's sandwich turned a gentle warm correction
-          into a white drive of (R 1.39, clipped; G 0.866; B 0.910), a violent magenta cast across the
-          entire tonal range. The correct construction wraps the intended RGB-to-RGB matrix
-          <strong>M</strong> as <strong>S·M·S⁻¹</strong> (with S the wire RGB-to-XYZ matrix), whereupon
-          the engine's fixed conversions cancel algebraically and exactly <strong>M</strong> is
-          applied. A useful corollary: because the display is characterized <em>through</em> Windows'
-          own content rendering, the wire-format conversion cancels identically in SDR and HDR. The
-          same sRGB-wrapped matrix is correct in both modes, a result verified both algebraically and
-          on-screen.
-        </p>
-
-        <h3 id="s11-2">11.2 White Point: Absolute Matrix, Uniform Scale</h3>
-        <p>
-          White-point correction belongs <strong>inside the matrix</strong>, as the textbook absolute
-          mapping (content white to target white), with one refinement: on a panel whose native white
-          differs from the target, some channel demands more than full-scale drive (1.095 on the
-          blue-leaning test LCD), which clips. The resolution is a single <strong>uniform scale</strong>
-          of the entire matrix by the reciprocal of the largest drive value: every chromaticity,
-          primaries included, is preserved exactly, at the cost of a few percent of peak luminance.
-        </p>
-        <p>
-          The tempting alternative, normalizing per channel and folding the residual gains into the
-          tone LUTs, was implemented, measured, and rejected: per-channel gains form a diagonal matrix
-          applied <em>after</em> the gamut matrix and re-tint every non-neutral color the matrix had
-          just placed and primaries degraded from 1.39 to 2.46 ΔE2000 while neutrals
-          measured fine. Chromatic corrections must never be split across stages that compose
-          multiplicatively per channel.
-        </p>
-
-        <h3 id="s11-3">11.3 HDR: PQ-Domain LUTs and the Tone-Mapping Knee</h3>
-        <p>
-          In HDR the MHC2 LUTs operate on <strong>PQ wire signal</strong> (0-1 corresponding to
-          0-10,000 nits via ST.2084), and two physical constraints bound what they may attempt. First,
-          calibration patches are SDR content, mapped by Windows onto the wire at
-          <code>PQ(sdrWhite · sRGB(v))</code>: the measurements only cover the wire up to the SDR white
-          level (queried live via <code>DISPLAYCONFIG_SDR_WHITE_LEVEL</code>). Second, the upper portion of even that range sits
-          inside the panel's own tone-mapping knee, where the wire-axis model is invalid, and, more
-          subtly, where a strongly curved per-channel LUT distorts the channel ratios of unequal drive
-          values, which is precisely the matrix's corrected white. The builder corrects fully only below 50% of the
-          measured range, fades to identity by 80%, and passes the knee, and all true HDR highlights,
-          through untouched. Microsoft's own HDR Calibration utility, dissected for reference, ships an
-          identity matrix and two-entry identity LUTs: its entire payload is the MHC2 header's min/max
-          luminance metadata, which this tool also writes from the panel's DXGI-reported range.
-        </p>
-        <p>
-          <strong>Wire-exact measurement (the shipped HDR path).</strong> Both constraints above are
-          artifacts of measuring through Windows' SDR mapping, so the tool uses HDR calibrations to append a <strong>wire ladder</strong> of patches emitted through a
-          DirectX 11 FP16 scRGB swapchain (<code>R16G16B16A16_FLOAT</code> +
-          <code>DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709</code>, 1.0 corresponding to 80 nits), whose PQ
-          wire position is exact, <code>PQ⁻¹(requested nits)</code>, and which reaches far above SDR
-          white (0 to min(0.9 · panel peak, 1000) nits, log-spaced). A temporary probe harness
-          validated the premises before the path shipped: FP16 surfaces traverse the identical color
-          pipeline as SDR content (Δxy ≤ 0.0005), the SDR-in-HDR mapping is confirmed piecewise-sRGB,
-          FP16 wire positions are self-consistent to within 1.5% across the range, and the OS-reported
-          SDR white level was ~7% below where SDR white actually lands on the wire (240 reported vs
-          ~258 measured), disqualifying it as a calibration anchor. With measured wire-exact data the
-          LUT inverts the panel's response across the entire desktop-plus-HDR range, including the
-          tone-mapping knee (now just part of the measured response), and goes identity only above the
-          panel's <em>reachable</em> peak, where no LUT can create luminance. On the QD-OLED test
-          panel, which ran a uniform 86.7% of the PQ spec, this produced the project's first sub-1.0
-          grayscale result (0.57 ΔE2000 average).
-        </p>
-
-        <h3 id="s11-4">11.4 Advanced Color Association</h3>
-        <p>
-          HDR displays read the <strong>Advanced Color list</strong> (registry
-          <code>ICMProfileAC</code>) instead of the classic per-device profile association. That list
-          is reachable only through
-          <code>ColorProfileAddDisplayAssociation(..., associateAsAdvancedColor: true)</code> with the
-          display's DisplayConfig adapter LUID and source id. The classic WCS association APIs place
-          profiles in a list Windows ignores while HDR is active: a silent failure mode. (A
-          practical interop warning recorded for posterity: <code>DISPLAYCONFIG_RATIONAL</code> must be
-          declared as two 32-bit fields; declaring it as a 64-bit integer changes the struct's
-          alignment, inflates <code>DISPLAYCONFIG_PATH_TARGET_INFO</code> from 48 to 56 bytes, and
-          <code>QueryDisplayConfig</code> rejects every call with <code>ERROR_INVALID_PARAMETER</code>,
-          silently breaking both association and SDR-white-level queries.)
-        </p>
-
-        <h3 id="s11-5">11.5 Meter Truth: Spectral Corrections</h3>
-        <p>
-          A three-filter colorimeter is only as accurate as the spectral correction matching the
-          panel's emission spectra, and modern panels (KSF/PFS phosphor LCDs, QD-OLED) are pathological
-          cases for generic corrections. Measured consequence on this project's two test panels:
-          opposite-signed white errors of roughly ±11 tint steps against a common WOLED critical color reference grading display, each
-          calibration faithfully reproducing its meter's misplaced D65. With panel-matched spectral
-          samples (<code>.ccss</code>, applied via Argyll's <code>-X</code>), the KSF LCD's native
-          state measured nearly on-target (0.59 ΔE primaries), revealing that earlier corrections had
-          been partly chasing a meter artifact. The application integrates the DisplayCAL community
-          corrections database directly (searchable in-app; entries embed the full CGATS content) and
-          remembers the correction per monitor.
-        </p>
-
-        <h3 id="s11-6">11.6 Verification and the Noise Floor</h3>
-        <p>
-          Every calibration is verified by re-measuring a patch sweep <strong>through the applied
-          profile</strong> (the compositor applies MHC2 to all content, so a patch window sees the
-          corrected output) using the identical ΔE2000 metric as the native characterization, with the
-          GPU ramp quiesced for the sweep's duration (the user's gamma preference is a deliberate
-          offset, and an early verification pass that measured it produced a phantom 2.3 ΔE grayscale
-          "regression" with untouched full-signal patches: the diagnostic signature of a gamma ramp
-          riding the measurement). When the profile was built from the wire ladder, verification adds a
-          <strong>PQ tracking sweep</strong>: FP16 wire patches through the applied profile, graded in
-          absolute nits against ST.2084 and in ΔE ITP (BT.2124) against D65 gray at each level. This is
-          the correct way to grade a correction that claims absolute PQ tracking, and a check the
-          SDR-range sweep is physically incapable of performing.
-        </p>
-        <p>
-          Two empirical rules emerged. First: <strong>once a panel measures inside the system's
-          noise-plus-nonlinearity floor natively (roughly 2.5 ΔE average or less), full gamut
-          correction has nothing real to fix and verification reliably comes back worse</strong>. The
-          correct prescriptions are white-point-only correction (the matrix built with target primaries
-          replaced by the measured ones) or no correction at all. Second: measured accuracy and
-          perceptual match are distinct targets. Observer metamerism guarantees that displays of
-          different spectral character can measure identical and look different side by side; the final
-          small visual trim against a reference display is a legitimate final calibration step, and the
-          tool's report says so explicitly.
-        </p>
-      </section>
-
-      <!-- ================= Section 12 ================= -->
-      <section>
-        <h2 id="s12">12. Acknowledgements</h2>
-        <p>
-          This work builds directly on the research and implementation of <strong>Dylan Raga</strong>
-          (<a href="https://github.com/dylanraga/win11hdr-srgb-to-gamma2.2-icm">dylanraga/win11hdr-srgb-to-gamma2.2-icm</a>),
-          whose identification of the Windows SDR-in-HDR transfer function problem and creation of the
-          original LUT generator laid the foundation for this project.
-        </p>
-        <p>Additional acknowledgements:</p>
-        <ul>
-          <li><strong><a href="https://www.argyllcms.com/">ArgyllCMS</a></strong> by Graeme Gill: the <code>dispwin</code> utility enables low-level LUT loading for testing and validation</li>
-          <li><strong><a href="https://github.com/dantmnf/MHC2">MHC2Gen</a></strong> by dantmnf: reference for the MHC2 ICC profile format</li>
-          <li><strong>Microsoft</strong>: documentation on Advanced Color and HDR color management APIs</li>
-        </ul>
-      </section>
-
-      <!-- ================= Section 13 ================= -->
-      <section>
-        <h2 id="s13">13. References</h2>
-        <ol class="refs">
-          <li id="ref1">Poynton, C. (2003). <em>Digital Video and HDTV: Algorithms and Interfaces</em>. Morgan Kaufmann. Chapter on gamma and transfer functions.</li>
-          <li id="ref2">IEC 61966-2-1:1999. <em>Multimedia systems and equipment - Colour measurement and management - Part 2-1: Colour management - Default RGB colour space - sRGB</em>.</li>
-          <li id="ref3">Stokes, M., Anderson, M., Chandrasekar, S., &amp; Motta, R. (1996). <em>A Standard Default Color Space for the Internet - sRGB</em>. Hewlett-Packard / Microsoft.</li>
-          <li id="ref4">Raga, D. (2023). <em>win11hdr-srgb-to-gamma2.2-icm</em>. GitHub repository. <a href="https://github.com/dylanraga/win11hdr-srgb-to-gamma2.2-icm">github.com/dylanraga/win11hdr-srgb-to-gamma2.2-icm</a></li>
-          <li id="ref5">SMPTE ST 2084:2014. <em>High Dynamic Range Electro-Optical Transfer Function of Mastering Reference Displays</em>.</li>
-          <li id="ref6">Miller, S., Nezamabadi, M., &amp; Daly, S. (2013). <em>Perceptual Signal Coding for More Efficient Usage of Bit Codes</em>. SMPTE Motion Imaging Journal, 122(4), 52-59.</li>
-          <li id="ref7">Wyszecki, G., &amp; Stiles, W. S. (2000). <em>Color Science: Concepts and Methods, Quantitative Data and Formulae</em> (2nd ed.). Wiley-Interscience.</li>
-          <li id="ref8">Helland, T. (2012). <em>How to Convert Temperature (K) to RGB: Algorithm and Sample Code</em>. <a href="https://tannerhelland.com/2012/09/18/convert-temperature-rgb-algorithm-code.html">tannerhelland.com</a></li>
-          <li id="ref9">Stevens, S. S. (1957). On the psychophysical law. <em>Psychological Review</em>, 64(3), 153-181.</li>
-          <li id="ref10">Kang, B., Moon, O., Hong, C., Lee, H., Cho, B., &amp; Kim, Y. (2002). Design of Advanced Color Temperature Control System for HDTV Applications. <em>Journal of the Korean Physical Society</em>, 41(6), 865-871.</li>
-          <li id="ref11">Li, C., Li, Z., Wang, Z., Xu, Y., Luo, M. R., Cui, G., Melgosa, M., Brill, M. H., &amp; Pointer, M. (2017). Comprehensive color solutions: CAM16, CAT16, and CAM16-UCS. <em>Color Research &amp; Application</em>, 42(6), 703-718. (CAT16 standardized in CIE 248:2022.)</li>
-          <li id="ref12">Ohno, Y. (2014). Practical Use and Calculation of CCT and Duv. <em>LEUKOS</em>, 10(1), 47-55.</li>
-        </ol>
-        <p class="paper-meta">
-          Last updated July 4, 2026: documented the perceptual night-mode default, Ultra Night
-          spectral weighting from optional DisplayCAL CCSS samples, three-state Night Mode control,
-          seamless Velopack update behavior, and calibration wizard state persistence.
-          Section 11 documents the MHC2 matrix XYZ-sandwich semantics, uniform-scale white handling,
-          knee-safe PQ LUTs, Advanced Color association, spectral corrections, wire-exact HDR
-          measurement via FP16 scRGB patches, and the PQ tracking verification sweep.
-        </p>
-        <p class="paper-meta">
-          Revised (code-audit pass): corrected the §2.4 sRGB-vs-gamma-2.2 comparison table and its
-          surrounding narrative (the gamma column previously held gamma-2.4 values); replaced the
-          §6.2 Perceptual-strength description and formula to match the shipped CAT16 cone-space
-          incomplete-adaptation model (the earlier display-RGB lerp was superseded in code); updated
-          the §6.2 Accurate method to describe the CIE-1931-CMF Planckian locus table now used, with
-          the Kang et al. cubic retained only as a fallback; and corrected §4.3 to reflect that the
-          SDR white level is auto-detected from <code>DISPLAYCONFIG_SDR_WHITE_LEVEL</code> rather than
-          entered by the user. Added references [11] (CAT16 / Li et al. 2017) and [12] (Ohno 2014).
-        </p>
-      </section>
-
-    </article>
-  </main>
-
+          <p>
+            Every operation in this sequence is evaluated after transfer-function decoding. Applying these
+            multipliers to encoded values would make the physical result depend on the transfer curve.
+          </p>
+
+          <h3 id="s6-2">6.2 Temperature Coordinates</h3>
+          <p>
+            The manual scale maps to K = 6500 + 70<em>T</em>. Saved adjustments support 1900–10,000 K;
+            scheduled night mode is limited to 1900–6500 K. Manual trim and schedule shifts compose in
+            mired space, μ = 10<sup>6</sup>/K:
+          </p>
+          <div class="formula">μ<sub>effective</sub> = μ<sub>manual</sub> + μ<sub>schedule</sub> − μ<sub>6500</sub></div>
+          <p>This prevents a fixed Kelvin offset from becoming disproportionately strong near the warm end.</p>
+
+          <h3 id="s6-3">6.3 Temperature Algorithms</h3>
+          <ul>
+            <li>
+              <strong>Standard.</strong> Tanner Helland's RGB approximation is normalized against its 6500 K
+              result. Its RGB-like code values are converted through the sRGB EOTF before channel ratios are
+              formed, because the ratios are applied in linear light.
+            </li>
+            <li>
+              <strong>Accurate CIE 1931.</strong> A Planckian locus is generated from Planck's law and the
+              CIE 1931 2° color-matching functions at 5 nm intervals. Chromaticity is interpolated in log CCT,
+              converted to XYZ, then to the active wire RGB basis. Target and 6500 K values are each
+              normalized to their brightest channel before their ratio is formed. The underlying table spans
+              1000–25,000 K; public CCT-to-xy calls retain a 1667–25,000 K compatibility clamp. The Kang cubic
+              is only a defensive fallback if table construction fails.
+            </li>
+            <li>
+              <strong>Perceptual.</strong> The 6500 K and target whites are blended by degree of adaptation
+              <em>D</em> in CAT16 sharpened-cone space. The adapted XYZ white is then reduced to the same
+              basis-specific diagonal used by Accurate mode. The default strength is D = 0.8.
+            </li>
+            <li>
+              <strong>Blue Reduction.</strong> A non-colorimetric heuristic keeps red at 1 while green moves
+              toward 0.7 and blue toward 0.1 as the setting approaches 1900 K.
+            </li>
+            <li>
+              <strong>Ultra Night.</strong> The Accurate Planckian ratios are multiplied by a luminance factor
+              that reaches 0.70 near 2000 K. Blue is floored at 0.10 so Windows receives a valid, readable
+              ramp. When panel spectra are available, green may be reduced toward max(1.8B, 0.12) according
+              to its melanopic efficacy relative to red; green never falls below blue.
+            </li>
+          </ul>
+
+          <h3 id="s6-4">6.4 Constant-Y White</h3>
+          <p>
+            For temperature multipliers <strong>m</strong>, let Y(<strong>m</strong>) be their luminance in the
+            active RGB basis, <em>d</em> the dimmed-white fraction, and <em>c</em> the permitted channel ceiling.
+            The ideal luminance-restoring scale is 1/Y(<strong>m</strong>), bounded by available headroom:
+          </p>
+          <div class="formula">s = min(1 / Y(<strong>m</strong>), c / (d · max(<strong>m</strong>)))</div>
+          <p>
+            Full-brightness SDR has <em>c</em> = 1, so this mode is inert there. Dimming creates SDR ramp
+            headroom. In HDR, <em>c</em> is min(2, DXGI-reported peak / SDR white) when usable. Ultra
+            Night is excluded because recovering its luminance would undo its intended dose reduction.
+          </p>
+
+          <h3 id="s6-5">6.5 Tint and Dimming</h3>
+          <p>
+            With normalized tint <em>t</em> in [−1, 1], the green direction uses
+            (1 − 0.08|t|, 1 + 0.10|t|, 1 − 0.08|t|). The magenta direction uses
+            (1 + 0.08t, 1 − 0.12t, 1 + 0.08t). These are restrained display-RGB trims, not
+            a CIE tint coordinate.
+          </p>
+          <p>Perceptual dimming uses brightness fraction <em>b</em> and input light <em>x</em>:</p>
+          <div class="formula">
+            g = 1 + 0.3(1 − b)<br>
+            D(x, b) = b · x<sup>1/g</sup>
+          </div>
+          <p>Linear dimming, when selected, uses D(<em>x</em>, <em>b</em>) = <em>bx</em>.</p>
+        </section>
+
+        <section>
+          <h2 id="s7">7. Night Mode and Melanopic Policy</h2>
+          <h3 id="s7-1">7.1 Scheduling</h3>
+          <p>
+            A schedule is an ordered set of fixed-time, sunrise, or sunset points. Each point defines the
+            target Kelvin and the duration of the transition to that target. Solar times use the NOAA solar
+            position equations with latitude, longitude, local UTC offset, and optional ±120-minute offsets.
+            Polar day or night falls back to the saved manual times instead of treating the solar sentinels
+            as real events. The user-facing states are off, scheduled, and manual override.
+          </p>
+
+          <h3 id="s7-2">7.2 Fade Pacing</h3>
+          <p>
+            Temperature interpolates linearly in mired, not Kelvin. The timer also adapts its step size to
+            the active rendering algorithm. Around the current white, Gloam estimates ΔE ITP per mired by
+            central difference at a 100 cd/m² reference and targets at most 0.5 ΔE ITP per hardware write.
+            The permitted step is bounded to 0.01–2.0 mired; 0.05 mired is the fallback if the derivative is
+            unusable.
+          </p>
+          <p>
+            Fade ticks are bounded to 16.7–500 ms, while hardware writes are coalesced to no more than one
+            every 250 ms per monitor. The requested fade duration remains authoritative if it cannot satisfy
+            the half-JND target at that write rate. Outside a fade, the service sleeps until the next event or
+            for at most 60 seconds.
+          </p>
+
+          <h3 id="s7-3">7.3 Melanopic Estimates</h3>
+          <p>
+            When a CCSS is available, Gloam forms the emitted spectral power distribution from the measured
+            red, green, and blue channel spectra and the current linear gains. Melanopic DER and photopic
+            luminance are integrated from those spectra. The percentage reduction from the same panel's
+            6500 K white is ratiometric; the absolute melanopic EDI also assumes an effective viewing solid
+            angle, 0.20 sr by default. Generic Gaussian primaries are a marked fallback, with a wider
+            uncertainty than same-panel spectra.
+          </p>
+
+          <h3 id="s7-4">7.4 Optional Dose Ceiling</h3>
+          <p>
+            A melanopic-EDI ceiling invokes a constrained search. Candidate temperatures run from the
+            scheduled value down to 1900 K in 50 K steps. At each temperature, the minimum required dimming
+            is solved directly because EDI is linear in white luminance at fixed spectral shape. Brightness
+            never increases and has a 10% floor. Among compliant candidates, Gloam chooses the smallest
+            CAM16-UCS ΔE′ from the scheduled appearance; if none can comply, it chooses the lowest remaining
+            dose and reports that the ceiling was unreachable.
+          </p>
+        </section>
+
+        <section>
+          <h2 id="s8">8. Gamer Mode</h2>
+          <h3 id="s8-1">8.1 Session Policy</h3>
+          <p>
+            Gamer profiles are keyed by executable name and, when known, canonical path. Launcher, helper,
+            overlay, installer, server, shell, and Gloam processes are rejected from automatic ownership.
+            One executable may own one or more displays at a time; competing executables cannot control the
+            pipeline concurrently. Display scope can follow the game window, select every display, or name
+            one display explicitly.
+          </p>
+          <p>
+            Foreground activation is settled before application: 350 ms for a candidate game, 900 ms before
+            releasing an active game, and 250 ms for ordinary changes. Gameplay Lock freezes the scheduled
+            Kelvin captured at activation, while the ramp guard can still repair a verified external reset.
+            A panic suspend clears the active policy in memory even if settings persistence is unavailable.
+          </p>
+
+          <h3 id="s8-2">8.2 Shadow Visibility Toe</h3>
+          <p>
+            Competitive visibility is a black-anchored, monotonic toe in linear luminance. For strength
+            <em>a</em> ∈ [0, 1], pivot <em>p</em>, and 0 &lt; <em>L</em> &lt; <em>p</em>:
+          </p>
+          <div class="formula">
+            L′ = min(p, L + 1.5aL(1 − L/p)²)
+          </div>
+          <p>
+            Zero and the pivot are unchanged, the derivative rejoins at one, and values above the pivot are
+            bit-identical to the underlying calibration. Minimum slope is 1 − 0.5<em>a</em>, so the permitted
+            range remains increasing. Gloam evaluates luminance with Rec.709 weights in SDR or Rec.2020
+            weights in HDR, then scales RGB together along the same hue ray, limited by channel headroom.
+          </p>
+
+          <h3 id="s8-3">8.3 Presets and Signal Diagnostics</h3>
+          <ul>
+            <li><strong>Reference:</strong> no gamma override, no toe, daylight policy.</li>
+            <li><strong>Competitive Clarity:</strong> gamma 2.2, toe strength 0.55, pivot 0.10, follows the schedule.</li>
+            <li><strong>Cinematic HDR:</strong> Windows Default transfer, no toe, daylight policy, HDR expected.</li>
+            <li><strong>Night Ops:</strong> gamma 2.2, toe strength 0.45, pivot 0.10, Perceptual night rendering at up to 3400 K and strength 0.55. Its melanopic ceiling is opt-in.</li>
+          </ul>
+          <p>
+            At activation, diagnostics compare the requested SDR/HDR mode with the active output, decode the
+            DXGI color-space and bit-depth state, check SDR-white headroom against reported peak luminance,
+            and verify the saved MHC2 association when Windows exposes it. These checks report risk; they do
+            not infer the game's internal tone mapper or claim that reported peak metadata is measured truth.
+          </p>
+        </section>
+
+        <section>
+          <h2 id="s9">9. Windows Application Architecture</h2>
+          <h3 id="s9-1">9.1 Hardware Ramp</h3>
+          <p>
+            Live curves are calculated at 1024 samples and linearly resampled to the 256 unsigned 16-bit
+            entries required by <code>SetDeviceGammaRamp</code>. The native call is the fast path. If a driver
+            rejects it, Gloam writes a temporary Argyll <code>.cal</code> file and invokes <code>dispwin</code>
+            for the target display. Display matching uses the GDI device name parsed from Argyll's display
+            list, with the DXGI output index only as a fallback.
+          </p>
+          <p>
+            Identical curves are not rewritten. Rapid changes are latest-value coalesced per monitor with a
+            250 ms write floor. Every ten seconds, the ramp guard reads back the current hardware state and
+            restores a curve that a driver or full-screen application replaced. Drivers whose readback cannot
+            match within 512 16-bit counts after restoration are marked unverifiable so the guard does not
+            create a flashing repair loop. Calibration bypass suppresses both normal writes and guard repairs.
+          </p>
+
+          <h3 id="s9-2">9.2 Windows Color Profiles</h3>
+          <p>
+            Measured profiles are installed per display and per measured SDR/HDR mode. HDR profiles use the
+            Advanced Color association APIs and are read back after activation. SDR profiles use the current-
+            user WCS default. Cross-mode installation is refused because an SDR signal-domain curve and an
+            HDR PQ-domain curve do not share a meaningful input axis.
+          </p>
+          <p>
+            In an HDR profile, ordinary ICC matrix/TRC tags describe the app-facing sRGB presentation path;
+            the PQ correction remains inside the MHC2 payload. Advertising PQ in the classic ICC TRCs would
+            cause color-managed SDR applications to encode content for PQ before the compositor performs its
+            own Advanced Color mapping.
+          </p>
+
+          <h3 id="s9-3">9.3 Composition Rules</h3>
+          <p>
+            The native MHC2 profile corrects the panel at the compositor. The live ramp remains available for
+            the user's gamma, night, and gamer policy and is synthesized as though it were feeding an ideal
+            corrected display. Explicit settings previews temporarily take ownership from gamer mode. App
+            exclusions can block live policy on the display intersecting an excluded foreground window
+            without removing the measured panel profile.
+          </p>
+        </section>
+
+        <section>
+          <h2 id="s10">10. Measurement and Characterization</h2>
+          <h3 id="s10-1">10.1 Acquisition</h3>
+          <p>
+            ArgyllCMS <code>spotread</code> supplies XYZ measurements. The application owns one measurement
+            session and one patch surface for the run. SDR patches use the ordinary patch window. Absolute HDR
+            patches use an FP16 scRGB surface, where a channel value represents cd/m² divided by 80; Windows
+            converts the scRGB surface into the active HDR wire space. Probe position, patch size, and monitor
+            placement are reused for verification, refinement, spectral capture, and trust checks.
+          </p>
+          <p>
+            Existing live ramps are bypassed during calibration. Measurement validation rejects missing
+            anchors, implausible range, non-monotonic or insufficient HDR coverage, excessive repeated-white
+            drift, and other states that would make the fitted correction untrustworthy.
+          </p>
+
+          <h3 id="s10-2">10.2 Repeat Reads and Settling</h3>
+          <p>
+            Near-black patches, white, and full primaries receive multiple reads; their reported XYZ is the
+            per-component median. If the luminance spread exceeds 5% of the mean or 0.02 cd/m², a fourth read
+            is added. A luminance-decade noise model learns from these bursts. Later patches predicted to land
+            in a noisy decade receive longer settling and can be promoted from a single read to a median burst.
+            Patch settling also increases with the size of the signal transition and gives large downward
+            transitions extra time.
+          </p>
+
+          <h3 id="s10-3">10.3 Drift</h3>
+          <p>
+            Thorough, Full, and Adaptive sequences interleave white anchors every 25 ordinary patches and
+            black anchors every 50. White drift is modeled as a multiplicative luminance factor, interpolated
+            linearly in time; XYZ is divided by that factor, preserving chromaticity. Drift up to 8% can be
+            normalized. Larger drift is left untouched so validation can fail the run instead of concealing an
+            unstable display. Black re-reads are analyzed as an additive-domain diagnostic and are not used in
+            the multiplicative correction.
+          </p>
+
+          <h3 id="s10-4">10.4 Adaptive Patch Placement</h3>
+          <p>
+            The Adaptive preset begins with a coarse seed covering the gray axis, individual channel ramps,
+            primaries, secondaries, and selected mixed colors. The current model is refit after each batch.
+            Candidate points are scored on their own signal manifold by two terms: inverse-distance-weighted
+            model residual and half-weighted distance to the nearest measurement. Batches contain 12 ordinary
+            patches by default and are greedily thinned to avoid adjacent picks.
+          </p>
+          <p>
+            Tone residuals use |ΔL*| with a 1.5 target; color residuals use ΔE2000 with a 0.8 target. Clean
+            completion requires the worst target-normalized residual to reach 1. The 90th-percentile residual
+            controls plateau detection, which requires two consecutive rounds with less than 10% improvement.
+            The ordinary-patch budget is 120. Budget or plateau stops above target are persisted as degraded
+            outcomes rather than reported as convergence.
+          </p>
+
+          <h3 id="s10-5">10.5 Display Model</h3>
+          <p>
+            Characterization derives measured white, black, primary chromaticities, a white-normalized
+            RGB-to-XYZ matrix, a neutral tone curve, and per-channel tone curves when the patch set contains
+            single-channel ramps. Monotonic interpolation is enforced where a curve will be inverted. These
+            measurements support the installed matrix and one-dimensional tone correction; mixed-color
+            residuals can also feed 3D LUT exports, but an MHC2 install remains constrained to matrix plus
+            separable curves.
+          </p>
+        </section>
+
+        <section>
+          <h2 id="s11">11. MHC2 Profile Mathematics</h2>
+          <h3 id="s11-1">11.1 Absolute Gamut Matrix</h3>
+          <p>
+            Let <strong>D</strong> map native display-linear RGB to XYZ and <strong>T</strong> map target-linear
+            RGB to XYZ. The open-loop drive matrix is:
+          </p>
+          <div class="formula"><strong>M</strong> = <strong>D</strong><sup>−1</sup><strong>T</strong></div>
+          <p>
+            White-point-only targets substitute the measured panel primaries while retaining the requested
+            target white. A reachability gate permits primary drive only in the tolerance band −0.05 to 1.30;
+            values outside it indicate a target materially beyond the measured panel gamut. If the complete
+            target transform requires a drive above one, the whole matrix is scaled by:
+          </p>
+          <div class="formula">s = min(1, 1 / maxTargetDrive)</div>
+          <p>
+            Uniform scaling preserves every chromaticity. Per-channel clipping or normalization would re-tint
+            colors the matrix had just placed.
+          </p>
+
+          <h3 id="s11-2">11.2 Windows Matrix Domain</h3>
+          <p>
+            Windows evaluates the MHC2 matrix between fixed sRGB↔XYZ stages. If <strong>S</strong> is the
+            fixed linear sRGB-to-XYZ matrix, the tag stores:
+          </p>
+          <div class="formula"><strong>M</strong><sub>tag</sub> = <strong>S</strong>(s<strong>M</strong>)<strong>S</strong><sup>−1</sup></div>
+          <p>
+            The surrounding fixed transforms then cancel and apply the intended scaled RGB-to-RGB matrix.
+            This sandwich is undocumented Windows behavior, derived from MHC2Gen and verified against the
+            Windows 11 compositor; regression tests pin the identity and reference cases.
+          </p>
+
+          <h3 id="s11-3">11.3 SDR Tone Curves</h3>
+          <p>
+            SDR MHC2 LUTs operate in SDR signal space. The generated correction inverts the measured neutral
+            response toward the target. When separate channel ramps were measured and the base correction is
+            neutral, Gloam composes each channel's relative gray-tracking correction
+            f<sub>c</sub><sup>−1</sup>∘f<sub>neutral</sub> onto the shared curve. This keeps gray chromaticity
+            stable through the range without moving gamut correction out of the matrix.
+          </p>
+
+          <h3 id="s11-4">11.4 HDR Wire Ladder</h3>
+          <p>
+            The preferred HDR model uses absolute rungs at 0, 2, 4, 8, 16, 32, 64, 100, 150, 220, 320,
+            450, 650, and 1000 cd/m². The set stops at min(0.9 × reported peak, 1000), adding the cap itself
+            when the last fixed rung leaves more than a 5% gap. Each requested luminance <em>d</em> is rendered
+            at the exact wire coordinate <em>P</em><sup>−1</sup>(<em>d</em>) and measured in absolute XYZ,
+            where <em>P</em> is the ST.2084 signal-to-nits function from §3.3.
+          </p>
+          <p>
+            Because the matrix scale <em>s</em> runs before the tone LUT, content wire value <em>v</em> reaches
+            that LUT at:
+          </p>
+          <div class="formula">p<sub>in</sub>(v) = P<sup>−1</sup>(s · P(v))</div>
+          <p>
+            Equivalently, a LUT input <em>p</em> is solved against desired content luminance P(<em>p</em>)/<em>s</em>.
+            This composition makes the installed matrix-plus-LUT chain track absolute PQ. The HDR tone LUT is
+            neutral—identical red, green, and blue curves—because the matrix owns white point and gamut.
+          </p>
+          <p>
+            With a usable wire ladder, the inverse measured response is applied through the measured span and
+            blends to identity from 90% of measured peak to peak. Above the reachable range the panel's own
+            rolloff is left alone. If no usable wire ladder exists, a compatibility fallback assumes Windows
+            mapped SDR signal <em>v</em> to P<sup>−1</sup>(W · E<sub>sRGB</sub>(v)); that correction is limited
+            to the lower half of the measured range and blends to identity from 50% to 80% because its wire
+            axis and knee are inferred rather than measured.
+          </p>
+
+          <h3 id="s11-5">11.5 Profile Metadata and Association</h3>
+          <p>
+            The MHC2 payload contains a 3×4 fixed-point matrix and three 1024-entry <code>sf32</code> curves.
+            HDR min/max luminance metadata uses measured black and measured peak together when that pair is
+            valid; DXGI peak is a fallback, not mixed provenance. ICC colorimetry tags are regenerated from
+            the corrected presentation primaries and white. Installation uses a fresh profile identity when
+            necessary to force compositor reload, verifies the current-user Advanced Color default, retains
+            the pre-Gloam default for restoration, and retires only superseded profiles owned by the session.
+          </p>
+        </section>
+
+        <section>
+          <h2 id="s12">12. Joint HDR Refinement</h2>
+          <h3 id="s12-1">12.1 Why the Solve Is Joint</h3>
+          <p>
+            Changing the color matrix can change its required uniform scale, which changes the PQ input
+            coordinates seen by the tone LUT. Refining either component in isolation can therefore invalidate
+            the other. Gloam measures neutral tone rungs and colored stimuli through the same installed state,
+            builds one candidate matrix-plus-LUT pair, installs it atomically, and measures both objectives
+            again.
+          </p>
+
+          <h3 id="s12-2">12.2 Tone Residual</h3>
+          <p>
+            For requested luminance <em>d</em> and measured luminance <em>Y</em>, the multiplicative error is
+            <em>e</em> = <em>Y</em>/<em>d</em>. At the matrix-scaled LUT input P<sup>−1</sup>(<em>sd</em>),
+            the current LUT output luminance is divided by a damped, interpolated version of <em>e</em>:
+          </p>
+          <div class="formula">
+            e′ = clamp(1 + λ(e − 1), 0.7, 1.4)<br>
+            out′ = P<sup>−1</sup>(P(out) / e′)
+          </div>
+          <p>
+            At least four valid rungs below the identity region are required. A rung beyond ±35% refuses the
+            touch-up as evidence of a different failure. Average absolute error below 1% is converged. The
+            correction fades to one before the identity blend and preserves endpoints and monotonicity.
+          </p>
+
+          <h3 id="s12-3">12.3 Color Residual</h3>
+          <p>
+            The color sweep uses target-container R, G, B, C, M, Y, plus white anchors at 100, 203, and
+            400 cd/m² when the display peak can reach the rung. A stimulus producing less than 85% of target
+            luminance is classified as hardware-limited and excluded from the matrix fit. A matrix cannot
+            recover saturated light the panel did not emit.
+          </p>
+          <p>
+            For reachable measurements, the residual <strong>F</strong> in
+            XYZ<sub>measured</sub> ≈ <strong>F</strong>XYZ<sub>reference</sub> is fitted by weighted least squares.
+            Each pair is normalized by rung luminance and weighted by √Y, giving brighter rungs more influence
+            without letting absolute magnitude dominate. The fit requires at least eight reachable stimuli and
+            a white anchor. Average ΔE ITP below 2 is converged; above 25 is too large for a linear touch-up;
+            each coefficient is limited to 0.25 from identity.
+          </p>
+          <p>
+            The fitted residual is divided by its luminance gain on target white before composition. That keeps
+            the white chromaticity correction while assigning neutral luminance error only to the tone LUT.
+            The cumulative matrix becomes <strong>D</strong><sup>−1</sup><strong>F</strong><sup>−1</sup><strong>T</strong>,
+            followed by the same reachability and uniform-scale policy as an initial install.
+          </p>
+
+          <h3 id="s12-4">12.4 Keep-Best Objective</h3>
+          <p>
+            Refinement normalizes tone error by 1% and color error by 2 ΔE ITP:
+          </p>
+          <div class="formula">
+            J = √((tone / 0.01)² + (color / 2)²)
+          </div>
+          <p>
+            A candidate must lower <em>J</em> without worsening tone by more than 0.25 percentage points or
+            color by more than 0.5 ΔE ITP. The live workflow runs at most two passes, with damping λ = 1 on
+            the first pass and 0.55 later. Cancellation or regression restores the best measured installed
+            state. Refinement rungs stop at 85% of measured peak, below the region deliberately left to the
+            panel's rolloff.
+          </p>
+        </section>
+
+        <section>
+          <h2 id="s13">13. Verification, Uncertainty, and Reports</h2>
+          <h3 id="s13-1">13.1 Measured “After” Values</h3>
+          <p>
+            Verification is performed through the active profile with the live ramp held at identity. The
+            quick set has 14 SDR-content patches: seven neutral levels, primaries, secondaries, and a skin
+            mixture. Detailed verification has 39 patches: a 21-step gray ramp, four saturation levels for
+            each primary, and six memory colors. In HDR mode these remain sRGB application-content patches
+            mapped by Windows to SDR white; they are not PQ-decoded as though they were native HDR stimuli.
+          </p>
+          <p>
+            ΔE2000 is computed after normalizing measured XYZ to the measured white and using the target white
+            as the Lab reference. Grayscale error is split into tone and chroma components. ΔE ITP is also
+            computed from absolute XYZ through the BT.2124 XYZ-to-LMS, PQ, and ICtCp path:
+          </p>
+          <div class="formula">ΔE<sub>ITP</sub> = 720√(ΔI² + ΔT² + ΔP²), &nbsp; T = 0.5C<sub>T</sub></div>
+          <p>
+            HDR verification adds two independent sweeps. A neutral PQ ladder reports absolute luminance
+            tracking only inside the corrected region. Colored HDR verification measures target-container
+            R/G/B/C/M/Y at reachable 100, 203, and 400-nit rungs and reports ΔE ITP separately, so wide-gamut
+            hardware limits do not dilute the SDR-content grade.
+          </p>
+
+          <h3 id="s13-2">13.2 Profile Activation Sentinel</h3>
+          <p>
+            Native and verified measurements are compared on matching patches. When an inaccurate native
+            panel does not move measurably toward the target after installation, the report warns that profile
+            activation is suspect. This is a sentinel, not proof: display drift and meter noise can also reduce
+            the apparent improvement.
+          </p>
+
+          <h3 id="s13-3">13.3 Measurement Uncertainty</h3>
+          <p>
+            The report's expanded uncertainty is a GUM-style engineering estimate, not a laboratory
+            certificate. Per-patch luminance repeatability comes from observed read range and the exact or
+            tabulated small-sample standard error of the median; single reads inherit their luminance decade's
+            noise estimate. A numeric two-point perturbation propagates luminance uncertainty to ΔE. The
+            average combines independent patch terms as √Σuᵢ²/N, then combines instrument/correction and drift
+            terms in root-sum-square. The displayed interval uses <em>k</em> = 2.
+          </p>
+          <p>
+            Instrument terms are explicitly labeled estimates: 0.5 ΔE standard uncertainty for a filter
+            colorimeter with a panel-matched correction, 1.5 without one, and 0.3 for a recognized
+            spectrometer. Melanopic intervals additionally account for spectral-source provenance and, for
+            absolute EDI, the assumed viewing geometry. The ratiometric reduction does not include geometry.
+          </p>
+
+          <h3 id="s13-4">13.4 Refinement and Report State</h3>
+          <p>
+            After an HDR refinement attempt, Gloam automatically runs the full selected verification path
+            against the final installed correction. The new measurements replace the report's after values,
+            grade, recommendations, chart overlays, detailed patch analysis, PQ tracking, colored-HDR summary,
+            and persisted measurement payload. <code>PostCalibrationDeltaE</code> is the verified corrected
+            value; <code>PreCalibrationDeltaE</code> remains the native panel value. The saved report JSON is
+            rewritten in place, and future print-to-PDF exports render from that refreshed state. A PDF that
+            was already exported remains a static external file and is not silently overwritten.
+          </p>
+
+          <h3 id="s13-5">13.5 Validation Strategy</h3>
+          <p>
+            Automated tests pin standard transfer-function values, matrix-domain wrapping, LUT monotonicity
+            and endpoints, headroom continuity, constant-Y bounds, gamer-toe slope, adaptive stopping,
+            uncertainty propagation, profile persistence, and simulated closed-loop convergence. Golden
+            measurement fixtures replay the HDR model against captured display data. These tests establish
+            mathematical and serialization invariants; physical verification still requires a meter on the
+            target display and confirmation that Windows activated the intended profile.
+          </p>
+        </section>
+
+        <section>
+          <h2 id="s14">14. Acknowledgements and References</h2>
+          <p>
+            Gloam builds on Dylan Raga's identification and implementation of the Windows SDR-in-HDR
+            sRGB-to-gamma correction. ArgyllCMS supplies the measurement and fallback ramp tools. MHC2Gen
+            provided the essential reference for the MHC2 tag and Windows' fixed matrix stages.
+          </p>
+          <ol class="refs">
+            <li id="ref1">Poynton, C. (2003). <em>Digital Video and HDTV: Algorithms and Interfaces</em>. Morgan Kaufmann.</li>
+            <li id="ref2">IEC 61966-2-1:1999. <em>Multimedia systems and equipment — Colour management — Default RGB colour space — sRGB</em>.</li>
+            <li id="ref3">Stokes, M., Anderson, M., Chandrasekar, S., &amp; Motta, R. (1996). <em>A Standard Default Color Space for the Internet — sRGB</em>.</li>
+            <li id="ref4">Raga, D. <em>win11hdr-srgb-to-gamma2.2-icm</em>. <a href="https://github.com/dylanraga/win11hdr-srgb-to-gamma2.2-icm">github.com/dylanraga/win11hdr-srgb-to-gamma2.2-icm</a>.</li>
+            <li id="ref5">SMPTE ST 2084:2014. <em>High Dynamic Range Electro-Optical Transfer Function of Mastering Reference Displays</em>.</li>
+            <li id="ref6">ITU-R BT.2100. <em>Image parameter values for high dynamic range television</em>.</li>
+            <li id="ref7">ITU-R BT.2124. <em>Objective metric for the assessment of the potential visibility of colour differences in television</em>.</li>
+            <li id="ref8">ITU-R BT.2408. <em>Operational practices in HDR television production</em>.</li>
+            <li id="ref9">CIE 015. <em>Colorimetry</em>.</li>
+            <li id="ref10">CIE S 026/E:2018. <em>CIE System for Metrology of Optical Radiation for ipRGC-Influenced Responses to Light</em>.</li>
+            <li id="ref11">Helland, T. (2012). <em>How to Convert Temperature (K) to RGB</em>. <a href="https://tannerhelland.com/2012/09/18/convert-temperature-rgb-algorithm-code.html">tannerhelland.com</a>.</li>
+            <li id="ref12">Kang, B. et al. (2002). Design of Advanced Color Temperature Control System for HDTV Applications. <em>Journal of the Korean Physical Society</em>, 41(6), 865–871.</li>
+            <li id="ref13">Li, C. et al. (2017). Comprehensive color solutions: CAM16, CAT16, and CAM16-UCS. <em>Color Research &amp; Application</em>, 42(6), 703–718.</li>
+            <li id="ref14">Ohno, Y. (2014). Practical Use and Calculation of CCT and Duv. <em>LEUKOS</em>, 10(1), 47–55.</li>
+            <li id="ref15">JCGM 100:2008. <em>Evaluation of measurement data — Guide to the expression of uncertainty in measurement</em>.</li>
+            <li id="ref16"><a href="https://www.argyllcms.com/">ArgyllCMS</a>, by Graeme Gill.</li>
+            <li id="ref17"><a href="https://github.com/dantmnf/MHC2">MHC2Gen</a>, by dantmnf.</li>
+          </ol>
+          <p class="paper-meta">
+            Revision of July 22, 2026: separated the hardware-ramp and MHC2 paths; aligned SDR, HDR,
+            temperature, headroom, constant-Y, night, melanopic, and gamer equations with the current C#
+            implementation; documented adaptive acquisition, drift and noise handling, exact PQ wire
+            calibration, matrix-scale composition, joint tone-and-color refinement, colored HDR verification,
+            uncertainty, and automatic post-refinement report refresh.
+          </p>
+        </section>
+
+      </article>
+    </main>
   </div>
 
   <button class="back-to-top" id="backToTop" type="button" aria-label="Back to top">Back To Top</button>
 
   <script>
-    // Theme toggle function
     (function() {
       const themeToggle = document.getElementById('themeToggle');
       if (themeToggle) {
@@ -1250,7 +849,6 @@ Y_i   = Σ P_i(λ) · V(λ)</code></pre>
       }
     })();
 
-    // Back-to-top button
     (function () {
       var btn = document.getElementById("backToTop");
       window.addEventListener("scroll", function () {
@@ -1261,6 +859,5 @@ Y_i   = Σ P_i(λ) · V(λ)</code></pre>
       });
     })();
   </script>
-
 </body>
 </html>
