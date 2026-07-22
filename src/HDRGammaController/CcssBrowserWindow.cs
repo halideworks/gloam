@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using HDRGammaController.Core;
 using HDRGammaController.Core.Calibration;
+using HDRGammaController.Services;
 
 namespace HDRGammaController
 {
@@ -448,7 +449,7 @@ namespace HDRGammaController
             _status.Text = "Looking for a spectrometer…";
 
             ColorimeterService? colorimeter = null;
-            PatchDisplayWindow? patchWindow = null;
+            ProbeOperationScope? probe = null;
             try
             {
                 string? argyllBin = ArgyllPathFinder.FindArgyllBinPath();
@@ -480,19 +481,17 @@ namespace HDRGammaController
                 Log.Info($"CcssBrowserWindow: spectral capture starting on '{monitor.FriendlyName}' " +
                          $"with '{colorimeter.ConnectedColorimeter?.Model}'.");
 
-                // The shared placement surface keeps capture aligned with calibration and
-                // every report/refinement sweep.
-                patchWindow = new PatchDisplayWindow(monitor, patchSize: 400);
-                patchWindow.SetColor(1, 1, 1);
-
                 using var cts = new CancellationTokenSource();
-                patchWindow.AbortRequested += () => cts.Cancel();
-                patchWindow.Closed += (_, _) => cts.Cancel();
-                patchWindow.Show();
-                await patchWindow.WaitForPlacementAsync("Emission spectrum capture", cts.Token);
-
                 _status.Text = "Measuring emission spectra… watch the patch window.";
-                await colorimeter.BeginSpectralSessionAsync(cts.Token);
+                probe = await ProbeOperationScope.StartAsync(new ProbeOperationScope.Options(
+                    monitor,
+                    colorimeter,
+                    "Emission spectrum capture",
+                    PatchSize: 400,
+                    Session: ProbeOperationScope.SessionKind.Spectral,
+                    ConfigurePatchWindow: window => window.SetColor(1, 1, 1),
+                    CancellationToken: cts.Token));
+                var patchWindow = probe.PatchWindow;
 
                 var window = patchWindow; // non-null capture for the delegates
                 var capture = new SpectralCaptureService(
@@ -503,8 +502,7 @@ namespace HDRGammaController
                         window.SetProgress(done, total, name, null, phase: $"Measuring {name} spectrum"),
                 };
 
-                var spectra = await capture.CaptureAsync(cts.Token);
-                await colorimeter.EndSpectralSessionAsync();
+                var spectra = await capture.CaptureAsync(probe.Token);
 
                 string displayName = !string.IsNullOrWhiteSpace(_displayName) ? _displayName : monitor.FriendlyName;
                 string path = CcssWriter.SaveToFolder(
@@ -529,10 +527,10 @@ namespace HDRGammaController
             }
             finally
             {
-                try { patchWindow?.Close(); } catch { /* already closed */ }
+                if (probe != null)
+                    await probe.DisposeAsync();
                 if (colorimeter != null)
                 {
-                    try { await colorimeter.EndSpectralSessionAsync(); } catch { /* session already gone */ }
                     colorimeter.Dispose();
                 }
                 SetCaptureBusy(false);
@@ -555,7 +553,7 @@ namespace HDRGammaController
 
             ColorimeterService? first = null;
             ColorimeterService? second = null;
-            PatchDisplayWindow? patchWindow = null;
+            ProbeOperationScope? probe = null;
             try
             {
                 string? argyllBin = ArgyllPathFinder.FindArgyllBinPath();
@@ -582,14 +580,15 @@ namespace HDRGammaController
                 Log.Info($"CcssBrowserWindow: two-instrument CCMX capture starting on '{monitor.FriendlyName}' " +
                          $"with '{firstInfo.Model}' as the first instrument.");
 
-                // Reuse the same placement surface as full calibration and refinement.
-                patchWindow = new PatchDisplayWindow(monitor, patchSize: 400);
-                patchWindow.SetColor(1, 1, 1);
-
                 using var cts = new CancellationTokenSource();
-                patchWindow.AbortRequested += () => cts.Cancel();
-                patchWindow.Closed += (_, _) => cts.Cancel();
-                patchWindow.Show();
+                probe = await ProbeOperationScope.StartAsync(new ProbeOperationScope.Options(
+                    monitor,
+                    first,
+                    $"Correction matrix · {firstInfo.Model}",
+                    PatchSize: 400,
+                    ConfigurePatchWindow: window => window.SetColor(1, 1, 1),
+                    CancellationToken: cts.Token));
+                var patchWindow = probe.PatchWindow;
 
                 var window = patchWindow; // non-null capture for the delegates
                 ColorimeterInfo? secondInfo = null;
@@ -601,7 +600,7 @@ namespace HDRGammaController
                     {
                         // Phase 1 done: release the first instrument's USB handle so the
                         // second instrument can be attached and detected.
-                        await first!.EndMeasurementSessionAsync();
+                        await probe.EndSessionAsync();
                         first.Dispose();
 
                         // Themed confirm instead of a stock Win32 MessageBox: the old MessageBox
@@ -644,13 +643,8 @@ namespace HDRGammaController
                         window.SetProgress(done, total, name, null, phase: $"{phase}: measuring {name}"),
                 };
 
-                await patchWindow.WaitForPlacementAsync(
-                    $"Correction matrix · {firstInfo.Model}", cts.Token);
-
                 _status.Text = $"Phase 1: measuring with {firstInfo.Model}… watch the patch window.";
-                await first.BeginMeasurementSessionAsync(hdrMode: false, cts.Token);
-
-                var readings = await capture.CaptureAsync(cts.Token);
+                var readings = await capture.CaptureAsync(probe.Token);
                 await second!.EndMeasurementSessionAsync();
 
                 // The ccmx maps colorimeter XYZ -> spectrometer XYZ, whichever phase each
@@ -682,10 +676,10 @@ namespace HDRGammaController
             }
             finally
             {
-                try { patchWindow?.Close(); } catch { /* already closed */ }
+                if (probe != null)
+                    await probe.DisposeAsync();
                 if (first != null)
                 {
-                    try { await first.EndMeasurementSessionAsync(); } catch { /* session already gone */ }
                     first.Dispose();
                 }
                 if (second != null)

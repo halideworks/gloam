@@ -115,22 +115,10 @@ namespace HDRGammaController
             _operationNotice = null;
         }
 
-        /// <summary>
-        /// Opens the shared calibration placement surface and remembers the committed
-        /// coordinates for every later sweep in this report session.
-        /// </summary>
-        private async Task WaitForProbePlacementAsync(
-            PatchDisplayWindow patchWindow, string phase, System.Threading.CancellationToken token)
+        private void RememberProbePlacement(double offsetX, double offsetY)
         {
-            await patchWindow.WaitForPlacementAsync(phase, token);
             if (_applyContext is { } context)
-            {
-                _applyContext = context with
-                {
-                    PatchOffsetX = patchWindow.OffsetX,
-                    PatchOffsetY = patchWindow.OffsetY,
-                };
-            }
+                _applyContext = context with { PatchOffsetX = offsetX, PatchOffsetY = offsetY };
         }
 
         // SummaryText without the appended measurement-uncertainty line, so the line can
@@ -1613,31 +1601,35 @@ namespace HDRGammaController
                     confirmLabel: "Position probe", cancelLabel: "Cancel"))
                 return;
 
-            EnterProbeBusy();
-            PatchDisplayWindow? surround = null;
+            ProbeOperationScope? probe = null;
             HdrPatchRenderer? renderer = null;
-            bool bypassed = false;
             using var validationCts = new System.Threading.CancellationTokenSource();
             var whitePatch = new ColorPatch { Name = "White", DisplayRgb = new LinearRgb(1, 1, 1), Category = PatchCategory.Grayscale };
             try
             {
-                if (ctx.StateManager != null)
-                {
-                    try { ctx.StateManager.EnterBypassMode(ctx.Monitor, ctx.PreviousGammaMode, ctx.PreviousSettings); bypassed = true; }
-                    catch { }
-                }
-
-                surround = new PatchDisplayWindow(ctx.Monitor, ctx.PatchSize, ctx.PatchOffsetX, ctx.PatchOffsetY);
-                surround.AbortRequested += () => validationCts.Cancel();
-                surround.Show();
-                await WaitForProbePlacementAsync(surround, "HDR renderer validation", validationCts.Token);
-                await colorimeter.BeginMeasurementSessionAsync(hdrMode: true, validationCts.Token);
+                probe = await ProbeOperationScope.StartAsync(new ProbeOperationScope.Options(
+                    ctx.Monitor,
+                    colorimeter,
+                    "HDR renderer validation",
+                    HdrMode: true,
+                    PatchSize: ctx.PatchSize,
+                    PatchOffsetX: ctx.PatchOffsetX,
+                    PatchOffsetY: ctx.PatchOffsetY,
+                    StateManager: ctx.StateManager,
+                    PreviousGammaMode: ctx.PreviousGammaMode,
+                    PreviousSettings: ctx.PreviousSettings,
+                    EnterBypass: ctx.StateManager != null,
+                    EnterBusy: EnterProbeBusy,
+                    ExitBusy: ExitProbeBusy,
+                    PlacementCommitted: RememberProbePlacement,
+                    CancellationToken: validationCts.Token));
+                var surround = probe.PatchWindow;
 
                 // 1) SDR baseline through the normal window.
                 surround.SetProgress(1, 3, "SDR white (baseline)");
                 surround.SetColor(1, 1, 1);
-                await Task.Delay(1500, validationCts.Token);
-                var sdr = await colorimeter.MeasureAsync(whitePatch, true, validationCts.Token);
+                await Task.Delay(1500, probe.Token);
+                var sdr = await colorimeter.MeasureAsync(whitePatch, true, probe.Token);
 
                 // Patch rectangle in pixels (same placement as the surround's patch).
                 Int32Rect patchRect = surround.GetPatchPixelRect();
@@ -1650,16 +1642,16 @@ namespace HDRGammaController
                 // 2) FP16 at the SDR white level - must match the SDR baseline.
                 surround.SetProgress(2, 3, "FP16 at SDR white level");
                 renderer.PresentNits(sdr.Xyz.Y, sdr.Xyz.Y, sdr.Xyz.Y);
-                await Task.Delay(1500, validationCts.Token);
-                var hdrSame = await colorimeter.MeasureAsync(whitePatch, true, validationCts.Token);
+                await Task.Delay(1500, probe.Token);
+                var hdrSame = await colorimeter.MeasureAsync(whitePatch, true, probe.Token);
 
                 // 3) FP16 at 2x - must exceed the SDR ceiling (capped below panel peak).
                 double targetHigh = Math.Min(sdr.Xyz.Y * 2.0,
                     ctx.Monitor.HdrPeakNits > 50 ? ctx.Monitor.HdrPeakNits * 0.9 : sdr.Xyz.Y * 2.0);
                 surround.SetProgress(3, 3, $"FP16 at {targetHigh:F0} nits");
                 renderer.PresentNits(targetHigh, targetHigh, targetHigh);
-                await Task.Delay(1500, validationCts.Token);
-                var hdrHigh = await colorimeter.MeasureAsync(whitePatch, true, validationCts.Token);
+                await Task.Delay(1500, probe.Token);
+                var hdrHigh = await colorimeter.MeasureAsync(whitePatch, true, probe.Token);
 
                 // Verdicts.
                 double sameRatio = hdrSame.Xyz.Y / Math.Max(sdr.Xyz.Y, 1e-6);
@@ -1682,8 +1674,7 @@ namespace HDRGammaController
                 // on a single monitor the dialog would otherwise render under them.
                 renderer?.Dispose();
                 renderer = null;
-                surround?.Close();
-                surround = null;
+                await probe.DisposeAsync();
                 ConfirmDialog.Info(this, "HDR Renderer Validation", report);
             }
             catch (OperationCanceledException)
@@ -1696,18 +1687,16 @@ namespace HDRGammaController
                 Log.Info($"HDR renderer validation failed: {ex}");
                 renderer?.Dispose();
                 renderer = null;
-                surround?.Close();
-                surround = null;
+                if (probe != null)
+                    await probe.DisposeAsync();
                 ConfirmDialog.Info(this, "HDR Renderer Validation",
                     $"HDR renderer validation failed:\n\n{ex.Message}");
             }
             finally
             {
-                try { await colorimeter.EndMeasurementSessionAsync(); } catch { }
                 renderer?.Dispose();
-                surround?.Close();
-                if (bypassed) { try { ctx.StateManager!.RestorePreviousState(); } catch { } }
-                ExitProbeBusy();
+                if (probe != null)
+                    await probe.DisposeAsync();
             }
         }
 
@@ -1992,26 +1981,30 @@ namespace HDRGammaController
                     confirmLabel: "Position probe", cancelLabel: "Cancel"))
                 return;
 
-            EnterProbeBusy();
-            PatchDisplayWindow? patchWindow = null;
-            bool bypassed = false;
+            ProbeOperationScope? probe = null;
+            using var placementCts = new System.Threading.CancellationTokenSource();
             try
             {
-                if (ctx.StateManager != null)
-                {
-                    try { ctx.StateManager.EnterBypassMode(ctx.Monitor, ctx.PreviousGammaMode, ctx.PreviousSettings); bypassed = true; }
-                    catch { }
-                }
-
-                patchWindow = new PatchDisplayWindow(ctx.Monitor, ctx.PatchSize, ctx.PatchOffsetX, ctx.PatchOffsetY);
-                patchWindow.Show();
-                using var placementCts = new System.Threading.CancellationTokenSource();
-                patchWindow.AbortRequested += () => placementCts.Cancel();
-                await WaitForProbePlacementAsync(patchWindow, "White re-anchor", placementCts.Token);
+                probe = await ProbeOperationScope.StartAsync(new ProbeOperationScope.Options(
+                    ctx.Monitor,
+                    colorimeter,
+                    "White re-anchor",
+                    HdrMode: ctx.HdrMode,
+                    PatchSize: ctx.PatchSize,
+                    PatchOffsetX: ctx.PatchOffsetX,
+                    PatchOffsetY: ctx.PatchOffsetY,
+                    StateManager: ctx.StateManager,
+                    PreviousGammaMode: ctx.PreviousGammaMode,
+                    PreviousSettings: ctx.PreviousSettings,
+                    EnterBypass: ctx.StateManager != null,
+                    EnterBusy: EnterProbeBusy,
+                    ExitBusy: ExitProbeBusy,
+                    PlacementCommitted: RememberProbePlacement,
+                    CancellationToken: placementCts.Token));
+                var patchWindow = probe.PatchWindow;
                 patchWindow.SetColor(1, 1, 1);
                 patchWindow.SetProgress(1, 1, "White (re-anchor)");
-                await colorimeter.BeginMeasurementSessionAsync(hdrMode: ctx.HdrMode);
-                await Task.Delay(1500);
+                await Task.Delay(1500, probe.Token);
 
                 var whitePatch = new ColorPatch
                 {
@@ -2023,10 +2016,10 @@ namespace HDRGammaController
                 const int reads = 3;
                 for (int i = 0; i < reads; i++)
                 {
-                    var m = await colorimeter.MeasureAsync(whitePatch, ctx.HdrMode);
+                    var m = await colorimeter.MeasureAsync(whitePatch, ctx.HdrMode, probe.Token);
                     sx += m.Xyz.X; sy += m.Xyz.Y; sz += m.Xyz.Z;
                     if (ctx.CaptureSounds) CalibrationSounds.PlayCapture();
-                    await Task.Delay(300);
+                    await Task.Delay(300, probe.Token);
                 }
                 var avg = new CieXyz(sx / reads, sy / reads, sz / reads);
                 var newWhite = avg.ToChromaticity();
@@ -2055,17 +2048,15 @@ namespace HDRGammaController
             {
                 // Close the patch window before the modal dialog (single-monitor: it would
                 // otherwise render under the topmost patch window).
-                patchWindow?.Close();
-                patchWindow = null;
+                if (probe != null)
+                    await probe.DisposeAsync();
                 ConfirmDialog.Info(this, "Re-anchor White", $"White re-anchor failed:\n\n{ex.Message}");
                 return;
             }
             finally
             {
-                try { await colorimeter.EndMeasurementSessionAsync(); } catch { }
-                patchWindow?.Close();
-                if (bypassed) { try { ctx.StateManager!.RestorePreviousState(); } catch { } }
-                ExitProbeBusy();
+                if (probe != null)
+                    await probe.DisposeAsync();
             }
 
             await ApplyAndVerifyAsync();
@@ -2205,38 +2196,35 @@ namespace HDRGammaController
                     confirmLabel: "Position probe", cancelLabel: "Cancel"))
                 return false;
 
-            EnterProbeBusy();
-            PatchDisplayWindow? patchWindow = null;
+            ProbeOperationScope? probe = null;
             using var refineCts = new System.Threading.CancellationTokenSource();
             _verifyCts = refineCts;
-
-            bool bypassed = false;
-            if (ctx.StateManager != null)
-            {
-                try
-                {
-                    ctx.StateManager.EnterBypassMode(ctx.Monitor, ctx.PreviousGammaMode, ctx.PreviousSettings);
-                    bypassed = true;
-                }
-                catch (Exception ex)
-                {
-                    Log.Info($"CalibrationReportWindow: joint-refine bypass failed (continuing): {ex.Message}");
-                }
-            }
 
             bool installedRefined = false;
             try
             {
-                patchWindow = new PatchDisplayWindow(ctx.Monitor, ctx.PatchSize, ctx.PatchOffsetX, ctx.PatchOffsetY);
-                patchWindow.AbortRequested += () => refineCts.Cancel();
-                patchWindow.EnableSweepControls(() =>
-                {
-                    if (_verifyCts is { IsCancellationRequested: false } cts)
-                        cts.Cancel();
-                });
-                patchWindow.Show();
-                await colorimeter.BeginMeasurementSessionAsync(hdrMode: true, refineCts.Token);
-                await WaitForProbePlacementAsync(patchWindow, "HDR tone + color refine", refineCts.Token);
+                probe = await ProbeOperationScope.StartAsync(new ProbeOperationScope.Options(
+                    ctx.Monitor,
+                    colorimeter,
+                    "HDR tone + color refine",
+                    HdrMode: true,
+                    PatchSize: ctx.PatchSize,
+                    PatchOffsetX: ctx.PatchOffsetX,
+                    PatchOffsetY: ctx.PatchOffsetY,
+                    StateManager: ctx.StateManager,
+                    PreviousGammaMode: ctx.PreviousGammaMode,
+                    PreviousSettings: ctx.PreviousSettings,
+                    EnterBypass: ctx.StateManager != null,
+                    EnterBusy: EnterProbeBusy,
+                    ExitBusy: ExitProbeBusy,
+                    ConfigurePatchWindow: window => window.EnableSweepControls(() =>
+                    {
+                        if (_verifyCts is { IsCancellationRequested: false } cts)
+                            cts.Cancel();
+                    }),
+                    PlacementCommitted: RememberProbePlacement,
+                    CancellationToken: refineCts.Token));
+                var patchWindow = probe.PatchWindow;
 
                 MonitorInfo installMonitor = ResolveCurrentMonitor(ctx.Monitor) ?? ctx.Monitor;
                 string? previousDefaultProfile = null;
@@ -2336,7 +2324,7 @@ namespace HDRGammaController
                             ? "Measuring HDR tone and color through the installed profile…"
                             : $"Joint pass {p.Pass}/{p.MaxPasses}: {p.Phase}…";
                     }),
-                }, refineCts.Token);
+                }, probe.Token);
 
                 var start = outcome.InitialMetrics;
                 var finish = outcome.FinalMetrics;
@@ -2406,15 +2394,9 @@ namespace HDRGammaController
             finally
             {
                 _verifyCts = null;
-                try { await colorimeter.EndMeasurementSessionAsync(); } catch { }
-                patchWindow?.Close();
-                if (bypassed)
-                {
-                    try { ctx.StateManager!.RestorePreviousState(); }
-                    catch (Exception ex) { Log.Info($"CalibrationReportWindow: joint-refine bypass restore failed: {ex.Message}"); }
-                }
                 Vm.VerifyButtonContent = "Re-verify";
-                ExitProbeBusy();
+                if (probe != null)
+                    await probe.DisposeAsync();
             }
         }
 
@@ -2550,42 +2532,39 @@ namespace HDRGammaController
                     confirmLabel: "Position probe", cancelLabel: "Cancel"))
                 return;
 
-            EnterProbeBusy();
-            PatchDisplayWindow? patchWindow = null;
+            ProbeOperationScope? probe = null;
             using var charCts = new System.Threading.CancellationTokenSource();
             _verifyCts = charCts;
 
-            bool bypassed = false;
-            if (ctx.StateManager != null)
-            {
-                try
-                {
-                    ctx.StateManager.EnterBypassMode(ctx.Monitor, ctx.PreviousGammaMode, ctx.PreviousSettings);
-                    bypassed = true;
-                }
-                catch (Exception ex)
-                {
-                    Log.Info($"CalibrationReportWindow: characterize bypass failed (continuing): {ex.Message}");
-                }
-            }
-
             try
             {
-                patchWindow = new PatchDisplayWindow(ctx.Monitor, ctx.PatchSize, ctx.PatchOffsetX, ctx.PatchOffsetY);
-                patchWindow.AbortRequested += () => charCts.Cancel();
-                patchWindow.EnableSweepControls(() =>
-                {
-                    if (_verifyCts is { IsCancellationRequested: false } cts)
-                        cts.Cancel();
-                });
-                patchWindow.Show();
-                await colorimeter.BeginMeasurementSessionAsync(hdrMode: true, charCts.Token);
-                await WaitForProbePlacementAsync(patchWindow, "Characterize HDR", charCts.Token);
+                probe = await ProbeOperationScope.StartAsync(new ProbeOperationScope.Options(
+                    ctx.Monitor,
+                    colorimeter,
+                    "Characterize HDR",
+                    HdrMode: true,
+                    PatchSize: ctx.PatchSize,
+                    PatchOffsetX: ctx.PatchOffsetX,
+                    PatchOffsetY: ctx.PatchOffsetY,
+                    StateManager: ctx.StateManager,
+                    PreviousGammaMode: ctx.PreviousGammaMode,
+                    PreviousSettings: ctx.PreviousSettings,
+                    EnterBypass: ctx.StateManager != null,
+                    EnterBusy: EnterProbeBusy,
+                    ExitBusy: ExitProbeBusy,
+                    ConfigurePatchWindow: window => window.EnableSweepControls(() =>
+                    {
+                        if (_verifyCts is { IsCancellationRequested: false } cts)
+                            cts.Cancel();
+                    }),
+                    PlacementCommitted: RememberProbePlacement,
+                    CancellationToken: charCts.Token));
+                var patchWindow = probe.PatchWindow;
 
                 // 1) Dense near-peak ladder at the standard patch window.
                 Vm.StatusText = "Measuring dense near-peak PQ ladder…";
                 var ladderReadings = await MeasurePqRungsAsync(
-                    patchWindow, colorimeter, ctx, rungs, "Tone map ladder", 0, charCts.Token);
+                    patchWindow, colorimeter, ctx, rungs, "Tone map ladder", 0, probe.Token);
                 var ladder = ladderReadings
                     .Select(r => new ToneMapLadderPoint(r.Requested, r.M.Xyz.Y))
                     .ToList();
@@ -2600,7 +2579,7 @@ namespace HDRGammaController
                 int aplIndex = 0;
                 foreach (double pct in ToneMappingAnalyzer.AplWindowPercents)
                 {
-                    charCts.Token.ThrowIfCancellationRequested();
+                    probe.Token.ThrowIfCancellationRequested();
                     double side = Math.Sqrt(pct / 100.0);
                     int w = Math.Max(64, (int)Math.Round(monitorW * side));
                     int h = Math.Max(64, (int)Math.Round(monitorH * side));
@@ -2618,7 +2597,7 @@ namespace HDRGammaController
                         aplWire.PresentNits(aplRequest, aplRequest, aplRequest);
                         // Longer settle: big field changes exercise ABL/power limiting,
                         // which reacts over hundreds of milliseconds.
-                        await Task.Delay(1800, charCts.Token);
+                        await Task.Delay(1800, probe.Token);
                         var patch = new ColorPatch
                         {
                             Name = $"APL {pct:F0}% window",
@@ -2628,7 +2607,7 @@ namespace HDRGammaController
                             Index = 1000 + aplIndex,
                         };
                         var m = WithSequenceIndex(
-                            await colorimeter.MeasureAsync(patch, ctx.HdrMode, charCts.Token), 1000 + aplIndex);
+                            await colorimeter.MeasureAsync(patch, ctx.HdrMode, probe.Token), 1000 + aplIndex);
                         if (ctx.CaptureSounds)
                             CalibrationSounds.PlayCapture();
                         if (m.IsValid)
@@ -2691,15 +2670,9 @@ namespace HDRGammaController
             finally
             {
                 _verifyCts = null;
-                try { await colorimeter.EndMeasurementSessionAsync(); } catch { }
-                patchWindow?.Close();
-                if (bypassed)
-                {
-                    try { ctx.StateManager!.RestorePreviousState(); }
-                    catch (Exception ex) { Log.Info($"CalibrationReportWindow: characterize bypass restore failed: {ex.Message}"); }
-                }
                 Vm.VerifyButtonContent = "Re-verify";
-                ExitProbeBusy();
+                if (probe != null)
+                    await probe.DisposeAsync();
             }
         }
 
@@ -2858,45 +2831,37 @@ namespace HDRGammaController
                 return;
 
             _lastReportSnapshotSaved = false;
-            EnterProbeBusy();
-            PatchDisplayWindow? patchWindow = null;
+            ProbeOperationScope? probe = null;
             using var verifyCts = new System.Threading.CancellationTokenSource();
             _verifyCts = verifyCts;
 
-            // RAMP QUIESCENCE: verification grades the CALIBRATION, so the user's gamma
-            // preference and night mode must not ride on the GPU ramp during the sweep.
-            // (The 14:28 run measured grayscale at 5.10 because the ramp guard restored the
-            // user's Gamma-2.4 ramp mid-verify — full-signal primaries were untouched, every
-            // mid-gray took the shift.) EnterBypassMode clears through DispwinRunner, so the
-            // guard MAINTAINS identity instead of "restoring" the preference ramp.
-            bool bypassed = false;
-            if (ctx.StateManager != null)
-            {
-                try
-                {
-                    ctx.StateManager.EnterBypassMode(ctx.Monitor, ctx.PreviousGammaMode, ctx.PreviousSettings);
-                    bypassed = true;
-                }
-                catch (Exception ex)
-                {
-                    Log.Info($"CalibrationReportWindow: verify bypass failed (continuing): {ex.Message}");
-                }
-            }
-
             try
             {
-                patchWindow = new PatchDisplayWindow(ctx.Monitor, ctx.PatchSize, ctx.PatchOffsetX, ctx.PatchOffsetY);
-                patchWindow.AbortRequested += () => verifyCts.Cancel(); // Escape aborts the sweep
-                // On-strip Cancel goes through the same CTS as Escape, so cleanup (session
-                // end, window close, bypass restore) is identical: this method's finally.
-                patchWindow.EnableSweepControls(() =>
-                {
-                    if (_verifyCts is { IsCancellationRequested: false } cts)
-                        cts.Cancel();
-                });
-                patchWindow.Show();
-                if (requestPlacement)
-                    await WaitForProbePlacementAsync(patchWindow, "Calibration verification", verifyCts.Token);
+                // RAMP QUIESCENCE: verification grades the calibration, so the user's gamma
+                // preference and night mode must not ride on the GPU ramp during the sweep.
+                probe = await ProbeOperationScope.StartAsync(new ProbeOperationScope.Options(
+                    ctx.Monitor,
+                    colorimeter,
+                    "Calibration verification",
+                    HdrMode: ctx.HdrMode,
+                    PatchSize: ctx.PatchSize,
+                    PatchOffsetX: ctx.PatchOffsetX,
+                    PatchOffsetY: ctx.PatchOffsetY,
+                    RequestPlacement: requestPlacement,
+                    StateManager: ctx.StateManager,
+                    PreviousGammaMode: ctx.PreviousGammaMode,
+                    PreviousSettings: ctx.PreviousSettings,
+                    EnterBypass: ctx.StateManager != null,
+                    EnterBusy: EnterProbeBusy,
+                    ExitBusy: ExitProbeBusy,
+                    ConfigurePatchWindow: window => window.EnableSweepControls(() =>
+                    {
+                        if (_verifyCts is { IsCancellationRequested: false } cts)
+                            cts.Cancel();
+                    }),
+                    PlacementCommitted: RememberProbePlacement,
+                    CancellationToken: verifyCts.Token));
+                var patchWindow = probe.PatchWindow;
 
                 // Detailed mode swaps in the extended patch set (fine grayscale, saturation
                 // ramps, memory colors); everything downstream - progress, settle delays,
@@ -2907,7 +2872,6 @@ namespace HDRGammaController
                     ? VerificationPatchSets.Detailed(verificationTarget, ctx.HdrMode)
                     : CalibrationVerifier.BuildVerificationPatches();
                 var results = new List<MeasurementResult>();
-                await colorimeter.BeginMeasurementSessionAsync(hdrMode: ctx.HdrMode, verifyCts.Token);
                 for (int i = 0; i < patches.Count; i++)
                 {
                     var p = patches[i];
@@ -2916,8 +2880,8 @@ namespace HDRGammaController
                     patchWindow.SetProgress(i + 1, patches.Count, PatchLabel(p),
                         next == null ? null : PatchLabel(next));
                     patchWindow.SetColor(p.DisplayRgb.R, p.DisplayRgb.G, p.DisplayRgb.B);
-                    await Task.Delay(i == 0 ? 1200 : 500, verifyCts.Token); // settle (longer for the first patch)
-                    results.Add(await colorimeter.MeasureAsync(p, ctx.HdrMode, verifyCts.Token));
+                    await Task.Delay(i == 0 ? 1200 : 500, probe.Token); // settle (longer for the first patch)
+                    results.Add(await colorimeter.MeasureAsync(p, ctx.HdrMode, probe.Token));
                     if (ctx.CaptureSounds)
                         CalibrationSounds.PlayCapture();
                 }
@@ -2928,7 +2892,7 @@ namespace HDRGammaController
                 // reachable peak) are graded; above it the LUT intentionally passes the
                 // panel's own rolloff through.
                 var pqTracking = ctx.HdrMode
-                    ? await RunPqTrackingSweepAsync(patchWindow, colorimeter, ctx, patches.Count, verifyCts.Token)
+                    ? await RunPqTrackingSweepAsync(patchWindow, colorimeter, ctx, patches.Count, probe.Token)
                     : null;
                 // COLORED HDR VERIFICATION: R/G/B/C/M/Y Rec.2020-container stimuli at
                 // absolute luminance rungs, graded with ΔE ITP against the container
@@ -2936,7 +2900,7 @@ namespace HDRGammaController
                 // so neither does this); reported separately from the neutral metrics.
                 var coloredHdr = ctx.HdrMode
                     ? await RunColoredHdrSweepAsync(patchWindow, colorimeter, ctx,
-                        patches.Count + (pqTracking?.AttemptedRungs ?? 0), verifyCts.Token)
+                        patches.Count + (pqTracking?.AttemptedRungs ?? 0), probe.Token)
                     : null;
                 var persistedVerifyMeasurements = new List<MeasurementResult>(results);
                 if (pqTracking?.Readings.Count > 0)
@@ -3071,8 +3035,8 @@ namespace HDRGammaController
             {
                 // Tear the patch window down BEFORE the modal dialog: on a single monitor the
                 // topmost patch window would otherwise render over (and hide) the error.
-                patchWindow?.Close();
-                patchWindow = null;
+                if (probe != null)
+                    await probe.DisposeAsync();
                 // The window may already be closed (Closing cancels the CTS, but a failure
                 // can surface after teardown) — showing a dialog owned by a closed window
                 // throws InvalidOperationException from ShowDialog.
@@ -3090,15 +3054,9 @@ namespace HDRGammaController
             finally
             {
                 _verifyCts = null;
-                try { await colorimeter.EndMeasurementSessionAsync(); } catch { }
-                patchWindow?.Close();
-                if (bypassed)
-                {
-                    try { ctx.StateManager!.RestorePreviousState(); }
-                    catch (Exception ex) { Log.Info($"CalibrationReportWindow: verify bypass restore failed: {ex.Message}"); }
-                }
                 Vm.VerifyButtonContent = "Re-verify";
-                ExitProbeBusy();
+                if (probe != null)
+                    await probe.DisposeAsync();
             }
         }
     }

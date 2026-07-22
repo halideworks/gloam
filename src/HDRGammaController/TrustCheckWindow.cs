@@ -252,14 +252,11 @@ namespace HDRGammaController
             using var cts = new CancellationTokenSource();
             _runCts = cts;
 
-            ColorimeterService? colorimeter = null;
-            PatchDisplayWindow? patchWindow = null;
-            CalibrationStateManager? stateManager = null;
-            bool bypassed = false;
+            using var colorimeter = new ColorimeterService(argyllBin);
+            ProbeOperationScope? probe = null;
             try
             {
                 _status.Text = "Detecting instrument…";
-                colorimeter = new ColorimeterService(argyllBin);
                 if (!await colorimeter.InitializeAsync(cts.Token) || !colorimeter.IsReady)
                 {
                     _status.Text = "No colorimeter detected. Connect the instrument and try again.";
@@ -272,26 +269,19 @@ namespace HDRGammaController
                 // Same ramp quiescence as the verify sweep: gamma preference / night mode
                 // must not ride the GPU ramp while we measure through the installed profile
                 // — a check made through the night ramp would poison the trend.
-                stateManager = new CalibrationStateManager(_dispwinRunner, _nightModeService);
-                try
-                {
-                    stateManager.EnterBypassMode(monitor,
-                        profile.GammaMode, profile.ToCalibrationSettings());
-                    bypassed = true;
-                }
-                catch (Exception ex)
-                {
-                    Log.Info($"TrustCheckWindow: bypass failed (continuing): {ex.Message}");
-                }
-
-                patchWindow = new PatchDisplayWindow(monitor);
-                patchWindow.AbortRequested += () => cts.Cancel();
-                patchWindow.EnableSweepControls(() => cts.Cancel());
-                patchWindow.Show();
-
                 _status.Text = "Position the probe on the marked target…";
-                await patchWindow.WaitForPlacementAsync("Calibration trust check", cts.Token);
-                await colorimeter.BeginMeasurementSessionAsync(hdrMode, cts.Token);
+                probe = await ProbeOperationScope.StartAsync(new ProbeOperationScope.Options(
+                    monitor,
+                    colorimeter,
+                    "Calibration trust check",
+                    HdrMode: hdrMode,
+                    StateManager: new CalibrationStateManager(_dispwinRunner, _nightModeService),
+                    PreviousGammaMode: profile.GammaMode,
+                    PreviousSettings: profile.ToCalibrationSettings(),
+                    EnterBypass: true,
+                    ConfigurePatchWindow: window => window.EnableSweepControls(cts.Cancel),
+                    CancellationToken: cts.Token));
+                var patchWindow = probe.PatchWindow;
 
                 var patches = TrustCheck.BuildPatches();
                 var results = new List<MeasurementResult>(patches.Count);
@@ -301,7 +291,7 @@ namespace HDRGammaController
                     var next = i + 1 < patches.Count ? patches[i + 1].Name : null;
                     patchWindow.SetProgress(i + 1, patches.Count, patch.Name, next, "Trust check");
                     patchWindow.SetColor(patch.DisplayRgb.R, patch.DisplayRgb.G, patch.DisplayRgb.B);
-                    await Task.Delay(i == 0 ? 1200 : 500, cts.Token);
+                    await Task.Delay(i == 0 ? 1200 : 500, probe.Token);
 
                     // White and black get the 3-read median treatment (the trend's anchor
                     // points); mid-tones and primaries are single reads — ~20 s total.
@@ -310,13 +300,13 @@ namespace HDRGammaController
                     {
                         var reads = new List<MeasurementResult>(3);
                         for (int r = 0; r < 3; r++)
-                            reads.Add(await colorimeter.MeasureAsync(patch, hdrMode, cts.Token));
+                            reads.Add(await colorimeter.MeasureAsync(patch, hdrMode, probe.Token));
                         results.Add(CalibrationOrchestrator.MedianMeasurement(
                             patch, reads.Where(m => m.IsValid).DefaultIfEmpty(reads[0]).ToList()));
                     }
                     else
                     {
-                        results.Add(await colorimeter.MeasureAsync(patch, hdrMode, cts.Token));
+                        results.Add(await colorimeter.MeasureAsync(patch, hdrMode, probe.Token));
                     }
                 }
 
@@ -372,17 +362,8 @@ namespace HDRGammaController
             }
             finally
             {
-                if (colorimeter != null)
-                {
-                    try { await colorimeter.EndMeasurementSessionAsync(); } catch { }
-                    colorimeter.Dispose();
-                }
-                patchWindow?.Close();
-                if (bypassed)
-                {
-                    try { stateManager!.RestorePreviousState(); }
-                    catch (Exception ex) { Log.Info($"TrustCheckWindow: bypass restore failed: {ex.Message}"); }
-                }
+                if (probe != null)
+                    await probe.DisposeAsync();
                 _runCts = null;
                 _running = false;
                 _runButton.IsEnabled = true;
