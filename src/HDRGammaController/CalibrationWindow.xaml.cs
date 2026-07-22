@@ -13,6 +13,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using HDRGammaController.Core;
 using HDRGammaController.Core.Calibration;
+using HDRGammaController.Services;
 using HDRGammaController.ViewModels;
 using static HDRGammaController.Core.Calibration.PatchSetGenerator;
 
@@ -132,8 +133,8 @@ namespace HDRGammaController
         private IReadOnlyList<ColorPatch>? _patches;
         private CancellationTokenSource? _cancellationTokenSource;
 
-        // Calibration orchestrator for managing the measurement workflow
-        private CalibrationOrchestrator? _orchestrator;
+        // Owns the calibration orchestrator, event lifetime, policy, and artifact build.
+        private CalibrationSessionCoordinator? _sessionCoordinator;
         private CalibrationResult? _calibrationResult;
         private Lut3D? _generatedLut;
         private DisplayCharacterization? _displayCharacterization;
@@ -1065,83 +1066,35 @@ namespace HDRGammaController
             // Carry the patch placement chosen during positioning into the measurement patch.
             ApplyPatchOffset();
 
-            // Create the calibration orchestrator
+            // Create the calibration session coordinator.
             // Measure in the display's actual HDR/SDR state — measuring HDR signal as if SDR
             // (the old hardcoded false) feeds the corrector nits-scaled data against an SDR
             // target, which made it diverge and produced an SDR profile for an HDR panel.
             bool hdrMode = _targetMonitor?.IsHdrActive ?? false;
             _measuredInHdr = hdrMode;
-            _orchestrator = new CalibrationOrchestrator(
-                _colorimeterService,
-                _calibrationTarget,
-                _calibrationPreset,
-                settleTimeMs: 300,
-                maxRetries: 3,
-                hdrMode: hdrMode);
+            _sessionCoordinator = new CalibrationSessionCoordinator(
+                new CalibrationSessionCoordinator.Config(
+                    _colorimeterService,
+                    _calibrationTarget,
+                    _calibrationPreset,
+                    hdrMode,
+                    _targetMonitor,
+                    _stateManager,
+                    _refinementRounds));
 
-            // Wire up orchestrator events
-            _orchestrator.DisplayPatchRequested += Orchestrator_DisplayPatchRequested;
-            _orchestrator.ProgressChanged += Orchestrator_ProgressChanged;
-            _orchestrator.StateChanged += Orchestrator_StateChanged;
-            _orchestrator.MeasurementTaken += Orchestrator_MeasurementTaken;
-            _orchestrator.ErrorOccurred += Orchestrator_ErrorOccurred;
-            _orchestrator.CalibrationCompleted += Orchestrator_CalibrationCompleted;
-            _orchestrator.PhaseChanged += (_, label) => Dispatcher.Invoke(() =>
-            {
-                // Verification/refinement passes report "Phase: i/N". Restart the progress bar
-                // at 0 for each pass instead of leaving it pinned at ~99% from the measure pass.
-                Vm.PhaseText = label;
-                int slash = label.LastIndexOf('/');
-                int colon = label.LastIndexOf(':');
-                if (slash > colon && colon >= 0
-                    && int.TryParse(label.AsSpan(colon + 1, slash - colon - 1).Trim(), out int cur)
-                    && int.TryParse(label.AsSpan(slash + 1).Trim(), out int total) && total > 0)
-                {
-                    Vm.ProgressPercent = cur * 100.0 / total;
-                    Vm.PatchInfoText = label;
-                }
-            });
-
-            // Enable the in-session apply → verify → refine closed loop when we have a target
-            // monitor + bypass manager. It loads each candidate correction onto the display's
-            // gamma ramp and re-measures, giving a real before/after instead of grading the
-            // uncorrected panel. Keep-best (in the orchestrator) makes refinement safe.
-            // HDR: skipped — the corrector's GPU-ramp curves are signal-domain, but in HDR the
-            // ramp sits on the PQ wire (wrong axis); the MHC2 PQ LUTs do the tone correction.
-            // The report's Verify button provides the measured after instead.
-            if (hdrMode)
-            {
-                Log.Info("CalibrationWindow: closed-loop refinement skipped in HDR (use report Verify for the measured after).");
-            }
-            else if (_stateManager != null && _targetMonitor != null && _refinementRounds > 0)
-            {
-                var corrector = new ClosedLoopCorrector(
-                    _calibrationTarget, _targetMonitor.SdrWhiteLevel, _targetMonitor.IsHdrActive);
-                _orchestrator.ClosedLoop = new ClosedLoopConfig
-                {
-                    Corrector = corrector,
-                    Apply = c => _stateManager.ApplyCorrectionLut(_targetMonitor, c.R, c.G, c.B),
-                    MaxRefinementRounds = _refinementRounds,
-                    TargetDeltaE = 1.0
-                };
-            }
-
-            // HDR wire ladder: FP16 patches at exact PQ wire positions, far above SDR white.
-            // HdrMhc2LutBuilder prefers these for the PQ tone LUTs (no SDR-mapping
-            // assumption - probe-validated on the MAG 271QPX June 2026).
-            if (hdrMode && _targetMonitor != null)
-            {
-                _orchestrator.AdditionalPatches = HdrWirePatchSet.Build(_targetMonitor.HdrPeakNits);
-                Log.Info($"CalibrationWindow: appended {_orchestrator.AdditionalPatches.Count} HDR wire-ladder patches " +
-                         $"(panel peak {_targetMonitor.HdrPeakNits:F0} nits).");
-            }
+            _sessionCoordinator.DisplayPatchRequested += Orchestrator_DisplayPatchRequested;
+            _sessionCoordinator.ProgressChanged += Orchestrator_ProgressChanged;
+            _sessionCoordinator.StateChanged += Orchestrator_StateChanged;
+            _sessionCoordinator.MeasurementTaken += Orchestrator_MeasurementTaken;
+            _sessionCoordinator.ErrorOccurred += Orchestrator_ErrorOccurred;
+            _sessionCoordinator.PhaseChanged += Orchestrator_PhaseChanged;
 
             // Start calibration
             _isCalibrationRunning = true;
             _isPaused = false;
             _isCancelled = false;
             _currentPatchIndex = 0;
-            _totalPatches = _orchestrator.TotalPatches;
+            _totalPatches = _sessionCoordinator.TotalPatches;
             using var runCancellation = new CancellationTokenSource();
             _cancellationTokenSource = runCancellation;
             _elapsedTimer.Restart();
@@ -1164,60 +1117,27 @@ namespace HDRGammaController
 
         private async Task RunCalibrationAsync(CancellationToken cancellationToken)
         {
-            if (_orchestrator == null) return;
+            if (_sessionCoordinator == null) return;
 
             try
             {
-                // Run the calibration through the orchestrator
-                _calibrationResult = await _orchestrator.StartCalibrationAsync(cancellationToken);
+                var session = await _sessionCoordinator.RunAsync(
+                    new Progress<CalibrationSessionCoordinator.ArtifactProgress>(progress =>
+                        Dispatcher.Invoke(() =>
+                        {
+                            Vm.PhaseText = progress.Phase;
+                            Vm.ProgressPercent = progress.Percent;
+                            Vm.SetProgressLabel(progress.Label);
+                        })),
+                    cancellationToken);
+                _calibrationResult = session.Calibration;
+                _generatedLut = session.Lut;
+                _displayCharacterization = session.Characterization;
+                _calibrationMetrics = session.Metrics;
 
                 // Process results if successful
                 if (_calibrationResult.Success && _calibrationResult.Measurements != null)
                 {
-                    // Generate the calibration artifact from measurements.
-                    Dispatcher.Invoke(() =>
-                    {
-                        Vm.PhaseText = _measuredInHdr ? "Building HDR profile model..." : "Generating LUT...";
-                    });
-
-                    // 33³ is the standard "high quality" 3D-LUT grid (the size Resolve/most
-                    // .cube workflows default to). The grid is sampled from the fitted
-                    // characterization model, not the raw patches, so a denser grid just
-                    // interpolates the correction more smoothly — it costs <1s to build and
-                    // doesn't require more measurements. 17³ was coarse enough to band gradients.
-                    var generator = new Lut3DGenerator(
-                        _calibrationTarget!,
-                        _calibrationResult.Measurements,
-                        lutSize: 33);
-
-                    if (_measuredInHdr)
-                    {
-                        // HDR install builds Windows Advanced Color MHC2 PQ LUTs from the
-                        // measured patches. Do not also emit a generic 33³ SDR-oriented LUT:
-                        // it is not what gets installed and can mislead reports/exports.
-                        _generatedLut = null;
-                        _displayCharacterization = generator.BuildCharacterizationOnly(hdrMode: true);
-                        Dispatcher.Invoke(() =>
-                        {
-                            Vm.ProgressPercent = 100;
-                            Vm.SetProgressLabel("Model built");
-                        });
-                    }
-                    else
-                    {
-                        _generatedLut = generator.Generate(progress =>
-                        {
-                            Dispatcher.Invoke(() =>
-                            {
-                                Vm.ProgressPercent = 100;
-                                Vm.SetProgressLabel("Generating...");
-                            });
-                        });
-
-                        _displayCharacterization = generator.Characterization;
-                    }
-                    _calibrationMetrics = generator.CalculateMetrics();
-
                     Dispatcher.Invoke(() =>
                     {
                         string gradeStr = _calibrationMetrics?.GetGrade().ToString() ?? "?";
@@ -1429,22 +1349,36 @@ namespace HDRGammaController
             });
         }
 
-        private void Orchestrator_CalibrationCompleted(object? sender, CalibrationResultEventArgs e)
+        private void Orchestrator_PhaseChanged(object? sender, string label)
         {
-            // Main completion handling is in RunCalibrationAsync
+            Dispatcher.Invoke(() =>
+            {
+                // Verification/refinement passes report "Phase: i/N". Restart the progress bar
+                // for each pass instead of leaving it pinned near the measurement pass's end.
+                Vm.PhaseText = label;
+                int slash = label.LastIndexOf('/');
+                int colon = label.LastIndexOf(':');
+                if (slash > colon && colon >= 0
+                    && int.TryParse(label.AsSpan(colon + 1, slash - colon - 1).Trim(), out int current)
+                    && int.TryParse(label.AsSpan(slash + 1).Trim(), out int total) && total > 0)
+                {
+                    Vm.ProgressPercent = current * 100.0 / total;
+                    Vm.PatchInfoText = label;
+                }
+            });
         }
 
         private void UnwireOrchestratorEvents()
         {
-            if (_orchestrator != null)
-            {
-                _orchestrator.DisplayPatchRequested -= Orchestrator_DisplayPatchRequested;
-                _orchestrator.ProgressChanged -= Orchestrator_ProgressChanged;
-                _orchestrator.StateChanged -= Orchestrator_StateChanged;
-                _orchestrator.MeasurementTaken -= Orchestrator_MeasurementTaken;
-                _orchestrator.ErrorOccurred -= Orchestrator_ErrorOccurred;
-                _orchestrator.CalibrationCompleted -= Orchestrator_CalibrationCompleted;
-            }
+            if (_sessionCoordinator == null) return;
+            _sessionCoordinator.DisplayPatchRequested -= Orchestrator_DisplayPatchRequested;
+            _sessionCoordinator.ProgressChanged -= Orchestrator_ProgressChanged;
+            _sessionCoordinator.StateChanged -= Orchestrator_StateChanged;
+            _sessionCoordinator.MeasurementTaken -= Orchestrator_MeasurementTaken;
+            _sessionCoordinator.ErrorOccurred -= Orchestrator_ErrorOccurred;
+            _sessionCoordinator.PhaseChanged -= Orchestrator_PhaseChanged;
+            _sessionCoordinator.Dispose();
+            _sessionCoordinator = null;
         }
 
         #endregion
@@ -1461,7 +1395,7 @@ namespace HDRGammaController
         private void Pause_Click(object sender, RoutedEventArgs e)
         {
             _isPaused = true;
-            _orchestrator?.Pause();
+            _sessionCoordinator?.Pause();
             Vm.IsPauseOverlayVisible = true;
             Vm.PauseButtonText = "Paused";
             Vm.IsPauseEnabled = false;
@@ -1499,7 +1433,7 @@ namespace HDRGammaController
                 }
 
                 _isPaused = false;
-                _orchestrator?.Resume();
+                _sessionCoordinator?.Resume();
                 Vm.IsPauseOverlayVisible = false;
                 Vm.PauseButtonText = "Pause";
                 Vm.IsPauseEnabled = true;
@@ -1532,7 +1466,7 @@ namespace HDRGammaController
                 _shutdownDialog ??= BusyDialog.Open(this, "Shutting down calibration...");
 
                 _isCancelled = true;
-                _orchestrator?.Cancel();
+                _sessionCoordinator?.Cancel();
                 _cancellationTokenSource?.Cancel();
                 // Don't close: RunCalibrationAsync observes the cancellation and returns the
                 // user to the setup screen so they can adjust and restart.
