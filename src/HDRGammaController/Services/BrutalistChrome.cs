@@ -18,13 +18,18 @@ namespace HDRGammaController.Services
     {
         public static void Apply(Window win, string title, UIElement content)
         {
+            // XAML-backed utility windows already own their body as Window.Content when
+            // InitializeComponent returns. Detach it before re-parenting into shared chrome.
+            if (ReferenceEquals(win.Content, content))
+                win.Content = null;
             win.WindowStyle = WindowStyle.None;
             win.AllowsTransparency = true;
             win.Background = Brushes.Transparent;
             if (win.ResizeMode == ResizeMode.CanResize)
                 win.ResizeMode = ResizeMode.CanResizeWithGrip;
 
-            var display = Application.Current?.Resources["DisplayFont"] as FontFamily;
+            var display = Application.Current?.Resources["DisplayFont"] as FontFamily
+                ?? SystemFonts.MessageFontFamily;
 
             var grid = new Grid();
             grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(44) });

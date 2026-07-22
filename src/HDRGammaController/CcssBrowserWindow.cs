@@ -17,18 +17,8 @@ namespace HDRGammaController
     /// display name, pick a spectro-derived correction, and it lands in the corrections
     /// folder ready for the setup picker — no website round-trip.
     /// </summary>
-    public sealed class CcssBrowserWindow : Window
+    public sealed partial class CcssBrowserWindow : Window
     {
-        private readonly TextBox _query;
-        private readonly Button _searchButton;
-        private readonly Button _downloadButton;
-        private readonly Button _createButton;
-        private readonly Button _createMatrixButton;
-        private readonly Button _deleteButton;
-        private readonly Button _dedupeButton;
-        private readonly Button _closeButton;
-        private readonly ListView _list;
-        private readonly TextBlock _status;
         private readonly string _saveFolder;
         private readonly string? _typeFilter;
         private readonly string _displayName;
@@ -41,64 +31,6 @@ namespace HDRGammaController
         /// <summary>Path of the downloaded correction file when the dialog returns true.</summary>
         public string? SavedPath { get; private set; }
 
-        // Accent style for the two primary actions (Search, Download & Use), built from the
-        // Theme* tokens so it follows the light/dark swap. The normal/secondary buttons are
-        // left to the reactive DarkControls implicit Button style. Its hover keeps the accent
-        // fill (unlike the implicit template's grey ThemeHover) and just adds a themed ring.
-        private static readonly Style PrimaryButtonStyle = (Style)System.Windows.Markup.XamlReader.Parse(
-            @"<Style xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'
-                     xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'
-                     TargetType='Button'>
-                <Setter Property='Background' Value='{DynamicResource ThemeAccent}'/>
-                <Setter Property='Foreground' Value='{DynamicResource ThemeOnAccent}'/>
-                <Setter Property='FontFamily' Value='{DynamicResource DisplayFont}'/>
-                <Setter Property='FontWeight' Value='Bold'/>
-                <Setter Property='FontSize' Value='12'/>
-                <Setter Property='Cursor' Value='Hand'/>
-                <Setter Property='Padding' Value='14,6'/>
-                <Setter Property='Template'>
-                  <Setter.Value>
-                    <ControlTemplate TargetType='Button'>
-                      <Border x:Name='Bd' Background='{TemplateBinding Background}'
-                              BorderBrush='{DynamicResource ThemeAccent}' BorderThickness='1'
-                              Padding='{TemplateBinding Padding}'>
-                        <ContentPresenter HorizontalAlignment='Center' VerticalAlignment='Center'/>
-                      </Border>
-                      <ControlTemplate.Triggers>
-                        <Trigger Property='IsMouseOver' Value='True'>
-                          <Setter TargetName='Bd' Property='Opacity' Value='0.88'/>
-                          <Setter TargetName='Bd' Property='BorderBrush' Value='{DynamicResource ThemeOnAccent}'/>
-                        </Trigger>
-                        <Trigger Property='IsEnabled' Value='False'>
-                          <Setter TargetName='Bd' Property='Opacity' Value='0.40'/>
-                        </Trigger>
-                      </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                  </Setter.Value>
-                </Setter>
-              </Style>");
-
-        // Type-column cell: a 1px chip so the decision-relevant .ccss/.ccmx distinction reads
-        // at a glance — accent for ccss (the preferred spectral sample), ThemeAmber for ccmx.
-        private static readonly DataTemplate TypeChipTemplate = (DataTemplate)System.Windows.Markup.XamlReader.Parse(
-            @"<DataTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'
-                            xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'>
-                <Border BorderThickness='1' Padding='6,1' HorizontalAlignment='Left' VerticalAlignment='Center'>
-                  <Border.Style>
-                    <Style TargetType='Border'>
-                      <Setter Property='BorderBrush' Value='{DynamicResource ThemeAccent}'/>
-                      <Style.Triggers>
-                        <DataTrigger Binding='{Binding Type}' Value='ccmx'>
-                          <Setter Property='BorderBrush' Value='{DynamicResource ThemeAmber}'/>
-                        </DataTrigger>
-                      </Style.Triggers>
-                    </Style>
-                  </Border.Style>
-                  <TextBlock Text='{Binding Type}' FontSize='11' FontWeight='Bold'
-                             Foreground='{DynamicResource ThemeText}'/>
-                </Border>
-              </DataTemplate>");
-
         public CcssBrowserWindow(
             string initialQuery,
             string saveFolder,
@@ -109,206 +41,59 @@ namespace HDRGammaController
             _saveFolder = saveFolder;
             _displayName = initialQuery?.Trim() ?? "";
             _typeFilter = string.IsNullOrWhiteSpace(typeFilter) ? null : typeFilter.Trim().ToLowerInvariant();
+            InitializeComponent();
             Title = title ?? "Find Meter Correction - DisplayCAL Community Database";
-            Width = 760;
-            Height = 560;
-            MinWidth = 760;
-            MinHeight = 560;
-            WindowStartupLocation = WindowStartupLocation.CenterOwner;
-            this.SetResourceReference(BackgroundProperty, "ThemeBg");
-            this.SetResourceReference(ForegroundProperty, "ThemeText");
-            Resources.MergedDictionaries.Add(new ResourceDictionary
-            {
-                Source = new Uri("pack://application:,,,/Gloam;component/Themes/DarkControls.xaml", UriKind.Absolute),
-            });
-            // Brutalist custom chrome (header + frame) is applied at the end of the ctor.
-
-            _query = new TextBox
-            {
-                Text = initialQuery,
-                FontSize = 13,
-                FontFamily = Application.Current?.Resources["BodyFont"] as FontFamily,
-                Padding = new Thickness(8, 6, 8, 6),
-                BorderThickness = new Thickness(1),
-                VerticalContentAlignment = VerticalAlignment.Center,
-            };
-            _query.SetResourceReference(BackgroundProperty, "ThemeSurface");
-            _query.SetResourceReference(ForegroundProperty, "ThemeText");
-            _query.SetResourceReference(Control.BorderBrushProperty, "ThemeBorder");
-            _query.SetResourceReference(TextBox.CaretBrushProperty, "ThemeText");
-            _query.KeyDown += async (_, e) => { if (e.Key == System.Windows.Input.Key.Enter) await SearchAsync(); };
-
-            _searchButton = MakePrimaryButton("Search");
-            _searchButton.Click += async (_, _) => await SearchAsync();
-
-            _downloadButton = MakePrimaryButton("Download & Use");
-            _downloadButton.IsEnabled = false;
-            _downloadButton.Click += (_, _) => DownloadSelected();
-
-            // Secondary actions — no inline colours; the reactive DarkControls implicit
-            // Button style drives their fill/border/hover so they follow light/dark.
-            _createButton = MakeButton("From spectrometer…");
+            _query.Text = initialQuery;
+            _status.Text = introText ??
+                "Search the community database by display model. .ccss spectral samples are preferred for an i1 Display; choose one measured for your panel model when possible.";
             _createButton.ToolTip = "Measure this panel's R/G/B/W emission spectra with a connected spectrometer " +
                                     "(i1 Pro, ColorMunki Photo/Design, i1 Studio) and generate a .ccss for it.";
-            _createButton.Click += async (_, _) => await CreateFromSpectrometerAsync();
-
-            _createMatrixButton = MakeButton("Correction matrix…");
             _createMatrixButton.ToolTip = "Measure the same White/Red/Green/Blue patches with your reference spectrometer " +
                                           "and your everyday colorimeter in turn, then generate a .ccmx correction matrix " +
                                           "that maps the colorimeter's readings onto the spectrometer's for this exact panel.";
-            _createMatrixButton.Click += async (_, _) => await CreateCorrectionMatrixAsync();
             if (_typeFilter == "ccss")
-            {
-                // A matrix correction is useless to callers that specifically want spectral
-                // samples (e.g. the Ultra Night melanopic estimator).
                 _createMatrixButton.Visibility = Visibility.Collapsed;
-            }
-
-            // Management of the saved-correction library. Both are available wherever this
-            // browser is opened (calibration setup and the night-mode spectrum picker), so
-            // corrections can be tidied from anywhere they're chosen. Delete acts on the
-            // selected saved file; Remove duplicates cleans the whole corrections folder.
-            _deleteButton = MakeButton("Delete");
-            _deleteButton.IsEnabled = false;
             _deleteButton.ToolTip = "Delete the selected saved correction file from disk. Only files saved in " +
                                     "Gloam's corrections folder can be deleted (online results cannot).";
-            _deleteButton.Click += async (_, _) => await DeleteSelectedAsync();
-
-            _dedupeButton = MakeButton("Remove duplicates");
             _dedupeButton.ToolTip = "Delete redundant saved correction files whose contents are identical, " +
                                     "keeping one copy of each.";
-            _dedupeButton.Click += async (_, _) => await RemoveDuplicatesAsync();
-
-            _closeButton = MakeButton("Cancel");
-            _closeButton.Click += (_, _) => { if (_captureInProgress) return; DialogResult = false; Close(); };
-
-            _list = new ListView
-            {
-                BorderThickness = new Thickness(1),
-                Margin = new Thickness(0, 10, 0, 10),
-            };
-            _list.SetResourceReference(BackgroundProperty, "ThemeSurface");
-            _list.SetResourceReference(ForegroundProperty, "ThemeText");
-            _list.SetResourceReference(Control.BorderBrushProperty, "ThemeBorder");
-            var grid = new GridView();
-            grid.Columns.Add(Col("Source", nameof(CcssDatabaseClient.Entry.Source), 70));
-            grid.Columns.Add(Col("Display", nameof(CcssDatabaseClient.Entry.Display), 250));
-            grid.Columns.Add(ChipCol("Type", 64));
-            grid.Columns.Add(Col("Instrument", nameof(CcssDatabaseClient.Entry.Instrument), 130));
-            grid.Columns.Add(Col("Measured with", nameof(CcssDatabaseClient.Entry.Reference), 150));
-            grid.Columns.Add(Col("Created", nameof(CcssDatabaseClient.Entry.Created), 120));
-            _list.View = grid;
-            _list.SelectionChanged += (_, _) =>
-            {
-                _downloadButton.IsEnabled = !_captureInProgress && _list.SelectedItem != null;
-                _downloadButton.Content = _list.SelectedItem is CcssDatabaseClient.Entry { LocalPath: not null }
-                    ? "Use Saved"
-                    : "Download & Use";
-                // Only saved files (those with a LocalPath) live on disk and can be deleted.
-                _deleteButton.IsEnabled = !_captureInProgress
-                    && _list.SelectedItem is CcssDatabaseClient.Entry { LocalPath: not null };
-            };
-            _list.MouseDoubleClick += (_, _) => { if (_list.SelectedItem != null) DownloadSelected(); };
-
-            _status = new TextBlock
-            {
-                FontSize = 12,
-                VerticalAlignment = VerticalAlignment.Center,
-                Text = introText ??
-                       "Search the community database by display model. .ccss (spectral sample) entries are " +
-                       "preferred for the i1 Display; ones measured with a spectro for YOUR panel model are best.",
-                TextWrapping = TextWrapping.Wrap,
-            };
-            _status.SetResourceReference(ForegroundProperty, "ThemeTextDim");
-
-            var topRow = new Grid { Margin = new Thickness(0, 0, 0, 0) };
-            topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            Grid.SetColumn(_searchButton, 1);
-            _searchButton.Margin = new Thickness(8, 0, 0, 0);
-            topRow.Children.Add(_query);
-            topRow.Children.Add(_searchButton);
-
-            // Bottom row: "make a new correction" (status + the two Create actions) reads on
-            // the left, distinct from "commit selection / leave" (Download & Use + Cancel) on
-            // the right. Grouping the Create actions lets the window drop back to its natural
-            // ~760px instead of the old five-across 940px.
-            _createMatrixButton.Margin = new Thickness(8, 0, 0, 0);
-            var createRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
-            createRow.Children.Add(_createButton);
-            createRow.Children.Add(_createMatrixButton);
-
-            // Second action row: manage the saved library (distinct from the "make a new
-            // correction" Create actions above).
-            _dedupeButton.Margin = new Thickness(8, 0, 0, 0);
-            var manageRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 0) };
-            manageRow.Children.Add(_deleteButton);
-            manageRow.Children.Add(_dedupeButton);
-
-            var leftPanel = new StackPanel { Orientation = Orientation.Vertical, VerticalAlignment = VerticalAlignment.Bottom };
-            leftPanel.Children.Add(_status);
-            leftPanel.Children.Add(createRow);
-            leftPanel.Children.Add(manageRow);
-
-            _downloadButton.Margin = new Thickness(0, 0, 8, 0);
-            var rightPanel = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                VerticalAlignment = VerticalAlignment.Bottom,
-                HorizontalAlignment = HorizontalAlignment.Right,
-                Margin = new Thickness(12, 0, 0, 0),
-            };
-            rightPanel.Children.Add(_downloadButton);
-            rightPanel.Children.Add(_closeButton);
-
-            var bottomRow = new Grid();
-            bottomRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            bottomRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            Grid.SetColumn(leftPanel, 0);
-            Grid.SetColumn(rightPanel, 1);
-            bottomRow.Children.Add(leftPanel);
-            bottomRow.Children.Add(rightPanel);
-
-            var root = new Grid { Margin = new Thickness(16) };
-            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            Grid.SetRow(topRow, 0);
-            Grid.SetRow(_list, 1);
-            Grid.SetRow(bottomRow, 2);
-            root.Children.Add(topRow);
-            root.Children.Add(_list);
-            root.Children.Add(bottomRow);
-            Services.BrutalistChrome.Apply(this, title ?? "Find Meter Correction", root);
-
+            BrutalistChrome.Apply(this, title ?? "Find Meter Correction", BodyRoot);
             Loaded += async (_, _) => await SearchAsync();
         }
 
-        private static Button MakeButton(string content) => new()
+        private async void Query_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
         {
-            Content = content,
-            Padding = new Thickness(14, 6, 14, 6),
-        };
+            if (e.Key == System.Windows.Input.Key.Enter)
+                await SearchAsync();
+        }
 
-        private static Button MakePrimaryButton(string content) => new()
+        private async void Search_Click(object sender, RoutedEventArgs e) => await SearchAsync();
+        private void Download_Click(object sender, RoutedEventArgs e) => DownloadSelected();
+        private async void CreateSpectral_Click(object sender, RoutedEventArgs e) => await CreateFromSpectrometerAsync();
+        private async void CreateMatrix_Click(object sender, RoutedEventArgs e) => await CreateCorrectionMatrixAsync();
+        private async void Delete_Click(object sender, RoutedEventArgs e) => await DeleteSelectedAsync();
+        private async void Dedupe_Click(object sender, RoutedEventArgs e) => await RemoveDuplicatesAsync();
+        private void Close_Click(object sender, RoutedEventArgs e)
         {
-            Content = content,
-            Style = PrimaryButtonStyle,
-        };
+            if (_captureInProgress) return;
+            DialogResult = false;
+            Close();
+        }
 
-        private static GridViewColumn Col(string header, string property, double width) => new()
+        private void Correction_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            Header = header,
-            Width = width,
-            DisplayMemberBinding = new System.Windows.Data.Binding(property),
-        };
+            _downloadButton.IsEnabled = !_captureInProgress && _list.SelectedItem != null;
+            _downloadButton.Content = _list.SelectedItem is CcssDatabaseClient.Entry { LocalPath: not null }
+                ? "Use Saved"
+                : "Download & Use";
+            _deleteButton.IsEnabled = !_captureInProgress &&
+                _list.SelectedItem is CcssDatabaseClient.Entry { LocalPath: not null };
+        }
 
-        private static GridViewColumn ChipCol(string header, double width) => new()
+        private void Correction_MouseDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
         {
-            Header = header,
-            Width = width,
-            CellTemplate = TypeChipTemplate,
-        };
+            if (_list.SelectedItem != null) DownloadSelected();
+        }
 
         /// <summary>
         /// Reflects a running instrument capture across the window: it owns the instrument

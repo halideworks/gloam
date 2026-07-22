@@ -19,21 +19,13 @@ namespace HDRGammaController
     /// so recalibration becomes data-driven instead of superstition. Drift alerts honor the
     /// combined measurement uncertainty of the runs being compared.
     /// </summary>
-    public sealed class TrustCheckWindow : Window
+    public sealed partial class TrustCheckWindow : Window
     {
         private readonly MonitorManager _monitorManager;
         private readonly SettingsManager _settingsManager;
         private readonly DispwinRunner _dispwinRunner;
         private readonly NightModeService _nightModeService;
         private readonly IToastService? _toastService;
-
-        private readonly ComboBox _monitorPicker;
-        private readonly TextBlock _status;
-        private readonly TextBlock _latest;
-        private readonly Canvas _deltaECanvas;
-        private readonly Canvas _duvCanvas;
-        private readonly Button _runButton;
-        private readonly CheckBox _reminderToggle;
 
         private CancellationTokenSource? _runCts;
         private bool _running;
@@ -55,138 +47,28 @@ namespace HDRGammaController
             _dispwinRunner = dispwinRunner;
             _nightModeService = nightModeService;
             _toastService = toastService;
-
-            Title = "Trust Check";
-            Width = 860;
-            Height = 620;
-            MinWidth = 720;
-            MinHeight = 520;
-            WindowStartupLocation = WindowStartupLocation.CenterOwner;
-            this.SetResourceReference(BackgroundProperty, "ThemeBg");
-            this.SetResourceReference(ForegroundProperty, "ThemeText");
-            Resources.MergedDictionaries.Add(new ResourceDictionary
-            {
-                Source = new Uri("pack://application:,,,/Gloam;component/Themes/DarkControls.xaml", UriKind.Absolute),
-            });
-
-            _monitorPicker = new ComboBox { MinWidth = 320, VerticalAlignment = VerticalAlignment.Center };
-            _monitorPicker.SelectionChanged += (_, _) => RefreshTrend();
-
-            _status = new TextBlock
-            {
-                FontSize = 12,
-                Margin = new Thickness(0, 8, 0, 0),
-                TextWrapping = TextWrapping.Wrap,
-            };
-            _status.SetResourceReference(ForegroundProperty, "ThemeTextDim");
-
-            _latest = new TextBlock
-            {
-                FontSize = 13,
-                Margin = new Thickness(0, 8, 0, 8),
-                TextWrapping = TextWrapping.Wrap,
-            };
-            _latest.SetResourceReference(ForegroundProperty, "ThemeText");
-
-            _deltaECanvas = MakeCanvas();
-            _duvCanvas = MakeCanvas();
-
-            var charts = new Grid { Margin = new Thickness(0, 4, 0, 8) };
-            charts.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-            charts.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-            Grid.SetRow(_deltaECanvas, 0);
-            Grid.SetRow(_duvCanvas, 1);
-            charts.Children.Add(_deltaECanvas);
-            charts.Children.Add(_duvCanvas);
-
-            _reminderToggle = new CheckBox
-            {
-                Content = "Remind me monthly to run a trust check",
-                VerticalAlignment = VerticalAlignment.Center,
-                IsChecked = _settingsManager.TrustCheckReminderDays > 0,
-            };
-            _reminderToggle.SetResourceReference(ForegroundProperty, "ThemeTextDim");
-            _reminderToggle.Checked += (_, _) => _settingsManager.SetTrustCheckReminderDays(30);
-            _reminderToggle.Unchecked += (_, _) => _settingsManager.SetTrustCheckReminderDays(0);
-
-            Button Make(string label, RoutedEventHandler onClick, bool accent = false)
-            {
-                var b = new Button
-                {
-                    Content = label,
-                    Padding = new Thickness(14, 6, 14, 6),
-                    Margin = new Thickness(8, 0, 0, 0),
-                    BorderThickness = new Thickness(1),
-                };
-                b.SetResourceReference(BackgroundProperty, accent ? "ThemeAccent" : "ThemeSurface");
-                b.SetResourceReference(ForegroundProperty, accent ? "ThemeOnAccent" : "ThemeText");
-                b.SetResourceReference(Control.BorderBrushProperty, accent ? "ThemeAccent" : "ThemeBorder");
-                b.Click += onClick;
-                return b;
-            }
-
-            _runButton = Make("Run Check", async (_, _) => await RunAsync(), accent: true);
-            var export = Make("Export CSV…", (_, _) => ExportCsv());
-            var close = Make("Close", (_, _) => Close());
-
-            var buttons = new Grid();
-            buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            for (int i = 0; i < 3; i++) buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            Grid.SetColumn(_runButton, 1);
-            Grid.SetColumn(export, 2);
-            Grid.SetColumn(close, 3);
-            buttons.Children.Add(_reminderToggle);
-            buttons.Children.Add(_runButton);
-            buttons.Children.Add(export);
-            buttons.Children.Add(close);
-
-            var headerRow = new StackPanel { Orientation = Orientation.Horizontal };
-            var pickerLabel = new TextBlock
-            {
-                Text = "Display",
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 10, 0),
-            };
-            pickerLabel.SetResourceReference(ForegroundProperty, "ThemeTextDim");
-            headerRow.Children.Add(pickerLabel);
-            headerRow.Children.Add(_monitorPicker);
-
-            var root = new Grid { Margin = new Thickness(16) };
-            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            Grid.SetRow(headerRow, 0);
-            Grid.SetRow(_latest, 1);
-            Grid.SetRow(_status, 2);
-            Grid.SetRow(charts, 3);
-            Grid.SetRow(buttons, 4);
-            root.Children.Add(headerRow);
-            root.Children.Add(_latest);
-            root.Children.Add(_status);
-            root.Children.Add(charts);
-            root.Children.Add(buttons);
-            BrutalistChrome.Apply(this, "Trust Check", root);
-
-            SizeChanged += (_, _) => RefreshTrend();
+            InitializeComponent();
+            _reminderToggle.IsChecked = _settingsManager.TrustCheckReminderDays > 0;
+            BrutalistChrome.Apply(this, "Trust Check", BodyRoot);
             BrutalistTheme.Changed += OnThemeChanged;
-            Closed += (_, _) =>
-            {
-                BrutalistTheme.Changed -= OnThemeChanged;
-                _runCts?.Cancel();
-            };
-
             PopulateMonitors();
         }
 
         private void OnThemeChanged() => RefreshTrend();
 
-        private static Canvas MakeCanvas()
+        private void Monitor_SelectionChanged(object sender, SelectionChangedEventArgs e) => RefreshTrend();
+        private async void Run_Click(object sender, RoutedEventArgs e) => await RunAsync();
+        private void Export_Click(object sender, RoutedEventArgs e) => ExportCsv();
+        private void Close_Click(object sender, RoutedEventArgs e) => Close();
+        private void Reminder_Checked(object sender, RoutedEventArgs e) =>
+            _settingsManager.SetTrustCheckReminderDays(30);
+        private void Reminder_Unchecked(object sender, RoutedEventArgs e) =>
+            _settingsManager.SetTrustCheckReminderDays(0);
+        private void Window_SizeChanged(object sender, SizeChangedEventArgs e) => RefreshTrend();
+        private void Window_Closed(object? sender, EventArgs e)
         {
-            var canvas = new Canvas { Margin = new Thickness(0, 4, 0, 4), MinHeight = 140, ClipToBounds = true };
-            canvas.SetResourceReference(Panel.BackgroundProperty, "ThemeSurface");
-            return canvas;
+            BrutalistTheme.Changed -= OnThemeChanged;
+            _runCts?.Cancel();
         }
 
         private void PopulateMonitors()
