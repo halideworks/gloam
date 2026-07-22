@@ -506,114 +506,32 @@ namespace HDRGammaController.Core
 
         public void Load()
         {
-            SettingsData? loaded = null;
-            bool fileExists = false;
-            bool parseFailed = false;
-            bool newerSchema = false;
-            try
-            {
-                fileExists = File.Exists(SettingsFilePath);
-                if (fileExists)
-                {
-                    if (new FileInfo(SettingsFilePath).Length > MaxSettingsFileBytes)
-                        throw new InvalidDataException("settings.json exceeds the size limit.");
-                    string json = File.ReadAllText(SettingsFilePath);
-                    var options = new JsonSerializerOptions
-                    {
-                        // Tolerant enum handling: an unknown enum string (e.g. written by a
-                        // newer build) maps to the enum default instead of throwing away the
-                        // whole file. Applies to ALL enums in the settings graph.
-                        Converters = { new TolerantJsonStringEnumConverter() },
-                        PropertyNameCaseInsensitive = true
-                    };
-
-                    try
-                    {
-                        loaded = JsonSerializer.Deserialize<SettingsData>(json, options) ?? new SettingsData();
-                        MigrateSettings(loaded);
-                        ValidateAndClampSettings(loaded);
-                        Log.Info($"SettingsManager: Loaded {loaded.MonitorProfiles.Count} monitor profiles.");
-
-                        if (loaded.SchemaVersion > CurrentSchemaVersion)
-                        {
-                            // The file was written by a newer build. Loaded best-effort above;
-                            // mark read-only so this old binary can never clobber the newer file.
-                            newerSchema = true;
-                            Log.Error(
-                                $"SettingsManager: settings.json has SchemaVersion {loaded.SchemaVersion}, newer than this " +
-                                $"build's supported version {CurrentSchemaVersion}. Loading best-effort and REFUSING all saves " +
-                                "so the newer file is not overwritten by an older binary.");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        // Fallback: Try defining a legacy structure or just reset ExcludedApps
-                        Log.Info($"SettingsManager: Primary deserialization failed ({ex.Message}), attempting legacy migration...");
-                        try
-                        {
-                            var legacy = JsonSerializer.Deserialize<LegacySettingsData>(json, options);
-                            if (legacy != null)
-                            {
-                                loaded = new SettingsData
-                                {
-                                    MonitorProfiles = legacy.MonitorProfiles,
-                                    NightMode = legacy.NightMode,
-                                    ExcludedApps = legacy.ExcludedApps?.Select(path => new AppExclusionRule { AppName = path, FullDisable = false }).ToList() ?? new List<AppExclusionRule>()
-                                };
-                                MigrateSettings(loaded);
-                                ValidateAndClampSettings(loaded);
-                                Log.Info("SettingsManager: Legacy migration successful.");
-                                Log.Info($"SettingsManager: Loaded {loaded.MonitorProfiles.Count} monitor profiles.");
-                                // Persist in the new format under the lock to avoid racing another Load.
-                                lock (_dataLock)
-                                {
-                                    _data = loaded;
-                                    LoadedExistingSettingsFile = fileExists;
-                                    SettingsFileFromNewerVersion = false;
-                                    LoadFailedPreservingFile = false;
-                                    _dataVersion++;
-                                    _dataVersionAtLoad = _dataVersion;
-                                }
-                                Save();
-                                return;
-                            }
-
-                            parseFailed = true;
-                        }
-                        catch (Exception innerEx)
-                        {
-                            // NEVER reset-and-save here: leave the unreadable file untouched on
-                            // disk (a legacy binary destructively resetting settings on parse
-                            // failure is exactly the bug this guards against). Keep a .bak copy,
-                            // run on in-memory defaults, and suppress routine saves until a real
-                            // change happens (see Save()).
-                            Log.Error(
-                                $"SettingsManager: Legacy migration failed ({innerEx.Message}). settings.json is left " +
-                                "UNTOUCHED on disk; running with in-memory defaults and suppressing saves until a setting changes.");
-                            try { File.Copy(SettingsFilePath, SettingsFilePath + $".bak-{DateTime.Now.Ticks}", true); } catch { }
-                            parseFailed = true;
-                            loaded = new SettingsData();
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Info($"SettingsManager: Failed to load settings: {ex.Message}");
-                // If the file exists but could not even be read, treat it like a parse
-                // failure: keep it on disk and do not auto-overwrite it with defaults.
-                parseFailed = fileExists;
-                loaded = new SettingsData();
-            }
+            var loaded = SettingsPersistence.Load(
+                SettingsFilePath,
+                MaxSettingsFileBytes,
+                CurrentSchemaVersion);
 
             lock (_dataLock)
             {
-                _data = loaded ?? new SettingsData();
-                LoadedExistingSettingsFile = fileExists;
-                SettingsFileFromNewerVersion = newerSchema;
-                LoadFailedPreservingFile = parseFailed;
+                _data = loaded.Data;
+                LoadedExistingSettingsFile = loaded.FileExists;
+                SettingsFileFromNewerVersion = loaded.NewerSchema;
+                LoadFailedPreservingFile = loaded.ParseFailed;
                 _dataVersion++;
                 _dataVersionAtLoad = _dataVersion;
+            }
+
+            Log.Info($"SettingsManager: Loaded {_data.MonitorProfiles.Count} monitor profiles.");
+            if (loaded.NewerSchema)
+            {
+                Log.Error(
+                    $"SettingsManager: settings.json uses schema {_data.SchemaVersion}, newer than supported " +
+                    $"schema {CurrentSchemaVersion}; saves are disabled to preserve the newer file.");
+            }
+            if (loaded.MigratedLegacy)
+            {
+                lock (_dataLock) _dataVersion++;
+                Save();
             }
         }
 
@@ -642,8 +560,7 @@ namespace HDRGammaController.Core
                 // Stamp the schema version we are about to write.
                 _data.SchemaVersion = CurrentSchemaVersion;
 
-                var options = CreateJsonOptions();
-                json = JsonSerializer.Serialize(_data, options);
+                json = SettingsPersistence.Serialize(_data);
                 profileCount = _data.MonitorProfiles.Count;
                 snapshotVersion = _dataVersion;
             }
@@ -659,18 +576,13 @@ namespace HDRGammaController.Core
                     {
                         if (snapshotVersion != _dataVersion)
                         {
-                            var options = CreateJsonOptions();
-                            json = JsonSerializer.Serialize(_data, options);
+                            json = SettingsPersistence.Serialize(_data);
                             profileCount = _data.MonitorProfiles.Count;
                             snapshotVersion = _dataVersion;
                         }
                     }
 
-                    Directory.CreateDirectory(AppDataPath);
-                    // Write-then-rename so a crash mid-write can't leave a truncated settings.json.
-                    string tempPath = SettingsFilePath + $".{Guid.NewGuid():N}.tmp";
-                    File.WriteAllText(tempPath, json);
-                    File.Move(tempPath, SettingsFilePath, overwrite: true);
+                    SettingsPersistence.WriteAtomic(SettingsFilePath, json);
                     Log.Info($"SettingsManager: Saved {profileCount} monitor profiles (v{snapshotVersion}).");
                     return true;
                 }
@@ -692,14 +604,7 @@ namespace HDRGammaController.Core
             {
                 lock (_saveLock)
                 {
-                    if (!File.Exists(SettingsFilePath)) return null;
-                    string safeLabel = new string((label ?? "backup")
-                        .Where(c => char.IsLetterOrDigit(c) || c is '-' or '_' or '.').ToArray());
-                    if (safeLabel.Length == 0) safeLabel = "backup";
-                    string backupPath = SettingsFilePath +
-                        $".{safeLabel}-{DateTime.Now:yyyyMMdd-HHmmss}.bak";
-                    File.Copy(SettingsFilePath, backupPath, overwrite: false);
-                    return backupPath;
+                    return SettingsPersistence.TryCreateBackup(SettingsFilePath, label);
                 }
             }
             catch (Exception ex)
@@ -708,14 +613,6 @@ namespace HDRGammaController.Core
                 return null;
             }
         }
-
-        private static JsonSerializerOptions CreateJsonOptions() => new()
-        {
-            WriteIndented = true,
-            // Tolerant on read (unknown enum -> default), JsonStringEnumConverter-compatible
-            // names on write. Shared by Save so round-trips stay symmetric.
-            Converters = { new TolerantJsonStringEnumConverter() }
-        };
 
         public GammaMode? GetProfileForMonitor(string monitorDevicePath)
         {
@@ -1111,38 +1008,7 @@ namespace HDRGammaController.Core
         }
 
         internal static List<GamerProfileRule> NormalizeGamerProfiles(
-            IEnumerable<GamerProfileRule>? profiles)
-        {
-            var normalized = new List<GamerProfileRule>();
-            if (profiles == null) return normalized;
-
-            foreach (var source in profiles)
-            {
-                if (source == null) continue;
-                GamerProfileRule profile = source.Sanitized();
-                if (profile.AppName.Length == 0) continue;
-                if (!GamerExecutableSafety.IsSafeProfileTarget(profile.AppName, profile.DisplayName))
-                {
-                    Log.Info($"SettingsManager: removed unsafe game-profile target '{profile.AppName}' ({profile.DisplayName}).");
-                    continue;
-                }
-
-                int duplicate = normalized.FindIndex(existing =>
-                    existing.AppName.Equals(profile.AppName, StringComparison.OrdinalIgnoreCase));
-                if (duplicate >= 0)
-                {
-                    // Last writer wins. The dashboard edits one canonical row per executable;
-                    // this also makes hand-edited JSON resolve predictably.
-                    normalized[duplicate] = profile;
-                }
-                else
-                {
-                    normalized.Add(profile);
-                }
-            }
-
-            return normalized;
-        }
+            IEnumerable<GamerProfileRule>? profiles) => SettingsNormalization.GamerProfiles(profiles);
 
         /// <summary>
         /// Atomically replaces the recorded native profile only when it still names the
@@ -1187,37 +1053,7 @@ namespace HDRGammaController.Core
         }
 
         internal static List<AppExclusionRule> NormalizeExcludedApps(
-            IEnumerable<AppExclusionRule?>? apps)
-        {
-            var normalized = new List<AppExclusionRule>();
-            if (apps == null) return normalized;
-
-            foreach (var rule in apps)
-            {
-                if (rule == null) continue;
-
-                string appName = AppExclusionRule.NormalizeAppName(rule.AppName);
-                if (appName.Length == 0) continue;
-
-                var duplicate = normalized.FirstOrDefault(existing =>
-                    existing.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase));
-                if (duplicate != null)
-                {
-                    // Preserve the stronger scope if a hand-edited or legacy file contains
-                    // duplicate rules with conflicting values.
-                    duplicate.FullDisable |= rule.FullDisable;
-                    continue;
-                }
-
-                normalized.Add(new AppExclusionRule
-                {
-                    AppName = appName,
-                    FullDisable = rule.FullDisable
-                });
-            }
-
-            return normalized;
-        }
+            IEnumerable<AppExclusionRule?>? apps) => SettingsNormalization.ExcludedApps(apps);
 
         #region Calibration Profile Management
 
@@ -1391,148 +1227,7 @@ namespace HDRGammaController.Core
 
         #endregion
 
-        /// <summary>
-        /// Validates and clamps all settings to safe ranges to prevent malicious/corrupted values.
-        /// </summary>
-        private static void MigrateSettings(SettingsData data)
-        {
-            // Schema 3 introduced Game Lab with a mandatory 10 mel-lx Night Ops ceiling.
-            // Schema 4 makes that governor opt-in. The exact old default can be identified
-            // without disturbing profiles where the user chose another explicit value.
-            if (data.SchemaVersion <= 3 && data.GamerProfiles != null)
-            {
-                foreach (GamerProfileRule profile in data.GamerProfiles)
-                {
-                    if (profile != null &&
-                        profile.NightPolicy == GamerNightPolicy.NightOps &&
-                        Math.Abs(profile.NightOpsMelanopicCeiling - 10.0) < 0.0001)
-                    {
-                        profile.NightOpsMelanopicCeiling = 0.0;
-                    }
-                }
-            }
-        }
-
-        private static void ValidateAndClampSettings(SettingsData data)
-        {
-            if (data == null) return;
-
-            // Null entries, duplicates, paths and extension-less names can all arrive from
-            // hand-edited or legacy settings. Canonicalize them before the foreground hook
-            // starts reading this list.
-            data.ExcludedApps = NormalizeExcludedApps(data.ExcludedApps);
-            data.GamerProfiles = NormalizeGamerProfiles(data.GamerProfiles);
-
-            // Validate monitor profiles
-            foreach (var profile in data.MonitorProfiles.Values)
-            {
-                if (profile == null) continue;
-
-                // Brightness: 10-100%
-                profile.Brightness = ClampFinite(profile.Brightness, 10.0, 100.0, 100.0);
-
-                // Temperature offset: -50 to +50
-                profile.Temperature = ClampFinite(profile.Temperature, -50.0, 50.0, 0.0);
-                profile.TemperatureOffset = ClampFinite(profile.TemperatureOffset, -50.0, 50.0, 0.0);
-
-                // Tint: -50 to +50
-                profile.Tint = ClampFinite(profile.Tint, -50.0, 50.0, 0.0);
-
-                // RGB Gains: 0.5 to 1.5
-                profile.RedGain = ClampFinite(profile.RedGain, 0.5, 1.5, 1.0);
-                profile.GreenGain = ClampFinite(profile.GreenGain, 0.5, 1.5, 1.0);
-                profile.BlueGain = ClampFinite(profile.BlueGain, 0.5, 1.5, 1.0);
-
-                // RGB Offsets: -0.5 to +0.5
-                profile.RedOffset = ClampFinite(profile.RedOffset, -0.5, 0.5, 0.0);
-                profile.GreenOffset = ClampFinite(profile.GreenOffset, -0.5, 0.5, 0.0);
-                profile.BlueOffset = ClampFinite(profile.BlueOffset, -0.5, 0.5, 0.0);
-
-                // Invalid IDs can only originate in hand-edited or corrupted settings. Clear
-                // them before any runtime lookup and before the normalized settings are saved.
-                if (profile.CalibrationProfileId != null &&
-                    !TryGetCalibrationProfilePath(profile.CalibrationProfileId, out _))
-                {
-                    profile.CalibrationProfileId = null;
-                    profile.UseCalibrationForGamma = false;
-                }
-            }
-
-            // Validate night mode settings
-            var nm = data.NightMode;
-            if (nm != null)
-            {
-                // Latitude: -90 to +90
-                if (nm.Latitude.HasValue)
-                    nm.Latitude = ClampFinite(nm.Latitude.Value, -90.0, 90.0, 0.0);
-
-                // Longitude: -180 to +180
-                if (nm.Longitude.HasValue)
-                    nm.Longitude = ClampFinite(nm.Longitude.Value, -180.0, 180.0, 0.0);
-
-                // Temperature: 1900K to 6500K (valid color temperature range)
-                nm.TemperatureKelvin = Math.Clamp(nm.TemperatureKelvin, 1900, 6500);
-
-                // Fade duration: 0 to 120 minutes
-                nm.FadeMinutes = Math.Clamp(nm.FadeMinutes, 0, 120);
-
-                // Respect the user's chosen rendering algorithm on reload, but migrate the
-                // retired Blue reduction mode (and any out-of-range value) to the perceptual
-                // default. Clamp the perceptual intensity to [0,1].
-                if (nm.Algorithm == NightModeAlgorithm.BlueReduction ||
-                    !Enum.IsDefined(typeof(NightModeAlgorithm), nm.Algorithm))
-                {
-                    nm.Algorithm = NightModeAlgorithm.Perceptual;
-                }
-                nm.PerceptualStrength = ClampFinite(nm.PerceptualStrength, 0.0, 1.0, ColorAdjustments.DefaultPerceptualStrength);
-
-                // Validate schedule points
-                if (nm.Schedule != null)
-                {
-                    foreach (var point in nm.Schedule)
-                    {
-                        if (point == null) continue;
-                        // Clamp TargetKelvin to valid range
-                        point.TargetKelvin = Math.Clamp(point.TargetKelvin, 1900, 6500);
-                        // Clamp FadeMinutes to valid range
-                        point.FadeMinutes = Math.Clamp(point.FadeMinutes, 0, 120);
-                        // Clamp OffsetMinutes to reasonable range (-120 to +120)
-                        point.OffsetMinutes = ClampFinite(point.OffsetMinutes, -120.0, 120.0, 0.0);
-                    }
-                }
-            }
-
-            if (data.WindowBounds == null)
-                data.WindowBounds = new Dictionary<string, WindowBoundsData>();
-
-            foreach (var key in data.WindowBounds.Keys.ToList())
-            {
-                var bounds = data.WindowBounds[key];
-                if (bounds == null ||
-                    !double.IsFinite(bounds.Left) ||
-                    !double.IsFinite(bounds.Top) ||
-                    !double.IsFinite(bounds.Width) ||
-                    !double.IsFinite(bounds.Height) ||
-                    bounds.Width < 320 ||
-                    bounds.Height < 240)
-                {
-                    data.WindowBounds.Remove(key);
-                }
-            }
-
-            if (data.UiSectionExpanded == null)
-                data.UiSectionExpanded = new Dictionary<string, bool>();
-            foreach (string key in data.UiSectionExpanded.Keys.ToList())
-            {
-                if (string.IsNullOrWhiteSpace(key) || key.Length > 80)
-                    data.UiSectionExpanded.Remove(key);
-            }
-        }
-
-        private static double ClampFinite(double value, double min, double max, double fallback) =>
-            double.IsFinite(value) ? Math.Clamp(value, min, max) : fallback;
-
-        private class SettingsData
+        internal class SettingsData
         {
             /// <summary>
             /// On-disk schema version (see <see cref="CurrentSchemaVersion"/>). Absent/0 in
@@ -1556,7 +1251,7 @@ namespace HDRGammaController.Core
             public Dictionary<string, bool> UiSectionExpanded { get; set; } = new Dictionary<string, bool>();
         }
 
-        private class LegacySettingsData
+        internal class LegacySettingsData
         {
             public Dictionary<string, MonitorProfileData> MonitorProfiles { get; set; } = new Dictionary<string, MonitorProfileData>();
             public NightModeSettingsData NightMode { get; set; } = new NightModeSettingsData();
