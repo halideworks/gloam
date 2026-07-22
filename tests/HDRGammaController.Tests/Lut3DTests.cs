@@ -1068,7 +1068,7 @@ namespace HDRGammaController.Tests
                 foreach (var line in System.IO.File.ReadAllLines(tempPath))
                 {
                     string trimmed = line.Trim();
-                    if (trimmed.Length == 0 || trimmed.StartsWith("#") ||
+                    if (trimmed.Length == 0 || trimmed.StartsWith('#') ||
                         char.IsLetter(trimmed[0]))
                         continue;
                     dataLines.Add(trimmed);

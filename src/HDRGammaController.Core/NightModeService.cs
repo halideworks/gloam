@@ -747,6 +747,7 @@ namespace HDRGammaController.Core
                 _timer.Stop();
                 _timer.Dispose();
             }
+            GC.SuppressFinalize(this);
         }
     }
 }

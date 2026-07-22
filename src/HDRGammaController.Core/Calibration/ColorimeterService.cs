@@ -238,7 +238,7 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public void SetDisplayIndex(int index)
         {
-            if (index < 1) throw new ArgumentOutOfRangeException(nameof(index));
+            ArgumentOutOfRangeException.ThrowIfLessThan(index, 1);
             _displayIndex = index;
         }
 
@@ -857,6 +857,7 @@ namespace HDRGammaController.Core.Calibration
                     }
                 });
             }
+            GC.SuppressFinalize(this);
         }
     }
 

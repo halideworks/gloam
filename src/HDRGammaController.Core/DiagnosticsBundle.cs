@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
@@ -26,6 +27,9 @@ namespace HDRGammaController.Core
         {
             WriteIndented = true
         };
+
+        private static readonly SearchValues<char> CsvEscapeCharacters =
+            SearchValues.Create(",\"\r\n");
 
         private static readonly Regex MonitorIdentifierRegex = new(
             @"\\\\\?\\DISPLAY#[^\s,""'<>,]+|MONITOR\\[^\s,""'<>,]+|DISPLAY#[^\s,""'<>,]+",
@@ -493,7 +497,7 @@ namespace HDRGammaController.Core
             };
 
             text = SanitizeText(text);
-            return text.IndexOfAny(new[] { ',', '"', '\r', '\n' }) >= 0
+            return text.AsSpan().IndexOfAny(CsvEscapeCharacters) >= 0
                 ? $"\"{text.Replace("\"", "\"\"")}\""
                 : text;
         }

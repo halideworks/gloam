@@ -86,6 +86,20 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void Load_OversizedSettingsFile_IsPreservedWithoutParsing()
+        {
+            using (var stream = new FileStream(SettingsPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                stream.SetLength(SettingsManager.MaxSettingsFileBytes + 1);
+
+            var sm = new SettingsManager();
+
+            Assert.True(sm.LoadFailedPreservingFile);
+            Assert.Equal(SettingsManager.MaxSettingsFileBytes + 1, new FileInfo(SettingsPath).Length);
+            Assert.False(sm.Save());
+            Assert.Equal(SettingsManager.MaxSettingsFileBytes + 1, new FileInfo(SettingsPath).Length);
+        }
+
+        [Fact]
         public void Load_ParseFailure_SaveResumesAfterRealChange()
         {
             File.WriteAllText(SettingsPath, "{ this is not valid json !!!");

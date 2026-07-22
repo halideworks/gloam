@@ -136,8 +136,7 @@ namespace HDRGammaController.Services
 
         private static byte[] ComputeHash(byte[] data)
         {
-            using var sha256 = SHA256.Create();
-            return sha256.ComputeHash(data);
+            return SHA256.HashData(data);
         }
 
         private static byte[] ComputeFileHash(string filePath)

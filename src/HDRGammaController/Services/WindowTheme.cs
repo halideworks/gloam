@@ -49,7 +49,7 @@ namespace HDRGammaController.Services
             // the fallback covers older builds, and either way it's purely cosmetic.
             if (DwmSetWindowAttribute(hwnd, DwmwaUseImmersiveDarkMode, ref enabled, sizeof(int)) != 0)
             {
-                DwmSetWindowAttribute(hwnd, DwmwaUseImmersiveDarkModePre20H1, ref enabled, sizeof(int));
+                _ = DwmSetWindowAttribute(hwnd, DwmwaUseImmersiveDarkModePre20H1, ref enabled, sizeof(int));
             }
         }
 
@@ -75,8 +75,9 @@ namespace HDRGammaController.Services
         {
             if (hwnd == IntPtr.Zero) return;
             int on = 1;
-            DwmSetWindowAttribute(hwnd, DwmwaExcludedFromPeek, ref on, sizeof(int));
-            DwmSetWindowAttribute(hwnd, DwmwaDisallowPeek, ref on, sizeof(int));
+            // Best effort: unsupported DWM attributes only affect cosmetics/Peek behavior.
+            _ = DwmSetWindowAttribute(hwnd, DwmwaExcludedFromPeek, ref on, sizeof(int));
+            _ = DwmSetWindowAttribute(hwnd, DwmwaDisallowPeek, ref on, sizeof(int));
         }
     }
 }

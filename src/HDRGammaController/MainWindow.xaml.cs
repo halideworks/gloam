@@ -9,6 +9,9 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace HDRGammaController
 {
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design", "CA1001:Types that own disposable fields should be disposable",
+        Justification = "WPF owns the window lifecycle; Cleanup disposes window-bound resources on close and application exit.")]
     public partial class MainWindow : Window
     {
         private HotkeyManager? _hotkeyManager;

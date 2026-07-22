@@ -113,6 +113,7 @@ namespace HDRGammaController.Core
             _rampGuard.Stop();
             _rampGuard.Dispose();
             _coalescer.Dispose();
+            GC.SuppressFinalize(this);
         }
 
         /// <summary>

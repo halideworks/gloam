@@ -175,6 +175,44 @@ namespace HDRGammaController.Tests
                 () => MeasurementCsvImporter.Parse(new StringReader(string.Empty)));
         }
 
+        [Fact]
+        public void Parse_UnterminatedQuotedField_Throws()
+        {
+            var ex = Assert.Throws<InvalidDataException>(() =>
+                MeasurementCsvImporter.Parse(new StringReader("\"unterminated")));
+
+            Assert.Contains("quoted field", ex.Message);
+        }
+
+        [Fact]
+        public void Parse_ExplicitNonFiniteNumber_Throws()
+        {
+            string csv = MeasurementCsvExporter.BuildCsv("r", "native", new[]
+            {
+                Measurement(0, "White", PatchCategory.Grayscale, 1, 1, 1, new CieXyz(1, 1, 1))
+            }).Replace(",1,1,1,", ",NaN,1,1,", StringComparison.Ordinal);
+
+            Assert.Throws<InvalidDataException>(() =>
+                MeasurementCsvImporter.Parse(new StringReader(csv)));
+        }
+
+        [Fact]
+        public void Load_OversizedFile_ThrowsBeforeParsing()
+        {
+            string path = Path.Combine(Path.GetTempPath(), $"gloam-csv-oversized-{Guid.NewGuid():N}.csv");
+            try
+            {
+                using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                    stream.SetLength(MeasurementCsvImporter.MaxFileBytes + 1);
+
+                Assert.Throws<InvalidDataException>(() => MeasurementCsvImporter.Load(path));
+            }
+            finally
+            {
+                try { File.Delete(path); } catch { }
+            }
+        }
+
         private static MeasurementResult Measurement(
             int patchIndex,
             string name,

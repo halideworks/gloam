@@ -149,12 +149,12 @@ namespace HDRGammaController.Core.Calibration
         /// <summary>
         /// Downloads and extracts ArgyllCMS binaries to LocalApplicationData.
         /// </summary>
-        /// <param name="cancellationToken">Cancellation token.</param>
         /// <param name="progress">Optional progress reporter (0-100).</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
         /// <returns>True if download and extraction succeeded.</returns>
         public static async Task<bool> DownloadAsync(
-            CancellationToken cancellationToken = default,
-            IProgress<int>? progress = null)
+            IProgress<int>? progress = null,
+            CancellationToken cancellationToken = default)
         {
             string? tempDir = null;
             string? stagingDir = null;
@@ -268,7 +268,7 @@ namespace HDRGammaController.Core.Calibration
                                 $"Archive entry '{entry.FullName}' resolves outside the install directory.");
                         }
 
-                        if (entry.FullName.EndsWith("/") || entry.FullName.EndsWith("\\"))
+                        if (entry.FullName.EndsWith('/') || entry.FullName.EndsWith('\\'))
                         {
                             // Directory
                             Directory.CreateDirectory(destPath);

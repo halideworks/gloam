@@ -31,20 +31,32 @@ namespace HDRGammaController.Core
     /// </summary>
     public sealed class LatestValueCoalescer<TKey, TValue> : IDisposable where TKey : notnull
     {
-        private sealed class Slot
+        private sealed class Slot : IDisposable
         {
             public readonly SemaphoreSlim Gate = new SemaphoreSlim(1, 1);
             public TValue? Pending;
             public bool HasPending;
             public CancellationTokenSource? ActiveCts;
+            public bool RunnerActive;
             // TickCount64 of the last completed work invocation for this key (0 = never).
             // Only the single active runner reads/writes it, so no extra synchronization.
             public long LastWorkTicks;
+
+            private int _disposed;
+
+            public void Dispose()
+            {
+                if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+                ActiveCts?.Dispose();
+                ActiveCts = null;
+                Gate.Dispose();
+            }
         }
 
         private readonly ConcurrentDictionary<TKey, Slot> _slots = new();
         private readonly Action<TKey, TValue, CancellationToken> _work;
         private readonly int _minIntervalMs;
+        private readonly object _lifetimeLock = new();
         private int _disposed;
 
         /// <param name="minIntervalMs">
@@ -73,9 +85,13 @@ namespace HDRGammaController.Core
         /// <summary>Submit a value for the given key. Returns immediately.</summary>
         public void Submit(TKey key, TValue value)
         {
-            if (Volatile.Read(ref _disposed) != 0) return;
+            Slot slot;
+            lock (_lifetimeLock)
+            {
+                if (Volatile.Read(ref _disposed) != 0) return;
+                slot = _slots.GetOrAdd(key, _ => new Slot());
+            }
 
-            var slot = _slots.GetOrAdd(key, _ => new Slot());
             lock (slot)
             {
                 if (Volatile.Read(ref _disposed) != 0) return;
@@ -93,12 +109,16 @@ namespace HDRGammaController.Core
         /// </summary>
         public void Cancel(TKey key)
         {
-            if (!_slots.TryGetValue(key, out var slot)) return;
-            lock (slot)
+            lock (_lifetimeLock)
             {
-                slot.Pending = default;
-                slot.HasPending = false;
-                slot.ActiveCts?.Cancel();
+                if (Volatile.Read(ref _disposed) != 0 || !_slots.TryGetValue(key, out var slot))
+                    return;
+                lock (slot)
+                {
+                    slot.Pending = default;
+                    slot.HasPending = false;
+                    slot.ActiveCts?.Cancel();
+                }
             }
         }
 
@@ -108,20 +128,15 @@ namespace HDRGammaController.Core
         /// </summary>
         public bool WaitForIdle(TKey key, TimeSpan timeout)
         {
+            if (Volatile.Read(ref _disposed) != 0) return true;
             if (!_slots.TryGetValue(key, out var slot)) return true;
             var deadline = DateTime.UtcNow + timeout;
             while (DateTime.UtcNow < deadline)
             {
-                if (slot.Gate.Wait(0))
+                if (Volatile.Read(ref _disposed) != 0) return true;
+                lock (slot)
                 {
-                    try
-                    {
-                        lock (slot)
-                        {
-                            if (!slot.HasPending) return true;
-                        }
-                    }
-                    finally { slot.Gate.Release(); }
+                    if (!slot.RunnerActive && !slot.HasPending) return true;
                 }
                 Thread.Sleep(1);
             }
@@ -130,9 +145,15 @@ namespace HDRGammaController.Core
 
         private void TryStartRunner(TKey key, Slot slot)
         {
-            if (Volatile.Read(ref _disposed) != 0) return;
-
-            if (!slot.Gate.Wait(0)) return;
+            // Keep the disposal boundary closed across the state check and gate acquire.
+            // Otherwise Dispose could release an idle slot's semaphore between those two
+            // operations and a racing Submit would call Wait on a disposed semaphore.
+            lock (_lifetimeLock)
+            {
+                if (Volatile.Read(ref _disposed) != 0) return;
+                if (!slot.Gate.Wait(0)) return;
+                lock (slot) { slot.RunnerActive = true; }
+            }
             _ = Task.Run(() =>
             {
                 try
@@ -141,15 +162,34 @@ namespace HDRGammaController.Core
                 }
                 finally
                 {
-                    slot.Gate.Release();
+                    // Dispose owns each per-key semaphore. If shutdown raced this runner,
+                    // leave the gate acquired and release its resources here once work has
+                    // stopped. Idle slots are disposed directly by Dispose() below.
+                    bool disposed;
+                    lock (_lifetimeLock)
+                    {
+                        disposed = Volatile.Read(ref _disposed) != 0;
+                        if (!disposed)
+                        {
+                            lock (slot) { slot.RunnerActive = false; }
+                            slot.Gate.Release();
+                        }
+                    }
 
-                    // Race recovery: a producer whose Submit landed between our last
-                    // null-check and the release above would have seen the gate held and
-                    // bailed out of its own TryStartRunner. Detect that case here and
-                    // re-kick ourselves — otherwise the pending update is orphaned.
-                    bool stillPending;
-                    lock (slot) { stillPending = slot.HasPending; }
-                    if (stillPending && Volatile.Read(ref _disposed) == 0) TryStartRunner(key, slot);
+                    if (disposed)
+                    {
+                        slot.Dispose();
+                    }
+                    else
+                    {
+                        // Race recovery: a producer whose Submit landed between our last
+                        // null-check and the release above would have seen the gate held and
+                        // bailed out of its own TryStartRunner. Detect that case here and
+                        // re-kick ourselves — otherwise the pending update is orphaned.
+                        bool stillPending;
+                        lock (slot) { stillPending = slot.HasPending; }
+                        if (stillPending && Volatile.Read(ref _disposed) == 0) TryStartRunner(key, slot);
+                    }
                 }
             });
         }
@@ -196,12 +236,15 @@ namespace HDRGammaController.Core
                 }
 
                 try { _work(key, value, workCts.Token); }
-                catch
+                catch (OperationCanceledException) when (workCts.IsCancellationRequested)
                 {
-                    // Swallowing is deliberate: the coalescer is a dispatcher, not an
-                    // error handler. Work callbacks are expected to handle their own
-                    // failure modes. An unhandled exception here would orphan the gate
-                    // via finally, but we'd prefer not to tear down the runner entirely.
+                    // Replacement/disposal cancellation is an expected coalescing outcome.
+                }
+                catch (Exception ex)
+                {
+                    // Keep the runner alive so a bad value does not orphan future work, but
+                    // retain evidence instead of silently hiding callback defects.
+                    Log.Error($"LatestValueCoalescer: work callback failed: {ex.Message}");
                 }
                 finally
                 {
@@ -220,17 +263,31 @@ namespace HDRGammaController.Core
 
         public void Dispose()
         {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-
-            foreach (var slot in _slots.Values)
+            Slot[] slots;
+            lock (_lifetimeLock)
             {
+                if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+                slots = _slots.Values.ToArray();
+                _slots.Clear();
+            }
+
+            foreach (var slot in slots)
+            {
+                bool runnerActive;
                 lock (slot)
                 {
                     slot.Pending = default;
                     slot.HasPending = false;
                     slot.ActiveCts?.Cancel();
+                    runnerActive = slot.RunnerActive;
                 }
+
+                // An active runner owns the gate and disposes the slot from its finally
+                // block after the callback exits. No new runner can start past _disposed.
+                if (!runnerActive)
+                    slot.Dispose();
             }
+            GC.SuppressFinalize(this);
         }
     }
 }

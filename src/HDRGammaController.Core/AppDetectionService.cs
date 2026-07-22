@@ -59,8 +59,10 @@ namespace HDRGammaController.Core
                 IntPtr hwnd = hwndOverride ?? User32.GetForegroundWindow();
                 if (hwnd == IntPtr.Zero) return;
 
-                User32.GetWindowThreadProcessId(hwnd, out uint pid);
-                if (pid == 0) return;
+                // A zero thread ID means the Win32 lookup failed; do not reuse an undefined
+                // process ID or report a stale foreground application.
+                uint threadId = User32.GetWindowThreadProcessId(hwnd, out uint pid);
+                if (threadId == 0 || pid == 0) return;
 
                 string processName = "";
                 string? executablePath = null;

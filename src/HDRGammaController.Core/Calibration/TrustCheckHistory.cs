@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -49,6 +50,9 @@ namespace HDRGammaController.Core.Calibration
         public const double DuvDriftFloor = 0.003;
 
         private static readonly object WriteLock = new();
+
+        private static readonly SearchValues<char> CsvEscapeCharacters =
+            SearchValues.Create(",\"\r\n");
 
         private static readonly JsonSerializerOptions JsonOptions = new()
         {
@@ -183,7 +187,7 @@ namespace HDRGammaController.Core.Calibration
             static string N(double v) => v.ToString("G9", CultureInfo.InvariantCulture);
             static string Csv(string? v) =>
                 string.IsNullOrEmpty(v) ? string.Empty
-                : v.IndexOfAny(new[] { ',', '"', '\r', '\n' }) >= 0 ? $"\"{v.Replace("\"", "\"\"")}\""
+                : v.AsSpan().IndexOfAny(CsvEscapeCharacters) >= 0 ? $"\"{v.Replace("\"", "\"\"")}\""
                 : v;
         }
 

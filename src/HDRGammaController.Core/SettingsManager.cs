@@ -339,6 +339,7 @@ namespace HDRGammaController.Core
         /// old binary can never clobber a newer file.
         /// </summary>
         public const int CurrentSchemaVersion = 4;
+        internal const long MaxSettingsFileBytes = 16L * 1024 * 1024;
 
         // Use LocalApplicationData to avoid Resilio Sync corruption
         private static string AppDataPath => AppPaths.DataDir;
@@ -514,6 +515,8 @@ namespace HDRGammaController.Core
                 fileExists = File.Exists(SettingsFilePath);
                 if (fileExists)
                 {
+                    if (new FileInfo(SettingsFilePath).Length > MaxSettingsFileBytes)
+                        throw new InvalidDataException("settings.json exceeds the size limit.");
                     string json = File.ReadAllText(SettingsFilePath);
                     var options = new JsonSerializerOptions
                     {
@@ -1220,15 +1223,36 @@ namespace HDRGammaController.Core
 
         private static string CalibrationProfilesPath => Path.Combine(AppDataPath, "CalibrationProfiles");
 
+        private static bool TryGetCalibrationProfilePath(string? profileId, out string filePath)
+        {
+            filePath = string.Empty;
+            if (string.IsNullOrWhiteSpace(profileId))
+                return false;
+
+            // Profile IDs are generated GUIDs. Constrain persisted/hand-edited values to the
+            // two formats Gloam has emitted so they can never become rooted paths or contain
+            // directory traversal segments when used as filenames below.
+            if (!Guid.TryParseExact(profileId, "N", out _) &&
+                !Guid.TryParseExact(profileId, "D", out _))
+            {
+                return false;
+            }
+
+            filePath = Path.Combine(CalibrationProfilesPath, profileId + ".json");
+            return true;
+        }
+
         /// <summary>
         /// Saves a calibration profile to disk.
         /// </summary>
         public void SaveCalibrationProfile(DisplayCalibrationProfile profile)
         {
-            if (profile == null) throw new ArgumentNullException(nameof(profile));
+            ArgumentNullException.ThrowIfNull(profile);
+
+            if (!TryGetCalibrationProfilePath(profile.Id, out string filePath))
+                throw new ArgumentException("Calibration profile ID must be a GUID.", nameof(profile));
 
             Directory.CreateDirectory(CalibrationProfilesPath);
-            string filePath = Path.Combine(CalibrationProfilesPath, $"{profile.Id}.json");
             profile.SaveToFile(filePath);
             Log.Info($"SettingsManager: Saved calibration profile '{profile.Name}' to {filePath}");
         }
@@ -1238,9 +1262,12 @@ namespace HDRGammaController.Core
         /// </summary>
         public DisplayCalibrationProfile? LoadCalibrationProfile(string profileId)
         {
-            if (string.IsNullOrEmpty(profileId)) return null;
+            if (!TryGetCalibrationProfilePath(profileId, out string filePath))
+            {
+                Log.Info("SettingsManager: Ignoring invalid calibration profile ID.");
+                return null;
+            }
 
-            string filePath = Path.Combine(CalibrationProfilesPath, $"{profileId}.json");
             if (!File.Exists(filePath))
             {
                 Log.Info($"SettingsManager: Calibration profile not found: {filePath}");
@@ -1312,9 +1339,12 @@ namespace HDRGammaController.Core
         /// </summary>
         public bool DeleteCalibrationProfile(string profileId)
         {
-            if (string.IsNullOrEmpty(profileId)) return false;
+            if (!TryGetCalibrationProfilePath(profileId, out string filePath))
+            {
+                Log.Info("SettingsManager: Refusing to delete an invalid calibration profile ID.");
+                return false;
+            }
 
-            string filePath = Path.Combine(CalibrationProfilesPath, $"{profileId}.json");
             if (!File.Exists(filePath))
                 return false;
 
@@ -1417,6 +1447,15 @@ namespace HDRGammaController.Core
                 profile.RedOffset = ClampFinite(profile.RedOffset, -0.5, 0.5, 0.0);
                 profile.GreenOffset = ClampFinite(profile.GreenOffset, -0.5, 0.5, 0.0);
                 profile.BlueOffset = ClampFinite(profile.BlueOffset, -0.5, 0.5, 0.0);
+
+                // Invalid IDs can only originate in hand-edited or corrupted settings. Clear
+                // them before any runtime lookup and before the normalized settings are saved.
+                if (profile.CalibrationProfileId != null &&
+                    !TryGetCalibrationProfilePath(profile.CalibrationProfileId, out _))
+                {
+                    profile.CalibrationProfileId = null;
+                    profile.UseCalibrationForGamma = false;
+                }
             }
 
             // Validate night mode settings

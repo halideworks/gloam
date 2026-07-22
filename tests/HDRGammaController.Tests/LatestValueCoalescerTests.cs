@@ -290,5 +290,65 @@ namespace HDRGammaController.Tests
             Thread.Sleep(50);
             Assert.Equal(0, invocations);
         }
+
+        [Fact]
+        public void Dispose_CancelsActiveWorkAndReleasesSlotResourcesAfterExit()
+        {
+            using var started = new ManualResetEventSlim();
+            using var cancelled = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            using var completed = new ManualResetEventSlim();
+            var c = new LatestValueCoalescer<string, int>((_, _, token) =>
+            {
+                started.Set();
+                while (!release.IsSet)
+                {
+                    if (token.IsCancellationRequested)
+                        cancelled.Set();
+                    Thread.Sleep(1);
+                }
+                completed.Set();
+            });
+
+            c.Submit("k", 1);
+            Assert.True(started.Wait(TimeSpan.FromSeconds(2)));
+
+            c.Dispose();
+
+            Assert.True(cancelled.Wait(TimeSpan.FromSeconds(2)));
+            release.Set();
+            Assert.True(completed.Wait(TimeSpan.FromSeconds(2)));
+            c.Dispose(); // Idempotent after the active runner has released its slot.
+        }
+
+        [Fact]
+        public async Task SubmitAndWaitForIdle_CanRaceDisposeWithoutThrowing()
+        {
+            for (int attempt = 0; attempt < 50; attempt++)
+            {
+                var coalescer = new LatestValueCoalescer<string, int>((_, _) => { });
+                using var start = new ManualResetEventSlim(false);
+
+                Task submit = Task.Run(() =>
+                {
+                    start.Wait();
+                    for (int i = 0; i < 100; i++)
+                        coalescer.Submit("monitor-a", i);
+                });
+                Task wait = Task.Run(() =>
+                {
+                    start.Wait();
+                    _ = coalescer.WaitForIdle("monitor-a", TimeSpan.FromMilliseconds(20));
+                });
+                Task dispose = Task.Run(() =>
+                {
+                    start.Wait();
+                    coalescer.Dispose();
+                });
+
+                start.Set();
+                await Task.WhenAll(submit, wait, dispose);
+            }
+        }
     }
 }

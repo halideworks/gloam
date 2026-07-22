@@ -11,6 +11,9 @@ namespace HDRGammaController
     /// <summary>
     /// Styled dialog for downloading ArgyllCMS with progress feedback.
     /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design", "CA1001:Types that own disposable fields should be disposable",
+        Justification = "WPF owns the window lifecycle; OnClosed cancels and disposes the token source.")]
     public partial class ArgyllDownloadDialog : Window
     {
         private CancellationTokenSource? _cts;
@@ -71,7 +74,7 @@ namespace HDRGammaController
                     });
                 });
 
-                await ArgyllDownloader.DownloadAsync(_cts.Token, progress);
+                await ArgyllDownloader.DownloadAsync(progress, _cts.Token);
                 _downloadSucceeded = true;
 
                 // Show success

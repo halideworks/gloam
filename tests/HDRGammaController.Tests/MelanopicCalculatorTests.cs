@@ -236,6 +236,7 @@ namespace HDRGammaController.Tests
         {
             MelanopicDoseStore.DirectoryOverride = null;
             try { Directory.Delete(_dir, recursive: true); } catch { }
+            GC.SuppressFinalize(this);
         }
 
         private static MelanopicDoseSample At(DateTime utc, double edi, string monitor = "mon-1") => new()

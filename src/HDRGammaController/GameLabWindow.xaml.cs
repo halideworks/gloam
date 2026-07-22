@@ -12,6 +12,9 @@ namespace HDRGammaController
     /// ScrollViewer: large libraries and scan results virtualize inside their own fixed
     /// workspaces, while only the selected profile owns a live editor tree.
     /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design", "CA1001:Types that own disposable fields should be disposable",
+        Justification = "WPF owns the window lifecycle; the Closed handler disposes the view model.")]
     public partial class GameLabWindow : Window
     {
         private readonly DashboardViewModel _viewModel;

@@ -13,6 +13,9 @@ namespace HDRGammaController
     /// UserControl (not yet MVVM) to the view model. Everything else is in
     /// DashboardViewModel.
     /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design", "CA1001:Types that own disposable fields should be disposable",
+        Justification = "WPF owns the window lifecycle; the Closed handler stops the timer and disposes the view model.")]
     public partial class DashboardWindow : Window
     {
         private readonly DashboardViewModel _viewModel;

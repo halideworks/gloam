@@ -17,6 +17,20 @@ namespace HDRGammaController.Core.Calibration
     /// </remarks>
     public static class ColorMath
     {
+        private static readonly double[,] BradfordMatrix =
+        {
+            {  0.8951000,  0.2664000, -0.1614000 },
+            { -0.7502000,  1.7135000,  0.0367000 },
+            {  0.0389000, -0.0685000,  1.0296000 }
+        };
+
+        private static readonly double[,] BradfordInverseMatrix =
+        {
+            {  0.9869929, -0.1470543,  0.1599627 },
+            {  0.4323053,  0.5183603,  0.0492912 },
+            { -0.0085287,  0.0400428,  0.9684867 }
+        };
+
         #region Constants
 
         /// <summary>
@@ -162,49 +176,31 @@ namespace HDRGammaController.Core.Calibration
             sourceWhite = SafeReferenceWhite(sourceWhite);
             destWhite = SafeReferenceWhite(destWhite);
 
-            // Bradford cone response matrix
-            // Transforms XYZ to "sharpened" cone responses (LMS-like)
-            double[,] mBradford = {
-                {  0.8951000,  0.2664000, -0.1614000 },
-                { -0.7502000,  1.7135000,  0.0367000 },
-                {  0.0389000, -0.0685000,  1.0296000 }
-            };
-
-            // Inverse Bradford matrix
-            double[,] mBradfordInv = {
-                {  0.9869929, -0.1470543,  0.1599627 },
-                {  0.4323053,  0.5183603,  0.0492912 },
-                { -0.0085287,  0.0400428,  0.9684867 }
-            };
-
             // Transform reference whites to cone responses
-            double[] srcCone = MatrixMultiply(mBradford, new[] { sourceWhite.X, sourceWhite.Y, sourceWhite.Z });
-            double[] dstCone = MatrixMultiply(mBradford, new[] { destWhite.X, destWhite.Y, destWhite.Z });
+            CieXyz srcCone = MatrixMultiply(BradfordMatrix, sourceWhite.X, sourceWhite.Y, sourceWhite.Z);
+            CieXyz dstCone = MatrixMultiply(BradfordMatrix, destWhite.X, destWhite.Y, destWhite.Z);
 
             // Scaling factors
             if (!IsUsableCone(srcCone) || !IsUsableCone(dstCone))
                 return xyz;
 
-            double scaleL = dstCone[0] / srcCone[0];
-            double scaleM = dstCone[1] / srcCone[1];
-            double scaleS = dstCone[2] / srcCone[2];
+            double scaleL = dstCone.X / srcCone.X;
+            double scaleM = dstCone.Y / srcCone.Y;
+            double scaleS = dstCone.Z / srcCone.Z;
             if (!double.IsFinite(scaleL) || !double.IsFinite(scaleM) || !double.IsFinite(scaleS))
                 return xyz;
 
             // Transform input XYZ to cone response
-            double[] inputCone = MatrixMultiply(mBradford, new[] { xyz.X, xyz.Y, xyz.Z });
-
-            // Apply scaling
-            double[] adaptedCone = {
-                inputCone[0] * scaleL,
-                inputCone[1] * scaleM,
-                inputCone[2] * scaleS
-            };
+            CieXyz inputCone = MatrixMultiply(BradfordMatrix, xyz.X, xyz.Y, xyz.Z);
 
             // Transform back to XYZ
-            double[] result = MatrixMultiply(mBradfordInv, adaptedCone);
+            CieXyz result = MatrixMultiply(
+                BradfordInverseMatrix,
+                inputCone.X * scaleL,
+                inputCone.Y * scaleM,
+                inputCone.Z * scaleS);
 
-            return SafeXyz(new CieXyz(result[0], result[1], result[2]));
+            return SafeXyz(result);
         }
 
         /// <summary>
@@ -265,34 +261,30 @@ namespace HDRGammaController.Core.Calibration
             destWhite = SafeReferenceWhite(destWhite);
             degree = double.IsFinite(degree) ? Math.Clamp(degree, 0.0, 1.0) : 1.0;
 
-            double[] srcCone = MatrixMultiply(Cat16Matrix, new[] { sourceWhite.X, sourceWhite.Y, sourceWhite.Z });
-            double[] dstCone = MatrixMultiply(Cat16Matrix, new[] { destWhite.X, destWhite.Y, destWhite.Z });
+            CieXyz srcCone = MatrixMultiply(Cat16Matrix, sourceWhite.X, sourceWhite.Y, sourceWhite.Z);
+            CieXyz dstCone = MatrixMultiply(Cat16Matrix, destWhite.X, destWhite.Y, destWhite.Z);
             if (!IsUsableCone(srcCone) || !IsUsableCone(dstCone))
                 return source;
 
             // Effective adopted white: degree-of-adaptation blend of the destination and
             // source whites in sharpened cone space (see remarks).
-            double[] adoptedCone = {
-                degree * dstCone[0] + (1.0 - degree) * srcCone[0],
-                degree * dstCone[1] + (1.0 - degree) * srcCone[1],
-                degree * dstCone[2] + (1.0 - degree) * srcCone[2]
-            };
+            double adoptedR = degree * dstCone.X + (1.0 - degree) * srcCone.X;
+            double adoptedG = degree * dstCone.Y + (1.0 - degree) * srcCone.Y;
+            double adoptedB = degree * dstCone.Z + (1.0 - degree) * srcCone.Z;
 
-            double scaleR = adoptedCone[0] / srcCone[0];
-            double scaleG = adoptedCone[1] / srcCone[1];
-            double scaleB = adoptedCone[2] / srcCone[2];
+            double scaleR = adoptedR / srcCone.X;
+            double scaleG = adoptedG / srcCone.Y;
+            double scaleB = adoptedB / srcCone.Z;
             if (!double.IsFinite(scaleR) || !double.IsFinite(scaleG) || !double.IsFinite(scaleB))
                 return source;
 
-            double[] inputCone = MatrixMultiply(Cat16Matrix, new[] { source.X, source.Y, source.Z });
-            double[] adaptedCone = {
-                inputCone[0] * scaleR,
-                inputCone[1] * scaleG,
-                inputCone[2] * scaleB
-            };
-
-            double[] result = MatrixMultiply(Cat16InverseMatrix, adaptedCone);
-            return SafeXyz(new CieXyz(result[0], result[1], result[2]));
+            CieXyz inputCone = MatrixMultiply(Cat16Matrix, source.X, source.Y, source.Z);
+            CieXyz result = MatrixMultiply(
+                Cat16InverseMatrix,
+                inputCone.X * scaleR,
+                inputCone.Y * scaleG,
+                inputCone.Z * scaleB);
+            return SafeXyz(result);
         }
 
         #endregion
@@ -349,8 +341,7 @@ namespace HDRGammaController.Core.Calibration
         public static CieXyz LinearSrgbToXyz(LinearRgb rgb)
         {
             rgb = SafeLinearRgb(rgb);
-            double[] result = MatrixMultiply(SrgbToXyzMatrix, new[] { rgb.R, rgb.G, rgb.B });
-            return new CieXyz(result[0], result[1], result[2]);
+            return MatrixMultiply(SrgbToXyzMatrix, rgb.R, rgb.G, rgb.B);
         }
 
         /// <summary>
@@ -359,8 +350,8 @@ namespace HDRGammaController.Core.Calibration
         public static LinearRgb XyzToLinearSrgb(CieXyz xyz)
         {
             xyz = SafeXyz(xyz);
-            double[] result = MatrixMultiply(XyzToSrgbMatrix, new[] { xyz.X, xyz.Y, xyz.Z });
-            return new LinearRgb(result[0], result[1], result[2]);
+            CieXyz result = MatrixMultiply(XyzToSrgbMatrix, xyz.X, xyz.Y, xyz.Z);
+            return new LinearRgb(result.X, result.Y, result.Z);
         }
 
         /// <summary>
@@ -369,8 +360,7 @@ namespace HDRGammaController.Core.Calibration
         public static CieXyz LinearRec2020ToXyz(LinearRgb rgb)
         {
             rgb = SafeLinearRgb(rgb);
-            double[] result = MatrixMultiply(Rec2020ToXyzMatrix, new[] { rgb.R, rgb.G, rgb.B });
-            return new CieXyz(result[0], result[1], result[2]);
+            return MatrixMultiply(Rec2020ToXyzMatrix, rgb.R, rgb.G, rgb.B);
         }
 
         /// <summary>
@@ -379,8 +369,8 @@ namespace HDRGammaController.Core.Calibration
         public static LinearRgb XyzToLinearRec2020(CieXyz xyz)
         {
             xyz = SafeXyz(xyz);
-            double[] result = MatrixMultiply(XyzToRec2020Matrix, new[] { xyz.X, xyz.Y, xyz.Z });
-            return new LinearRgb(result[0], result[1], result[2]);
+            CieXyz result = MatrixMultiply(XyzToRec2020Matrix, xyz.X, xyz.Y, xyz.Z);
+            return new LinearRgb(result.X, result.Y, result.Z);
         }
 
         /// <summary>
@@ -389,8 +379,7 @@ namespace HDRGammaController.Core.Calibration
         public static CieXyz LinearP3D65ToXyz(LinearRgb rgb)
         {
             rgb = SafeLinearRgb(rgb);
-            double[] result = MatrixMultiply(P3D65ToXyzMatrix, new[] { rgb.R, rgb.G, rgb.B });
-            return new CieXyz(result[0], result[1], result[2]);
+            return MatrixMultiply(P3D65ToXyzMatrix, rgb.R, rgb.G, rgb.B);
         }
 
         /// <summary>
@@ -399,8 +388,8 @@ namespace HDRGammaController.Core.Calibration
         public static LinearRgb XyzToLinearP3D65(CieXyz xyz)
         {
             xyz = SafeXyz(xyz);
-            double[] result = MatrixMultiply(XyzToP3D65Matrix, new[] { xyz.X, xyz.Y, xyz.Z });
-            return new LinearRgb(result[0], result[1], result[2]);
+            CieXyz result = MatrixMultiply(XyzToP3D65Matrix, xyz.X, xyz.Y, xyz.Z);
+            return new LinearRgb(result.X, result.Y, result.Z);
         }
 
         #endregion
@@ -915,17 +904,12 @@ namespace HDRGammaController.Core.Calibration
         }
 
         /// <summary>
-        /// Multiplies a 3x3 matrix by a 3-element vector.
+        /// Multiplies a 3x3 matrix by a 3-element vector without heap allocation.
         /// </summary>
-        private static double[] MatrixMultiply(double[,] m, double[] v)
-        {
-            return new[]
-            {
-                m[0, 0] * v[0] + m[0, 1] * v[1] + m[0, 2] * v[2],
-                m[1, 0] * v[0] + m[1, 1] * v[1] + m[1, 2] * v[2],
-                m[2, 0] * v[0] + m[2, 1] * v[1] + m[2, 2] * v[2]
-            };
-        }
+        private static CieXyz MatrixMultiply(double[,] m, double x, double y, double z) => new(
+            m[0, 0] * x + m[0, 1] * y + m[0, 2] * z,
+            m[1, 0] * x + m[1, 1] * y + m[1, 2] * z,
+            m[2, 0] * x + m[2, 1] * y + m[2, 2] * z);
 
         /// <summary>
         /// Calculates the 3x3 RGB to XYZ matrix for given primaries and white point.
@@ -956,13 +940,13 @@ namespace HDRGammaController.Core.Calibration
 
             // Invert to solve for S (scaling factors)
             double[,] inverse = Invert3x3(primaries);
-            double[] s = MatrixMultiply(inverse, new[] { xyzW.X, xyzW.Y, xyzW.Z });
+            CieXyz s = MatrixMultiply(inverse, xyzW.X, xyzW.Y, xyzW.Z);
 
             // Final matrix = primaries * diag(S)
             return new double[,] {
-                { s[0] * xyzR.X, s[1] * xyzG.X, s[2] * xyzB.X },
-                { s[0] * xyzR.Y, s[1] * xyzG.Y, s[2] * xyzB.Y },
-                { s[0] * xyzR.Z, s[1] * xyzG.Z, s[2] * xyzB.Z }
+                { s.X * xyzR.X, s.Y * xyzG.X, s.Z * xyzB.X },
+                { s.X * xyzR.Y, s.Y * xyzG.Y, s.Z * xyzB.Y },
+                { s.X * xyzR.Z, s.Y * xyzG.Z, s.Z * xyzB.Z }
             };
         }
 
@@ -1154,10 +1138,9 @@ namespace HDRGammaController.Core.Calibration
                 ? white
                 : D65White;
 
-        private static bool IsUsableCone(double[] cone) =>
-            cone.Length == 3 &&
-            double.IsFinite(cone[0]) && double.IsFinite(cone[1]) && double.IsFinite(cone[2]) &&
-            Math.Abs(cone[0]) > 1e-12 && Math.Abs(cone[1]) > 1e-12 && Math.Abs(cone[2]) > 1e-12;
+        private static bool IsUsableCone(CieXyz cone) =>
+            double.IsFinite(cone.X) && double.IsFinite(cone.Y) && double.IsFinite(cone.Z) &&
+            Math.Abs(cone.X) > 1e-12 && Math.Abs(cone.Y) > 1e-12 && Math.Abs(cone.Z) > 1e-12;
 
         private static bool IsPlausibleChromaticity(Chromaticity xy) =>
             double.IsFinite(xy.X) && double.IsFinite(xy.Y) &&

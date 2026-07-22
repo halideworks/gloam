@@ -355,17 +355,13 @@ namespace HDRGammaController.Core.Calibration
             if (fields.Count == 0) return null;
 
             var spectralFields = fields
-                .Select((field, index) => new { field, index })
-                .Where(x => TryParseSpecWavelength(x.field, out _))
+                .Select((field, index) => new { index, Parsed = TryParseSpecWavelength(field, out double nm), Wavelength = nm })
+                .Where(x => x.Parsed)
                 .ToList();
             if (spectralFields.Count < 3) return null;
 
             var wavelengths = spectralFields
-                .Select(x =>
-                {
-                    TryParseSpecWavelength(x.field, out double nm);
-                    return nm;
-                })
+                .Select(x => x.Wavelength)
                 .ToList();
 
             var dataRows = ExtractBlock(lines, "BEGIN_DATA", "END_DATA");

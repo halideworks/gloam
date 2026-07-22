@@ -23,6 +23,12 @@ namespace HDRGammaController.Core.Calibration
     /// </remarks>
     public class CalibrationProfile
     {
+        private static readonly JsonSerializerOptions PersistenceJsonOptions = new()
+        {
+            WriteIndented = true,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        };
+
         #region Identification
 
         /// <summary>
@@ -246,12 +252,6 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public void SaveToFile(string path)
         {
-            var options = new JsonSerializerOptions
-            {
-                WriteIndented = true,
-                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-            };
-
             // Create a serializable version
             var data = new CalibrationProfileData
             {
@@ -280,7 +280,7 @@ namespace HDRGammaController.Core.Calibration
                 SoftwareVersion = SoftwareVersion
             };
 
-            string json = JsonSerializer.Serialize(data, options);
+            string json = JsonSerializer.Serialize(data, PersistenceJsonOptions);
             // Write-then-rename: a crash mid-write can't corrupt an existing profile.
             string tmp = path + ".tmp";
             File.WriteAllText(tmp, json);

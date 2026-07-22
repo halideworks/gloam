@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -20,6 +21,9 @@ namespace HDRGammaController.Core.Calibration
     public static class CcssDatabaseClient
     {
         private const string BaseUrl = "https://colorimetercorrections.displaycal.net/";
+        private const long MaxDatabaseResponseBytes = 32L * 1024 * 1024;
+        private const int MaxQueryCharacters = 200;
+        private const int MaxLocalResultsPerType = 10_000;
 
         private static readonly HttpClient Http = CreateClient();
 
@@ -51,8 +55,12 @@ namespace HDRGammaController.Core.Calibration
         public static async Task<IReadOnlyList<Entry>> SearchAsync(
             string displayQuery, string? type = null, CancellationToken cancellationToken = default)
         {
-            string pattern = string.IsNullOrWhiteSpace(displayQuery) ? "*" : $"*{displayQuery.Trim()}*";
-            var types = type != null ? new[] { type } : new[] { "ccss", "ccmx" };
+            string query = displayQuery?.Trim() ?? string.Empty;
+            if (query.Length > MaxQueryCharacters)
+                throw new ArgumentException($"Display query cannot exceed {MaxQueryCharacters} characters.", nameof(displayQuery));
+
+            string pattern = query.Length == 0 ? "*" : $"*{query}*";
+            var types = GetRequestedTypes(type);
 
             var results = new List<Entry>();
             Exception? lastError = null;
@@ -64,7 +72,16 @@ namespace HDRGammaController.Core.Calibration
                              $"&instrument={Uri.EscapeDataString("*")}&json=1";
                 try
                 {
-                    string body = await Http.GetStringAsync(url, cancellationToken);
+                    using var response = await Http.GetAsync(
+                        url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                    response.EnsureSuccessStatusCode();
+                    if (response.Content.Headers.ContentLength is long contentLength &&
+                        contentLength > MaxDatabaseResponseBytes)
+                    {
+                        throw new InvalidDataException("Corrections database response exceeds the size limit.");
+                    }
+
+                    string body = await ReadBoundedResponseAsync(response.Content, cancellationToken);
                     results.AddRange(Parse(body, t));
                 }
                 catch (OperationCanceledException) { throw; }
@@ -89,16 +106,18 @@ namespace HDRGammaController.Core.Calibration
                 return results;
 
             string query = displayQuery?.Trim() ?? "";
-            var types = type != null ? new[] { type } : new[] { "ccss", "ccmx" };
+            if (query.Length > MaxQueryCharacters)
+                return results;
+            var types = GetRequestedTypes(type);
             foreach (string t in types)
             {
                 string pattern = t.Equals("ccmx", StringComparison.OrdinalIgnoreCase) ? "*.ccmx" : "*.ccss";
-                foreach (string path in Directory.GetFiles(folder, pattern, SearchOption.TopDirectoryOnly))
+                foreach (string path in Directory.EnumerateFiles(folder, pattern, SearchOption.TopDirectoryOnly)
+                             .Take(MaxLocalResultsPerType))
                 {
                     try
                     {
-                        string cgats = File.ReadAllText(path);
-                        if (!CgatsValidator.Validate(cgats, t).IsValid)
+                        if (!TryReadValidCorrection(path, t, out string cgats))
                             continue;
 
                         var entry = ParseLocal(path, cgats, t);
@@ -169,6 +188,61 @@ namespace HDRGammaController.Core.Calibration
             }
         }
 
+        private static string[] GetRequestedTypes(string? type)
+        {
+            if (type == null)
+                return new[] { "ccss", "ccmx" };
+            if (type.Equals("ccss", StringComparison.OrdinalIgnoreCase))
+                return new[] { "ccss" };
+            if (type.Equals("ccmx", StringComparison.OrdinalIgnoreCase))
+                return new[] { "ccmx" };
+            throw new ArgumentException("Correction type must be 'ccss' or 'ccmx'.", nameof(type));
+        }
+
+        private static async Task<string> ReadBoundedResponseAsync(
+            HttpContent content,
+            CancellationToken cancellationToken)
+        {
+            await using Stream input = await content.ReadAsStreamAsync(cancellationToken);
+            using var buffer = new MemoryStream();
+            var chunk = new byte[16 * 1024];
+            long total = 0;
+            int read;
+            while ((read = await input.ReadAsync(chunk.AsMemory(), cancellationToken)) > 0)
+            {
+                total = checked(total + read);
+                if (total > MaxDatabaseResponseBytes)
+                    throw new InvalidDataException("Corrections database response exceeds the size limit.");
+                await buffer.WriteAsync(chunk.AsMemory(0, read), cancellationToken);
+            }
+
+            Encoding encoding = Encoding.UTF8;
+            string? charset = content.Headers.ContentType?.CharSet?.Trim('"');
+            if (!string.IsNullOrWhiteSpace(charset))
+            {
+                try { encoding = Encoding.GetEncoding(charset); }
+                catch (ArgumentException) { /* Malformed charset: JSON defaults to UTF-8. */ }
+            }
+            return encoding.GetString(buffer.GetBuffer(), 0, checked((int)buffer.Length));
+        }
+
+        private static bool TryReadValidCorrection(string path, string type, out string content)
+        {
+            content = string.Empty;
+            try
+            {
+                if (!File.Exists(path) || new FileInfo(path).Length > CgatsValidator.MaxFileBytes)
+                    return false;
+                content = File.ReadAllText(path);
+                return CgatsValidator.Validate(content, type).IsValid;
+            }
+            catch
+            {
+                content = string.Empty;
+                return false;
+            }
+        }
+
         private static Entry ParseLocal(string path, string cgats, string type)
         {
             string GetKeyword(string keyword)
@@ -225,10 +299,13 @@ namespace HDRGammaController.Core.Calibration
         /// validation and is therefore not written to disk.</exception>
         public static string Save(Entry entry, string folder)
         {
+            ArgumentNullException.ThrowIfNull(entry);
+            string type = GetRequestedTypes(entry.Type).Single();
+
             // Validate before touching disk: this content came from a third-party,
             // community-contributed database and is handed verbatim to spotread. A malformed
             // body is never useful and shouldn't be persisted as a "correction".
-            var validation = CgatsValidator.Validate(entry.Cgats, entry.Type);
+            var validation = CgatsValidator.Validate(entry.Cgats, type);
             if (!validation.IsValid)
                 throw new InvalidDataException(
                     $"Correction file for '{entry.Display}' failed validation and was not saved: {validation.Error}");
@@ -244,7 +321,7 @@ namespace HDRGammaController.Core.Calibration
             name = string.Join(" ", name.Split(' ', StringSplitOptions.RemoveEmptyEntries));
             if (name.Length > 80) name = name[..80].Trim();
 
-            string ext = entry.Type.Equals("ccmx", StringComparison.OrdinalIgnoreCase) ? ".ccmx" : ".ccss";
+            string ext = type == "ccmx" ? ".ccmx" : ".ccss";
             string path = Path.Combine(folder, name + ext);
             int n = 2;
             while (File.Exists(path))
@@ -288,18 +365,13 @@ namespace HDRGammaController.Core.Calibration
             var byContent = new Dictionary<string, List<string>>(StringComparer.Ordinal);
             foreach (string pattern in new[] { "*.ccss", "*.ccmx" })
             {
-                foreach (string path in Directory.GetFiles(folder, pattern, SearchOption.TopDirectoryOnly))
+                foreach (string path in Directory.EnumerateFiles(folder, pattern, SearchOption.TopDirectoryOnly)
+                             .Take(MaxLocalResultsPerType))
                 {
-                    string key;
-                    try
-                    {
-                        key = NormalizeCgats(File.ReadAllText(path));
-                    }
-                    catch
-                    {
-                        // Unreadable file: leave it alone rather than risk deleting the wrong copy.
+                    string type = Path.GetExtension(path).TrimStart('.');
+                    if (!TryReadValidCorrection(path, type, out string content))
                         continue;
-                    }
+                    string key = NormalizeCgats(content);
                     if (key.Length == 0) continue; // empty/garbage — not a safe dedup key
                     if (!byContent.TryGetValue(key, out var list))
                         byContent[key] = list = new List<string>();
@@ -331,17 +403,12 @@ namespace HDRGammaController.Core.Calibration
             string ext = entry.Type.Equals("ccmx", StringComparison.OrdinalIgnoreCase) ? ".ccmx" : ".ccss";
             string wanted = NormalizeCgats(entry.Cgats);
 
-            foreach (string path in Directory.GetFiles(folder, "*" + ext, SearchOption.TopDirectoryOnly))
+            foreach (string path in Directory.EnumerateFiles(folder, "*" + ext, SearchOption.TopDirectoryOnly)
+                         .Take(MaxLocalResultsPerType))
             {
-                try
-                {
-                    if (NormalizeCgats(File.ReadAllText(path)) == wanted)
-                        return path;
-                }
-                catch
-                {
-                    // Ignore unreadable files; Save will write a new one if needed.
-                }
+                if (TryReadValidCorrection(path, ext.TrimStart('.'), out string content) &&
+                    NormalizeCgats(content) == wanted)
+                    return path;
             }
 
             return null;

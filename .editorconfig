@@ -33,19 +33,9 @@ dotnet_style_collection_initializer = true:suggestion
 dotnet_style_coalesce_expression = true:suggestion
 dotnet_style_null_propagation = true:suggestion
 
-# Keep the default build signal-bearing. The existing codebase has a large analyzer
-# backlog in interop naming, globalization formatting, and performance suggestions.
-# Directory.Build.props baselines those known codes unless GloamAnalyzerAudit=true.
-dotnet_analyzer_diagnostic.category-Design.severity = none
-dotnet_analyzer_diagnostic.category-Globalization.severity = none
-dotnet_analyzer_diagnostic.category-Interoperability.severity = none
-dotnet_analyzer_diagnostic.category-Maintainability.severity = none
-dotnet_analyzer_diagnostic.category-Naming.severity = none
-dotnet_analyzer_diagnostic.category-Performance.severity = none
-dotnet_analyzer_diagnostic.category-Reliability.severity = none
-dotnet_analyzer_diagnostic.category-Security.severity = none
-dotnet_analyzer_diagnostic.category-Style.severity = none
-dotnet_analyzer_diagnostic.category-Usage.severity = none
+# Keep the default build signal-bearing. Directory.Build.props baselines specific,
+# reviewed legacy diagnostics. Do not suppress whole analyzer categories here: doing so
+# would also hide new security, reliability, and usage findings.
 
 dotnet_diagnostic.CA1416.severity = warning
 dotnet_diagnostic.CA2000.severity = warning
@@ -53,6 +43,14 @@ dotnet_diagnostic.CA2201.severity = warning
 dotnet_diagnostic.CA2213.severity = warning
 dotnet_diagnostic.CA1031.severity = silent
 dotnet_diagnostic.IDE0005.severity = silent
+
+[tests/**/*.cs]
+# Short-lived test doubles and synchronization probes intentionally use process-lifetime
+# cleanup in several synchronous tests. Keep ownership diagnostics active in production.
+dotnet_diagnostic.CA2000.severity = none
+# Cancellation-token tests deliberately decide whether to observe or ignore the callback
+# token at each wait point.
+dotnet_diagnostic.CA2016.severity = none
 
 [*.{csproj,props,targets,xaml,xml,config}]
 indent_style = space

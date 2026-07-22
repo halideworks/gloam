@@ -17,10 +17,10 @@ namespace HDRGammaController.Core
         /// </summary>
         public readonly struct SunResult
         {
-            public readonly TimeSpan Sunrise;
-            public readonly TimeSpan Sunset;
-            public readonly bool IsPolarNight;   // sun never rises above horizon today
-            public readonly bool IsMidnightSun;  // sun never sets below horizon today
+            public TimeSpan Sunrise { get; }
+            public TimeSpan Sunset { get; }
+            public bool IsPolarNight { get; }   // sun never rises above horizon today
+            public bool IsMidnightSun { get; }  // sun never sets below horizon today
 
             public SunResult(TimeSpan sunrise, TimeSpan sunset, bool polarNight = false, bool midnightSun = false)
             {

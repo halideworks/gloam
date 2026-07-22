@@ -51,6 +51,9 @@ namespace HDRGammaController.Core.Calibration
     /// </summary>
     public class DisplayCalibrationProfile
     {
+        internal const long MaxProfileFileBytes = 16L * 1024 * 1024;
+        internal const int MaxProfileCharacters = 8_000_000;
+
         /// <summary>
         /// Profile format version for compatibility checking.
         /// </summary>
@@ -320,6 +323,8 @@ namespace HDRGammaController.Core.Calibration
         {
             if (!File.Exists(path))
                 return null;
+            if (new FileInfo(path).Length > MaxProfileFileBytes)
+                throw new InvalidDataException("Calibration profile exceeds the size limit.");
 
             var json = File.ReadAllText(path);
             return FromJson(json);
@@ -338,6 +343,10 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         public static DisplayCalibrationProfile? FromJson(string json)
         {
+            ArgumentNullException.ThrowIfNull(json);
+            if (json.Length > MaxProfileCharacters)
+                throw new InvalidDataException("Calibration profile exceeds the size limit.");
+
             var raw = JsonSerializer.Deserialize<DisplayCalibrationProfile>(json, JsonOptions);
             if (raw == null)
                 return null;

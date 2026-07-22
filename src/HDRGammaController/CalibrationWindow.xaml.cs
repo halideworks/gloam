@@ -22,6 +22,9 @@ namespace HDRGammaController
     /// Calibration window for displaying color patches and showing measurement progress.
     /// Supports both full-screen and windowed modes with comprehensive progress tracking.
     /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design", "CA1001:Types that own disposable fields should be disposable",
+        Justification = "WPF owns the window lifecycle; Closing and run-finally paths release the renderer and cancellation source.")]
     public partial class CalibrationWindow : Window
     {
         #region Win32 Imports
@@ -1139,7 +1142,8 @@ namespace HDRGammaController
             _isCancelled = false;
             _currentPatchIndex = 0;
             _totalPatches = _orchestrator.TotalPatches;
-            _cancellationTokenSource = new CancellationTokenSource();
+            using var runCancellation = new CancellationTokenSource();
+            _cancellationTokenSource = runCancellation;
             _elapsedTimer.Restart();
 
             // Update initial progress
@@ -1148,10 +1152,12 @@ namespace HDRGammaController
             // Run calibration via orchestrator
             try
             {
-                await RunCalibrationAsync(_cancellationTokenSource.Token);
+                await RunCalibrationAsync(runCancellation.Token);
             }
             finally
             {
+                if (ReferenceEquals(_cancellationTokenSource, runCancellation))
+                    _cancellationTokenSource = null;
                 DisposeHdrWireRenderer();
             }
         }

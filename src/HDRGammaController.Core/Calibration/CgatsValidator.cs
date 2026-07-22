@@ -32,6 +32,9 @@ namespace HDRGammaController.Core.Calibration
     /// </summary>
     public static class CgatsValidator
     {
+        internal const int MaxContentCharacters = 2_000_000;
+        internal const long MaxFileBytes = 4_000_000;
+
         /// <summary>Result of validating a correction-file body.</summary>
         public readonly struct Result
         {
@@ -56,7 +59,7 @@ namespace HDRGammaController.Core.Calibration
 
             // Reject implausibly large bodies up front. A real .ccss is ~5-40 KB; a .ccmx is
             // under 1 KB. A multi-megabyte payload is not a correction file.
-            if (content.Length > 2_000_000)
+            if (content.Length > MaxContentCharacters)
                 return Result.Fail("Correction file is implausibly large.");
 
             // NUL bytes / control chars that don't belong in a text CGATS file — a strong
@@ -85,6 +88,8 @@ namespace HDRGammaController.Core.Calibration
             if (!string.IsNullOrEmpty(expectedType))
             {
                 string t = expectedType.ToLowerInvariant();
+                if (t is not "ccmx" and not "ccss")
+                    return Result.Fail("Expected correction type must be 'ccmx' or 'ccss'.");
                 if (t == "ccmx" && !isCcmx && !isCgats)
                     return Result.Fail($"Correction file is not a .ccmx (header is not CCMX).");
                 if (t == "ccss" && !isCcss && !isCgats)
@@ -121,6 +126,11 @@ namespace HDRGammaController.Core.Calibration
             try
             {
                 if (!File.Exists(path)) return false;
+                if (new FileInfo(path).Length > MaxFileBytes)
+                {
+                    Log.Info($"CgatsValidator: rejected '{path}': file exceeds the size limit.");
+                    return false;
+                }
                 string content = File.ReadAllText(path);
                 var result = Validate(content, expectedType);
                 if (!result.IsValid)

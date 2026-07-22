@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -14,6 +15,9 @@ namespace HDRGammaController.Core.Calibration
     /// </summary>
     public static class MeasurementCsvExporter
     {
+        private static readonly SearchValues<char> CsvEscapeCharacters =
+            SearchValues.Create(",\"\r\n");
+
         public static void Save(
             string path,
             string reportId,
@@ -126,7 +130,7 @@ namespace HDRGammaController.Core.Calibration
                 _ => value.ToString() ?? string.Empty
             };
 
-            return text.IndexOfAny(new[] { ',', '"', '\r', '\n' }) >= 0
+            return text.AsSpan().IndexOfAny(CsvEscapeCharacters) >= 0
                 ? $"\"{text.Replace("\"", "\"\"")}\""
                 : text;
         }

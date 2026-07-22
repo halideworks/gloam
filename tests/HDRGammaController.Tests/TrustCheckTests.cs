@@ -108,6 +108,7 @@ namespace HDRGammaController.Tests
         {
             TrustCheckHistory.TrendDirectoryOverride = null;
             try { Directory.Delete(_dir, recursive: true); } catch { }
+            GC.SuppressFinalize(this);
         }
 
         private static TrustCheckEntry Entry(

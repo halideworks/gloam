@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using HDRGammaController.Core;
 using HDRGammaController.Core.Calibration;
 using Xunit;
@@ -247,6 +248,23 @@ namespace HDRGammaController.Tests
             Assert.False(LutGenerator.CanUseCalibratedLut(loaded));
             Assert.NotNull(loaded.RedToneCurve);
             Assert.True(loaded.RedToneCurve!.SequenceEqual(loaded.RedToneCurve.OrderBy(v => v)));
+        }
+
+        [Fact]
+        public void LoadFromFile_OversizedProfile_ThrowsBeforeParsing()
+        {
+            string path = Path.Combine(Path.GetTempPath(), $"gloam-profile-oversized-{Guid.NewGuid():N}.json");
+            try
+            {
+                using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                    stream.SetLength(DisplayCalibrationProfile.MaxProfileFileBytes + 1);
+
+                Assert.Throws<InvalidDataException>(() => DisplayCalibrationProfile.LoadFromFile(path));
+            }
+            finally
+            {
+                try { File.Delete(path); } catch { }
+            }
         }
 
         private static DisplayCalibrationProfile ValidProfile() => new()

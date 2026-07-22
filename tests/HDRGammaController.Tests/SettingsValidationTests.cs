@@ -566,6 +566,35 @@ namespace HDRGammaController.Tests
         }
 
         [Fact]
+        public void SettingsManager_ProfileIdsCannotEscapeCalibrationDirectory()
+        {
+            string originalData = AppPaths.DataDir;
+            string originalRoaming = AppPaths.RoamingDataDir;
+            string tempDir = CreateTempDirectory();
+            string outsidePath = Path.Combine(tempDir, "outside.json");
+
+            try
+            {
+                AppPaths.UseDataDirectoriesForCurrentProcess(tempDir, Path.Combine(tempDir, "roaming"));
+                File.WriteAllText(outsidePath, "do not touch");
+
+                var settings = new SettingsManager();
+                var profile = ValidCalibrationProfile(@"\\?\DISPLAY#TRAVERSAL#1");
+                profile.Id = @"..\outside";
+
+                Assert.Throws<ArgumentException>(() => settings.SaveCalibrationProfile(profile));
+                Assert.Null(settings.LoadCalibrationProfile(@"..\outside"));
+                Assert.False(settings.DeleteCalibrationProfile(@"..\outside"));
+                Assert.Equal("do not touch", File.ReadAllText(outsidePath));
+            }
+            finally
+            {
+                AppPaths.UseDataDirectoriesForCurrentProcess(originalData, originalRoaming);
+                DeleteDirectory(tempDir);
+            }
+        }
+
+        [Fact]
         public void NightModeSettingsData_RoundTripsManualOverride()
         {
             var data = NightModeSettingsData.FromNightModeSettings(new NightModeSettings

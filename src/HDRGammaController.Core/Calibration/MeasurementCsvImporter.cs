@@ -19,6 +19,11 @@ namespace HDRGammaController.Core.Calibration
     /// </remarks>
     public static class MeasurementCsvImporter
     {
+        internal const long MaxFileBytes = 64L * 1024 * 1024;
+        internal const int MaxRows = 1_000_000;
+        internal const int MaxFieldsPerRow = 256;
+        internal const int MaxFieldCharacters = 1_000_000;
+
         public sealed record ImportedSet(
             string ReportId,
             string Phase,
@@ -28,6 +33,8 @@ namespace HDRGammaController.Core.Calibration
         {
             if (string.IsNullOrWhiteSpace(path))
                 throw new ArgumentException("Input path is required.", nameof(path));
+            if (new FileInfo(path).Length > MaxFileBytes)
+                throw new InvalidDataException("Measurement CSV exceeds the size limit.");
 
             using var reader = new StreamReader(path);
             return Parse(reader);
@@ -140,7 +147,8 @@ namespace HDRGammaController.Core.Calibration
         {
             if (allowEmpty && string.IsNullOrWhiteSpace(text))
                 return double.NaN; // exporter writes empty for non-finite values
-            if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double value))
+            if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double value) &&
+                double.IsFinite(value))
                 return value;
             throw new InvalidDataException(
                 $"Row {rowNumber}: cannot parse '{text}' as number for column '{column}'.");
@@ -150,7 +158,8 @@ namespace HDRGammaController.Core.Calibration
         {
             if (string.IsNullOrWhiteSpace(text))
                 return null;
-            return double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double value)
+            return double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double value) &&
+                   double.IsFinite(value)
                 ? value
                 : null;
         }
@@ -206,10 +215,14 @@ namespace HDRGammaController.Core.Calibration
             var field = new System.Text.StringBuilder();
             bool inQuotes = false;
             bool rowHasContent = false;
+            long charactersRead = 0;
 
             int ch;
             while ((ch = reader.Read()) >= 0)
             {
+                if (++charactersRead > MaxFileBytes)
+                    throw new InvalidDataException("Measurement CSV exceeds the size limit.");
+
                 char c = (char)ch;
                 if (inQuotes)
                 {
@@ -218,7 +231,11 @@ namespace HDRGammaController.Core.Calibration
                         if (reader.Peek() == '"')
                         {
                             reader.Read();
+                            if (++charactersRead > MaxFileBytes)
+                                throw new InvalidDataException("Measurement CSV exceeds the size limit.");
                             field.Append('"');
+                            if (field.Length > MaxFieldCharacters)
+                                throw new InvalidDataException("Measurement CSV contains an oversized field.");
                         }
                         else
                         {
@@ -228,6 +245,8 @@ namespace HDRGammaController.Core.Calibration
                     else
                     {
                         field.Append(c);
+                        if (field.Length > MaxFieldCharacters)
+                            throw new InvalidDataException("Measurement CSV contains an oversized field.");
                     }
                     continue;
                 }
@@ -240,6 +259,8 @@ namespace HDRGammaController.Core.Calibration
                         break;
                     case ',':
                         currentRow.Add(field.ToString());
+                        if (currentRow.Count > MaxFieldsPerRow)
+                            throw new InvalidDataException("Measurement CSV contains too many columns.");
                         field.Clear();
                         rowHasContent = true;
                         break;
@@ -249,7 +270,11 @@ namespace HDRGammaController.Core.Calibration
                         if (rowHasContent || field.Length > 0)
                         {
                             currentRow.Add(field.ToString());
+                            if (currentRow.Count > MaxFieldsPerRow)
+                                throw new InvalidDataException("Measurement CSV contains too many columns.");
                             rows.Add(currentRow);
+                            if (rows.Count > MaxRows)
+                                throw new InvalidDataException("Measurement CSV contains too many rows.");
                             currentRow = new List<string>();
                             field.Clear();
                         }
@@ -257,15 +282,24 @@ namespace HDRGammaController.Core.Calibration
                         break;
                     default:
                         field.Append(c);
+                        if (field.Length > MaxFieldCharacters)
+                            throw new InvalidDataException("Measurement CSV contains an oversized field.");
                         rowHasContent = true;
                         break;
                 }
             }
 
+            if (inQuotes)
+                throw new InvalidDataException("Measurement CSV ends inside a quoted field.");
+
             if (rowHasContent || field.Length > 0 || currentRow.Count > 0)
             {
                 currentRow.Add(field.ToString());
+                if (currentRow.Count > MaxFieldsPerRow)
+                    throw new InvalidDataException("Measurement CSV contains too many columns.");
                 rows.Add(currentRow);
+                if (rows.Count > MaxRows)
+                    throw new InvalidDataException("Measurement CSV contains too many rows.");
             }
 
             return rows;

@@ -194,6 +194,23 @@ END_DATA
         }
 
         [Fact]
+        public void IsValidFile_RejectsOversizedFileBeforeParsing()
+        {
+            string path = Path.Combine(Path.GetTempPath(), $"gloam-oversized-{Guid.NewGuid():N}.ccss");
+            try
+            {
+                using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                    stream.SetLength(CgatsValidator.MaxFileBytes + 1);
+
+                Assert.False(CgatsValidator.IsValidFile(path, "ccss"));
+            }
+            finally
+            {
+                try { File.Delete(path); } catch { }
+            }
+        }
+
+        [Fact]
         public void CgatsKeyword_AlsoAccepted()
         {
             // Some Argyll files begin with the generic CGATS keyword rather than CCMX/CCSS.
@@ -289,6 +306,31 @@ END_DATA
             {
                 try { Directory.Delete(dir, recursive: true); } catch { }
             }
+        }
+
+        [Fact]
+        public void CcssDatabaseClient_ListSaved_RejectsUnknownCorrectionType()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "GloamCcssTests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                Assert.Throws<ArgumentException>(() =>
+                    CcssDatabaseClient.ListSaved(dir, "", "executable"));
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        }
+
+        [Fact]
+        public void Validate_RejectsUnknownExpectedCorrectionType()
+        {
+            var result = CgatsValidator.Validate(ValidCcss, "executable");
+
+            Assert.False(result.IsValid);
+            Assert.Contains("ccmx", result.Error ?? string.Empty, StringComparison.OrdinalIgnoreCase);
         }
     }
 }

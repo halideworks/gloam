@@ -875,10 +875,11 @@ namespace HDRGammaController.ViewModels
                 preferredMonitorDevicePath,
                 reusableColorimeterService);
             var dialogResult = setupWindow.ShowDialog();
+            var selectedColorimeter = setupWindow.ColorimeterService;
 
             if (dialogResult == true &&
                 setupWindow.SelectedTarget != null &&
-                setupWindow.ColorimeterService != null &&
+                selectedColorimeter != null &&
                 setupWindow.SelectedMonitor != null)
             {
                 // Create state manager to handle bypass/restore during calibration
@@ -890,7 +891,7 @@ namespace HDRGammaController.ViewModels
                 var currentSettings = profile?.ToCalibrationSettings();
 
                 var calibrationWindow = new CalibrationWindow(
-                    setupWindow.ColorimeterService,
+                    selectedColorimeter,
                     setupWindow.SelectedTarget,
                     setupWindow.SelectedPreset,
                     stateManager,
@@ -912,14 +913,14 @@ namespace HDRGammaController.ViewModels
                 };
 
                 // Back: reopen the setup dialog after this window finishes closing
-                // (BeginInvoke so the modal setup doesn't block the close).
+                // (BeginInvoke from Closed so the modal setup cannot block or outrun the close).
                 var selectedMonitorPath = setupWindow.SelectedMonitor.MonitorDevicePath;
+                bool colorimeterTransferredBack = false;
+                CalibrationWindow.UiState? transferredUiState = null;
                 calibrationWindow.BackRequested += (s, e) =>
                 {
-                    var uiState = calibrationWindow.CaptureUiState();
-                    var colorimeterService = calibrationWindow.ColorimeterService;
-                    Application.Current.Dispatcher.BeginInvoke(new Action(() =>
-                        OpenCalibration(selectedMonitorPath, uiState, colorimeterService)));
+                    transferredUiState = calibrationWindow.CaptureUiState();
+                    colorimeterTransferredBack = true;
                 };
 
                 // When the calibration window closes, re-assert the correct live gamma through
@@ -928,11 +929,27 @@ namespace HDRGammaController.ViewModels
                 // correction the ramp guard might otherwise keep re-applying.
                 calibrationWindow.Closed += (s, e) =>
                 {
+                    if (colorimeterTransferredBack)
+                    {
+                        Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+                            OpenCalibration(selectedMonitorPath, transferredUiState, selectedColorimeter)));
+                    }
+                    else
+                    {
+                        selectedColorimeter.Dispose();
+                    }
                     _applyService.InvalidateAppliedState();
                     ApplyAll();
                 };
 
                 calibrationWindow.Show();
+            }
+            else
+            {
+                // The setup window owns a newly-created or transferred service until a live
+                // calibration accepts it. Cancelling setup must release the instrument and
+                // any lingering spotread process instead of orphaning the service.
+                selectedColorimeter?.Dispose();
             }
         }
 
@@ -996,6 +1013,7 @@ namespace HDRGammaController.ViewModels
             _applyService.Dispose();
             _nightModeService.Dispose();
             _appDetectionService.Dispose();
+            GC.SuppressFinalize(this);
         }
 
         public void RefreshMonitors()

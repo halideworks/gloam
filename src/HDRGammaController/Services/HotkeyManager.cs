@@ -77,6 +77,7 @@ namespace HDRGammaController.Services
             _registeredIds.Clear();
             if (_source?.TryGetTarget(out var source) == true)
                 source.RemoveHook(WndProc);
+            GC.SuppressFinalize(this);
         }
     }
 }

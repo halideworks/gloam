@@ -1347,6 +1347,7 @@ namespace HDRGammaController.ViewModels
             _bypassPollTimer.Stop();
             _gamerAutoSaveTimer.Stop();
             _runningAppRefreshTimer.Stop();
+            GC.SuppressFinalize(this);
         }
     }
 }

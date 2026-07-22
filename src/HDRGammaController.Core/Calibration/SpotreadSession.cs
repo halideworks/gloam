@@ -40,6 +40,8 @@ namespace HDRGammaController.Core.Calibration
     /// </summary>
     internal sealed class SpotreadSession : IAsyncDisposable
     {
+        private static readonly char[] SpectralValueSeparators = { ',', ' ', '\t' };
+
         // "Result is XYZ: X Y Z, D50 Lab: ..." — we also accept bare "XYZ:" lines some
         // builds emit in non-interactive mode.
         private static readonly Regex XyzPattern = new(
@@ -882,7 +884,7 @@ namespace HDRGammaController.Core.Calibration
         /// </summary>
         private bool AppendSpectralValues(string line)
         {
-            string[] tokens = line.Split(new[] { ',', ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            string[] tokens = line.Split(SpectralValueSeparators, StringSplitOptions.RemoveEmptyEntries);
             if (tokens.Length == 0) return false;
 
             var parsed = new System.Collections.Generic.List<double>(tokens.Length);
