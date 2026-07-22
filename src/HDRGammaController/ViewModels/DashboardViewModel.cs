@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -70,7 +69,6 @@ namespace HDRGammaController.ViewModels
         private const int RefreshThrottleMs = 500;
         private bool _refreshPending;
         private List<MonitorInfo>? _cachedMonitors;
-        private int _runningAppScanGeneration;
         private volatile bool _isDisposed;
         private readonly DispatcherTimer _gamerAutoSaveTimer;
         private readonly DispatcherTimer _runningAppRefreshTimer;
@@ -78,9 +76,7 @@ namespace HDRGammaController.ViewModels
         private bool _savingGamerProfiles;
         private readonly Action _gamerSettingsChangedHandler;
         private readonly Action<string, DateTime> _gamerProfileUsedHandler;
-        private readonly GameDiscoveryService _gameDiscoveryService = new();
-        private CancellationTokenSource? _gameDiscoveryCancellation;
-        private int _gameDiscoveryGeneration;
+        private readonly GameLibraryCoordinator _gameLibrary = new();
 
         public SettingsManager SettingsManager { get; }
 
@@ -675,10 +671,8 @@ namespace HDRGammaController.ViewModels
 
         private async Task LoadRunningAppsAsync(AppExclusionItem item)
         {
-            int generation = Interlocked.Increment(ref _runningAppScanGeneration);
-            RunningAppScan apps = await Task.Run(GetRunningApps);
-            if (_isDisposed || generation != Volatile.Read(ref _runningAppScanGeneration))
-                return;
+            GameLibraryCoordinator.RunningAppScan? apps = await _gameLibrary.RefreshRunningAppsAsync();
+            if (_isDisposed || apps == null) return;
 
             SyncRunningApps(item.RunningApps, apps.AppNames);
             List<string> safeGameApps = apps.AppNames
@@ -796,60 +790,6 @@ namespace HDRGammaController.ViewModels
             }
         }
 
-        private sealed record RunningAppScan(
-            List<string> AppNames,
-            Dictionary<string, string> ExecutablePaths);
-
-        private static RunningAppScan GetRunningApps()
-        {
-            try
-            {
-                var appNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                var executablePaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var process in Process.GetProcesses())
-                {
-                    using (process)
-                    {
-                        try
-                        {
-                            if (process.MainWindowHandle != IntPtr.Zero &&
-                                !string.IsNullOrEmpty(process.MainWindowTitle))
-                            {
-                                string appName = process.ProcessName.ToLowerInvariant() + ".exe";
-                                appNames.Add(appName);
-                                try
-                                {
-                                    string? path = process.MainModule?.FileName;
-                                    if (!string.IsNullOrWhiteSpace(path))
-                                        executablePaths[appName] = Path.GetFullPath(path);
-                                }
-                                catch
-                                {
-                                    // Elevated/protected processes remain available to the
-                                    // night-mode exclusion picker, but cannot be trusted as a
-                                    // path-bound game profile.
-                                }
-                            }
-                        }
-                        catch
-                        {
-                            // Access denied or the process exited during enumeration.
-                        }
-                    }
-                }
-
-                return new RunningAppScan(
-                    appNames.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList(),
-                    executablePaths);
-            }
-            catch
-            {
-                return new RunningAppScan(
-                    new List<string>(),
-                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
-            }
-        }
-
         private void AddExcludedApp(AppExclusionItem? item)
         {
             if (item != null && TryAddExcludedApp(item))
@@ -892,19 +832,13 @@ namespace HDRGammaController.ViewModels
         private async Task ScanForGamesAsync()
         {
             if (GamerMode.IsScanningForGames) return;
-            _gameDiscoveryCancellation?.Cancel();
-            _gameDiscoveryCancellation?.Dispose();
-            var cancellation = new CancellationTokenSource();
-            _gameDiscoveryCancellation = cancellation;
-            int generation = Interlocked.Increment(ref _gameDiscoveryGeneration);
             GamerMode.IsScanningForGames = true;
             GamerMode.DiscoveryStatus = "Checking your launcher libraries…";
             try
             {
                 var progress = new Progress<GameDiscoveryProgress>(update =>
                 {
-                    if (_isDisposed || cancellation.IsCancellationRequested ||
-                        generation != Volatile.Read(ref _gameDiscoveryGeneration)) return;
+                    if (_isDisposed) return;
                     var saved = GamerMode.Profiles
                         .Select(profile => profile.AppName)
                         .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -913,10 +847,7 @@ namespace HDRGammaController.ViewModels
                     GamerMode.DiscoveryStatus =
                         $"Checking {update.Stage} · {GamerMode.DiscoveredGames.Count} new games found{cacheText}";
                 });
-                IReadOnlyList<DiscoveredGame> games = await Task.Run(
-                    () => _gameDiscoveryService.Scan(cancellation.Token, progress),
-                    cancellation.Token);
-                cancellation.Token.ThrowIfCancellationRequested();
+                IReadOnlyList<DiscoveredGame> games = await _gameLibrary.ScanLibrariesAsync(progress);
                 int metadataUpdates = 0;
                 _suppressGamerProfileSave = true;
                 try
@@ -956,7 +887,7 @@ namespace HDRGammaController.ViewModels
             }
             catch (OperationCanceledException)
             {
-                if (!_isDisposed && generation == Volatile.Read(ref _gameDiscoveryGeneration))
+                if (!_isDisposed)
                     GamerMode.DiscoveryStatus = "Game scan stopped.";
             }
             catch (Exception ex)
@@ -966,13 +897,8 @@ namespace HDRGammaController.ViewModels
             }
             finally
             {
-                if (generation == Volatile.Read(ref _gameDiscoveryGeneration))
-                {
+                if (!_isDisposed)
                     GamerMode.IsScanningForGames = false;
-                    if (ReferenceEquals(_gameDiscoveryCancellation, cancellation))
-                        _gameDiscoveryCancellation = null;
-                }
-                cancellation.Dispose();
             }
         }
 
@@ -1099,9 +1025,7 @@ namespace HDRGammaController.ViewModels
 
         private void DismissGameDiscovery()
         {
-            Interlocked.Increment(ref _gameDiscoveryGeneration);
-            _gameDiscoveryCancellation?.Cancel();
-            _gameDiscoveryCancellation = null;
+            _gameLibrary.CancelLibraryScan();
             GamerMode.IsScanningForGames = false;
             GamerMode.DiscoveredGames.Clear();
             GamerMode.DiscoverySearchText = string.Empty;
@@ -1331,13 +1255,9 @@ namespace HDRGammaController.ViewModels
             if (_gamerAutoSaveTimer.IsEnabled)
                 SaveGamerProfiles();
             _isDisposed = true;
-            Interlocked.Increment(ref _gameDiscoveryGeneration);
-            _gameDiscoveryCancellation?.Cancel();
-            _gameDiscoveryCancellation?.Dispose();
-            _gameDiscoveryCancellation = null;
+            _gameLibrary.Dispose();
             if (_gamerApplyService != null && _gamerSessionsChangedHandler != null)
                 _gamerApplyService.GamerSessionsChanged -= _gamerSessionsChangedHandler;
-            Interlocked.Increment(ref _runningAppScanGeneration);
             SettingsManager.GamerSettingsChanged -= _gamerSettingsChangedHandler;
             SettingsManager.GamerProfileUsed -= _gamerProfileUsedHandler;
             GamerMode.Profiles.CollectionChanged -= OnGamerProfilesCollectionChanged;

@@ -46,6 +46,7 @@ namespace HDRGammaController.ViewModels
         private List<MonitorInfo> _activeMonitors = new List<MonitorInfo>();
         private readonly object _activeMonitorsLock = new();
         private readonly GamerModeCoordinator _gamerModeCoordinator;
+        private readonly CalibrationLaunchCoordinator _calibrationLaunchCoordinator;
 
         private Dictionary<string, MonitorInfo> _savedConfigs = new Dictionary<string, MonitorInfo>();
 
@@ -101,6 +102,20 @@ namespace HDRGammaController.ViewModels
                     lock (_activeMonitorsLock) return _activeMonitors.ToList();
                 });
             _gamerModeCoordinator.PolicyChanged += OnGamerPolicyChanged;
+            _calibrationLaunchCoordinator = new CalibrationLaunchCoordinator(
+                _settingsManager,
+                _dispwinRunner,
+                _nightModeService,
+                () =>
+                {
+                    lock (_activeMonitorsLock) return _activeMonitors.ToList();
+                },
+                RefreshMonitors,
+                () =>
+                {
+                    _applyService.InvalidateAppliedState();
+                    ApplyAll();
+                });
 
             _dispwinRunner.DispwinUnavailable += () =>
                 OnUiThread(() =>
@@ -844,114 +859,7 @@ namespace HDRGammaController.ViewModels
         }
 
         private void OpenCalibration()
-            => OpenCalibration(preferredMonitorDevicePath: null, calibrationUiState: null, reusableColorimeterService: null);
-
-        private void OpenCalibration(
-            string? preferredMonitorDevicePath,
-            CalibrationWindow.UiState? calibrationUiState = null,
-            ColorimeterService? reusableColorimeterService = null)
-        {
-            // Only one probe exists: if a calibration flow is already open (setup wizard,
-            // live calibration, or a report window mid-verify), bring it to the front
-            // instead of starting a second flow for another monitor.
-            foreach (Window window in Application.Current.Windows)
-            {
-                bool inUse = window is CalibrationSetupWindow or CalibrationWindow
-                    || (window is CalibrationReportWindow report && report.IsVerifyRunning);
-                if (!inUse) continue;
-
-                Log.Info($"TrayViewModel: calibration already in progress ({window.GetType().Name}); focusing the existing window instead of opening a new flow.");
-                if (window.WindowState == WindowState.Minimized)
-                    window.WindowState = WindowState.Normal;
-                window.Activate();
-                return;
-            }
-
-            List<MonitorInfo> activeMonitors;
-            lock (_activeMonitorsLock) { activeMonitors = _activeMonitors; }
-            var setupWindow = new CalibrationSetupWindow(
-                activeMonitors,
-                _settingsManager,
-                preferredMonitorDevicePath,
-                reusableColorimeterService);
-            var dialogResult = setupWindow.ShowDialog();
-            var selectedColorimeter = setupWindow.ColorimeterService;
-
-            if (dialogResult == true &&
-                setupWindow.SelectedTarget != null &&
-                selectedColorimeter != null &&
-                setupWindow.SelectedMonitor != null)
-            {
-                // Create state manager to handle bypass/restore during calibration
-                var stateManager = new CalibrationStateManager(_dispwinRunner, _nightModeService);
-
-                // Get current settings for the selected monitor
-                var profile = _settingsManager.GetMonitorProfile(setupWindow.SelectedMonitor.MonitorDevicePath);
-                var currentMode = profile?.GammaMode ?? setupWindow.SelectedMonitor.CurrentGamma;
-                var currentSettings = profile?.ToCalibrationSettings();
-
-                var calibrationWindow = new CalibrationWindow(
-                    selectedColorimeter,
-                    setupWindow.SelectedTarget,
-                    setupWindow.SelectedPreset,
-                    stateManager,
-                    setupWindow.SelectedMonitor,
-                    currentMode,
-                    currentSettings,
-                    _settingsManager);
-                WindowBoundsPersistence.CopyBounds(calibrationWindow, setupWindow);
-                calibrationWindow.ApplyUiState(calibrationUiState);
-
-                // Handle calibration completion to refresh our state
-                calibrationWindow.CalibrationCompleted += (s, e) =>
-                {
-                    if (e.Success)
-                    {
-                        // Refresh monitors to pick up any new calibration data
-                        RefreshMonitors();
-                    }
-                };
-
-                // Back: reopen the setup dialog after this window finishes closing
-                // (BeginInvoke from Closed so the modal setup cannot block or outrun the close).
-                var selectedMonitorPath = setupWindow.SelectedMonitor.MonitorDevicePath;
-                bool colorimeterTransferredBack = false;
-                CalibrationWindow.UiState? transferredUiState = null;
-                calibrationWindow.BackRequested += (s, e) =>
-                {
-                    transferredUiState = calibrationWindow.CaptureUiState();
-                    colorimeterTransferredBack = true;
-                };
-
-                // When the calibration window closes, re-assert the correct live gamma through
-                // the apply path. This composes any freshly-installed MHC2 calibration with the
-                // user's gamma mode + night mode, and overwrites any leftover closed-loop
-                // correction the ramp guard might otherwise keep re-applying.
-                calibrationWindow.Closed += (s, e) =>
-                {
-                    if (colorimeterTransferredBack)
-                    {
-                        Application.Current.Dispatcher.BeginInvoke(new Action(() =>
-                            OpenCalibration(selectedMonitorPath, transferredUiState, selectedColorimeter)));
-                    }
-                    else
-                    {
-                        selectedColorimeter.Dispose();
-                    }
-                    _applyService.InvalidateAppliedState();
-                    ApplyAll();
-                };
-
-                calibrationWindow.Show();
-            }
-            else
-            {
-                // The setup window owns a newly-created or transferred service until a live
-                // calibration accepts it. Cancelling setup must release the instrument and
-                // any lingering spotread process instead of orphaning the service.
-                selectedColorimeter?.Dispose();
-            }
-        }
+            => _calibrationLaunchCoordinator.Open();
 
         private void ExportDiagnostics()
         {
