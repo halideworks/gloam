@@ -28,6 +28,82 @@ namespace HDRGammaController.Core.Calibration
             HdrMhc2LutBuilder.Result? HdrLuts = null);
 
         /// <summary>
+        /// The exact gamut-matrix plan the installer will write. Joint HDR refinement uses
+        /// the predicted neutral scale to re-parameterize its tone LUT before submitting the
+        /// matrix and LUT as one atomic candidate; sharing this routine prevents the solver
+        /// and installer from drifting onto subtly different matrix domains.
+        /// </summary>
+        public sealed record GamutMatrixPlan(
+            double[,] AbsoluteMatrix,
+            double[,] ScaledMatrix,
+            double UniformScale,
+            double MaxTargetDrive,
+            double MaxPrimaryDrive,
+            CalibrationTarget MatrixTarget);
+
+        public static GamutMatrixPlan BuildGamutMatrixPlan(
+            DisplayCharacterization characterization,
+            CalibrationTarget target,
+            double[,]? xyzCorrectionOverride = null)
+        {
+            ArgumentNullException.ThrowIfNull(characterization);
+            ArgumentNullException.ThrowIfNull(target);
+
+            // White-point-only mode substitutes the measured panel primaries, so the matrix
+            // carries white correction without remapping the native gamut.
+            var matrixTarget = target;
+            if (target.WhitePointOnly)
+            {
+                matrixTarget = new CalibrationTarget
+                {
+                    Name = target.Name,
+                    RedPrimary = characterization.RedPrimary,
+                    GreenPrimary = characterization.GreenPrimary,
+                    BluePrimary = characterization.BluePrimary,
+                    WhitePoint = target.WhitePoint,
+                    TransferFunction = target.TransferFunction,
+                    Gamma = target.Gamma,
+                    PeakLuminance = target.PeakLuminance,
+                    BlackLevel = target.BlackLevel,
+                    ReferenceWhite = target.ReferenceWhite,
+                };
+            }
+
+            double[,] matrix = Mhc2ProfileBuilder.BuildGamutMatrix(characterization, matrixTarget);
+            if (xyzCorrectionOverride != null)
+            {
+                // M' = D^-1 * F^-1 * T: pre-compensate the residual measured through the
+                // installed chain. BuildGamutMatrix is D^-1 * T.
+                var displayXyzToRgb = ColorMath.Invert3x3(characterization.RgbToXyzMatrix);
+                matrix = ColorMath.MultiplyMatrices(
+                    displayXyzToRgb,
+                    ColorMath.MultiplyMatrices(
+                        ColorMath.Invert3x3(xyzCorrectionOverride),
+                        matrixTarget.RgbToXyzMatrix));
+            }
+
+            var (minPrimaryDrive, maxPrimaryDrive) = GamutReachability.PrimaryDriveExtent(matrix);
+            if (!GamutReachability.IsReachable(maxPrimaryDrive, minPrimaryDrive))
+            {
+                throw new InvalidOperationException(
+                    $"The chosen target ('{target.Name}') needs primaries about {maxPrimaryDrive:P0} of this " +
+                    "display's maximum - i.e. a wider gamut than the panel can physically produce, so the " +
+                    "correction would clip and cast color.\n\nCalibrate to a target the panel can reach - " +
+                    "for an SDR display that's usually \"sRGB (Gamma 2.2)\" or Rec.709. Re-run with that selected.");
+            }
+
+            double maxTargetDrive = MaxTargetDrive(matrix);
+            double uniformScale = Mhc2ProfileBuilder.UniformScale(maxTargetDrive);
+            return new GamutMatrixPlan(
+                matrix,
+                Mhc2ProfileBuilder.ScaleMatrix(matrix, uniformScale),
+                uniformScale,
+                maxTargetDrive,
+                maxPrimaryDrive,
+                matrixTarget);
+        }
+
+        /// <summary>
         /// Chooses the Windows profile backup to preserve before activating a Gloam profile.
         /// Existing backups win; otherwise capture the current default only if it is not
         /// already the app's active calibration.
@@ -169,76 +245,18 @@ namespace HDRGammaController.Core.Calibration
             if (template == null)
                 return new InstallResult(false, "", "No MHC2 template found to base the profile on.");
 
-            // White-point-only mode: substitute the panel's MEASURED primaries for the
-            // target's, so the matrix carries the white correction and nothing else. The
-            // tone LUTs are unaffected. Verification still grades against the full target.
-            var matrixTarget = target;
-            if (target.WhitePointOnly)
-            {
-                matrixTarget = new CalibrationTarget
-                {
-                    Name = target.Name,
-                    RedPrimary = characterization.RedPrimary,
-                    GreenPrimary = characterization.GreenPrimary,
-                    BluePrimary = characterization.BluePrimary,
-                    WhitePoint = target.WhitePoint,
-                    TransferFunction = target.TransferFunction,
-                    Gamma = target.Gamma,
-                    PeakLuminance = target.PeakLuminance,
-                    BlackLevel = target.BlackLevel,
-                    ReferenceWhite = target.ReferenceWhite,
-                };
-            }
-
-            double[,] matrix;
+            GamutMatrixPlan matrixPlan;
             try
             {
-                matrix = Mhc2ProfileBuilder.BuildGamutMatrix(characterization, matrixTarget);
-                if (xyzCorrectionOverride != null)
-                {
-                    // M′ = D⁻¹·F⁻¹·T: pre-compensate the measured XYZ residual so the
-                    // panel lands the references the matrix intended. BuildGamutMatrix is
-                    // D⁻¹·T, so left-compose D⁻¹·F⁻¹·D — equivalently rebuild directly.
-                    var displayXyzToRgb = ColorMath.Invert3x3(characterization.RgbToXyzMatrix);
-                    matrix = ColorMath.MultiplyMatrices(
-                        displayXyzToRgb,
-                        ColorMath.MultiplyMatrices(
-                            ColorMath.Invert3x3(xyzCorrectionOverride),
-                            matrixTarget.RgbToXyzMatrix));
-                }
+                matrixPlan = BuildGamutMatrixPlan(characterization, target, xyzCorrectionOverride);
             }
             catch (Exception ex) { return new InstallResult(false, "", $"Gamut matrix failed: {ex.Message}"); }
-
-            // GAMUT GUARD: block only when the target gamut is wider than the panel can EMIT
-            // (e.g. an sRGB-class display calibrated to Rec.2020). There the matrix has to
-            // synthesize primaries the display can't produce, so a target primary maps to a
-            // display drive value well above full-scale → clipping and a heavy cast (the magenta
-            // we hit). NARROWING a slightly-wide panel to sRGB/Rec.709 is perfectly reachable
-            // (drive values stay <= 1) and must NOT be blocked — that wrongly rejected a good
-            // Gamma-2.4 calibration. Gauge REACH on the PRIMARIES ONLY: the matrix is ABSOLUTE,
-            // so white (1,1,1) drives above 1.0 whenever the panel white differs from the target
-            // white — that is a luminance shift UniformScale absorbs, not unreachable gamut, and
-            // must not trip this reject.
-            // Negative drives are the other unreachable signature: a target primary outside
-            // the panel gamut demands negative light from some channel even when the positive
-            // drives stay under the ceiling.
-            var (minPrimaryDrive, maxPrimaryDrive) = GamutReachability.PrimaryDriveExtent(matrix);
-            if (!GamutReachability.IsReachable(maxPrimaryDrive, minPrimaryDrive))
-                return new InstallResult(false, "",
-                    $"The chosen target ('{target.Name}') needs primaries about {maxPrimaryDrive:P0} of this " +
-                    "display's maximum - i.e. a wider gamut than the panel can physically produce, so the " +
-                    "correction would clip and cast color.\n\nCalibrate to a target the panel can reach - " +
-                    "for an SDR display that's usually \"sRGB (Gamma 2.2)\" or Rec.709. Re-run with that selected.");
-
-            // White-point handling: the matrix is ABSOLUTE (maps content white to the target
-            // white), so on a panel whose white differs some channel needs >1.0 drive for
-            // white. Dim ALL channels uniformly to fit — chromaticities (including the
-            // primaries) stay exact; per-channel compensation here would re-tint them. The
-            // scale uses the FULL drive (primaries AND white) so the white overshoot the guard
-            // ignored is still absorbed here.
-            double maxDrive = MaxTargetDrive(matrix);
-            double uniformScale = Mhc2ProfileBuilder.UniformScale(maxDrive);
-            double[,] scaledMatrix = Mhc2ProfileBuilder.ScaleMatrix(matrix, uniformScale);
+            double[,] matrix = matrixPlan.AbsoluteMatrix;
+            double uniformScale = matrixPlan.UniformScale;
+            double[,] scaledMatrix = matrixPlan.ScaledMatrix;
+            double maxDrive = matrixPlan.MaxTargetDrive;
+            double maxPrimaryDrive = matrixPlan.MaxPrimaryDrive;
+            CalibrationTarget matrixTarget = matrixPlan.MatrixTarget;
 
             // Tone LUTs.
             //  SDR: the caller's signal-domain tone LUTs. When the characterization carries

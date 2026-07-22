@@ -183,6 +183,36 @@ namespace HDRGammaController.Core.Calibration
             return new RefinementResult(damped, null, before, excluded);
         }
 
+        /// <summary>
+        /// Separates color correction from neutral-axis tone correction for the joint HDR
+        /// solver. The fitted residual F may contain a uniform luminance gain because its
+        /// white anchors participate in the unconstrained XYZ least-squares fit. Dividing F
+        /// by its gain on the target white leaves the white chromaticity rotation intact but
+        /// makes Y(F*w) == Y(w), so the PQ LUT alone owns neutral luminance tracking and the
+        /// two corrections cannot double-count the same white error.
+        /// </summary>
+        public static double[,] PreserveNeutralLuminance(double[,] xyzResidual, CieXyz targetWhite)
+        {
+            ArgumentNullException.ThrowIfNull(xyzResidual);
+            if (xyzResidual.GetLength(0) != 3 || xyzResidual.GetLength(1) != 3)
+                throw new ArgumentException("XYZ residual must be a 3x3 matrix.", nameof(xyzResidual));
+            if (!IsPhysical(targetWhite))
+                throw new ArgumentException("Target white must be a finite positive XYZ value.", nameof(targetWhite));
+
+            double mappedY = xyzResidual[1, 0] * targetWhite.X +
+                             xyzResidual[1, 1] * targetWhite.Y +
+                             xyzResidual[1, 2] * targetWhite.Z;
+            double gain = mappedY / targetWhite.Y;
+            if (!double.IsFinite(gain) || gain <= 0.0)
+                throw new InvalidOperationException("Fitted HDR color residual has no physical neutral luminance gain.");
+
+            var normalized = new double[3, 3];
+            for (int row = 0; row < 3; row++)
+                for (int col = 0; col < 3; col++)
+                    normalized[row, col] = xyzResidual[row, col] / gain;
+            return normalized;
+        }
+
         private static bool IsPhysical(CieXyz xyz) =>
             double.IsFinite(xyz.X) && double.IsFinite(xyz.Y) && double.IsFinite(xyz.Z) &&
             xyz.Y > 0 && xyz.X >= 0 && xyz.Z >= 0;

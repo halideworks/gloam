@@ -356,6 +356,66 @@ namespace HDRGammaController.Core.Calibration
         }
 
         /// <summary>
+        /// Re-parameterizes an installed tone LUT for a changed MHC2 matrix neutral scale
+        /// without changing the neutral-axis content-to-output mapping. If content luminance
+        /// d reached the old LUT at PQ^-1(s_old*d), the rebased LUT returns that same value at
+        /// PQ^-1(s_new*d). This is the exact neutral-axis handoff needed when a joint HDR pass
+        /// changes the gamut matrix and tone correction atomically.
+        /// </summary>
+        /// <remarks>
+        /// The operation cannot make an arbitrary matrix+1D-LUT pipeline equivalent for every
+        /// saturated color; that is why the joint loop re-measures colored stimuli after each
+        /// install. It does preserve the modeled white-axis response, stays monotone, and avoids
+        /// throwing away a previously closed-loop-refined tone curve merely because the matrix
+        /// needed a different uniform headroom scale.
+        /// </remarks>
+        public static Result RebaseNeutralScale(Result existing, double newMatrixNeutralScale)
+        {
+            ArgumentNullException.ThrowIfNull(existing);
+            if (!double.IsFinite(newMatrixNeutralScale) ||
+                newMatrixNeutralScale <= 0.0 || newMatrixNeutralScale > 1.0 + 1e-9)
+            {
+                throw new ArgumentOutOfRangeException(nameof(newMatrixNeutralScale),
+                    $"Matrix neutral scale {newMatrixNeutralScale} must be in (0, 1].");
+            }
+            if (existing.LutR is not { Length: >= 2 } ||
+                existing.LutG.Length != existing.LutR.Length ||
+                existing.LutB.Length != existing.LutR.Length)
+            {
+                throw new ArgumentException("Existing HDR LUT channels must have the same non-zero length.",
+                    nameof(existing));
+            }
+
+            if (Math.Abs(existing.MatrixNeutralScale - newMatrixNeutralScale) <= 1e-12)
+                return existing;
+
+            double ratio = existing.MatrixNeutralScale / newMatrixNeutralScale;
+            double[] Rebase(IReadOnlyList<double> source)
+            {
+                var result = new double[source.Count];
+                for (int i = 0; i < result.Length; i++)
+                {
+                    double newInput = i / (double)(result.Length - 1);
+                    double oldLinearNits = Math.Min(10000.0,
+                        Math.Max(0.0, TransferFunctions.PqEotf(newInput) * ratio));
+                    double oldInput = TransferFunctions.PqInverseEotf(oldLinearNits);
+                    result[i] = SampleLut(source, oldInput);
+                }
+
+                result[0] = source[0];
+                result[^1] = source[^1];
+                for (int i = 1; i < result.Length; i++)
+                    if (result[i] < result[i - 1]) result[i] = result[i - 1];
+                return result;
+            }
+
+            return new Result(
+                Rebase(existing.LutR), Rebase(existing.LutG), Rebase(existing.LutB),
+                existing.MeasuredBlackNits, existing.MeasuredPeakNits,
+                existing.WireExact, newMatrixNeutralScale);
+        }
+
+        /// <summary>
         /// Mean |measuredY / requestedNits − 1| over valid wire-ladder measurements — the
         /// figure Refine gates on, shared so callers can report before/after consistently.
         /// Returns NaN when no valid rungs exist.
@@ -368,6 +428,15 @@ namespace HDRGammaController.Core.Calibration
                 .Select(m => Math.Abs(m.Xyz.Y / m.Patch.Nits!.Value - 1.0))
                 .ToList();
             return errors.Count > 0 ? errors.Average() : double.NaN;
+        }
+
+        private static double SampleLut(IReadOnlyList<double> lut, double position)
+        {
+            double x = Math.Clamp(position, 0.0, 1.0) * (lut.Count - 1);
+            int lo = (int)Math.Floor(x);
+            int hi = Math.Min(lo + 1, lut.Count - 1);
+            double t = x - lo;
+            return lut[lo] + (lut[hi] - lut[lo]) * t;
         }
 
         /// <summary>

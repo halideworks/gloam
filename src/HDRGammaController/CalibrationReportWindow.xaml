@@ -591,22 +591,19 @@
                             Margin="0,0,10,0"
                             Click="VerifyButton_Click"/>
 
-                    <!-- Refine menu: HDR tone / HDR color (HDR + profile applied) and white
-                         point tools. Item visibility/enable is set by UpdateRefineButtonState. -->
+                    <!-- Refine menu: one coordinated HDR matrix+tone solve (HDR + profile
+                         applied) and white point tools. Item state is set in code-behind. -->
                     <Button x:Name="RefineMenuButton"
                             Content="Refine ▾"
-                            ToolTip="Closed-loop refinements: HDR tone curve, HDR color/gamut, or white point tools. Place the probe on the display first."
+                            ToolTip="Closed-loop HDR tone + color refinement, or white point tools. Place the probe on the display first."
                             Style="{StaticResource BrutBtnSecondary}"
                             Margin="0,0,10,0"
                             Click="RefineMenu_Click">
                         <Button.ContextMenu>
                             <ContextMenu>
-                                <MenuItem x:Name="RefineHdrMenuItem" Header="HDR tone curve"
-                                          ToolTip="Re-measures the PQ ladder through the installed profile and iterates a closed-loop correction to the HDR tone curve (Calman-style EOTF tracking)."
-                                          Click="RefineHdrButton_Click"/>
-                                <MenuItem x:Name="RefineHdrColorMenuItem" Header="HDR color / gamut"
-                                          ToolTip="Measures colored + neutral stimuli at multiple luminance levels and fits a correction to the gamut matrix (catches panels whose gamut rotates with brightness)."
-                                          Click="RefineHdrColorButton_Click"/>
+                                <MenuItem x:Name="RefineHdrMenuItem" Header="HDR tone + color"
+                                          ToolTip="Measures PQ and colored HDR stimuli through one installed state, then jointly refines the MHC2 tone curves and gamut matrix."
+                                          Click="RefineHdrJointButton_Click"/>
                                 <Separator/>
                                 <MenuItem x:Name="WhiteToolsMenuItem" Header="White point tools…"
                                           ToolTip="Re-anchor white with a quick measurement (drift fix), or trim the target white by eye against a reference display."

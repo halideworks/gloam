@@ -111,9 +111,10 @@ instruments.
 
 ## Tier 2 — HDR frontier (where the field is still soft)
 
-**2.1 Iterated HDR closed loop.** `[DONE — v1.5.0]` Refine HDR currently does one multiplicative pass. Loop it with
-the same keep-best/damping discipline as the SDR loop until the ladder converges (<1% everywhere
-or 3 iterations). Cheap: the probe is already mounted; each pass is ~90 seconds.
+**2.1 Iterated HDR closed loop.** `[DONE — v1.5.0; jointly coordinated in v1.8.0]` Refine HDR runs an
+iterated, keep-best/damped solve until the measured ladder converges. In v1.8.0 the tone loop and
+colored HDR loop became one coordinated operation (see 2.2), so a matrix change can no longer
+invalidate a separately-refined tone curve.
 
 *Method.* The loop lives in Core (`HdrRefinementLoop`), delegate-driven so the simulated DWM chain
 tests it end-to-end: full step on pass 1 (bit-identical to the historical single pass), damping 0.5
@@ -136,11 +137,12 @@ mandatory — an unanchored 3×3 fit can rotate the whole gamut around a drifted
 "better" while looking worse; the fit refuses without them). The residual is modeled as
 measured ≈ F·reference in XYZ and fit by luminance-weighted least squares (pairs normalized to
 rung luminance, weighted √Y); the installer's new `xyzCorrectionOverride` composes the refined
-matrix M′ = D⁻¹·F⁻¹·T. Keep-best loop (`HdrColorMatrixLoop`) caps at 2 passes (a colored sweep
-is ~2 min), cumulative across passes (F_total = F₂·F₁), with the same refusal honesty as the
-tone loop (converged <2 avg ΔE ITP, wild >25, per-element deviation cap 0.25). A changed matrix
-changes the neutral scale, so the HDR tone LUTs are rebuilt open-loop at the new scale and the
-UI says to run Refine HDR again for the final tone pass — the coupling is by design, not a leak.
+matrix M′ = D⁻¹·F⁻¹·T. The v1.8.0 joint coordinator (`HdrJointRefinement`) measures both PQ tone
+and colored HDR through the same installed state, strips neutral luminance gain from the color
+residual, rebases the existing tone LUT to the candidate matrix scale, applies its closed-loop
+tone correction, and installs matrix + LUT atomically. It caps at 2 passes and keeps a normalized
+joint score only when neither tone nor color materially regresses; cancellation or a losing pass
+restores the best measured complete state. There is no second-pass handoff in the UI.
 
 **2.3 Tone-mapping characterization.** `[DONE — v1.6.0; needs hardware validation]` Measure the panel's actual roll-off (dense rungs near peak,
 plus APL variants), report the true knee/peak against its EDID/DXGI claims, and emit suggested
