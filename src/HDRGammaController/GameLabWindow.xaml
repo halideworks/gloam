@@ -135,6 +135,7 @@
                             <ColumnDefinition Width="265"/>
                             <ColumnDefinition Width="1"/>
                             <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="225"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <StackPanel VerticalAlignment="Center">
@@ -154,7 +155,35 @@
                                        Foreground="{DynamicResource ThemeTextDim}"
                                        TextTrimming="CharacterEllipsis" MaxHeight="14"/>
                         </StackPanel>
-                        <Button Grid.Column="3" Content="{Binding GamerModeToggleLabel}"
+                        <Grid Grid.Column="3" Margin="12,0,0,0" VerticalAlignment="Center">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid>
+                                <ComboBox x:Name="GameLabLibraryPresetPicker" Height="30" Margin="0"
+                                          ItemsSource="{Binding GamerMode.AvailableLibraryPresets}"
+                                          SelectedItem="{Binding GamerMode.SelectedLibraryPreset, Mode=TwoWay}"
+                                          ToolTip="Set one look for the library, including a detected-HDR-only option"/>
+                                <TextBlock Text="Library default…" Margin="9,0,28,0" VerticalAlignment="Center"
+                                           IsHitTestVisible="False" Foreground="{DynamicResource ThemeTextDim}" FontSize="9">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding GamerMode.HasSelectedLibraryPreset}" Value="False">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+                            <Button Grid.Column="1" Content="Apply" Margin="6,0,0,0" Padding="9,6"
+                                    Command="{Binding ApplyGamerLibraryPresetCommand}"
+                                    IsEnabled="{Binding GamerMode.HasSelectedLibraryPreset}"/>
+                        </Grid>
+                        <Button Grid.Column="4" Content="{Binding GamerModeToggleLabel}"
                                 Command="{Binding ToggleGamerModeCommand}"
                                 Style="{StaticResource BrutBtnPrimary}" Margin="15,0,0,0"
                                 VerticalAlignment="Center" Padding="15,8"
@@ -192,15 +221,20 @@
                                 <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
                             <Grid Margin="2,0,0,7">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
                                 <StackPanel>
                                     <TextBlock Text="YOUR GAMES" Style="{StaticResource Kicker}"/>
                                     <TextBlock Text="{Binding GamerMode.FilteredProfileCountText}"
-                                               Style="{StaticResource FieldLabel}" Margin="0,2,0,0"/>
+                                               Style="{StaticResource FieldLabel}" Margin="0,2,0,0"
+                                               TextTrimming="CharacterEllipsis"/>
                                 </StackPanel>
-                                <Button Content="{Binding GamerMode.ShowAllProfilesLabel}"
+                                <Button Grid.Column="1" Content="{Binding GamerMode.ShowAllProfilesLabel}"
                                         Command="{Binding ToggleShowAllGamerProfilesCommand}"
                                         Style="{StaticResource BrutIconButton}" HorizontalAlignment="Right"
-                                        VerticalAlignment="Center" Padding="5,3" FontSize="9"/>
+                                        VerticalAlignment="Center" Padding="6,3" FontSize="9" Margin="6,0,0,0"/>
                             </Grid>
                             <Grid Grid.Row="1" Margin="0,0,0,8">
                                 <TextBox x:Name="GameProfileSearchBox"
@@ -230,6 +264,7 @@
                                      SelectedItem="{Binding GamerMode.SelectedProfile, Mode=TwoWay}"
                                      Background="Transparent" BorderThickness="0"
                                      ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                      ScrollViewer.CanContentScroll="True"
                                      VirtualizingPanel.IsVirtualizing="True"
                                      VirtualizingPanel.VirtualizationMode="Recycling"
@@ -243,10 +278,12 @@
                                                 <ColumnDefinition Width="Auto"/>
                                             </Grid.ColumnDefinitions>
                                             <StackPanel>
-                                                <TextBlock Text="{Binding GameTitle}" FontFamily="{StaticResource DisplayFont}"
+                                                <TextBlock Text="{Binding GameTitle}" ToolTip="{Binding GameTitle}"
+                                                           FontFamily="{StaticResource DisplayFont}"
                                                            FontWeight="Bold" FontSize="11" TextTrimming="CharacterEllipsis"
                                                            Foreground="{DynamicResource ThemeText}"/>
-                                                <TextBlock Text="{Binding AppName}" FontFamily="{StaticResource MonoFont}"
+                                                <TextBlock Text="{Binding AppName}" ToolTip="{Binding AppName}"
+                                                           FontFamily="{StaticResource MonoFont}"
                                                            FontSize="9" TextTrimming="CharacterEllipsis"
                                                            Foreground="{DynamicResource ThemeTextDim}"/>
                                             </StackPanel>
@@ -386,6 +423,19 @@
                                                                 </Style>
                                                             </TextBlock.Style>
                                                         </TextBlock>
+                                                        <TextBlock Text="  ·  " FontSize="9" Foreground="{DynamicResource ThemeTextDim}"/>
+                                                        <TextBlock Text="{Binding HdrSupportLabel}" FontSize="9">
+                                                            <TextBlock.Style>
+                                                                <Style TargetType="TextBlock">
+                                                                    <Setter Property="Foreground" Value="{DynamicResource ThemeTextDim}"/>
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsHdrCapable}" Value="True">
+                                                                            <Setter Property="Foreground" Value="{DynamicResource ThemeAccent}"/>
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </TextBlock.Style>
+                                                        </TextBlock>
                                                     </StackPanel>
                                                 </StackPanel>
                                                 <CheckBox Grid.Column="1" Content="Auto-apply"
@@ -470,9 +520,12 @@
                                             </Grid>
 
                                             <Expander Grid.Row="4" Header="Advanced signal &amp; display controls"
-                                                      Margin="0,9,0,0" Foreground="{DynamicResource ThemeText}">
+                                                      Margin="0,9,0,0" Foreground="{DynamicResource ThemeText}"
+                                                      IsExpanded="{Binding DataContext.IsGameProfileAdvancedExpanded, RelativeSource={RelativeSource AncestorType=Window}, Mode=TwoWay}">
                                                 <Grid x:Name="AdvancedControlsGrid" Margin="0,7,0,0">
                                                     <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="*"/>
                                                         <ColumnDefinition Width="*"/>
                                                         <ColumnDefinition Width="*"/>
                                                         <ColumnDefinition Width="*"/>
@@ -493,13 +546,21 @@
                                                                  Text="{Binding DisplayName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
                                                     </StackPanel>
                                                     <StackPanel Grid.Row="0" Grid.Column="2" Grid.ColumnSpan="2" Margin="0,0,9,0">
+                                                        <TextBlock Text="HDR SUPPORT" Style="{StaticResource FieldLabel}"/>
+                                                        <ComboBox x:Name="AdvancedHdrSupportBox"
+                                                                  Margin="0"
+                                                                  ItemsSource="{Binding AvailableHdrCapabilities}" DisplayMemberPath="Label"
+                                                                  SelectedValuePath="Value" SelectedValue="{Binding HdrCapability, Mode=TwoWay}"
+                                                                  ToolTip="Detected from local game configuration; you can correct it here"/>
+                                                    </StackPanel>
+                                                    <StackPanel Grid.Row="0" Grid.Column="4" Grid.ColumnSpan="2" Margin="0,0,9,0">
                                                         <TextBlock Text="EXPECTED SIGNAL" Style="{StaticResource FieldLabel}"/>
                                                         <ComboBox x:Name="AdvancedExpectedSignalBox"
                                                                   Margin="0"
                                                                   ItemsSource="{Binding AvailableHdrExpectations}" DisplayMemberPath="Label"
                                                                   SelectedValuePath="Value" SelectedValue="{Binding HdrExpectation, Mode=TwoWay}"/>
                                                     </StackPanel>
-                                                    <StackPanel Grid.Row="0" Grid.Column="4" Grid.ColumnSpan="2">
+                                                    <StackPanel Grid.Row="0" Grid.Column="6" Grid.ColumnSpan="2">
                                                         <TextBlock Text="TARGET DISPLAYS" Style="{StaticResource FieldLabel}"/>
                                                         <ComboBox x:Name="AdvancedTargetDisplaysBox"
                                                                   Margin="0"
@@ -507,7 +568,7 @@
                                                                   SelectedValuePath="Value" SelectedValue="{Binding DisplayScope, Mode=TwoWay}"/>
                                                     </StackPanel>
 
-                                                    <ComboBox Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="6" Margin="0,5,0,0"
+                                                    <ComboBox Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="8" Margin="0,5,0,0"
                                                               Visibility="{Binding IsSpecificDisplay, Converter={StaticResource BoolToVis}}"
                                                               ItemsSource="{Binding DataContext.GamerMode.AvailableDisplays, RelativeSource={RelativeSource AncestorType=Window}}"
                                                               DisplayMemberPath="Label" SelectedValuePath="DevicePath"
@@ -532,18 +593,18 @@
                                                                   ItemsSource="{Binding AvailableGammaModes}" DisplayMemberPath="Label"
                                                                   SelectedValuePath="Value" SelectedValue="{Binding GammaMode, Mode=TwoWay}"/>
                                                     </StackPanel>
-                                                    <StackPanel Grid.Row="2" Grid.Column="4" Margin="0,7,9,0">
+                                                    <StackPanel Grid.Row="2" Grid.Column="4" Grid.ColumnSpan="2" Margin="0,7,9,0">
                                                         <TextBlock Text="PAPER WHITE" Style="{StaticResource FieldLabel}"/>
                                                         <TextBox x:Name="AdvancedPaperWhiteBox"
                                                                  Text="{Binding PaperWhiteNits, UpdateSourceTrigger=PropertyChanged, StringFormat=F0}"/>
                                                     </StackPanel>
-                                                    <StackPanel Grid.Row="2" Grid.Column="5" Margin="0,7,0,0">
+                                                    <StackPanel Grid.Row="2" Grid.Column="6" Grid.ColumnSpan="2" Margin="0,7,0,0">
                                                         <TextBlock Text="PEAK NITS" Style="{StaticResource FieldLabel}"/>
                                                         <TextBox x:Name="AdvancedPeakNitsBox"
                                                                  Text="{Binding PeakNits, UpdateSourceTrigger=PropertyChanged, StringFormat=F0}"/>
                                                     </StackPanel>
 
-                                                    <StackPanel Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="4" Margin="0,7,9,0"
+                                                    <StackPanel Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="6" Margin="0,7,9,0"
                                                                 VerticalAlignment="Bottom"
                                                                 Visibility="{Binding IsNightOps, Converter={StaticResource BoolToVis}}">
                                                         <TextBlock Text="NIGHT PLAY SPECTRAL LIMIT" Style="{StaticResource FieldLabel}"/>
@@ -552,7 +613,7 @@
                                                                   IsChecked="{Binding IsNightOpsMelanopicCeilingEnabled, Mode=TwoWay}"
                                                                   ToolTip="Off by default because a hard ceiling can alter the selected look."/>
                                                     </StackPanel>
-                                                    <StackPanel Grid.Row="3" Grid.Column="4" Grid.ColumnSpan="2" Margin="0,7,0,0"
+                                                    <StackPanel Grid.Row="3" Grid.Column="6" Grid.ColumnSpan="2" Margin="0,7,0,0"
                                                                 Visibility="{Binding IsNightOps, Converter={StaticResource BoolToVis}}">
                                                         <TextBlock Text="MELANOPIC CEILING" Style="{StaticResource FieldLabel}"/>
                                                         <TextBox x:Name="AdvancedMelanopicCeilingBox"
@@ -658,8 +719,18 @@
                                                 <TextBlock Text="{Binding ExecutableName}" FontFamily="{StaticResource MonoFont}"
                                                            FontSize="9" Foreground="{DynamicResource ThemeTextDim}"/>
                                             </StackPanel>
-                                            <TextBlock Grid.Column="1" Text="{Binding Library}" Style="{StaticResource FieldLabel}"
-                                                       VerticalAlignment="Center" Margin="18,0,2,0"/>
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                                        VerticalAlignment="Center" Margin="18,0,2,0">
+                                                <Border BorderBrush="{DynamicResource ThemeAccent}" BorderThickness="1"
+                                                        Padding="5,2" Margin="0,0,8,0"
+                                                        Visibility="{Binding HasDetectedHdr, Converter={StaticResource BoolToVis}}"
+                                                        ToolTip="{Binding HdrEvidence}">
+                                                    <TextBlock Text="HDR FOUND" Style="{StaticResource FieldLabel}"
+                                                               Foreground="{DynamicResource ThemeAccent}"/>
+                                                </Border>
+                                                <TextBlock Text="{Binding Library}" Style="{StaticResource FieldLabel}"
+                                                           VerticalAlignment="Center"/>
+                                            </StackPanel>
                                         </Grid>
                                     </CheckBox>
                                 </DataTemplate>

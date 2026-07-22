@@ -117,6 +117,7 @@ namespace HDRGammaController.Tests
                     Assert.Equal("Night Play", editor.AvailablePictureIntents[3].ToString());
 
                     var largeLibrary = settings.GamerProfiles;
+                    largeLibrary[0].HdrCapability = GamerHdrCapability.Detected;
                     for (int i = 0; i < 120; i++)
                     {
                         largeLibrary.Add(new GamerProfileRule
@@ -124,10 +125,41 @@ namespace HDRGammaController.Tests
                             AppName = $"game-{i:000}.exe",
                             ExecutablePath = Path.Combine(root, "games", $"game-{i:000}.exe"),
                             DisplayName = $"Game {i:000}",
+                            HdrCapability = i == 0
+                                ? GamerHdrCapability.UserConfirmed
+                                : GamerHdrCapability.Unknown,
                             LastUsedUtc = i < 8 ? DateTime.UtcNow.AddMinutes(-i) : null
                         });
                     }
                     settings.SetGamerProfiles(largeLibrary);
+                    Pump(TimeSpan.FromMilliseconds(260));
+
+                    var dashboardProfileList = Assert.IsType<ListBox>(window.FindName("DashboardGameProfileList"));
+                    Assert.Equal(5, dashboardProfileList.Items.Count);
+                    Assert.True(double.IsNaN(dashboardProfileList.Height));
+                    Assert.Equal(260, dashboardProfileList.MaxHeight);
+                    ScrollViewer dashboardProfileScroll = Assert.Single(
+                        FindVisualChildren<ScrollViewer>(dashboardProfileList));
+                    Assert.Equal(Visibility.Collapsed,
+                        dashboardProfileScroll.ComputedVerticalScrollBarVisibility);
+                    Assert.Equal(Visibility.Collapsed,
+                        dashboardProfileScroll.ComputedHorizontalScrollBarVisibility);
+                    Rect recentCountBounds = BoundsIn(
+                        Assert.IsType<TextBlock>(window.FindName("DashboardProfileCount")), window);
+                    Rect viewAllBounds = BoundsIn(
+                        Assert.IsType<Button>(window.FindName("DashboardShowAllProfilesButton")), window);
+                    Rect libraryPaneBounds = BoundsIn(
+                        Assert.IsType<Border>(window.FindName("DashboardGameLibraryPane")), window);
+                    Assert.True(recentCountBounds.Right + 4 <= viewAllBounds.Left);
+                    Assert.True(viewAllBounds.Right <= libraryPaneBounds.Right - 9);
+                    Assert.True(viewAllBounds.Width >= 48);
+                    var gamerExpander = Assert.IsType<Expander>(window.FindName("GamerModeExpander"));
+                    gamerExpander.BringIntoView();
+                    Pump(TimeSpan.FromMilliseconds(120));
+                    SaveScreenshotIfRequested(window, "dashboard-game-library.png");
+                    dashboardProfileList.BringIntoView();
+                    Pump(TimeSpan.FromMilliseconds(120));
+                    SaveScreenshotIfRequested(window, "dashboard-game-library-detail.png");
 
                     gameLabWindow = new GameLabWindow(
                         new MonitorManager(), settings, nightMode, update,
@@ -155,6 +187,7 @@ namespace HDRGammaController.Tests
                     ScrollViewer profileScroll = Assert.Single(
                         FindVisualChildren<ScrollViewer>(profileList));
                     Assert.Equal(Visibility.Collapsed, profileScroll.ComputedVerticalScrollBarVisibility);
+                    Assert.Equal(Visibility.Collapsed, profileScroll.ComputedHorizontalScrollBarVisibility);
                     Assert.All(FindVisualChildren<ScrollViewer>(viewport), scroll =>
                         Assert.True(
                             HasVisualAncestor<ItemsControl>(scroll) ||
@@ -162,6 +195,17 @@ namespace HDRGammaController.Tests
                             "Game Lab must not have a window-level ScrollViewer."));
                     var gameLabViewModel = Assert.IsType<DashboardViewModel>(gameLabWindow.DataContext);
                     Assert.Equal("teardown.exe", gameLabViewModel.GamerMode.NewAppText);
+
+                    GamerLibraryPresetOption hdrDefault = Assert.Single(
+                        gameLabViewModel.GamerMode.AvailableLibraryPresets,
+                        option => option.HdrCapableOnly);
+                    gameLabViewModel.GamerMode.SelectedLibraryPreset = hdrDefault;
+                    gameLabViewModel.ApplyGamerLibraryPresetCommand.Execute(null);
+                    Pump(TimeSpan.FromMilliseconds(100));
+                    Assert.Equal(2, gameLabViewModel.GamerMode.Profiles.Count(profile =>
+                        profile.PictureIntent == GamerPictureIntent.CinematicHdr));
+                    Assert.All(gameLabViewModel.GamerMode.Profiles.Where(profile => !profile.IsHdrCapable),
+                        profile => Assert.NotEqual(GamerPictureIntent.CinematicHdr, profile.PictureIntent));
 
                     Assert.NotNull(gameLabViewModel.GamerMode.SelectedProfile);
                     gameLabViewModel.GamerMode.SelectedProfile!.PictureIntent =
@@ -179,6 +223,9 @@ namespace HDRGammaController.Tests
 
                     Rect profileBounds = BoundsIn(
                         Assert.IsType<TextBox>(FindVisualChild<TextBox>(viewport, "AdvancedProfileNameBox")),
+                        workspace);
+                    Rect hdrSupportBounds = BoundsIn(
+                        Assert.IsType<ComboBox>(FindVisualChild<ComboBox>(viewport, "AdvancedHdrSupportBox")),
                         workspace);
                     Rect expectedSignalBounds = BoundsIn(
                         Assert.IsType<ComboBox>(FindVisualChild<ComboBox>(viewport, "AdvancedExpectedSignalBox")),
@@ -202,13 +249,15 @@ namespace HDRGammaController.Tests
                         Assert.IsType<TextBox>(FindVisualChild<TextBox>(viewport, "AdvancedMelanopicCeilingBox")),
                         workspace);
 
-                    AssertAligned(profileBounds.Top, expectedSignalBounds.Top, targetDisplaysBounds.Top);
+                    AssertAligned(profileBounds.Top, hdrSupportBounds.Top, expectedSignalBounds.Top, targetDisplaysBounds.Top);
                     AssertAligned(nightBehaviorBounds.Top, gammaBounds.Top, paperWhiteBounds.Top, peakNitsBounds.Top);
                     AssertAligned(profileBounds.Left, nightBehaviorBounds.Left);
                     AssertAligned(profileBounds.Right, nightBehaviorBounds.Right);
-                    AssertAligned(expectedSignalBounds.Left, gammaBounds.Left);
-                    AssertAligned(expectedSignalBounds.Right, gammaBounds.Right);
-                    AssertAligned(targetDisplaysBounds.Left, paperWhiteBounds.Left, melanopicBounds.Left);
+                    AssertAligned(hdrSupportBounds.Left, gammaBounds.Left);
+                    AssertAligned(hdrSupportBounds.Right, gammaBounds.Right);
+                    AssertAligned(expectedSignalBounds.Left, paperWhiteBounds.Left);
+                    AssertAligned(expectedSignalBounds.Right, paperWhiteBounds.Right);
+                    AssertAligned(targetDisplaysBounds.Left, peakNitsBounds.Left, melanopicBounds.Left);
                     AssertAligned(targetDisplaysBounds.Right, peakNitsBounds.Right, melanopicBounds.Right);
                     Assert.True(paperWhiteBounds.Right < peakNitsBounds.Left);
                     SaveScreenshotIfRequested(gameLabWindow, "game-lab-advanced.png");
@@ -317,6 +366,9 @@ namespace HDRGammaController.Tests
             if (string.IsNullOrWhiteSpace(outputDirectory)) return;
 
             Directory.CreateDirectory(outputDirectory);
+            double originalOpacity = window.Opacity;
+            window.Opacity = 1;
+            window.UpdateLayout();
             DpiScale dpi = VisualTreeHelper.GetDpi(window);
             int width = Math.Max(1, (int)Math.Ceiling(window.ActualWidth * dpi.DpiScaleX));
             int height = Math.Max(1, (int)Math.Ceiling(window.ActualHeight * dpi.DpiScaleY));
@@ -328,6 +380,7 @@ namespace HDRGammaController.Tests
             encoder.Frames.Add(BitmapFrame.Create(bitmap));
             using FileStream output = File.Create(Path.Combine(outputDirectory, fileName));
             encoder.Save(output);
+            window.Opacity = originalOpacity;
         }
 
         private static void RunSta(Action body)
