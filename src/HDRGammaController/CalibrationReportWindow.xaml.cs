@@ -500,91 +500,27 @@ namespace HDRGammaController
                     _latestVerificationMetrics = after;
                 after ??= _latestVerificationMetrics;
 
-                // Detailed sweep results (when one ran): per-patch list capped at the
-                // detailed set size, plus the derived histogram and category breakdown so
-                // the saved JSON is self-describing.
-                var detailed = _detailedPatchResults;
-                CategoryBreakdown? breakdown = detailed != null
-                    ? VerificationAnalysis.ComputeCategoryBreakdown(detailed)
-                    : null;
-
-                _profile.ReportSummary = new CalibrationReportSummary
-                {
-                    AvgDeltaE = _metrics?.AverageDeltaE,
-                    MaxDeltaE = _metrics?.MaxDeltaE,
-                    GrayscaleDeltaE = _metrics?.AverageGrayscaleDeltaE,
-                    PrimaryDeltaE = _metrics?.AveragePrimaryDeltaE,
-                    AfterAvgDeltaE = after?.AverageDeltaE,
-                    AfterMaxDeltaE = after?.MaxDeltaE,
-                    AfterGrayscaleDeltaE = after?.AverageGrayscaleDeltaE,
-                    AfterPrimaryDeltaE = after?.AveragePrimaryDeltaE,
-                    GradeScopeLabel = Vm.GradeScopeText,
-                    SummaryText = Vm.SummaryText,
-                    DetailedPatches = detailed?
-                        .Take(VerificationPatchSets.DetailedPatchCount)
-                        .Select(p => new VerifiedPatchResult
-                        {
-                            Name = p.Name,
-                            Category = p.Category.ToString(),
-                            DeltaE = Math.Round(p.DeltaE, 3),
-                        })
-                        .ToList(),
-                    DetailedHistogram = detailed != null
-                        ? VerificationAnalysis.HistogramCounts(detailed.Select(p => p.DeltaE))
-                        : null,
-                    DetailedGrayscaleDeltaE = breakdown?.GrayscaleDeltaE,
-                    DetailedPrimariesDeltaE = breakdown?.PrimariesDeltaE,
-                    DetailedSaturationDeltaE = breakdown?.SaturationDeltaE,
-                    DetailedMemoryColorsDeltaE = breakdown?.MemoryColorsDeltaE,
-                    VerificationDetailText = Vm.IsVerifyDetailVisible ? Vm.VerifyDetailText : null,
-                    PqTrackingDetailText = Vm.IsPqTrackingDetailVisible ? Vm.PqTrackingDetailText : null,
-                    ColoredHdrDetailText = Vm.IsColoredHdrDetailVisible ? Vm.ColoredHdrDetailText : null,
-                    ToneMapping = _toneMapping,
-                };
-
-                if (_reportSavePath == null)
-                {
-                    string safeName = string.Join("_", _profile.MonitorName.Split(Path.GetInvalidFileNameChars()));
-                    _reportSavePath = Path.Combine(
-                        CalibrationProfile.GetReportsDirectory(),
-                        $"{safeName}_{DateTime.Now:yyyyMMdd_HHmmss}.json");
-                }
-                _profile.SaveToFile(_reportSavePath);
-                PersistRawMeasurementCsvs();
+                var result = ReportSnapshotBuilder.Save(new ReportSnapshotBuilder.Request(
+                    _profile,
+                    _metrics,
+                    after,
+                    _detailedPatchResults,
+                    Vm.GradeScopeText,
+                    Vm.SummaryText,
+                    Vm.IsVerifyDetailVisible ? Vm.VerifyDetailText : null,
+                    Vm.IsPqTrackingDetailVisible ? Vm.PqTrackingDetailText : null,
+                    Vm.IsColoredHdrDetailVisible ? Vm.ColoredHdrDetailText : null,
+                    _toneMapping,
+                    _measurements,
+                    _verifyMeasurements,
+                    _reportSavePath));
+                _reportSavePath = result.Path;
                 _lastReportSnapshotSaved = true;
                 Log.Info($"CalibrationReportWindow: report snapshot saved to {_reportSavePath}");
             }
             catch (Exception ex)
             {
                 Log.Info($"CalibrationReportWindow: report snapshot save failed (report unaffected): {ex.Message}");
-            }
-        }
-
-        private void PersistRawMeasurementCsvs()
-        {
-            if (_profile == null || string.IsNullOrEmpty(_reportSavePath)) return;
-
-            string reportDir = Path.GetDirectoryName(_reportSavePath) ?? CalibrationProfile.GetReportsDirectory();
-            string measurementDir = Path.Combine(reportDir, "measurements");
-            string baseName = Path.GetFileNameWithoutExtension(_reportSavePath);
-            string reportId = _profile.Id.ToString();
-
-            if (_measurements is { Count: > 0 })
-            {
-                MeasurementCsvExporter.Save(
-                    Path.Combine(measurementDir, $"{baseName}_native-measurements.csv"),
-                    reportId,
-                    "native",
-                    _measurements);
-            }
-
-            if (_verifyMeasurements is { Count: > 0 })
-            {
-                MeasurementCsvExporter.Save(
-                    Path.Combine(measurementDir, $"{baseName}_verification-measurements.csv"),
-                    reportId,
-                    "verification",
-                    _verifyMeasurements);
             }
         }
 
@@ -2237,94 +2173,51 @@ namespace HDRGammaController
                         saved?.PreviousColorProfileName);
                 }
 
-                string? supersededThisSession = null;
-                var outcome = await HdrJointRefinement.RunAsync(new HdrJointRefinement.Config
-                {
-                    InitialState = new HdrJointRefinement.State(
-                        _installedHdrXyzCorrection, currentLuts),
-                    TargetWhite = target.WhitePoint.ToXyz(1.0),
-                    ToneRungs = rungs,
-                    ColorStimuli = stimuli,
-                    MeasureAsync = async (ladder, colorSet, sequenceOffset, token) =>
-                    {
-                        var toneReadings = await MeasurePqRungsAsync(
-                            patchWindow!, colorimeter, ctx, ladder,
-                            "HDR tone + color", sequenceOffset, token);
-                        var colorReadings = await MeasureColoredStimuliAsync(
-                            patchWindow!, colorimeter, ctx, colorSet,
-                            "HDR tone + color", sequenceOffset + ladder.Count, token);
-                        return new HdrJointRefinement.Measurements(
-                            toneReadings.Select(r => r.M).ToList(), colorReadings);
-                    },
-                    ResolveMatrixNeutralScale = correction =>
-                    {
-                        try
+                var coordinated = await HdrRefinementCoordinator.RunAsync(
+                    new HdrRefinementCoordinator.Config(
+                        installMonitor,
+                        characterization,
+                        target,
+                        ctx.LutR,
+                        ctx.LutG,
+                        ctx.LutB,
+                        ctx.WhiteLevel,
+                        _measurements,
+                        _installedProfileName ?? installedName,
+                        previousDefaultProfile,
+                        new HdrJointRefinement.State(_installedHdrXyzCorrection, currentLuts),
+                        rungs,
+                        stimuli,
+                        async (ladder, colorSet, sequenceOffset, token) =>
                         {
-                            return CalibrationProfileInstaller.BuildGamutMatrixPlan(
-                                characterization, target, correction).UniformScale;
-                        }
-                        catch (InvalidOperationException ex) when (IsGamutLimitError(ex.Message))
+                            var toneReadings = await MeasurePqRungsAsync(
+                                patchWindow, colorimeter, ctx, ladder,
+                                "HDR tone + color", sequenceOffset, token);
+                            var colorReadings = await MeasureColoredStimuliAsync(
+                                patchWindow, colorimeter, ctx, colorSet,
+                                "HDR tone + color", sequenceOffset + ladder.Count, token);
+                            return new HdrJointRefinement.Measurements(
+                                toneReadings.Select(r => r.M).ToList(), colorReadings);
+                        },
+                        ctx.OnInstalled,
+                        installation =>
                         {
-                            throw new GamutLimitException();
-                        }
-                    },
-                    InstallAsync = async (candidate, token) =>
-                    {
-                        token.ThrowIfCancellationRequested();
-                        var result = CalibrationProfileInstaller.Install(
-                            installMonitor, characterization, target,
-                            ctx.LutR, ctx.LutG, ctx.LutB, ctx.WhiteLevel,
-                            hdrMode: true, measurements: _measurements,
-                            profileNameOverride: BuildRefinedProfileName(_installedProfileName ?? installedName),
-                            hdrLutsOverride: candidate.Luts,
-                            xyzCorrectionOverride: candidate.XyzCorrection);
-                        if (!result.Success)
+                            installedRefined = true;
+                            _installedProfileName = installation.ProfileName;
+                            _profileApplied = true;
+                            _profileEnabled = true;
+                            _installedHdrLuts = installation.State.Luts;
+                            _installedHdrXyzCorrection = installation.State.XyzCorrection;
+                            Vm.ApplyButtonContent = "Disable Profile";
+                        },
+                        new Progress<HdrRefinementLoop.PassProgress>(p =>
                         {
-                            if (IsGamutLimitError(result.Error))
-                                throw new GamutLimitException();
-                            throw new InvalidOperationException($"Joint HDR profile install failed: {result.Error}");
-                        }
-
-                        installedRefined = true;
-                        if (supersededThisSession is { } stale && stale != result.ProfileName)
-                        {
-                            try { CalibrationProfileInstaller.Uninstall(installMonitor, stale); }
-                            catch (Exception ex)
-                            {
-                                Log.Info($"CalibrationReportWindow: superseded joint-refined profile cleanup failed: {ex.Message}");
-                            }
-                        }
-                        supersededThisSession = result.ProfileName;
-
-                        var installedLuts = result.HdrLuts ?? candidate.Luts;
-                        _installedProfileName = result.ProfileName;
-                        _profileApplied = true;
-                        _profileEnabled = true;
-                        _installedHdrLuts = installedLuts;
-                        _installedHdrXyzCorrection = candidate.XyzCorrection;
-                        Vm.ApplyButtonContent = "Disable Profile";
-                        try { ctx.OnInstalled?.Invoke(result.ProfileName, previousDefaultProfile); }
-                        catch (Exception ex)
-                        {
-                            // Installation already changed Windows state; a persistence
-                            // callback failure must not prevent keep-best from tracking it.
-                            Log.Error($"CalibrationReportWindow: recording joint-refined profile failed: {ex}");
-                        }
-
-                        // Do not let a late Cancel strand an installed candidate outside the
-                        // core loop's keep-best bookkeeping. Cancellation is observed by the
-                        // next measurement, after the install delegate has returned its state.
-                        await Task.Delay(1000, System.Threading.CancellationToken.None);
-                        return (new HdrJointRefinement.State(
-                            candidate.XyzCorrection, installedLuts), result.ProfileName);
-                    },
-                    Progress = new Progress<HdrRefinementLoop.PassProgress>(p =>
-                    {
-                        Vm.StatusText = p.Pass == 0
-                            ? "Measuring HDR tone and color through the installed profile…"
-                            : $"Joint pass {p.Pass}/{p.MaxPasses}: {p.Phase}…";
-                    }),
-                }, probe.Token);
+                            Vm.StatusText = p.Pass == 0
+                                ? "Measuring HDR tone and color through the installed profile…"
+                                : $"Joint pass {p.Pass}/{p.MaxPasses}: {p.Phase}…";
+                        })),
+                    probe.Token);
+                var outcome = coordinated.Outcome;
 
                 var start = outcome.InitialMetrics;
                 var finish = outcome.FinalMetrics;
@@ -2382,7 +2275,7 @@ namespace HDRGammaController
                     : "Cancelled — the profile is unchanged.");
                 return installedRefined;
             }
-            catch (GamutLimitException)
+            catch (HdrRefinementGamutLimitException)
             {
                 Vm.StatusText = "HDR color is already at the panel's gamut limit - no change applied.";
                 Vm.StatusBrush = CalibrationReportViewModel.DimBrush;
@@ -2400,27 +2293,6 @@ namespace HDRGammaController
             }
         }
 
-        private static bool IsGamutLimitError(string? message) =>
-            message?.Contains("wider gamut", StringComparison.OrdinalIgnoreCase) == true ||
-            message?.Contains("physically produce", StringComparison.OrdinalIgnoreCase) == true;
-
-        /// <summary>
-        /// Filename for the refined re-install: the original profile name with a
-        /// millisecond-precision "refined" suffix (a fresh name forces Windows to load the new
-        /// bytes — InstallColorProfile keeps existing content under a reused name). Repeated
-        /// passes replace the suffix instead of stacking it, and the monitor prefix is
-        /// preserved so stale-association cleanup still matches.
-        /// </summary>
-        private static string BuildRefinedProfileName(string installedProfileName)
-        {
-            string stem = Path.GetFileNameWithoutExtension(installedProfileName);
-            stem = System.Text.RegularExpressions.Regex.Replace(stem, @" refined \d{6,9}$", "");
-            return $"{stem} refined {DateTime.Now:HHmmssfff}.icm";
-        }
-
-        /// <summary>Signals that the fitted color correction would exceed the panel's
-        /// gamut — a graceful "no improvement possible", not an error.</summary>
-        private sealed class GamutLimitException : Exception { }
         /// <summary>
         /// Measures colored/neutral wire stimuli through the active correction — the
         /// parameterized core of <see cref="RunColoredHdrSweepAsync"/>, returning
@@ -2871,20 +2743,22 @@ namespace HDRGammaController
                 var patches = detailedSweep
                     ? VerificationPatchSets.Detailed(verificationTarget, ctx.HdrMode)
                     : CalibrationVerifier.BuildVerificationPatches();
-                var results = new List<MeasurementResult>();
-                for (int i = 0; i < patches.Count; i++)
-                {
-                    var p = patches[i];
-                    var next = i + 1 < patches.Count ? patches[i + 1] : null;
-                    Vm.VerifyButtonContent = $"Verifying {i + 1}/{patches.Count}…";
-                    patchWindow.SetProgress(i + 1, patches.Count, PatchLabel(p),
-                        next == null ? null : PatchLabel(next));
-                    patchWindow.SetColor(p.DisplayRgb.R, p.DisplayRgb.G, p.DisplayRgb.B);
-                    await Task.Delay(i == 0 ? 1200 : 500, probe.Token); // settle (longer for the first patch)
-                    results.Add(await colorimeter.MeasureAsync(p, ctx.HdrMode, probe.Token));
-                    if (ctx.CaptureSounds)
-                        CalibrationSounds.PlayCapture();
-                }
+                var coordinated = await VerificationCoordinator.RunAsync(
+                    new VerificationCoordinator.Config(
+                        patches,
+                        verificationTarget,
+                        _measurements,
+                        p => patchWindow.SetColor(p.DisplayRgb.R, p.DisplayRgb.G, p.DisplayRgb.B),
+                        (current, total, p, next) =>
+                        {
+                            Vm.VerifyButtonContent = $"Verifying {current}/{total}…";
+                            patchWindow.SetProgress(current, total, PatchLabel(p),
+                                next == null ? null : PatchLabel(next));
+                        },
+                        (p, token) => colorimeter.MeasureAsync(p, ctx.HdrMode, token),
+                        ctx.CaptureSounds ? CalibrationSounds.PlayCapture : null),
+                    probe.Token);
+                var results = coordinated.Measurements;
                 // HDR PQ-TRACKING SWEEP: when the applied profile was built from the FP16
                 // wire ladder, verify it the same way - wire-exact FP16 patches THROUGH the
                 // profile, graded in absolute nits against the PQ spec. Only rungs inside
@@ -2909,13 +2783,8 @@ namespace HDRGammaController
                     persistedVerifyMeasurements.AddRange(coloredHdr.Readings);
                 _verifyMeasurements = persistedVerifyMeasurements;
 
-                var after = CalibrationVerifier.ComputeMetrics(results, verificationTarget);
-                var activation = _measurements != null
-                    ? VerificationAnalysis.AnalyzeProfileActivation(
-                        CalibrationVerifier.ComputeMetrics(_measurements, verificationTarget).PatchResults,
-                        after.PatchResults,
-                        verificationTarget.WhitePointOnly)
-                    : null;
+                var after = coordinated.Metrics;
+                var activation = coordinated.Activation;
                 Vm.AfterAvgText = $"{after.AverageDeltaE:F2}";
                 Vm.AfterMaxText = $"{after.MaxDeltaE:F2}";
                 Vm.AfterGrayscaleText = $"{after.AverageGrayscaleDeltaE:F2}";
