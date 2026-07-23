@@ -409,7 +409,13 @@ namespace HDRGammaController
 
                 DragOverlay.Margin = new Thickness(left, pos.Y - 40, 0, 0);
             }
-            catch {}
+            catch (Exception ex)
+            {
+                Log.DebugRateLimited(
+                    "night-schedule-overlay",
+                    $"Night schedule overlay update was skipped: {ex.Message}",
+                    TimeSpan.FromMinutes(10));
+            }
         }
 
         private void GraphCanvas_MouseMove(object sender, MouseEventArgs e)

@@ -298,7 +298,13 @@ namespace HDRGammaController.Core
                         ?? key?.GetValue("InstallPath") as string;
                     AddExistingDirectory(roots, path);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    Log.DebugRateLimited(
+                        $"game-discovery-registry-{hive}-{view}",
+                        $"Game discovery could not read the {hive}/{view} Steam registry key: {ex.Message}",
+                        TimeSpan.FromHours(1));
+                }
             }
 
             string programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
@@ -330,7 +336,13 @@ namespace HDRGammaController.Core
                     foreach (string child in Directory.EnumerateDirectories(directory).Take(80))
                         queue.Enqueue((child, depth + 1));
                 }
-                catch (Exception ex) when (ex is not OperationCanceledException) { }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    Log.DebugRateLimited(
+                        "game-discovery-directory-enumeration",
+                        $"Game discovery skipped an unreadable directory '{directory}': {ex.Message}",
+                        TimeSpan.FromMinutes(10));
+                }
             }
 
             string gameKey = NormalizeForMatch(displayName);
@@ -358,7 +370,13 @@ namespace HDRGammaController.Core
                 directoryKey.Contains("win64") || directoryKey.Contains("win_x64") ||
                 directoryKey.Contains("win_x86")) score += 35;
             try { score += (int)Math.Min(new FileInfo(path).Length / (20L * 1024 * 1024), 40); }
-            catch { }
+            catch (Exception ex)
+            {
+                Log.DebugRateLimited(
+                    "game-discovery-executable-size",
+                    $"Game discovery could not inspect executable size for '{path}': {ex.Message}",
+                    TimeSpan.FromMinutes(10));
+            }
             return score;
         }
 
@@ -461,14 +479,27 @@ namespace HDRGammaController.Core
                     foreach (string child in Directory.EnumerateDirectories(gameRoot).Take(24))
                         AddDirectory(Path.Combine(child, "Config"));
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    Log.DebugRateLimited(
+                        "game-signal-config-directory-enumeration",
+                        $"Game signal inspection skipped child directories below '{gameRoot}': {ex.Message}",
+                        TimeSpan.FromMinutes(10));
+                }
 
                 int inspected = 0;
                 foreach (string directory in directories.Take(48))
                 {
                     IEnumerable<string> files;
                     try { files = Directory.EnumerateFiles(directory, "*", SearchOption.TopDirectoryOnly); }
-                    catch { continue; }
+                    catch (Exception ex)
+                    {
+                        Log.DebugRateLimited(
+                            "game-signal-config-file-enumeration",
+                            $"Game signal inspection skipped '{directory}': {ex.Message}",
+                            TimeSpan.FromMinutes(10));
+                        continue;
+                    }
 
                     foreach (string file in files
                                  .Where(path => HdrConfigExtensions.Contains(Path.GetExtension(path)))
@@ -651,7 +682,13 @@ namespace HDRGammaController.Core
                     hash.Add(info.LastWriteTimeUtc.Ticks);
                     count++;
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    Log.DebugRateLimited(
+                        "game-signal-config-fingerprint",
+                        $"Game signal inspection could not fingerprint '{path}': {ex.Message}",
+                        TimeSpan.FromMinutes(10));
+                }
             }
             hash.Add(count);
             return hash.ToHashCode().ToString("X8");

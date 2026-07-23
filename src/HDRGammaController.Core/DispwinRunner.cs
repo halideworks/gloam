@@ -192,7 +192,7 @@ namespace HDRGammaController.Core
                         }
                         else
                         {
-                            try { p.Kill(entireProcessTree: true); } catch { }
+                            TryKillProcess(p, "display-list timeout");
                         }
                     }
                 }
@@ -504,6 +504,21 @@ namespace HDRGammaController.Core
         private bool RunDispwin(params string[] args)
             => RunDispwin(CancellationToken.None, args);
 
+        private static void TryKillProcess(Process process, string operation)
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch (Exception ex)
+            {
+                Log.DebugRateLimited(
+                    "dispwin-process-termination",
+                    $"Could not terminate dispwin after {operation}: {ex.Message}",
+                    TimeSpan.FromMinutes(10));
+            }
+        }
+
         /// <returns>True if dispwin ran to completion with exit code 0.</returns>
         private bool RunDispwin(CancellationToken cancellationToken, params string[] args)
         {
@@ -539,7 +554,7 @@ namespace HDRGammaController.Core
                     if (cancellationToken.IsCancellationRequested)
                     {
                         Log.Info("DispwinRunner.RunDispwin: Cancelled, killing process");
-                        try { p.Kill(entireProcessTree: true); } catch { }
+                        TryKillProcess(p, "cancellation");
                         return false;
                     }
 
@@ -550,7 +565,7 @@ namespace HDRGammaController.Core
                 if (!p.HasExited)
                 {
                     Log.Info("DispwinRunner.RunDispwin: Timed out after 5s, killing process");
-                    try { p.Kill(entireProcessTree: true); } catch { }
+                    TryKillProcess(p, "execution timeout");
                     return false;
                 }
 

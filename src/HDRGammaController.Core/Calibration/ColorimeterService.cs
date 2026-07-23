@@ -634,7 +634,17 @@ namespace HDRGammaController.Core.Calibration
                 }
                 catch (OperationCanceledException)
                 {
-                    try { process.Kill(entireProcessTree: true); } catch { }
+                    try
+                    {
+                        process.Kill(entireProcessTree: true);
+                    }
+                    catch (Exception ex)
+                    {
+                        HDRGammaController.Core.Log.DebugRateLimited(
+                            "colorimeter-process-termination",
+                            $"Could not terminate the cancelled instrument process: {ex.Message}",
+                            TimeSpan.FromMinutes(10));
+                    }
                     return null;
                 }
 

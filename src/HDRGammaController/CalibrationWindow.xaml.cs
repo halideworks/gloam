@@ -1811,7 +1811,17 @@ namespace HDRGammaController
         private void DisposeHdrWireRenderer()
         {
             if (_hdrWireRenderer == null) return;
-            try { _hdrWireRenderer.Dispose(); } catch { }
+            try
+            {
+                _hdrWireRenderer.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Log.DebugRateLimited(
+                    "hdr-wire-renderer-dispose",
+                    $"HDR wire renderer cleanup failed: {ex.Message}",
+                    TimeSpan.FromMinutes(10));
+            }
             _hdrWireRenderer = null;
         }
 

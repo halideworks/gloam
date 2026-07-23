@@ -85,7 +85,17 @@ namespace HDRGammaController.Core
                         }
                     } catch (Exception ex) {
                         Log.Info($"MonitorManager: Exception wrapping adapter {adapterIndex}: {ex.GetType().Name}: {ex.Message}");
-                        if (adapterObj != null) { try { Marshal.ReleaseComObject(adapterObj); } catch { } }
+                        if (adapterObj != null)
+                        {
+                            try { Marshal.ReleaseComObject(adapterObj); }
+                            catch (Exception releaseEx)
+                            {
+                                Log.DebugRateLimited(
+                                    "monitor-adapter-com-release",
+                                    $"MonitorManager could not release an adapter COM object: {releaseEx.Message}",
+                                    TimeSpan.FromMinutes(10));
+                            }
+                        }
                     }
                     
                     if (adapter == null) {
@@ -137,7 +147,17 @@ namespace HDRGammaController.Core
                         catch (Exception ex)
                         {
                             Log.Info($"MonitorManager: Failed to get IDXGIOutput6 for output {outputIndex}: {ex.Message}");
-                            if (outObj != null) { try { Marshal.ReleaseComObject(outObj); } catch { } }
+                            if (outObj != null)
+                            {
+                                try { Marshal.ReleaseComObject(outObj); }
+                                catch (Exception releaseEx)
+                                {
+                                    Log.DebugRateLimited(
+                                        "monitor-output-com-release",
+                                        $"MonitorManager could not release an output COM object: {releaseEx.Message}",
+                                        TimeSpan.FromMinutes(10));
+                                }
+                            }
                         }
 
                         if (output6 != null)

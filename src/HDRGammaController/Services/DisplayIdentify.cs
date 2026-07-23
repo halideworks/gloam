@@ -144,7 +144,17 @@ namespace HDRGammaController.Services
                 };
                 fade.Completed += (_, _) =>
                 {
-                    try { window.Close(); } catch { }
+                    try
+                    {
+                        window.Close();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.DebugRateLimited(
+                            "display-identify-close",
+                            $"Display identity overlay cleanup failed: {ex.Message}",
+                            TimeSpan.FromMinutes(10));
+                    }
                 };
                 window.BeginAnimation(UIElement.OpacityProperty, fade);
             };

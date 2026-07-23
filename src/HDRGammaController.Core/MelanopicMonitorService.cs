@@ -94,13 +94,18 @@ namespace HDRGammaController.Core
         // UI thread during fades.
         private void OnStateApplied(GammaApplyService.AppliedStateSnapshot snapshot)
         {
-            if (string.IsNullOrEmpty(snapshot.MonitorDevicePath)) return;
-            lock (_pendingLock) { _pending[snapshot.MonitorDevicePath] = snapshot; }
-            _wake.Set();
+            if (_disposed || string.IsNullOrEmpty(snapshot.MonitorDevicePath)) return;
+            lock (_pendingLock)
+            {
+                if (_disposed) return;
+                _pending[snapshot.MonitorDevicePath] = snapshot;
+                _wake.Set();
+            }
         }
 
         private void QueueKeepalive()
         {
+            if (_disposed) return;
             // Re-queue the last snapshot per monitor at the current wall clock so the dose
             // integral advances while nothing changes on screen.
             List<GammaApplyService.AppliedStateSnapshot> snapshots;
@@ -108,10 +113,11 @@ namespace HDRGammaController.Core
             if (snapshots.Count == 0) return;
             lock (_pendingLock)
             {
+                if (_disposed) return;
                 foreach (var s in snapshots)
                     _pending[s.MonitorDevicePath] = s with { TimestampUtc = DateTime.UtcNow };
+                _wake.Set();
             }
-            _wake.Set();
         }
 
         private void WorkerLoop()
@@ -248,14 +254,41 @@ namespace HDRGammaController.Core
 
         public void Dispose()
         {
-            if (_disposed) return;
-            _disposed = true;
+            lock (_pendingLock)
+            {
+                if (_disposed) return;
+                _disposed = true;
+            }
             _applyService.StateApplied -= OnStateApplied;
             _keepalive.Stop();
             _keepalive.Dispose();
             _wake.Set(); // release the worker from WaitOne
-            try { _worker.Join(TimeSpan.FromSeconds(2)); } catch { }
-            _wake.Dispose();
+            bool workerStopped = false;
+            try
+            {
+                workerStopped = _worker.Join(TimeSpan.FromSeconds(2));
+            }
+            catch (Exception ex)
+            {
+                Log.DebugRateLimited(
+                    "melanopic-worker-shutdown",
+                    $"Melanopic worker shutdown wait failed: {ex.Message}",
+                    TimeSpan.FromMinutes(10));
+            }
+            if (workerStopped)
+            {
+                _wake.Dispose();
+            }
+            else
+            {
+                // The background worker may still be unwinding an in-flight file read. Do
+                // not dispose its wait handle underneath it; process shutdown will reclaim
+                // the handle once this rare timeout path completes.
+                Log.DebugRateLimited(
+                    "melanopic-worker-shutdown-timeout",
+                    "Melanopic worker did not stop within two seconds; leaving its wait handle alive for safe unwind.",
+                    TimeSpan.FromMinutes(10));
+            }
         }
     }
 }

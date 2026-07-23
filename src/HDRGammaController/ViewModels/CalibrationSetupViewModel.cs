@@ -447,7 +447,17 @@ namespace HDRGammaController.ViewModels
                 System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ArgyllCMS"),
                 AppContext.BaseDirectory,
             };
-            try { Directory.CreateDirectory(CorrectionsFolder); } catch { }
+            try
+            {
+                Directory.CreateDirectory(CorrectionsFolder);
+            }
+            catch (Exception ex)
+            {
+                Log.DebugRateLimited(
+                    "calibration-corrections-directory",
+                    $"Could not create the calibration corrections directory '{CorrectionsFolder}': {ex.Message}",
+                    TimeSpan.FromMinutes(10));
+            }
 
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var dir in dirs)

@@ -422,7 +422,17 @@ namespace HDRGammaController.Core.Calibration
             }
             finally
             {
-                try { if (File.Exists(srcPath)) File.Delete(srcPath); } catch { }
+                try
+                {
+                    if (File.Exists(srcPath)) File.Delete(srcPath);
+                }
+                catch (Exception ex)
+                {
+                    Log.DebugRateLimited(
+                        "profile-installer-source-cleanup",
+                        $"Could not remove temporary profile source '{srcPath}': {ex.Message}",
+                        TimeSpan.FromMinutes(10));
+                }
             }
         }
 
@@ -564,7 +574,18 @@ namespace HDRGammaController.Core.Calibration
             }
             finally
             {
-                try { if (Directory.Exists(stagingDirectory)) Directory.Delete(stagingDirectory, recursive: true); } catch { }
+                try
+                {
+                    if (Directory.Exists(stagingDirectory))
+                        Directory.Delete(stagingDirectory, recursive: true);
+                }
+                catch (Exception ex)
+                {
+                    Log.DebugRateLimited(
+                        "profile-installer-staging-cleanup",
+                        $"Could not remove profile staging directory '{stagingDirectory}': {ex.Message}",
+                        TimeSpan.FromMinutes(10));
+                }
             }
         }
 

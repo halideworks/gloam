@@ -133,7 +133,17 @@ namespace HDRGammaController.Core
                             System.Globalization.DateTimeStyles.None, out var day) &&
                         day < cutoff)
                     {
-                        try { File.Delete(file); } catch { }
+                        try
+                        {
+                            File.Delete(file);
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.DebugRateLimited(
+                                "melanopic-history-prune",
+                                $"Could not prune old melanopic history '{file}': {ex.Message}",
+                                TimeSpan.FromHours(1));
+                        }
                     }
                 }
             }

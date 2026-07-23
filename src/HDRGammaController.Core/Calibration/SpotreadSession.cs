@@ -1112,7 +1112,17 @@ namespace HDRGammaController.Core.Calibration
                     catch
                     {
                         // Didn't quit cleanly; force it.
-                        try { _process.Kill(entireProcessTree: true); } catch { }
+                        try
+                        {
+                            _process.Kill(entireProcessTree: true);
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.DebugRateLimited(
+                                "spotread-process-termination",
+                                $"Could not force the instrument process to exit: {ex.Message}",
+                                TimeSpan.FromMinutes(10));
+                        }
                     }
                 }
             }
