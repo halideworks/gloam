@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Gloam - Free, open-source HDR gamma fix for Windows</title>
-  <meta name="description" content="Gloam is a free, open-source Windows app that fixes washed-out SDR-in-HDR gamma and adds a scientifically sound night mode. No colorimeter required.">
+  <title>Gloam - HDR gamma, Game Lab, night mode, and display calibration</title>
+  <meta name="description" content="Gloam is a free, open-source Windows display tool for SDR-in-HDR gamma, perceptual night mode, per-game display profiles, and measured SDR/HDR calibration.">
   <link rel="stylesheet" href="style.css">
   <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
 </head>
@@ -44,7 +44,7 @@
           <span class="kicker">SDR-in-HDR Gamma Override</span>
           <h1>Fix the gray that Windows HDR casts over <span>everything.</span></h1>
           <p class="hero-tagline">Gloam is a free, open-source Windows app that restores proper gamma to SDR content in HDR, with a color-science-aware night mode.</p>
-          <p class="hero-summary">A small tray app, designed by a colorist, that repairs the broken Windows HDR tone curve per monitor while you play, watch, or work.</p>
+          <p class="hero-summary">A local tray app, designed by a colorist, that corrects the SDR-in-HDR decode mismatch per display and keeps the result stable through games, driver resets, and display changes.</p>
           <div class="hero-actions">
             <a class="btn btn-primary" href="#download">Download Gloam</a>
             <a class="btn btn-secondary" href="guides.html">Read the quick-start guide</a>
@@ -60,7 +60,7 @@
             <span class="kicker">01 / The problem</span>
             <h2 id="problem-heading">Windows lifts shadows and it's ugly.</h2>
             <p>
-              When you enable HDR, Windows 11 decodes standard SDR window frames using a piecewise sRGB curve. Because almost all games, movies, and desktop assets are mastered for traditional gamma 2.2 screens, this curves mismatch dumps extra light directly into shadow regions.
+              When you enable HDR, Windows 11 decodes standard SDR window frames using a piecewise sRGB curve. Because almost all games, movies, and desktop assets are mastered for traditional gamma 2.2 screens, this curve mismatch dumps extra light directly into shadow regions.
             </p>
             <p>
               In dark scenes, such as dark gameplay in Diablo IV, blacks turn into a flat gray haze, ruining ambient contrast in the areas where human vision is most sensitive:
@@ -237,8 +237,8 @@
       <section id="features" aria-labelledby="features-heading">
         <div class="wrap" style="padding: 4rem 2rem 1rem;">
           <span class="kicker">03 / What it does</span>
-          <h2 id="features-heading">One app. Three things Windows gets wrong.</h2>
-          <p class="section-lede">Gloam fixes HDR/SDR gamma, replaces Night Light with perceptual night mode, and provides a full HDR-capable calibration path when you are ready to measure.</p>
+          <h2 id="features-heading">One app for the whole display path.</h2>
+          <p class="section-lede">Gloam manages everyday gamma and night rendering, per-game display intents, and a measured SDR/HDR calibration workflow when a meter is connected.</p>
         </div>
 
         <div class="feature-grid">
@@ -269,7 +269,27 @@
               </span>
               Colorimeter calibration
             </h3>
-            <p>Add a meter and Gloam installs a native Windows MHC2 profile, then verifies it by measuring through the applied correction. HDR verification includes a PQ tracking sweep in absolute nits.</p>
+            <p>Add a meter and Gloam builds a native Windows MHC2 profile, installs it for the measured display mode, and re-measures through the applied correction. HDR runs cover neutral PQ tracking and colored R/G/B/C/M/Y patches in absolute luminance.</p>
+          </article>
+
+          <article class="feature-card">
+            <h3>
+              <span class="feature-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M7 8h10a5 5 0 0 1 4.8 6.4l-1.1 3.7a2.5 2.5 0 0 1-4.3.9l-2-2.5H9.6l-2 2.5a2.5 2.5 0 0 1-4.3-.9l-1.1-3.7A5 5 0 0 1 7 8z"/><path d="M8 11v4M6 13h4M16.5 12.5h.01M18.5 14.5h.01"/></svg>
+              </span>
+              Game Lab
+            </h3>
+            <p>Save a profile for each game, then choose Reference, Competitive Clarity, Cinematic HDR, or spectral Night Ops. Gloam follows the foreground game, targets the displays its window covers, and can lock schedule-derived color for the session.</p>
+          </article>
+
+          <article class="feature-card">
+            <h3>
+              <span class="feature-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/><path d="m3 6 5 3 5-6 7 4"/></svg>
+              </span>
+              Reports that stay current
+            </h3>
+            <p>Detailed reports include distributions, worst patches, raw CSV data, tone and gamut charts, and HDR PQ tracking. Joint HDR refinement keeps the best measured result, re-verifies it, and refreshes the saved report data and every derived view.</p>
           </article>
 
           <article class="feature-card">
@@ -289,7 +309,7 @@
               </span>
               Native apply
             </h3>
-            <p>LUTs write directly to the GPU gamma ramp through the Windows API. No helper process. No repeated rewrites when nothing has changed.</p>
+            <p>Live LUTs normally write through the Windows gamma-ramp API, with an Argyll <code>dispwin</code> fallback for drivers that need it. A coalesced output path skips redundant hardware writes.</p>
           </article>
 
           <article class="feature-card">
@@ -299,7 +319,7 @@
               </span>
               No telemetry, fully local
             </h3>
-            <p>Your settings live in a local JSON file. The only network calls are the auto-updater (it checks GitHub for new releases and downloads them) and, when you calibrate, the optional ArgyllCMS and spectral-correction downloads. No telemetry, no accounts.</p>
+            <p>Settings, game profiles, measurements, reports, and logs stay on your PC. Network access is limited to GitHub update checks and explicit downloads such as a missing Argyll package or a DisplayCAL correction. No telemetry, no account, no cloud processing.</p>
           </article>
         </div>
       </section>
@@ -315,7 +335,7 @@
               Gloam exists because a lot of people bought beautiful HDR displays and then watched Windows wash them out. As a Windows user this bothers me but as a colorist this dismays me. The fix is straightforward enough to give away, and open enough that anyone can inspect it, improve it, or fork it.
             </p>
             <p>
-              The source is on GitHub. Builds are published through GitHub Releases. There is no paid tier, no subscription, no data collection, and no upsell. If you have a colorimeter, great. If you do not, the app still will make SDR content look pristine on your HDR display.
+              The source is on GitHub. Builds are published through GitHub Releases. There is no paid tier, subscription, data collection, or upsell. A colorimeter unlocks measured calibration, but the gamma correction, night mode, and Game Lab work without one.
             </p>
             <a class="btn btn-secondary" href="https://github.com/halideworks/gloam">View source on GitHub</a>
           </div>
@@ -324,11 +344,11 @@
             <ul class="opensource-list">
               <li>
                 <span style="color: var(--accent); font-weight: bold; flex-shrink: 0; margin-right: 0.5rem;">→</span>
-                <span><strong>Core features need no dependencies.</strong> Gamma correction, night mode, and dashboard run on the app's native pipeline.</span>
+                <span><strong>Core features need no external tools.</strong> Gamma correction, night mode, Game Lab, and the dashboard run on Gloam's native pipeline.</span>
               </li>
               <li>
                 <span style="color: var(--accent); font-weight: bold; flex-shrink: 0; margin-right: 0.5rem;">→</span>
-                <span><strong>ArgyllCMS is used only for measurement.</strong> It is downloaded automatically when calibration runs and invoked as a separate process. Gloam does not link against it.</span>
+                <span><strong>ArgyllCMS is used only for measurement and compatibility fallback.</strong> Official packages include it; source builds can fetch it if missing. Gloam invokes it as a separate process and does not link against it.</span>
               </li>
               <li>
                 <span style="color: var(--accent); font-weight: bold; flex-shrink: 0; margin-right: 0.5rem;">→</span>
@@ -413,7 +433,7 @@
               <span style="font-size: 1.25rem;">+</span>
             </summary>
             <div class="faq-body" style="padding-top: 1rem; opacity: 0.85; max-width: 800px;">
-              <p>Both. HDR is where the gray haze is most obvious, so that is where Gloam started. The gamma fix operates inside the HDR signal path, and colorimeter corrections install as native Windows MHC2 profiles that the compositor applies in HDR and SDR. SDR displays get gamma control, night mode, and full calibration too.</p>
+              <p>Both. HDR is where the gray haze is most obvious, so that is where Gloam started. The gamma fix operates inside the HDR signal path. Measured corrections are installed as native Windows MHC2 profiles for the SDR or HDR display association used during the run. SDR displays also get gamma control, night mode, Game Lab, and full calibration.</p>
             </div>
           </details>
 
@@ -424,8 +444,19 @@
             </summary>
             <div class="faq-body" style="padding-top: 1rem; opacity: 0.85; max-width: 800px;">
               <p>Three differences. First, the math: Gloam derives its warm white points from the Planckian locus computed against the CIE 1931 observer, models incomplete chromatic adaptation in CAT16 cone space, and blends in linear light where light physically mixes. Night Light is a simple compositor filter that tints without discernment.</p>
-              <p>Second, composition: Night Light fights other corrections for control of the pipeline. Gloam bakes the warm shift into the same high-precision LUTs as your gamma and calibration, so nothing bands or flickers.</p>
+              <p>Second, composition: Gloam combines gamma and night rendering into one high-precision live ramp, while an installed MHC2 profile remains the compositor-level measured correction. The output coalescer applies the resolved state as one update.</p>
               <p>Third, control: Off disables schedule and manual warmth, Schedule follows your configured time or sun position, and Manual holds your chosen warmth now. You can also set fades, a per-application night-mode auto-disable list that drops the warm shift while a chosen app is in the foreground (gamma and calibration stay active), and per-monitor temperature offsets.</p>
+            </div>
+          </details>
+
+          <details style="border-bottom: var(--border-thin) solid var(--border); padding: 1rem 0;">
+            <summary style="font-weight: 700; cursor: pointer; text-transform: uppercase; list-style: none; display: flex; justify-content: space-between; align-items: center;">
+              What does Game Lab change?
+              <span style="font-size: 1.25rem;">+</span>
+            </summary>
+            <div class="faq-body" style="padding-top: 1rem; opacity: 0.85; max-width: 800px;">
+              <p>Game Lab resolves a saved display intent when a configured game owns the foreground window. It can select gamma, apply a calibrated shadow lift, choose a night policy, hold schedule-derived color steady with Gameplay Lock, and report local signal facts such as HDR state, DXGI color space, bit depth, headroom, and calibration status.</p>
+              <p>It does not inject into games, hook swap chains, install an overlay, or inspect game memory. The library scanner reads local Steam, Epic, GOG, and Xbox metadata and leaves every discovered title for you to add explicitly.</p>
             </div>
           </details>
 

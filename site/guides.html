@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Guides - Gloam</title>
-  <meta name="description" content="Quick-start guide and calibration best practices for Gloam, the free, open-source HDR-native display tool for Windows.">
+  <meta name="description" content="Current setup, Game Lab, calibration, verification, HDR refinement, and troubleshooting guides for Gloam on Windows.">
   <link rel="stylesheet" href="style.css">
   <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
 </head>
@@ -41,7 +41,7 @@
         <span class="kicker">Documentation</span>
         <h1>Guides</h1>
         <p class="section-lede">
-          From a fresh download to a verified calibration. The quick start covers the whole flow; the best-practices section is what separates a good measurement from a misleading one.
+          From a fresh download to a verified calibration and per-game display intent. The quick start follows the current app; the measurement notes explain where accuracy is won or lost.
         </p>
       </section>
 
@@ -69,26 +69,47 @@
             <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>F1</kbd> for 2.2,
             <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>F2</kbd> for 2.4,
             <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>F3</kbd> for Windows default, and
-            <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>F4</kbd> for panic mode, which clears all gamma tables immediately. <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd> toggles night mode.</p>
+            <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>F4</kbd> for panic mode, which clears all gamma tables immediately. <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd> toggles night mode, and <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd> opens Game Lab for the active game.</p>
           </li>
 
           <li data-step="03">
             <h3>Calibrate (colorimeter required)</h3>
             <p>Connect your meter and open <strong>Calibrate Display</strong> from the tray.</p>
             <ul style="padding-left: 1.5rem; margin-bottom: 1.5rem;">
-              <li>Pick the monitor, the display type, and the target. For HDR displays use <strong>HDR Desktop PQ (sRGB gamut)</strong>.</li>
-              <li>Select a <strong>meter spectral correction</strong> matched to your panel. The "Find online" button searches the DisplayCAL community database and downloads the file directly. Strongly recommended for QD-OLED and wide-gamut panels.</li>
-              <li>Start the run. Patches are measured with your existing corrections bypassed; a mute button silences the capture sounds mid-run. On HDR displays the run also measures an HDR wire ladder: true HDR-range patches far above SDR white, emitted through a DirectX FP16 surface at exact PQ positions.</li>
+              <li>Pick the monitor, display type, and target. For an HDR desktop run, use <strong>HDR Desktop PQ (sRGB gamut)</strong>. The setup page checks that Windows is in the matching SDR or HDR mode before measurement.</li>
+              <li>Select a <strong>meter spectral correction</strong> matched to the panel. <strong>Find online</strong> searches the DisplayCAL community database. The same browser can measure a new .ccss with a spectrometer or build a .ccmx from a reference spectrometer and colorimeter.</li>
+              <li>Choose <strong>Place Probe</strong> to position the shared patch surface on the intended display. The same placement window is reused by calibration, verification, refinement, characterization, trust checks, and correction capture.</li>
+              <li>Start the run. Gloam suspends its temporary rendering and measures with the intended calibration bypass. On HDR displays it also emits true HDR-range patches through a DirectX FP16 surface at exact PQ positions.</li>
             </ul>
           </li>
 
           <li data-step="04">
-            <h3>Verify</h3>
-            <p>When the run completes, Gloam applies the profile and re-measures through it automatically, then opens the scored report: native vs. calibrated dE2000 (average, max, grayscale, primaries), tone and gamut charts with the corrected response overlaid, and on HDR displays a PQ tracking sweep graded in absolute nits against ST.2084.</p>
-            <p>Use the <strong>toggle button</strong> for an eyes-on A/B against the uncorrected panel. Reports are kept in history and can be exported as a printer-friendly PDF.</p>
+            <h3>Verify the installed result</h3>
+            <p>When the run completes, Gloam installs the profile and measures through it. The report compares native and calibrated dE2000, shows tone and gamut charts, and records the exact profile and signal state used for the run.</p>
+            <p>Enable detailed verification for error distributions and the worst-patch list. HDR verification adds neutral PQ tracking in absolute nits plus colored R/G/B/C/M/Y patches scored with dE ITP. The report keeps its JSON snapshot and raw CSV data in history; export a printer-friendly PDF when you need a portable record.</p>
+            <p>Use the report's <strong>toggle</strong> control for an immediate A/B. If activation is suspect, treat the measurements as diagnostic evidence and resolve the profile association before judging the calibration.</p>
           </li>
 
           <li data-step="05">
+            <h3>Refine, characterize, and track</h3>
+            <p>For a live HDR report with its profile enabled, <strong>Refine → HDR tone + color</strong> runs a coordinated closed loop over neutral and colored HDR patches. It keeps the best measured state, limits the solve to two passes, and refuses unsafe or non-improving changes.</p>
+            <p>After a successful refinement, Gloam re-verifies through the new profile and rebuilds the report. The numbers, charts, saved JSON, raw CSV files, and later PDF exports therefore describe the refined calibration rather than the original run.</p>
+            <p><strong>Characterize HDR</strong> measures the panel's true peak, clipping or roll-off knee, and APL/ABL behavior with extra samples near the top end. <strong>Trust Check</strong> is a short six-patch recheck that trends average error and white-point drift, exports CSV, and can remind you monthly without committing you to a full recalibration.</p>
+          </li>
+
+          <li data-step="06">
+            <h3>Set up Game Lab</h3>
+            <p>Press <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd> while a game is active. Add that executable, or scan local Steam, Epic, GOG, and Xbox library metadata and choose a title yourself. Scanning never enables a profile automatically.</p>
+            <ul style="padding-left: 1.5rem; margin-bottom: 1.5rem;">
+              <li><strong>Reference</strong> keeps measured correction and the monitor's normal gamma.</li>
+              <li><strong>Competitive Clarity</strong> lifts the deepest shadows while protecting the midtones.</li>
+              <li><strong>Cinematic HDR</strong> preserves the HDR path and requires an HDR signal.</li>
+              <li><strong>Night Ops</strong> uses the spectral night renderer for dark-room play.</li>
+            </ul>
+            <p>Leave <strong>Gameplay Lock</strong> on if you want the resolved scheduled color temperature to stay fixed during the session. The active receipt shows which game, display, calibration, gamma, shadow lift, and night policy are actually in force.</p>
+          </li>
+
+          <li data-step="07">
             <h3>Live with it</h3>
             <p>Your gamma preference and night mode compose on top of the installed calibration. Open Settings from the tray for night mode scheduling, fade duration, the night-mode auto-disable list, and per-monitor temperature offsets for visually matching displays to each other.</p>
             <p>The Night Mode button cycles between <strong>Off</strong>, <strong>Schedule</strong>, and <strong>Manual</strong>. Off disables warmth entirely, Schedule follows your configured schedule, and Manual holds your selected temperature immediately.</p>
@@ -96,6 +117,14 @@
             <p>Settings, reports, corrections, diagnostics, and logs are saved under <code>%LOCALAPPDATA%\Gloam</code>. Use <strong>Export Diagnostics</strong> from the tray when reporting issues.</p>
           </li>
         </ol>
+      </section>
+
+      <section id="game-lab" style="padding-top: 3rem; border-bottom: none;">
+        <span class="kicker">Per-game control</span>
+        <h2 style="margin-top: 0; margin-bottom: 2rem;">How Game Lab stays out of the game</h2>
+        <p>Game Lab watches the normal Windows foreground-window state and resolves a saved display profile outside the game process. It does not inject a DLL, hook a swap chain, draw an overlay, or inspect game memory. Executable paths are validated before they can become profiles, and shell or system executables are filtered from discovery.</p>
+        <p>For borderless or windowed games that span displays, Gloam applies the profile only to the screens covered by the game window. Local signal checks report the expected SDR/HDR mode, DXGI color space, bit depth, HDR headroom, and measured-calibration status. These are observations of the Windows display chain, not claims about a game's internal renderer.</p>
+        <p>Edits save and apply automatically. Disable the profile to compare against your normal desktop state, or press the panic hotkey at any time to clear live gamma ramps. Calibration and verification temporarily bypass game rendering so a foreground profile cannot contaminate measurements.</p>
       </section>
 
       <section id="best-practices" style="padding-top: 3rem; border-bottom: none;">
@@ -119,14 +148,14 @@
         </ul>
 
         <h3>Use the right spectral correction</h3>
-        <p>A three-filter colorimeter is only as accurate as the spectral correction matching the panel's emission spectra. KSF and PFS phosphor LCDs and QD-OLEDs are difficult cases for generic corrections: an uncorrected or mismatched filter set can push the measured white point in opposite directions on two panels read by the same meter, producing errors of many tint steps. Use the in-app DisplayCAL corrections browser to fetch a .ccss matched to your panel. Gloam remembers the correction per monitor.</p>
+        <p>A three-filter colorimeter is only as accurate as the spectral correction matching the panel's emission spectra. KSF and PFS phosphor LCDs and QD-OLEDs are difficult cases for generic corrections: an uncorrected or mismatched filter set can push the measured white point in opposite directions on two panels read by the same meter, producing errors of many tint steps. Use the in-app corrections browser to fetch a matching .ccss, capture one with a spectrometer, or create a .ccmx from sequential reference and colorimeter readings. Gloam remembers the correction per monitor.</p>
 
         <h3>Know when to correct less</h3>
         <p>If a panel already measures close to target natively (roughly 2.5 dE average or better), full gamut correction has nothing real to fix, and verification will reliably come back worse. Use the <strong>white point correction only</strong> mode, which Gloam auto-suggests for OLED, or no correction at all. More correction is not more accuracy.</p>
 
-        <h3>Verify in detail, then trust your eyes last</h3>
+        <h3>Verify in detail, then make visual matching explicit</h3>
         <p>Always read the detailed verification, not just the grade: the dE histograms and the worst-patch list tell you whether residual error is broadly distributed measurement noise or concentrated somewhere visible like the grayscale. On HDR displays, check the PQ tracking sweep to confirm absolute luminance tracking across the range.</p>
-        <p>Finally, instruments and eyes weigh display spectra differently (observer metamerism): two displays can measure identical and still look different side by side. A small final Tint or Temperature trim against a reference display is normal, rides on top of the profile, and never affects the measurements.</p>
+        <p>Instruments and eyes can weigh display spectra differently (observer metamerism), so two displays may measure alike and still look different side by side. Use the report's White Tools or a small per-display Temperature/Tint trim when visual matching is the real goal. That trim changes the final rendered state; verify again if the report must describe the trimmed output.</p>
 
         <h3>Use Back freely</h3>
         <p>The calibration wizard is stateful. If you go back from Finalize Calibration, Gloam keeps the selected monitor, target, preset, correction file, display type, display mode, sound options, detailed verification choice, patch placement, and window size. This makes it safe to revise setup choices without losing the meter session.</p>
@@ -149,6 +178,15 @@
 
         <h3>The wrong monitor appears selected</h3>
         <p>Use the Identify button. The monitor identity popup appears near the upper-left of the selected display and fades out after a few seconds.</p>
+
+        <h3>HDR refinement is unavailable</h3>
+        <p>Open the live HDR report for the selected display and make sure its generated profile is both applied and enabled. Refinement requires the installed HDR tone LUTs, a connected meter, and the same display mode used by the report. Historical reports remain readable, but they cannot drive a new measurement loop.</p>
+
+        <h3>A Game Lab profile does not activate</h3>
+        <p>Confirm that the saved executable path still points to the game, that the profile is enabled, and that the game owns the foreground window. Re-scan the library if a launcher moved the installation. The active receipt is the authority: it shows the resolved game and every display currently covered by its window.</p>
+
+        <h3>Verification says profile activation is suspect</h3>
+        <p>Keep Windows in the SDR or HDR mode used for calibration, enable the generated profile, and run Verify again. The warning means the measured change did not resemble the expected installed correction closely enough; it is safer to fix the profile association or compositor state than to interpret the score as a valid calibrated result.</p>
 
         <h3>An update did not seem to install</h3>
         <p>Installed builds download updates in the background and apply them when the app exits or restarts. Portable builds do not auto-update. After installing an update, fully quit Gloam and launch it again.</p>

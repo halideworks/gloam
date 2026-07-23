@@ -5,7 +5,7 @@
 Gloam is in strong shape for a Windows desktop application that crosses managed code,
 Win32, DXGI, ICC/MHC2 profiles, external measurement tools, and physical instruments. The
 current tree has no known vulnerable NuGet packages, no security-category .NET analyzer
-findings, a warning-free strict Release build, and 1,252 passing tests.
+findings, warning-free strict Debug and Release builds, and 1,255 passing tests.
 
 That is not the same as “proven bug-free.” No honest audit can make that claim, and this
 environment cannot reproduce every Windows HDR compositor, GPU driver, display firmware,
@@ -14,9 +14,9 @@ USB instrument, or ICC-registration failure mode. The remaining risks are stated
 | Area | Current assessment | Evidence |
 | --- | --- | --- |
 | Security | No known high-severity issue remains | Current NuGet advisory scan; process-launch, download, archive, path, persistence, and untrusted-input review |
-| Correctness | Strong automated coverage; hardware boundary still matters | 1,252 Debug and Release tests; calibration math and artifact regression suites |
+| Correctness | Strong automated coverage; hardware boundary still matters | 1,255 Debug and Release tests; calibration math, coordinator, XAML, and artifact regression suites |
 | Performance | Appropriate for the workload, with hot-path allocation waste removed | Allocation-free 3×3 color transforms; coalesced/rate-limited hardware writes; bounded network and file inputs |
-| Maintainability | Good and materially improved, but not immaculate | Shared probe-placement flow, specific analyzer baseline, documented lifecycle ownership, remaining large WPF controllers |
+| Maintainability | Strong, with remaining presentation concentration | Shared probe/session lifecycle, focused workflow coordinators, split settings concerns, common XAML surfaces, specific analyzer baseline |
 | Dead code and cruft | No obvious unfinished or abandoned production path found | Source scan found no TODO/FIXME/HACK markers or `NotImplementedException`; compiler/analyzer pass clean under the project policy |
 
 ## Confirmed findings fixed
@@ -57,6 +57,10 @@ setup/calibration flow releases its colorimeter service; choosing Back transfers
 to the reopened setup flow instead. WPF windows that own disposable resources now document
 their close-path ownership explicitly, while conventional `IDisposable` implementations call
 `GC.SuppressFinalize`.
+
+The melanopic worker's shutdown now synchronizes queue admission with disposal. If an in-flight
+evaluation does not unwind within the bounded shutdown wait, its event handle stays alive rather
+than being disposed underneath the background thread; the timeout is rate-limited in diagnostics.
 
 ### Native and parser error handling
 
@@ -105,12 +109,12 @@ hashing, and search-allocation findings were fixed rather than added to the base
 - `dotnet build src/HDRGammaController.sln /p:GloamStrictBuild=true`: zero warnings and errors.
 - strict Release build: zero warnings and errors.
 - focused security, persistence, parser, lifecycle, and color-math suites: all passing.
-- complete Debug suite: 1,252 passed, zero failed or skipped.
-- complete Release suite: 1,252 passed, zero failed or skipped.
+- complete Debug suite: 1,255 passed, zero failed or skipped.
+- complete Release suite: 1,255 passed, zero failed or skipped.
 - `dotnet list ... package --vulnerable --include-transitive` against NuGet.org: no vulnerable
   package in any production, CLI, interop, debug, or test project.
 - source scans for unfinished implementations, unsafe process argument construction, embedded
-  secrets, destructive file paths, and broad analyzer suppression.
+  secrets, destructive file paths, broad analyzer suppression, and silent non-critical failures.
 
 ## Residual risks and deliberate non-changes
 
@@ -122,13 +126,15 @@ USB recovery, or actual Argyll prompts across every supported instrument. Before
 the highest-value manual gate remains one SDR and one HDR calibration on supported hardware,
 including cancel/retry, refinement, report regeneration, reboot persistence, and update install.
 
-### Large UI controllers
+### Large presentation surfaces
 
-`CalibrationReportWindow`, `CalibrationWindow`, and `SettingsManager` remain large. Their most
-error-prone shared behavior has been consolidated, and the cleanup audit identifies sensible
-extraction boundaries, but splitting thousands of lines mechanically would increase regression
-risk without improving the shipped behavior. Further decomposition should follow real feature
-work, one testable responsibility at a time.
+`CalibrationReportWindow` and `CalibrationWindow` remain large because they present unusually
+deep measurement workflows. Their probe/session ownership, verification, HDR refinement,
+report persistence, initial-run orchestration, artifact construction, and profile-install policy
+have now moved to focused collaborators. Settings disk I/O, migration, and normalization are
+also separate behind the stable `SettingsManager` facade. The remaining size is primarily WPF
+navigation, binding, charts, and command presentation; further splitting should follow coherent
+UI capabilities rather than line-count targets.
 
 ### Dependency upgrades
 
