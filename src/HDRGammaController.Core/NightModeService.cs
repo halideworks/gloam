@@ -176,27 +176,6 @@ namespace HDRGammaController.Core
             return true;
         }
 
-        /// <summary>
-        /// Gets effective start/end times, using sunrise/sunset if auto mode enabled.
-        /// Falls back to the manual StartTime/EndTime if we're in polar day/night, where
-        /// the NOAA sentinels (0,0 / 0,24h) would otherwise drive a degenerate schedule.
-        /// </summary>
-        public (TimeSpan start, TimeSpan end) GetEffectiveTimes()
-        {
-            if (UseAutoSchedule && Latitude.HasValue && Longitude.HasValue)
-            {
-                var result = SunCalculator.CalculateTodayDetailed(Latitude.Value, Longitude.Value);
-                if (result.HasValidTimes)
-                {
-                    // Night mode starts at sunset, ends at sunrise
-                    return (result.Sunset, result.Sunrise);
-                }
-                // Polar day/night: fall back to the manual fallback times rather than
-                // collapsing the schedule to (0,0) or (0,24h).
-            }
-            return (StartTime, EndTime);
-        }
-
         public static int ClampKelvin(int kelvin) => Math.Clamp(kelvin, MinKelvin, MaxKelvin);
 
         public static int ClampFadeMinutes(int minutes) => Math.Clamp(minutes, 0, MaxFadeMinutes);

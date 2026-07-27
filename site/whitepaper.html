@@ -40,7 +40,7 @@
 
         <section>
           <h1>Gloam: A Technical Whitepaper</h1>
-          <p class="paper-meta">Windows display correction, measurement, and verification. Last updated July 22, 2026.</p>
+          <p class="paper-meta">Windows display correction, measurement, and verification. Last updated July 27, 2026.</p>
           <blockquote>A correction is trustworthy only when its signal domain, physical limits, and measured result are kept separate.</blockquote>
 
           <h2 id="abstract">Abstract</h2>
@@ -389,8 +389,9 @@
             A schedule is an ordered set of fixed-time, sunrise, or sunset points. Each point defines the
             target Kelvin and the duration of the transition to that target. Solar times use the NOAA solar
             position equations with latitude, longitude, local UTC offset, and optional ±120-minute offsets.
-            Polar day or night falls back to the saved manual times instead of treating the solar sentinels
-            as real events. The user-facing states are off, scheduled, and manual override.
+            Polar day or night substitutes fixed 07:00 and 19:00 sentinels, since the NOAA solar
+            result would otherwise collapse to a degenerate 0 h or 24 h event. The user-facing
+            states are off, scheduled, and manual override.
           </p>
 
           <h3 id="s7-2">7.2 Fade Pacing</h3>
@@ -820,6 +821,10 @@
             <li id="ref16"><a href="https://www.argyllcms.com/">ArgyllCMS</a>, by Graeme Gill.</li>
             <li id="ref17"><a href="https://github.com/dantmnf/MHC2">MHC2Gen</a>, by dantmnf.</li>
           </ol>
+          <p class="paper-meta">
+            Revision of July 27, 2026: corrected the polar day/night fallback in §7.1 to the fixed
+            07:00/19:00 sentinels the schedule resolver actually emits.
+          </p>
           <p class="paper-meta">
             Revision of July 22, 2026: separated the hardware-ramp and MHC2 paths; aligned SDR, HDR,
             temperature, headroom, constant-Y, night, melanopic, and gamer equations with the current C#
