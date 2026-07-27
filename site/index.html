@@ -68,20 +68,20 @@
 
             <div class="stats">
               <div class="stat">
-                <span class="stat-value">+58.7%</span>
-                <span class="stat-label">Extra light at 10% signal (deep shadows)</span>
+                <span class="stat-value">2.87×</span>
+                <span class="stat-label">Extra light at 5% signal (deep shadows)</span>
               </div>
               <div class="stat">
-                <span class="stat-value">+52.5%</span>
-                <span class="stat-label">Extra light at 20% signal (low mid-tones)</span>
+                <span class="stat-value">1.59×</span>
+                <span class="stat-label">Extra light at 10% signal (low shadows)</span>
               </div>
               <div class="stat">
-                <span class="stat-value">+34.3%</span>
-                <span class="stat-label">Extra light at 30% signal (average shadows)</span>
+                <span class="stat-value">1.14×</span>
+                <span class="stat-label">Extra light at 20% signal (mid-tones)</span>
               </div>
               <div class="stat">
-                <span class="stat-value">RUINED</span>
-                <span class="stat-label">Your perceptual visual experience.</span>
+                <span class="stat-value">1.00×</span>
+                <span class="stat-label">Extra light at 40% signal and above (white is correct)</span>
               </div>
             </div>
           </div>
@@ -259,7 +259,7 @@
               </span>
               Night mode, done right
             </h3>
-            <p>Temperature shifts are computed from the Planckian locus and blended in linear light, where light physically mixes. The default profile models incomplete chromatic adaptation in CAT16 cone space; a fully colorimetric CIE 1931 path is also available. Use Off, Schedule, or Manual mode, with smooth fades and a per-application auto-disable list that drops the warm shift for chosen apps.</p>
+            <p>Temperature shifts are computed from the Planckian locus and blended in linear light, where light physically mixes. The default profile models incomplete chromatic adaptation in CAT16 cone space; a fully colorimetric CIE 1931 path is also available. Use Off, Auto, or Manual mode, with smooth fades and a per-application auto-disable list that drops the warm shift for chosen apps.</p>
           </article>
 
           <article class="feature-card">
@@ -299,7 +299,7 @@
               </span>
               Per-monitor dashboard
             </h3>
-            <p>Real monitor names, HDR/SDR status, smart brightness levels, temp/tint and RGB adjustment, and live gamma mode readout for every connected display. Settings and window sizes persist per monitor and restore on startup.</p>
+            <p>Real monitor names, HDR/SDR status, brightness readout, temp/tint and RGB adjustment, and live gamma mode readout for every connected display. Settings and window sizes persist per monitor and restore on startup.</p>
           </article>
 
           <article class="feature-card">
@@ -445,7 +445,7 @@
             <div class="faq-body" style="padding-top: 1rem; opacity: 0.85; max-width: 800px;">
               <p>Three differences. First, the math: Gloam derives its warm white points from the Planckian locus computed against the CIE 1931 observer, models incomplete chromatic adaptation in CAT16 cone space, and blends in linear light where light physically mixes. Night Light is a simple compositor filter that tints without discernment.</p>
               <p>Second, composition: Gloam combines gamma and night rendering into one high-precision live ramp, while an installed MHC2 profile remains the compositor-level measured correction. The output coalescer applies the resolved state as one update.</p>
-              <p>Third, control: Off disables schedule and manual warmth, Schedule follows your configured time or sun position, and Manual holds your chosen warmth now. You can also set fades, a per-application night-mode auto-disable list that drops the warm shift while a chosen app is in the foreground (gamma and calibration stay active), and per-monitor temperature offsets.</p>
+              <p>Third, control: Off disables all warmth, Auto follows your configured time or sun position, and Manual holds your chosen warmth now. You can also set fades, a per-application night-mode auto-disable list that drops the warm shift while a chosen app is in the foreground (gamma and calibration stay active), and per-monitor temperature offsets.</p>
             </div>
           </details>
 
@@ -497,7 +497,9 @@
               <span style="font-size: 1.25rem;">+</span>
             </summary>
             <div class="faq-body" style="padding-top: 1rem; opacity: 0.85; max-width: 800px;">
-              <p>Use Off when you need exact daylight color. Use Schedule for normal evening use. Use Manual when you want warmth immediately regardless of schedule. Start around 2700K for a strong warm mode, then raise it if the screen feels too amber for your room.</p>
+              <p>For the button: use Off when you need exact daylight color, Auto for normal evening use, and Manual when you want warmth immediately regardless of schedule. Start around 2700K for a strong warm mode, then raise it if the screen feels too amber for your room.</p>
+              <p>For the rendering algorithm: <strong>Perceptual</strong> (the default) eases the white point partway toward warm, so colors stay close to normal while blue is cut. <strong>Accurate (CIE 1931)</strong> applies a full-strength black-body white point, colorimetrically exact but strongly warmed and desaturated. <strong>Ultra Night (amber)</strong> goes furthest, cutting roughly 90% of blue and most of green for maximum circadian protection in the darkest part of the evening; it is not color-accurate. <strong>Classic</strong> is a traditional photo-style tint.</p>
+              <p>If you care about the biological effect rather than the look, set a <strong>melanopic dose ceiling</strong> on the schedule. Gloam then picks the least visible combination of extra warmth and dimming that keeps the screen's melanopic light at or under your target, scored in CAM16-UCS so the change stays perceptually small.</p>
             </div>
           </details>
 

@@ -73,31 +73,24 @@
           </li>
 
           <li data-step="03">
-            <h3>Calibrate (colorimeter required)</h3>
-            <p>Connect your meter and open <strong>Calibrate Display</strong> from the tray.</p>
+            <h3>Set up night mode (no meter needed)</h3>
+            <p>Night mode warms the white point to cut blue light in the evening. It composes on top of your gamma correction and any installed calibration, and it works the same whether or not you ever calibrate.</p>
+            <p>The Night Mode button cycles between <strong>Off</strong>, <strong>Auto</strong>, and <strong>Manual</strong>. Off disables warmth entirely, Auto follows your configured schedule, and Manual holds your selected temperature immediately. <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd> is a separate quick toggle that temporarily disables or restores warmth without changing your button choice; it does not persist across restarts, so night mode always comes back on the next boot.</p>
+            <p>Open <strong>Settings</strong> from the tray to configure the schedule. Each point fixes a target Kelvin and the duration of the fade into it; triggers can be a fixed time, sunrise, or sunset, computed from your latitude and longitude with optional ±120-minute offsets. Fades run in mired space and pace themselves against a perceptual threshold, so a long slide into warm white stays smooth rather than stepping.</p>
+            <p>The rendering algorithm decides how the warm white point is computed:</p>
             <ul style="padding-left: 1.5rem; margin-bottom: 1.5rem;">
-              <li>Pick the monitor, display type, and target. For an HDR desktop run, use <strong>HDR Desktop PQ (sRGB gamut)</strong>. The setup page checks that Windows is in the matching SDR or HDR mode before measurement.</li>
-              <li>Select a <strong>meter spectral correction</strong> matched to the panel. <strong>Find online</strong> searches the DisplayCAL community database. The same browser can measure a new .ccss with a spectrometer or build a .ccmx from a reference spectrometer and colorimeter.</li>
-              <li>Choose <strong>Place Probe</strong> to position the shared patch surface on the intended display. The same placement window is reused by calibration, verification, refinement, characterization, trust checks, and correction capture.</li>
-              <li>Start the run. Gloam suspends its temporary rendering and measures with the intended calibration bypass. On HDR displays it also emits true HDR-range patches through a DirectX FP16 surface at exact PQ positions.</li>
+              <li><strong>Perceptual</strong> (the default) eases the white point partway toward warm, so colors stay close to normal while blue is cut. A strength slider controls how far the adaptation goes.</li>
+              <li><strong>Accurate (CIE 1931)</strong> applies a full-strength black-body white point. It is colorimetrically exact but strongly warms and desaturates the whole image.</li>
+              <li><strong>Ultra Night (amber)</strong> cuts roughly 90% of blue and most of green for maximum circadian protection. It is not color-accurate and is meant for the darkest part of the evening.</li>
+              <li><strong>Classic</strong> is a traditional photo-style warm tint.</li>
             </ul>
+            <p>If you care about the biological effect rather than the look, set a <strong>melanopic dose ceiling</strong> on the schedule. Gloam then picks the least visible combination of extra warmth and dimming that keeps the screen's melanopic light at or under your target, scored in CAM16-UCS so the change stays perceptually small. Typical evening targets land around 10 to 30 mel-lx; for melatonin sensitivity, under 10.</p>
+            <p>The dashboard's <strong>Circadian light (melanopic)</strong> panel shows the current screen dose and this evening's cumulative exposure. When a panel spectrum is available the estimate uses it directly; otherwise Gloam falls back to generic primaries and marks the wider uncertainty.</p>
+            <p>Application exclusions are a night-mode auto-disable list: while a listed application is in the foreground, night-mode warmth is turned off, either on every monitor or only on the displays its window covers. Your gamma correction and any installed calibration profile stay active; only the warm shift is suspended. This is useful for color-critical work in the evening, when you want neutral white on the working display without disabling night mode everywhere.</p>
+            <p>Per-monitor temperature offsets live in Settings too. Use them to visually match displays to each other; observer metamerism means two panels can measure alike and still look different side by side.</p>
           </li>
 
           <li data-step="04">
-            <h3>Verify the installed result</h3>
-            <p>When the run completes, Gloam installs the profile and measures through it. The report compares native and calibrated dE2000, shows tone and gamut charts, and records the exact profile and signal state used for the run.</p>
-            <p>Enable detailed verification for error distributions and the worst-patch list. HDR verification adds neutral PQ tracking in absolute nits plus colored R/G/B/C/M/Y patches scored with dE ITP. The report keeps its JSON snapshot and raw CSV data in history; export a printer-friendly PDF when you need a portable record.</p>
-            <p>Use the report's <strong>toggle</strong> control for an immediate A/B. If activation is suspect, treat the measurements as diagnostic evidence and resolve the profile association before judging the calibration.</p>
-          </li>
-
-          <li data-step="05">
-            <h3>Refine, characterize, and track</h3>
-            <p>For a live HDR report with its profile enabled, <strong>Refine → HDR tone + color</strong> runs a coordinated closed loop over neutral and colored HDR patches. It keeps the best measured state, limits the solve to two passes, and refuses unsafe or non-improving changes.</p>
-            <p>After a successful refinement, Gloam re-verifies through the new profile and rebuilds the report. The numbers, charts, saved JSON, raw CSV files, and later PDF exports therefore describe the refined calibration rather than the original run.</p>
-            <p><strong>Characterize HDR</strong> measures the panel's true peak, clipping or roll-off knee, and APL/ABL behavior with extra samples near the top end. <strong>Trust Check</strong> is a short six-patch recheck that trends average error and white-point drift, exports CSV, and can remind you monthly without committing you to a full recalibration.</p>
-          </li>
-
-          <li data-step="06">
             <h3>Set up Game Lab</h3>
             <p>Press <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd> while a game is active. Add that executable, or scan local Steam, Epic, GOG, and Xbox library metadata and choose a title yourself. Scanning never enables a profile automatically.</p>
             <ul style="padding-left: 1.5rem; margin-bottom: 1.5rem;">
@@ -109,12 +102,36 @@
             <p>Leave <strong>Gameplay Lock</strong> on if you want the resolved scheduled color temperature to stay fixed during the session. The active receipt shows which game, display, calibration, gamma, shadow lift, and night policy are actually in force.</p>
           </li>
 
-          <li data-step="07">
+          <li data-step="05">
             <h3>Live with it</h3>
-            <p>Your gamma preference and night mode compose on top of the installed calibration. Open Settings from the tray for night mode scheduling, fade duration, the night-mode auto-disable list, and per-monitor temperature offsets for visually matching displays to each other.</p>
-            <p>The Night Mode button cycles between <strong>Off</strong>, <strong>Schedule</strong>, and <strong>Manual</strong>. Off disables warmth entirely, Schedule follows your configured schedule, and Manual holds your selected temperature immediately.</p>
-            <p>Application exclusions are a night-mode auto-disable list: while a listed application is in the foreground, night-mode warmth is turned off, either on every monitor or only on the displays its window covers. Your gamma correction and any installed calibration profile stay active; only the warm shift is suspended. This is useful for color-critical work in the evening, where you want neutral white on the working display without disabling night mode everywhere.</p>
+            <p>Your gamma preference and night mode compose on top of the installed calibration. Settings and window sizes persist per monitor and restore on startup, along with the corrections themselves, so a reboot, display change, resume from sleep, or a game resetting the ramp all settle back to your chosen state without intervention.</p>
             <p>Settings, reports, corrections, diagnostics, and logs are saved under <code>%LOCALAPPDATA%\Gloam</code>. Use <strong>Export Diagnostics</strong> from the tray when reporting issues.</p>
+          </li>
+
+          <li data-step="06">
+            <h3>Calibrate (colorimeter required)</h3>
+            <p>The steps above cover everything most users need. Calibration is for when you have a meter and want a measured, verified profile installed at the Windows level.</p>
+            <p>Connect your meter and open <strong>Calibrate Display</strong> from the tray.</p>
+            <ul style="padding-left: 1.5rem; margin-bottom: 1.5rem;">
+              <li>Pick the monitor, display type, and target. For an HDR desktop run, use <strong>HDR Desktop PQ (sRGB gamut)</strong>. The setup page checks that Windows is in the matching SDR or HDR mode before measurement.</li>
+              <li>Select a <strong>meter spectral correction</strong> matched to the panel. <strong>Find online</strong> searches the DisplayCAL community database. The same browser can measure a new .ccss with a spectrometer or build a .ccmx from a reference spectrometer and colorimeter.</li>
+              <li>Choose <strong>Place Probe</strong> to position the shared patch surface on the intended display. The same placement window is reused by calibration, verification, refinement, characterization, trust checks, and correction capture.</li>
+              <li>Start the run. Gloam suspends its temporary rendering and measures with the intended calibration bypass. On HDR displays it also emits true HDR-range patches through a DirectX FP16 surface at exact PQ positions.</li>
+            </ul>
+          </li>
+
+          <li data-step="07">
+            <h3>Verify the installed result</h3>
+            <p>When the run completes, Gloam installs the profile and measures through it. The report compares native and calibrated dE2000, shows tone and gamut charts, and records the exact profile and signal state used for the run.</p>
+            <p>Enable detailed verification for error distributions and the worst-patch list. HDR verification adds neutral PQ tracking in absolute nits plus colored R/G/B/C/M/Y patches scored with dE ITP. The report keeps its JSON snapshot and raw CSV data in history; export a printer-friendly PDF when you need a portable record.</p>
+            <p>Use the report's <strong>toggle</strong> control for an immediate A/B. If activation is suspect, treat the measurements as diagnostic evidence and resolve the profile association before judging the calibration.</p>
+          </li>
+
+          <li data-step="08">
+            <h3>Refine, characterize, and track</h3>
+            <p>For a live HDR report with its profile enabled, <strong>Refine → HDR tone + color</strong> runs a coordinated closed loop over neutral and colored HDR patches. It keeps the best measured state, limits the solve to two passes, and refuses unsafe or non-improving changes.</p>
+            <p>After a successful refinement, Gloam re-verifies through the new profile and rebuilds the report. The numbers, charts, saved JSON, raw CSV files, and later PDF exports therefore describe the refined calibration rather than the original run.</p>
+            <p><strong>Characterize HDR</strong> measures the panel's true peak, clipping or roll-off knee, and APL/ABL behavior with extra samples near the top end. <strong>Trust Check</strong> is a short six-patch recheck that trends average error and white-point drift, exports CSV, and can remind you monthly without committing you to a full recalibration.</p>
           </li>
         </ol>
       </section>
@@ -155,7 +172,7 @@
 
         <h3>Verify in detail, then make visual matching explicit</h3>
         <p>Always read the detailed verification, not just the grade: the dE histograms and the worst-patch list tell you whether residual error is broadly distributed measurement noise or concentrated somewhere visible like the grayscale. On HDR displays, check the PQ tracking sweep to confirm absolute luminance tracking across the range.</p>
-        <p>Instruments and eyes can weigh display spectra differently (observer metamerism), so two displays may measure alike and still look different side by side. Use the report's White Tools or a small per-display Temperature/Tint trim when visual matching is the real goal. That trim changes the final rendered state; verify again if the report must describe the trimmed output.</p>
+        <p>Instruments and eyes can weigh display spectra differently (observer metamerism), so two displays may measure alike and still look different side by side. Use the report's White point tools or a small per-display Temperature/Tint trim when visual matching is the real goal. That trim changes the final rendered state; verify again if the report must describe the trimmed output.</p>
 
         <h3>Use Back freely</h3>
         <p>The calibration wizard is stateful. If you go back from Finalize Calibration, Gloam keeps the selected monitor, target, preset, correction file, display type, display mode, sound options, detailed verification choice, patch placement, and window size. This makes it safe to revise setup choices without losing the meter session.</p>
@@ -171,7 +188,7 @@
         <h2 style="margin-top: 0; margin-bottom: 2rem;">Troubleshooting</h2>
 
         <h3>Night Mode is not changing the display</h3>
-        <p>Check the button state. Off disables all warmth, including the schedule. Schedule only warms during the configured time window or sun-position window. Manual holds the selected temperature immediately.</p>
+        <p>Check the button state. Off disables all warmth, including the schedule. Auto only warms during the configured time window or sun-position window. Manual holds the selected temperature immediately.</p>
 
         <h3>Calibration will not start</h3>
         <p>Confirm the meter is connected, click Refresh, and read the setup warning. HDR targets require Windows HDR to be active on the selected display. SDR targets require HDR to be off. For correction files, .ccss and .ccmx files may contain negative samples; that is valid and expected.</p>
