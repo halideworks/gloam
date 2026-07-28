@@ -24,10 +24,19 @@ DST = os.path.join(ROOT, "site", "whitepaper.md")
 ORIGIN = "https://getgloam.org"
 
 INLINE_OPEN = {
-    "strong": "**", "b": "**", "em": "_", "i": "_", "cite": "_", "code": "`",
+    # Emphasis uses * rather than _ because subscripts are written with _ below,
+    # and this paper is full of an italic variable immediately followed by its
+    # subscript: <em>Y</em><sub>rel</sub> would close as _Y__{rel}, whose double
+    # underscore a Markdown reader takes for bold.
+    "strong": "**", "b": "**", "em": "*", "i": "*", "cite": "*", "code": "`",
 }
-# Rendered as plain text; Markdown has no portable sub/sup.
-PASSTHROUGH = {"span", "sup", "sub", "abbr", "small", "br", "nav", "svg", "text", "g", "path", "rect", "line", "polyline", "circle"}
+# Rendered as plain text. Markdown has no portable sub/sup, so <sub> and <sup>
+# are NOT in here: they carry meaning this document cannot afford to drop.
+# Flattening them turns m<sub>1</sub> into "m1", which reads as a variable named
+# m1 rather than as m subscript 1, and x<sup>y</sup> into "xy". They are written
+# in the _ and ^ notation instead, which is what a reader piping this into a
+# tool will expect.
+PASSTHROUGH = {"span", "abbr", "small", "br", "nav", "svg", "text", "g", "path", "rect", "line", "polyline", "circle"}
 
 
 class Extractor(HTMLParser):
@@ -81,6 +90,8 @@ def render(tokens):
     md = []
     buf = []
     stack = []
+    # Open <sub>/<sup> elements, as (tag, index into buf where the body starts).
+    scripts = []
     list_stack = []
     in_formula = False
     formula_lines = []
@@ -135,6 +146,13 @@ def render(tokens):
                 if not in_formula:
                     buf.append("[")
                     stack.append(("a", attrs.get("href", "")))
+            elif tag in ("sub", "sup"):
+                # Unlike emphasis, these are written even inside a formula: the
+                # code fence is exactly where losing them does the most damage.
+                # Formula text accumulates in its own buffer, so remember which
+                # one this body lands in. It is rewritten on the closing tag.
+                target = formula_lines if in_formula else buf
+                scripts.append((tag, target, len(target)))
             elif tag in INLINE_OPEN:
                 # Formula bodies are emitted verbatim in a code fence, so inline
                 # emphasis inside them must not leak markers into the text buffer.
@@ -146,7 +164,17 @@ def render(tokens):
                 raise ValueError("unhandled start tag: " + tag)
 
         else:  # end
-            if tag in ("h1", "h2", "h3", "h4"):
+            if tag in ("sub", "sup"):
+                if scripts and scripts[-1][0] == tag:
+                    _, target, start = scripts.pop()
+                    inner = "".join(target[start:]).strip()
+                    del target[start:]
+                    if inner:
+                        mark = "_" if tag == "sub" else "^"
+                        # Braces only where they disambiguate, so the common
+                        # single-character case stays readable: m_1, not m_{1}.
+                        target.append(mark + (inner if len(inner) == 1 else "{" + inner + "}"))
+            elif tag in ("h1", "h2", "h3", "h4"):
                 level = int(tag[1])
                 flush("#" * level + " ")
                 if stack and stack[-1] == tag:

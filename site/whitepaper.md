@@ -40,9 +40,9 @@ Content is not universally mastered to one display gamma. sRGB imagery, Rec.709 
 
 ### 2.2 Size of the Difference
 
-The following values are relative linear light for the same encoded signal _v_.
+The following values are relative linear light for the same encoded signal *v*.
 
-| Signal | sRGB EOTF | v2.2 | sRGB / gamma 2.2 |
+| Signal | sRGB EOTF | v^{2.2} | sRGB / gamma 2.2 |
 | --- | --- | --- | --- |
 | 0.05 | 0.00394 | 0.00137 | 2.87× |
 | 0.10 | 0.01002 | 0.00631 | 1.59× |
@@ -57,28 +57,28 @@ The correction reconstructs the SDR signal from the luminance assigned by Window
 ### 3.1 Power Law
 
 ```
-L = vγ
+L = v^γ
 ```
 
-Here _v_ is a normalized encoded value and _L_ is normalized linear light. Gloam uses γ = 2.2 or 2.4 for the selectable power-law modes.
+Here *v* is a normalized encoded value and *L* is normalized linear light. Gloam uses γ = 2.2 or 2.4 for the selectable power-law modes.
 
 ### 3.2 sRGB
 
 ```
-EsRGB(v) = v / 12.92, v ≤ 0.04045
-EsRGB(v) = ((v + 0.055) / 1.055)2.4, v > 0.04045
+E_{sRGB}(v) = v / 12.92, v ≤ 0.04045
+E_{sRGB}(v) = ((v + 0.055) / 1.055)^{2.4}, v > 0.04045
 ```
 
-_E_sRGB is the signal-to-linear-light direction. Its inverse is used to recover an SDR signal from normalized linear luminance.
+*E*_{sRGB} is the signal-to-linear-light direction. Its inverse is used to recover an SDR signal from normalized linear luminance.
 
 ### 3.3 SMPTE ST 2084 (PQ)
 
 ```
-L = 10000 · ((max(V1/m₂ − c₁, 0)) /
-(c₂ − c₃V1/m₂))1/m₁
+L = 10000 · ((max(V^{1/m_2} − c_1, 0)) /
+(c_2 − c_3V^{1/m_2}))^{1/m_1}
 ```
 
-The implementation uses m₁ = 2610/16384, m₂ = 2523/32, c₁ = 3424/4096, c₂ = 2413/128, and c₃ = 2392/128. PQ values are absolute: _V_ = 1 represents 10,000 cd/m². Gloam uses the inverse function to encode an absolute luminance back to PQ.
+The implementation uses m_1 = 2610/16384, m_2 = 2523/32, c_1 = 3424/4096, c_2 = 2413/128, and c_3 = 2392/128. PQ values are absolute: *V* = 1 represents 10,000 cd/m². Gloam uses the inverse function to encode an absolute luminance back to PQ.
 
 ### 3.4 RGB Bases
 
@@ -88,26 +88,26 @@ Live SDR ramps operate in an sRGB/Rec.709 basis. The HDR10 wire is a Rec.2020 co
 
 ### 4.1 SDR Output
 
-For SDR output, Gloam assumes a native display response near gamma 2.2. At LUT input _x_, it decodes with the selected target gamma, applies user controls in linear light, and encodes for the assumed 2.2 display response:
+For SDR output, Gloam assumes a native display response near gamma 2.2. At LUT input *x*, it decodes with the selected target gamma, applies user controls in linear light, and encodes for the assumed 2.2 display response:
 
 ```
-ℓ = xγtarget
+ℓ = x^{γ_{target}}
 (r, g, b) = A(ℓ, ℓ, ℓ)
-LUTc(x) = c1/2.2
+LUT_c(x) = c^{1/2.2}
 ```
 
 Windows Default and gamma 2.2 are therefore identity when no other adjustment is active. Gamma 2.4 darkens the lower range. A measured calibration does not use this assumed response; its own fitted tone curves live in the installed profile.
 
 ### 4.2 HDR Output
 
-Let _V_ be the PQ wire value, _P_(_V_) its luminance in cd/m², and _W_ the Windows SDR white level. Within the SDR region, a selected power-law mode computes:
+Let *V* be the PQ wire value, *P*(*V*) its luminance in cd/m², and *W* the Windows SDR white level. Within the SDR region, a selected power-law mode computes:
 
 ```
-q = EsRGB−1(P(V) / W)
-Lγ = W · qγtarget
+q = E_{sRGB}^{−1}(P(V) / W)
+L_γ = W · q^{γ_{target}}
 ```
 
-Windows Default keeps _L_γ = _P_(_V_). The result is normalized by _W_, adjusted in linear Rec.2020 RGB, returned to absolute luminance, and PQ-encoded per channel. Values above SDR white transition toward the headroom target described in §5.
+Windows Default keeps *L*_γ = *P*(*V*). The result is normalized by *W*, adjusted in linear Rec.2020 RGB, returned to absolute luminance, and PQ-encoded per channel. Values above SDR white transition toward the headroom target described in §5.
 
 ### 4.3 SDR White
 
@@ -121,13 +121,13 @@ Unavailable or non-finite readings fall back to 200 cd/m². Runtime values are b
 
 ### 4.4 Neutral Reference Curve
 
-The diagnostic gray curve is derived from mean linear light, then encoded. In SDR it is ((r + g + b) / 3)1/2.2; in HDR it is PQ((R + G + B) / 3). Averaging encoded channel values would not represent the signal for their mean emitted light.
+The diagnostic gray curve is derived from mean linear light, then encoded. In SDR it is ((r + g + b) / 3)^{1/2.2}; in HDR it is PQ((R + G + B) / 3). Averaging encoded channel values would not represent the signal for their mean emitted light.
 
 ## 5. HDR Headroom
 
 ### 5.1 PQ-Space Shoulder
 
-Gamma and white-balance controls are intended mainly for the SDR desktop region. Applying them unchanged to every HDR highlight would reshape mastered specular content. Above _W_, Gloam blends the adjusted result toward a headroom target in PQ signal space:
+Gamma and white-balance controls are intended mainly for the SDR desktop region. Applying them unchanged to every HDR highlight would reshape mastered specular content. Above *W*, Gloam blends the adjusted result toward a headroom target in PQ signal space:
 
 ```
 t = clamp((V − PQ(W)) / (1 − PQ(W)), 0, 1)
@@ -141,14 +141,14 @@ Smoothstep gives zero first derivative at both ends. Blending in PQ space alloca
 
 At full brightness, the ordinary headroom target is passthrough. When dimming is active, the target uses the same white-anchored perceptual dimming curve as the SDR region, so a dimmed desktop does not leave HDR highlights at full output.
 
-Constant-luminance night mode can lift the adjusted SDR white above the ordinary dimmed white. If that produces an anchor _A_ > 0, Gloam compresses the remaining headroom monotonically:
+Constant-luminance night mode can lift the adjusted SDR white above the ordinary dimmed white. If that produces an anchor *A* > 0, Gloam compresses the remaining headroom monotonically:
 
 ```
-H(L) = A(L / W)γ′,
+H(L) = A(L / W)^{γ′},
 γ′ = ln(10000 / A) / ln(10000 / W)
 ```
 
-This maps _W_ to _A_ and 10,000 nits to itself. Raising diffuse white consumes real highlight headroom; the power remap preserves ordering rather than hiding that tradeoff.
+This maps *W* to *A* and 10,000 nits to itself. Raising diffuse white consumes real highlight headroom; the power remap preserves ordering rather than hiding that tradeoff.
 
 ## 6. Linear-Light Adjustments
 
@@ -166,10 +166,10 @@ Every operation in this sequence is evaluated after transfer-function decoding. 
 
 ### 6.2 Temperature Coordinates
 
-The manual scale maps to K = 6500 + 70_T_. Saved adjustments support 1900–10,000 K; scheduled night mode is limited to 1900–6500 K. Manual trim and schedule shifts compose in mired space, μ = 106/K:
+The manual scale maps to K = 6500 + 70*T*. Saved adjustments support 1900–10,000 K; scheduled night mode is limited to 1900–6500 K. Manual trim and schedule shifts compose in mired space, μ = 10^6/K:
 
 ```
-μeffective = μmanual + μschedule − μ6500
+μ_{effective} = μ_{manual} + μ_{schedule} − μ_{6500}
 ```
 
 This prevents a fixed Kelvin offset from becoming disproportionately strong near the warm end.
@@ -178,73 +178,73 @@ This prevents a fixed Kelvin offset from becoming disproportionately strong near
 
 - **Standard.** Tanner Helland's RGB approximation is normalized against its 6500 K result. Its RGB-like code values are converted through the sRGB EOTF before channel ratios are formed, because the ratios are applied in linear light.
 - **Accurate CIE 1931.** A Planckian locus is generated from Planck's law and the CIE 1931 2° color-matching functions at 5 nm intervals. Chromaticity is interpolated in log CCT, converted to XYZ, then to the active wire RGB basis. Target and 6500 K values are each normalized to their brightest channel before their ratio is formed. The underlying table spans 1000–25,000 K; public CCT-to-xy calls retain a 1667–25,000 K compatibility clamp. The Kang cubic is only a defensive fallback if table construction fails.
-- **Perceptual.** The 6500 K and target whites are blended by degree of adaptation _D_ in CAT16 sharpened-cone space. The adapted XYZ white is then reduced to the same basis-specific diagonal used by Accurate mode. The default strength is D = 0.8. This is the recommended default; it is developed in 6.3.1.
+- **Perceptual.** The 6500 K and target whites are blended by degree of adaptation *D* in CAT16 sharpened-cone space. The adapted XYZ white is then reduced to the same basis-specific diagonal used by Accurate mode. The default strength is D = 0.8. This is the recommended default; it is developed in 6.3.1.
 - **Blue Reduction.** A non-colorimetric heuristic keeps red at 1 while green moves toward 0.7 and blue toward 0.1 as the setting approaches 1900 K.
 - **Ultra Night.** A deliberately non-colorimetric amber mode for the darkest part of the evening, developed in 6.3.2.
 
 ### 6.3.1 Degree of Adaptation as the Colour-Preserving Lever
 
-The live correction is a one-dimensional per-channel LUT. A full 3×3 chromatic adaptation transform is not separable and therefore cannot be baked into it: whatever Gloam does to the white point must survive reduction to three independent curves. That constraint, not a modelling preference, is what selects the mechanism. Within it the lever that best preserves colour is not the target chromaticity but the _degree_ of adaptation applied to it.
+The live correction is a one-dimensional per-channel LUT. A full 3×3 chromatic adaptation transform is not separable and therefore cannot be baked into it: whatever Gloam does to the white point must survive reduction to three independent curves. That constraint, not a modelling preference, is what selects the mechanism. Within it the lever that best preserves colour is not the target chromaticity but the *degree* of adaptation applied to it.
 
-Real chromatic adaptation is never complete. Perceptual mode models the incomplete case directly: for source white **X**6500, target white **X**T and degree _D_ ∈ [0, 1], the adapted white is the _D_-blend of the two taken in CAT16 sharpened cone space, not in display RGB:
+Real chromatic adaptation is never complete. Perceptual mode models the incomplete case directly: for source white **X**_{6500}, target white **X**_T and degree *D* ∈ [0, 1], the adapted white is the *D*-blend of the two taken in CAT16 sharpened cone space, not in display RGB:
 
 ```
-X′ = CAT16−1[ (1 − D)·ρ(X6500) + D·ρ(XT) ]
+X′ = CAT16^{−1}[ (1 − D)·ρ(X_{6500}) + D·ρ(X_T) ]
 ```
 
-Only then is **X**′ reduced to per-channel display ratios, through the identical path Accurate mode uses. The distinction matters: an earlier implementation eased the finished multipliers toward unity in display RGB as 1 + _D_(_m_ − 1), which is incomplete von Kries expressed in the wrong basis. Blending the whites in a sharpened cone space and reducing afterwards is the same operation performed in the space where it is defined.
+Only then is **X**′ reduced to per-channel display ratios, through the identical path Accurate mode uses. The distinction matters: an earlier implementation eased the finished multipliers toward unity in display RGB as 1 + *D*(*m* − 1), which is incomplete von Kries expressed in the wrong basis. Blending the whites in a sharpened cone space and reducing afterwards is the same operation performed in the space where it is defined.
 
-The 6500 K reference is pushed through the same CAT16 round trip as the target rather than assumed to be unity. At 6500 K the two are then bit-identical and their ratio is exactly (1, 1, 1). That invariant is load-bearing rather than cosmetic: without it, switching temperature algorithm at the neutral point would visibly shift the white. Because the blend is normalized against the brightest channel, that channel stays at 1.0, so no headroom is consumed and no clipping-induced cast is introduced. At _D_ = 1 the mode reduces exactly to Accurate; at _D_ = 0 it is the identity.
+The 6500 K reference is pushed through the same CAT16 round trip as the target rather than assumed to be unity. At 6500 K the two are then bit-identical and their ratio is exactly (1, 1, 1). That invariant is load-bearing rather than cosmetic: without it, switching temperature algorithm at the neutral point would visibly shift the white. Because the blend is normalized against the brightest channel, that channel stays at 1.0, so no headroom is consumed and no clipping-induced cast is introduced. At *D* = 1 the mode reduces exactly to Accurate; at *D* = 0 it is the identity.
 
 ### 6.3.2 Ultra Night
 
 Ultra Night targets maximum circadian protection and accepts the loss of colour accuracy that requires. Blue carries most of a display's melanopic weight per unit luminance, so the mode drives toward amber, cutting blue hard and green substantially while preserving red for legible text. It is not a warmer Accurate; it is a different objective, and the whitepaper states that plainly because the mode should not be selected for colour work.
 
-With warmth factor _f_ = clamp((6500 − _T_) / 4500, 0, 1) and Planckian ratios (_aR_, _aG_, _aB_) from Accurate mode in the active wire basis:
+With warmth factor *f* = clamp((6500 − *T*) / 4500, 0, 1) and Planckian ratios (*a_R*, *a_G*, *a_B*) from Accurate mode in the active wire basis:
 
 ```
 dim = 1 − 0.30f
-(r, g, b) = (aR·dim, aG·dim, aB·dim)
+(r, g, b) = (a_R·dim, a_G·dim, a_B·dim)
 b ← max(b, 0.10)
 g ← max(g, b)
 ```
 
-Three of those steps encode a defect found in practice. Building on the true Planckian ratios rather than hand-authored amber keeps the hue _on_ the blackbody locus; cutting green below its Planckian ratio directly is what produces the magenta cast that afflicts naive blue-reduction filters, and the final green floor at _b_ is a second guard against the same failure.
+Three of those steps encode a defect found in practice. Building on the true Planckian ratios rather than hand-authored amber keeps the hue *on* the blackbody locus; cutting green below its Planckian ratio directly is what produces the magenta cast that afflicts naive blue-reduction filters, and the final green floor at *b* is a second guard against the same failure.
 
 The blue floor of 0.10 is a platform constraint, not a perceptual choice. A channel driven to zero makes its gamma ramp map white to black, and Windows' `SetDeviceGammaRamp` rejects that ramp outright, so nothing applies at all. 0.10 is the warmest blue the driver accepts and still removes roughly 90% of blue output. The 30% luminance reduction is likewise deliberate: at the deepest evening setting a full-brightness amber white is both uncomfortable and a needlessly high melanopic dose, so the dimming is part of the mode's purpose rather than a side effect.
 
-When panel spectra are available, green is biased further down in proportion to how much more melanopic dose it carries per unit luminance than red. With per-primary melanopic efficacies _μc_ = melc / _Yc_:
+When panel spectra are available, green is biased further down in proportion to how much more melanopic dose it carries per unit luminance than red. With per-primary melanopic efficacies *μ_c* = mel_c / *Y_c*:
 
 ```
-penalty = clamp( (μG / μR − 1) / 4, 0, 1 )
-gfloor = max(1.8b, 0.12)
-g ← g + (min(g, gfloor) − g)·f·penalty
+penalty = clamp( (μ_G / μ_R − 1) / 4, 0, 1 )
+g_{floor} = max(1.8b, 0.12)
+g ← g + (min(g, g_{floor}) − g)·f·penalty
 ```
 
 The readable green floor exists so that text does not degrade into harsh magenta-red on panels whose green primary is unusually melanopic. Ultra Night is also excluded from the constant-Y rescaling of 6.4: restoring its luminance would undo precisely the dose reduction the mode exists to produce.
 
 ### 6.4 Constant-Y White
 
-For temperature multipliers **m**, let Y(**m**) be their luminance in the active RGB basis, _d_ the dimmed-white fraction, and _c_ the permitted channel ceiling. The ideal luminance-restoring scale is 1/Y(**m**), bounded by available headroom:
+For temperature multipliers **m**, let Y(**m**) be their luminance in the active RGB basis, *d* the dimmed-white fraction, and *c* the permitted channel ceiling. The ideal luminance-restoring scale is 1/Y(**m**), bounded by available headroom:
 
 ```
 s = min(1 / Y(m), c / (d · max(m)))
 ```
 
-Full-brightness SDR has _c_ = 1, so this mode is inert there. Dimming creates SDR ramp headroom. In HDR, _c_ is min(2, DXGI-reported peak / SDR white) when usable. Ultra Night is excluded because recovering its luminance would undo its intended dose reduction.
+Full-brightness SDR has *c* = 1, so this mode is inert there. Dimming creates SDR ramp headroom. In HDR, *c* is min(2, DXGI-reported peak / SDR white) when usable. Ultra Night is excluded because recovering its luminance would undo its intended dose reduction.
 
 ### 6.5 Tint and Dimming
 
-With normalized tint _t_ in [−1, 1], the green direction uses (1 − 0.08|t|, 1 + 0.10|t|, 1 − 0.08|t|). The magenta direction uses (1 + 0.08t, 1 − 0.12t, 1 + 0.08t). These are restrained display-RGB trims, not a CIE tint coordinate.
+With normalized tint *t* in [−1, 1], the green direction uses (1 − 0.08|t|, 1 + 0.10|t|, 1 − 0.08|t|). The magenta direction uses (1 + 0.08t, 1 − 0.12t, 1 + 0.08t). These are restrained display-RGB trims, not a CIE tint coordinate.
 
-Perceptual dimming uses brightness fraction _b_ and input light _x_:
+Perceptual dimming uses brightness fraction *b* and input light *x*:
 
 ```
 g = 1 + 0.3(1 − b)
-D(x, b) = b · x1/g
+D(x, b) = b · x^{1/g}
 ```
 
-Linear dimming, when selected, uses D(_x_, _b_) = _bx_.
+Linear dimming, when selected, uses D(*x*, *b*) = *bx*.
 
 ## 7. Night Mode and Melanopic Policy
 
@@ -260,30 +260,30 @@ Fade ticks are bounded to 16.7–500 ms, while hardware writes are coalesced to 
 
 ### 7.3 Melanopic Estimates
 
-An additive display's emitted spectrum is the gain-weighted sum of its channel spectra, so with per-channel linear gains _kc_ and measured channel SPDs _Sc_(λ) from a CCSS, the current and unshifted spectra are:
+An additive display's emitted spectrum is the gain-weighted sum of its channel spectra, so with per-channel linear gains *k_c* and measured channel SPDs *S_c*(λ) from a CCSS, the current and unshifted spectra are:
 
 ```
-Sstate(λ) = kRSR(λ) + kGSG(λ) + kBSB(λ)
-Sbase(λ) = SR(λ) + SG(λ) + SB(λ)
+S_{state}(λ) = k_RS_R(λ) + k_GS_G(λ) + k_BS_B(λ)
+S_{base}(λ) = S_R(λ) + S_G(λ) + S_B(λ)
 ```
 
-Additivity is an assumption, and it is not silently absorbed: the CCSS file's own measured white row will not exactly equal the sum of its channel rows, and that residual is carried forward as a named uncertainty term rather than discarded. The gains carry spectral _shape_ only. Brightness is deliberately excluded from them and passed separately as an absolute white luminance, because dimming scales magnitude rather than shape and folding it into the gains would corrupt the ratio quantities below.
+Additivity is an assumption, and it is not silently absorbed: the CCSS file's own measured white row will not exactly equal the sum of its channel rows, and that residual is carried forward as a named uncertainty term rather than discarded. The gains carry spectral *shape* only. Brightness is deliberately excluded from them and passed separately as an absolute white luminance, because dimming scales magnitude rather than shape and folding it into the gains would corrupt the ratio quantities below.
 
-Melanopic content is expressed as the melanopic daylight efficacy ratio, the melanopic ELR of the spectrum normalized by that of CIE D65 (1.3262 mW·lm−1), so mel-DER is 1 for D65 by construction. Writing _Y_rel for the photopic luminance of the state relative to the unshifted white, _L_white for the absolute white luminance at the current brightness, and Ω for the effective viewing solid angle:
+Melanopic content is expressed as the melanopic daylight efficacy ratio, the melanopic ELR of the spectrum normalized by that of CIE D65 (1.3262 mW·lm^{−1}), so mel-DER is 1 for D65 by construction. Writing *Y*_{rel} for the photopic luminance of the state relative to the unshifted white, *L*_{white} for the absolute white luminance at the current brightness, and Ω for the effective viewing solid angle:
 
 ```
-Lscreen = Lwhite · Yrel
-Ev ≈ Lscreen · Ω
-mel-EDI = Ev · mel-DERstate
+L_{screen} = L_{white} · Y_{rel}
+E_v ≈ L_{screen} · Ω
+mel-EDI = E_v · mel-DER_{state}
 ```
 
 The two numbers Gloam reports are epistemically different, and it separates them for that reason. The headline figure is the reduction against the same panel's own 6500 K white:
 
 ```
-reduction = 1 − (Yrel · mel-DERstate) / mel-DERbase
+reduction = 1 − (Y_{rel} · mel-DER_{state}) / mel-DER_{base}
 ```
 
-Ω, brightness and the white level all cancel out of that expression. It is geometry-free and immune to every assumption in the chain except the CCSS itself, which is what makes it safe to quote. Absolute mel-EDI is not: it additionally requires the corneal-illuminance step _Ev_ ≈ _L_·Ω, whose Ω defaults to 0.20 sr, roughly a 27-inch 16:9 panel at 60 cm viewed head-on. That assumption is exposed as a user-facing setting and appears as a dominant term in the reported uncertainty. It is never presented as measured truth, because a viewer at a different distance has a materially different corneal dose from an identical screen.
+Ω, brightness and the white level all cancel out of that expression. It is geometry-free and immune to every assumption in the chain except the CCSS itself, which is what makes it safe to quote. Absolute mel-EDI is not: it additionally requires the corneal-illuminance step *E_v* ≈ *L*·Ω, whose Ω defaults to 0.20 sr, roughly a 27-inch 16:9 panel at 60 cm viewed head-on. That assumption is exposed as a user-facing setting and appears as a dominant term in the reported uncertainty. It is never presented as measured truth, because a viewer at a different distance has a materially different corneal dose from an identical screen.
 
 Without a CCSS, Gloam synthesizes Gaussian primaries at typical peaks and widths, 615/545/455 nm at 60/70/25 nm FWHM for sRGB-class panels and 630/530/455 nm at 30/35/20 nm for wide-gamut QD and OLED panels, luminance-weighted so their sum approximates a D65-like white. Every reading from this path is flagged as an estimate, paired with a much wider uncertainty band and a prompt to load a CCSS. The reduction percentage survives the substitution better than the absolute dose does, because it is a ratio taken through the same assumed spectra on both sides.
 
@@ -294,12 +294,12 @@ Setting a melanopic-EDI ceiling changes the question from "what colour did the s
 The feasible set is deliberately one-sided: the governor never brightens and never cools, so it can only ever move further in the direction the schedule was already going. Candidate temperatures run from the scheduled value down to 1900 K in 50 K steps, and brightness from the scheduled value down to a 10% floor. At fixed temperature the spectral shape is fixed, so mel-EDI is exactly linear in white luminance and the minimum compliant dimming follows in closed form from a single probe rather than a search:
 
 ```
-bneeded = bsched · ceiling / mel-EDI(T, bsched)
+b_{needed} = b_{sched} · ceiling / mel-EDI(T, b_{sched})
 ```
 
 Cost is measured as CAM16-UCS ΔE′ against the scheduled appearance. The choice of metric is the substantive decision here. The candidates differ in luminance as well as chromaticity, and a colour-difference metric that does not model the observer's adaptation state will misprice that: ΔE ITP-style metrics under-price the adaptation benefit of dimming, while a pure-Kelvin rule ignores dimming altogether and would always answer by warming. CAM16-UCS prices luminance and chromaticity changes against each other under stated viewing conditions, which is exactly the comparison being made.
 
-Those conditions are anchored once and shared by every candidate so the comparison stays apples-to-apples: the reference white is the display's _unshifted_ 6500 K white at the scheduled brightness, with adapting luminance _LA_ = _Y_white/5 on the gray-world convention, background _Yb_ = 20, and a dim surround appropriate to a desktop at night. Only the forward model is needed; the solver never inverts it.
+Those conditions are anchored once and shared by every candidate so the comparison stays apples-to-apples: the reference white is the display's *unshifted* 6500 K white at the scheduled brightness, with adapting luminance *L_A* = *Y*_{white}/5 on the gray-world convention, background *Y_b* = 20, and a dim surround appropriate to a desktop at night. Only the forward model is needed; the solver never inverts it.
 
 Candidates that meet the ceiling are preferred over those that do not, and among them the smallest ΔE′ wins. When no candidate can comply, the governor returns the lowest remaining dose and reports the ceiling as unreachable rather than silently presenting a non-compliant state as a success. Because the apply path re-evaluates on every fade tick, solutions are memoized against inputs quantized to 25 K and 2% brightness, steps small enough to be imperceptible in the governed trajectory.
 
@@ -313,7 +313,7 @@ Foreground activation is settled before application: 350 ms for a candidate game
 
 ### 8.2 Shadow Visibility Toe
 
-Competitive visibility is a black-anchored, monotonic toe in linear luminance. For strength _a_ ∈ [0, 1], pivot _p_, and 0 < _L_ < _p_:
+Competitive visibility is a black-anchored, monotonic toe in linear luminance. For strength *a* ∈ [0, 1], pivot *p*, and 0 < *L* < *p*:
 
 ```
 L′ = min(p, L + 1.5aL(1 − L/p)²)
@@ -321,9 +321,9 @@ L′ = min(p, L + 1.5aL(1 − L/p)²)
 
 Zero and the pivot are unchanged, the derivative rejoins at one, and values above the pivot are bit-identical to the underlying calibration. Gloam evaluates luminance with Rec.709 weights in SDR or Rec.2020 weights in HDR, then scales RGB together along the same hue ray, limited by channel headroom.
 
-The squared shoulder term is what buys the _C_1 join. Both the lift and its first derivative vanish at _L_ = _p_, so the toe meets the untouched curve without a visible crease at the handover, which a linear shoulder would produce. Anchoring at black rather than lifting the whole curve matters for the stated purpose: a black lift raises the floor everywhere and washes the image, whereas this form leaves absolute black at zero and redistributes contrast only within the shadow range.
+The squared shoulder term is what buys the *C*^1 join. Both the lift and its first derivative vanish at *L* = *p*, so the toe meets the untouched curve without a visible crease at the handover, which a linear shoulder would produce. Anchoring at black rather than lifting the whole curve matters for the stated purpose: a black lift raises the floor everywhere and washes the image, whereas this form leaves absolute black at zero and redistributes contrast only within the shadow range.
 
-Monotonicity is guaranteed analytically rather than checked numerically. Differentiating the toe gives a minimum slope of 1 − 1.5_a_/3 = 1 − 0.5_a_ inside the pivot, which is strictly positive for every _a_ ∈ [0, 1]; at full strength the flattest part of the curve still rises at half the identity rate. No permitted setting can invert tonal order or crush two distinct shadow levels into one, which is the failure mode that makes many "black equalizer" controls destroy the detail they claim to reveal.
+Monotonicity is guaranteed analytically rather than checked numerically. Differentiating the toe gives a minimum slope of 1 − 1.5*a*/3 = 1 − 0.5*a* inside the pivot, which is strictly positive for every *a* ∈ [0, 1]; at full strength the flattest part of the curve still rises at half the identity rate. No permitted setting can invert tonal order or crush two distinct shadow levels into one, which is the failure mode that makes many "black equalizer" controls destroy the detail they claim to reveal.
 
 This is a visibility aid, not a correction, and Gloam does not present it otherwise. It deliberately departs from the calibrated transfer function, so a display running a competitive toe is no longer colour-accurate in the shadows. That is why the toe is a Gamer Mode session property scoped to an owning executable rather than a global setting, and why the Reference and Cinematic HDR presets set it to zero.
 
@@ -378,20 +378,20 @@ A fixed patch set spends its budget uniformly whether or not the panel needs it 
 
 #### Manifolds
 
-The governing idea is that residual interpolation and coverage are only meaningful _along_ a manifold. A grayscale tone residual says nothing about the red-only ramp, and a point in the middle of the colour cube says nothing about either. Every candidate and measurement is therefore tagged as gray (R = G = B), one of the three single-channel ramps, or a general cube location, and distance is defined accordingly: |Δlevel| along the one-dimensional manifolds, Euclidean in the cube, and infinite between manifolds. That last case is what stops a well-sampled gray axis from making the planner believe the red ramp is covered.
+The governing idea is that residual interpolation and coverage are only meaningful *along* a manifold. A grayscale tone residual says nothing about the red-only ramp, and a point in the middle of the colour cube says nothing about either. Every candidate and measurement is therefore tagged as gray (R = G = B), one of the three single-channel ramps, or a general cube location, and distance is defined accordingly: |Δlevel| along the one-dimensional manifolds, Euclidean in the cube, and infinite between manifolds. That last case is what stops a well-sampled gray axis from making the planner believe the red ramp is covered.
 
 #### Scoring
 
-Tone and colour errors have different units and different targets, so each residual is first divided by its own accuracy target to give a normalized residual _ni_, where 1.0 means "exactly at target" on a single shared scale. Each candidate then scores as an inverse-distance-weighted interpolation of the _ni_ on its own manifold, plus a coverage term:
+Tone and colour errors have different units and different targets, so each residual is first divided by its own accuracy target to give a normalized residual *n_i*, where 1.0 means "exactly at target" on a single shared scale. Each candidate then scores as an inverse-distance-weighted interpolation of the *n_i* on its own manifold, plus a coverage term:
 
 ```
-score = Σwini / Σwi + 0.5·gap,
-wi = 1 / (di + 0.02)
+score = Σw_in_i / Σw_i + 0.5·gap,
+w_i = 1 / (d_i + 0.02)
 ```
 
 The residual term is high where the model demonstrably fails nearby; the softening constant sets the locality, so a residual dominates candidates within a few multiples of it and fades beyond. The gap term is the distance to the nearest measured point on the same manifold, taken as full scale when the manifold is entirely unmeasured. Its half weight is calibrated rather than arbitrary: an unmeasured full-scale span scores like a residual at half its target, enough that early rounds fill genuine coverage holes, small enough that a demonstrated error always outranks mere distance from data.
 
-Tone residuals are measured as |Δ_L_*| against a target of 1.5, roughly 1.5 lightness JND on the worst predicted point, and colour residuals as ΔE2000 against 0.8. The tone metric was chosen over the more obvious photometric |Δ_Y_|/(white − black): that target penalized a shadow error and a highlight error of equal Δ_Y_ equally, even though the shadow error is far more visible. Because d_L_*/d_Y_ grows toward black, the same budget now spends shadow samples in proportion to their visibility, while _L_*'s linear toe keeps the weighting bounded near black instead of blowing up. At mid-gray the two targets nearly coincide, since |Δ_Y_| ≈ 1.5% maps to |Δ_L_*| ≈ 1.5.
+Tone residuals are measured as |Δ*L**| against a target of 1.5, roughly 1.5 lightness JND on the worst predicted point, and colour residuals as ΔE2000 against 0.8. The tone metric was chosen over the more obvious photometric |Δ*Y*|/(white − black): that target penalized a shadow error and a highlight error of equal Δ*Y* equally, even though the shadow error is far more visible. Because d*L**/d*Y* grows toward black, the same budget now spends shadow samples in proportion to their visibility, while *L**'s linear toe keeps the weighting bounded near black instead of blowing up. At mid-gray the two targets nearly coincide, since |Δ*Y*| ≈ 1.5% maps to |Δ*L**| ≈ 1.5.
 
 #### Thinning
 
@@ -403,7 +403,7 @@ This is a spacing floor, not a farthest-point or OFPS optimizer: it does not max
 
 Two different summaries of the residual distribution drive two different decisions, and conflating them is the failure mode this design avoids.
 
-- **Success uses the maximum.** The whole point of adaptive placement is to chase the worst point, so targets are declared met only when _every_ point, including a narrow defect the planner is actively crowding, is at target. This is strict by design and never reports clean success while the worst point is still bad.
+- **Success uses the maximum.** The whole point of adaptive placement is to chase the worst point, so targets are declared met only when *every* point, including a narrow defect the planner is actively crowding, is at target. This is strict by design and never reports clean success while the worst point is still bad.
 - **Plateau detection uses the 90th percentile, with patience.** A max-based plateau check false-triggers constantly, because resolving the current worst point merely exposes a next-worst point of similar size and the maximum barely moves. The robust summary instead tracks the whole distribution shifting down. A round must improve it by more than 10% to count as progress, and two consecutive shortfalls are required before stopping.
 
 The ordinary-patch budget is 120, excluding drift anchors, with 12 patches per round. Any stop that is not "targets met", whether budget exhaustion or a genuine plateau above target, is recorded as a degraded outcome and surfaced as a warning. A run that ran out of budget with the worst point still at three times target is a different result from a converged one, and the report says so.
@@ -419,7 +419,7 @@ Characterization derives measured white, black, primary chromaticities, a white-
 Let **D** map native display-linear RGB to XYZ and **T** map target-linear RGB to XYZ. The open-loop drive matrix is:
 
 ```
-M = D−1T
+M = D^{−1}T
 ```
 
 White-point-only targets substitute the measured panel primaries while retaining the requested target white. A reachability gate permits primary drive only in the tolerance band −0.05 to 1.30; values outside it indicate a target materially beyond the measured panel gamut. If the complete target transform requires a drive above one, the whole matrix is scaled by:
@@ -435,28 +435,28 @@ Uniform scaling preserves every chromaticity. Per-channel clipping or normalizat
 Windows evaluates the MHC2 matrix between fixed sRGB↔XYZ stages. If **S** is the fixed linear sRGB-to-XYZ matrix, the tag stores:
 
 ```
-Mtag = S(sM)S−1
+M_{tag} = S(sM)S^{−1}
 ```
 
 The surrounding fixed transforms then cancel and apply the intended scaled RGB-to-RGB matrix. This sandwich is undocumented Windows behavior, derived from MHC2Gen and verified against the Windows 11 compositor; regression tests pin the identity and reference cases.
 
 ### 11.3 SDR Tone Curves
 
-SDR MHC2 LUTs operate in SDR signal space. The generated correction inverts the measured neutral response toward the target. When separate channel ramps were measured and the base correction is neutral, Gloam composes each channel's relative gray-tracking correction fc−1∘fneutral onto the shared curve. This keeps gray chromaticity stable through the range without moving gamut correction out of the matrix.
+SDR MHC2 LUTs operate in SDR signal space. The generated correction inverts the measured neutral response toward the target. When separate channel ramps were measured and the base correction is neutral, Gloam composes each channel's relative gray-tracking correction f_c^{−1}∘f_{neutral} onto the shared curve. This keeps gray chromaticity stable through the range without moving gamut correction out of the matrix.
 
 ### 11.4 HDR Wire Ladder
 
-The preferred HDR model uses absolute rungs at 0, 2, 4, 8, 16, 32, 64, 100, 150, 220, 320, 450, 650, and 1000 cd/m². The set stops at min(0.9 × reported peak, 1000), adding the cap itself when the last fixed rung leaves more than a 5% gap. Each requested luminance _d_ is rendered at the exact wire coordinate _P_−1(_d_) and measured in absolute XYZ, where _P_ is the ST.2084 signal-to-nits function from §3.3.
+The preferred HDR model uses absolute rungs at 0, 2, 4, 8, 16, 32, 64, 100, 150, 220, 320, 450, 650, and 1000 cd/m². The set stops at min(0.9 × reported peak, 1000), adding the cap itself when the last fixed rung leaves more than a 5% gap. Each requested luminance *d* is rendered at the exact wire coordinate *P*^{−1}(*d*) and measured in absolute XYZ, where *P* is the ST.2084 signal-to-nits function from §3.3.
 
-Because the matrix scale _s_ runs before the tone LUT, content wire value _v_ reaches that LUT at:
+Because the matrix scale *s* runs before the tone LUT, content wire value *v* reaches that LUT at:
 
 ```
-pin(v) = P−1(s · P(v))
+p_{in}(v) = P^{−1}(s · P(v))
 ```
 
-Equivalently, a LUT input _p_ is solved against desired content luminance P(_p_)/_s_. This composition makes the installed matrix-plus-LUT chain track absolute PQ. The HDR tone LUT is neutral (identical red, green, and blue curves), because the matrix owns white point and gamut.
+Equivalently, a LUT input *p* is solved against desired content luminance P(*p*)/*s*. This composition makes the installed matrix-plus-LUT chain track absolute PQ. The HDR tone LUT is neutral (identical red, green, and blue curves), because the matrix owns white point and gamut.
 
-With a usable wire ladder, the inverse measured response is applied through the measured span and blends to identity from 90% of measured peak to peak. Above the reachable range the panel's own rolloff is left alone. If no usable wire ladder exists, a compatibility fallback assumes Windows mapped SDR signal _v_ to P−1(W · EsRGB(v)); that correction is limited to the lower half of the measured range and blends to identity from 50% to 80% because its wire axis and knee are inferred rather than measured.
+With a usable wire ladder, the inverse measured response is applied through the measured span and blends to identity from 90% of measured peak to peak. Above the reachable range the panel's own rolloff is left alone. If no usable wire ladder exists, a compatibility fallback assumes Windows mapped SDR signal *v* to P^{−1}(W · E_{sRGB}(v)); that correction is limited to the lower half of the measured range and blends to identity from 50% to 80% because its wire axis and knee are inferred rather than measured.
 
 ### 11.5 Profile Metadata and Association
 
@@ -470,11 +470,11 @@ Changing the color matrix can change its required uniform scale, which changes t
 
 ### 12.2 Tone Residual
 
-For requested luminance _d_ and measured luminance _Y_, the multiplicative error is _e_ = _Y_/_d_. At the matrix-scaled LUT input P−1(_sd_), the current LUT output luminance is divided by a damped, interpolated version of _e_:
+For requested luminance *d* and measured luminance *Y*, the multiplicative error is *e* = *Y*/*d*. At the matrix-scaled LUT input P^{−1}(*sd*), the current LUT output luminance is divided by a damped, interpolated version of *e*:
 
 ```
 e′ = clamp(1 + λ(e − 1), 0.7, 1.4)
-out′ = P−1(P(out) / e′)
+out′ = P^{−1}(P(out) / e′)
 ```
 
 At least four valid rungs below the identity region are required. A rung beyond ±35% refuses the touch-up as evidence of a different failure. Average absolute error below 1% is converged. The correction fades to one before the identity blend and preserves endpoints and monotonicity.
@@ -485,9 +485,9 @@ A refusal here or in the color fit below is not silent: the reason is recorded i
 
 The color sweep uses target-container R, G, B, C, M, Y, plus white anchors at 100, 203, and 400 cd/m² when the display peak can reach the rung. A stimulus producing less than 85% of target luminance is classified as hardware-limited and excluded from the matrix fit. A matrix cannot recover saturated light the panel did not emit.
 
-For reachable measurements, the residual **F** in XYZmeasured ≈ **F**XYZreference is fitted by weighted least squares. Each pair is normalized by rung luminance and weighted by √Y, giving brighter rungs more influence without letting absolute magnitude dominate. The fit requires at least eight reachable stimuli and a white anchor. Average ΔE ITP below 2 is converged; above 25 is too large for a linear touch-up; each coefficient is limited to 0.25 from identity.
+For reachable measurements, the residual **F** in XYZ_{measured} ≈ **F**XYZ_{reference} is fitted by weighted least squares. Each pair is normalized by rung luminance and weighted by √Y, giving brighter rungs more influence without letting absolute magnitude dominate. The fit requires at least eight reachable stimuli and a white anchor. Average ΔE ITP below 2 is converged; above 25 is too large for a linear touch-up; each coefficient is limited to 0.25 from identity.
 
-The fitted residual is divided by its luminance gain on target white before composition. That keeps the white chromaticity correction while assigning neutral luminance error only to the tone LUT. The cumulative matrix becomes **D**−1**F**−1**T**, followed by the same reachability and uniform-scale policy as an initial install.
+The fitted residual is divided by its luminance gain on target white before composition. That keeps the white chromaticity correction while assigning neutral luminance error only to the tone LUT. The cumulative matrix becomes **D**^{−1}**F**^{−1}**T**, followed by the same reachability and uniform-scale policy as an initial install.
 
 ### 12.4 Keep-Best Objective
 
@@ -497,7 +497,7 @@ Refinement normalizes tone error by 1% and color error by 2 ΔE ITP:
 J = √((tone / 0.01)² + (color / 2)²)
 ```
 
-A candidate must lower _J_ without worsening tone by more than 0.25 percentage points or color by more than 0.5 ΔE ITP. The live workflow runs at most two passes, with damping λ = 1 on the first pass and 0.55 later. Cancellation or regression restores the best measured installed state. Refinement rungs stop at 85% of measured peak, below the region deliberately left to the panel's rolloff.
+A candidate must lower *J* without worsening tone by more than 0.25 percentage points or color by more than 0.5 ΔE ITP. The live workflow runs at most two passes, with damping λ = 1 on the first pass and 0.55 later. Cancellation or regression restores the best measured installed state. Refinement rungs stop at 85% of measured peak, below the region deliberately left to the panel's rolloff.
 
 ## 13. Verification, Uncertainty, and Reports
 
@@ -508,7 +508,7 @@ Verification is performed through the active profile with the live ramp held at 
 ΔE2000 is computed after normalizing measured XYZ to the measured white and using the target white as the Lab reference. Grayscale error is split into tone and chroma components. ΔE ITP is also computed from absolute XYZ through the BT.2124 XYZ-to-LMS, PQ, and ICtCp path:
 
 ```
-ΔEITP = 720√(ΔI² + ΔT² + ΔP²), T = 0.5CT
+ΔE_{ITP} = 720√(ΔI² + ΔT² + ΔP²), T = 0.5C_T
 ```
 
 HDR verification adds two independent sweeps. A neutral PQ ladder reports absolute luminance tracking only inside the corrected region. Colored HDR verification measures target-container R/G/B/C/M/Y at reachable 100, 203, and 400-nit rungs and reports ΔE ITP separately, so wide-gamut hardware limits do not dilute the SDR-content grade.
@@ -519,7 +519,7 @@ Native and verified measurements are compared on matching patches. When an inacc
 
 ### 13.3 Measurement Uncertainty
 
-The report's expanded uncertainty is a GUM-style engineering estimate, not a laboratory certificate. Per-patch luminance repeatability comes from observed read range and the exact or tabulated small-sample standard error of the median; single reads inherit their luminance decade's noise estimate. A numeric two-point perturbation propagates luminance uncertainty to ΔE. The average combines independent patch terms as √Σuᵢ²/N, then combines instrument/correction and drift terms in root-sum-square. The displayed interval uses _k_ = 2.
+The report's expanded uncertainty is a GUM-style engineering estimate, not a laboratory certificate. Per-patch luminance repeatability comes from observed read range and the exact or tabulated small-sample standard error of the median; single reads inherit their luminance decade's noise estimate. A numeric two-point perturbation propagates luminance uncertainty to ΔE. The average combines independent patch terms as √Σu_i²/N, then combines instrument/correction and drift terms in root-sum-square. The displayed interval uses *k* = 2.
 
 Instrument terms are explicitly labeled estimates: 0.5 ΔE standard uncertainty for a filter colorimeter with a panel-matched correction, 1.5 without one, and 0.3 for a recognized spectrometer. Melanopic intervals additionally account for spectral-source provenance and, for absolute EDI, the assumed viewing geometry. The ratiometric reduction does not include geometry.
 
@@ -535,21 +535,21 @@ Automated tests pin standard transfer-function values, matrix-domain wrapping, L
 
 Gloam builds on Dylan Raga's identification and implementation of the Windows SDR-in-HDR sRGB-to-gamma correction. ArgyllCMS supplies the measurement and fallback ramp tools. MHC2Gen provided the essential reference for the MHC2 tag and Windows' fixed matrix stages.
 
-1. Poynton, C. (2003). _Digital Video and HDTV: Algorithms and Interfaces_. Morgan Kaufmann.
-1. IEC 61966-2-1:1999. _Multimedia systems and equipment - Colour management - Default RGB colour space - sRGB_.
-1. Stokes, M., Anderson, M., Chandrasekar, S., & Motta, R. (1996). _A Standard Default Color Space for the Internet - sRGB_.
-1. Raga, D. _win11hdr-srgb-to-gamma2.2-icm_. [github.com/dylanraga/win11hdr-srgb-to-gamma2.2-icm](https://github.com/dylanraga/win11hdr-srgb-to-gamma2.2-icm).
-1. SMPTE ST 2084:2014. _High Dynamic Range Electro-Optical Transfer Function of Mastering Reference Displays_.
-1. ITU-R BT.2100. _Image parameter values for high dynamic range television_.
-1. ITU-R BT.2124. _Objective metric for the assessment of the potential visibility of colour differences in television_.
-1. ITU-R BT.2408. _Operational practices in HDR television production_.
-1. CIE 015. _Colorimetry_.
-1. CIE S 026/E:2018. _CIE System for Metrology of Optical Radiation for ipRGC-Influenced Responses to Light_.
-1. Helland, T. (2012). _How to Convert Temperature (K) to RGB_. [tannerhelland.com](https://getgloam.org/https://tannerhelland.com/2012/09/18/convert-temperature-rgb-algorithm-code.html).
-1. Kang, B. et al. (2002). Design of Advanced Color Temperature Control System for HDTV Applications. _Journal of the Korean Physical Society_, 41(6), 865–871.
-1. Li, C. et al. (2017). Comprehensive color solutions: CAM16, CAT16, and CAM16-UCS. _Color Research & Application_, 42(6), 703–718.
-1. Ohno, Y. (2014). Practical Use and Calculation of CCT and Duv. _LEUKOS_, 10(1), 47–55.
-1. JCGM 100:2008. _Evaluation of measurement data - Guide to the expression of uncertainty in measurement_.
+1. Poynton, C. (2003). *Digital Video and HDTV: Algorithms and Interfaces*. Morgan Kaufmann.
+1. IEC 61966-2-1:1999. *Multimedia systems and equipment - Colour management - Default RGB colour space - sRGB*.
+1. Stokes, M., Anderson, M., Chandrasekar, S., & Motta, R. (1996). *A Standard Default Color Space for the Internet - sRGB*.
+1. Raga, D. *win11hdr-srgb-to-gamma2.2-icm*. [github.com/dylanraga/win11hdr-srgb-to-gamma2.2-icm](https://github.com/dylanraga/win11hdr-srgb-to-gamma2.2-icm).
+1. SMPTE ST 2084:2014. *High Dynamic Range Electro-Optical Transfer Function of Mastering Reference Displays*.
+1. ITU-R BT.2100. *Image parameter values for high dynamic range television*.
+1. ITU-R BT.2124. *Objective metric for the assessment of the potential visibility of colour differences in television*.
+1. ITU-R BT.2408. *Operational practices in HDR television production*.
+1. CIE 015. *Colorimetry*.
+1. CIE S 026/E:2018. *CIE System for Metrology of Optical Radiation for ipRGC-Influenced Responses to Light*.
+1. Helland, T. (2012). *How to Convert Temperature (K) to RGB*. [tannerhelland.com](https://getgloam.org/https://tannerhelland.com/2012/09/18/convert-temperature-rgb-algorithm-code.html).
+1. Kang, B. et al. (2002). Design of Advanced Color Temperature Control System for HDTV Applications. *Journal of the Korean Physical Society*, 41(6), 865–871.
+1. Li, C. et al. (2017). Comprehensive color solutions: CAM16, CAT16, and CAM16-UCS. *Color Research & Application*, 42(6), 703–718.
+1. Ohno, Y. (2014). Practical Use and Calculation of CCT and Duv. *LEUKOS*, 10(1), 47–55.
+1. JCGM 100:2008. *Evaluation of measurement data - Guide to the expression of uncertainty in measurement*.
 1. [ArgyllCMS](https://www.argyllcms.com/), by Graeme Gill.
 1. [MHC2Gen](https://github.com/dantmnf/MHC2), by dantmnf.
 

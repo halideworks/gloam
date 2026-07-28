@@ -243,12 +243,12 @@
 
           <h3 id="s3-3">3.3 SMPTE ST 2084 (PQ)</h3>
           <div class="formula">
-            L = 10000 · ((max(V<sup>1/m₂</sup> − c₁, 0)) /
-            (c₂ − c₃V<sup>1/m₂</sup>))<sup>1/m₁</sup>
+            L = 10000 · ((max(V<sup>1/m<sub>2</sub></sup> − c<sub>1</sub>, 0)) /
+            (c<sub>2</sub> − c<sub>3</sub>V<sup>1/m<sub>2</sub></sup>))<sup>1/m<sub>1</sub></sup>
           </div>
           <p>
-            The implementation uses m₁ = 2610/16384, m₂ = 2523/32, c₁ = 3424/4096,
-            c₂ = 2413/128, and c₃ = 2392/128. PQ values are absolute: <em>V</em> = 1 represents
+            The implementation uses m<sub>1</sub> = 2610/16384, m<sub>2</sub> = 2523/32, c<sub>1</sub> = 3424/4096,
+            c<sub>2</sub> = 2413/128, and c<sub>3</sub> = 2392/128. PQ values are absolute: <em>V</em> = 1 represents
             10,000 cd/m². Gloam uses the inverse function to encode an absolute luminance back to PQ.
           </p>
 
@@ -271,7 +271,7 @@
             for the assumed 2.2 display response:
           </p>
           <div class="formula">
-            ℓ = x<sup>γtarget</sup><br>
+            ℓ = x<sup>γ<sub>target</sub></sup><br>
             (r, g, b) = A(ℓ, ℓ, ℓ)<br>
             LUT<sub>c</sub>(x) = c<sup>1/2.2</sup>
           </div>
@@ -288,7 +288,7 @@
           </p>
           <div class="formula">
             q = E<sub>sRGB</sub><sup>−1</sup>(P(V) / W)<br>
-            L<sub>γ</sub> = W · q<sup>γtarget</sup>
+            L<sub>γ</sub> = W · q<sup>γ<sub>target</sub></sup>
           </div>
           <p>
             Windows Default keeps <em>L</em><sub>γ</sub> = <em>P</em>(<em>V</em>). The result is normalized
@@ -1104,7 +1104,7 @@
             certificate. Per-patch luminance repeatability comes from observed read range and the exact or
             tabulated small-sample standard error of the median; single reads inherit their luminance decade's
             noise estimate. A numeric two-point perturbation propagates luminance uncertainty to ΔE. The
-            average combines independent patch terms as √Σuᵢ²/N, then combines instrument/correction and drift
+            average combines independent patch terms as √Σu<sub>i</sub>²/N, then combines instrument/correction and drift
             terms in root-sum-square. The displayed interval uses <em>k</em> = 2.
           </p>
           <p>
