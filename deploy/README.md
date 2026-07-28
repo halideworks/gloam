@@ -1,9 +1,69 @@
-# Deploying the Gloam site to erebus
+# Deploying the Gloam site
 
 The site in `site/` is fully static: no build step, no bundler, nothing
-server-side. Deployment is a file copy plus one Caddy site block.
+server-side.
 
-## What is already on erebus
+It is served from **Cloudflare Pages**, deployed by
+`.github/workflows/deploy-site.yml` on any push to `main` that touches
+`site/**`. The erebus setup below came first and is kept as a documented
+fallback: the machine still has the files and the Caddy block, so pointing DNS
+back at the tunnel restores it without any work in this repo.
+
+## Cloudflare Pages
+
+Project `gloam` in the account whose id is the `CLOUDFLARE_ACCOUNT_ID` repo
+variable. Preview host is `gloam-d4b.pages.dev`, since the bare `gloam`
+subdomain was already taken account-wide.
+
+Two files in `site/` do what the Caddy block used to. Pages consumes both at
+deploy time and does not publish them, which is worth remembering because it
+means a mistake in either is invisible except in the response headers:
+
+- `_headers` carries the CSP, HSTS, and the two content types that matter:
+  `text/markdown` for `whitepaper.md`, and `application/manifest+json`.
+- `_redirects` carries the `.html` to clean-URL 301s. Unlike the Caddy version
+  this cannot be a regex, so **a new page needs a new line here**.
+
+The workflow curls the live site after deploying and fails the run if the
+markdown content type, the CSP, HSTS, or any of the three routes has gone
+missing. Those are the failures that do not show up in a rendered page.
+
+To deploy by hand, which does not need the repo secret:
+
+```sh
+npx wrangler pages deploy site --project-name=gloam --branch=main
+```
+
+### Required repository configuration
+
+- Variable `CLOUDFLARE_ACCOUNT_ID`.
+- Secret `CLOUDFLARE_API_TOKEN`, a token with **Cloudflare Pages: Edit**. The
+  account-wide OAuth token that `wrangler login` produces cannot edit DNS, so
+  the custom domain is attached from the Cloudflare dashboard rather than from
+  here.
+
+### Bump the `?v=` on style.css when the CSS changes
+
+There is no build step, so the filename never changes on its own. Each page
+links `style.css?v=<hash>`; the hash is the first 8 characters of the file's
+MD5:
+
+```sh
+md5sum site/style.css | cut -c1-8
+```
+
+Both hosts serve the stylesheet `must-revalidate`, so this is not strictly
+required, but changing the URL is what guarantees an immediate update at the
+Cloudflare edge without a purge. Skipping it once already caused visitors to
+pair new HTML with a stale stylesheet, which rendered the whole site in the
+light theme.
+
+## The erebus fallback
+
+Kept because it is still a working host for this site, not because anything
+routes to it.
+
+### What is already on erebus
 
 Worth knowing before touching anything, since this is a shared host:
 
@@ -23,7 +83,7 @@ tunnel, so TLS terminates at the edge and the site block is declared as
 `http://` to opt out of Caddy's automatic HTTPS for that one site. See the
 comments in `caddy-site-block.txt`.
 
-## Steps
+### Steps
 
 1. Copy the site to the static root:
 
@@ -83,24 +143,7 @@ comments in `caddy-site-block.txt`.
    curl -sI https://getgloam.org/index.html | grep -i location    # 301 to /
    ```
 
-## Extensionless page URLs
-
-Pages are served without `.html`: `/guides` reads `guides.html` off disk. The
-extension is still the filename, only never the URL. Three pieces have to agree,
-and all three live in this repo:
-
-- `try_files {path} {path}.html` in the site block, which is what makes
-  `/guides` resolve at all.
-- Two `redir`s in the same block, so `/guides.html` and `/index.html` send a
-  301 to the clean URL. Without them both spellings answer 200, which splits a
-  page's canonical URL from its indexed one.
-- The links, canonicals, `og:url`s, `sitemap.xml` and `llms.txt` in `site/`,
-  which all name the extensionless form.
-
-Adding a page is still just dropping `<name>.html` into `site/`. Nothing in the
-Caddy block enumerates pages, so it needs no edit.
-
-## Two traps worth knowing
+### The Caddyfile bind-mount trap
 
 **Never replace the Caddyfile with `mv`.** It is a single-file bind mount
 (`/nvme-mirror/apps/caddy/Caddyfile` → `/etc/caddy/Caddyfile`). Docker pins that
@@ -129,21 +172,7 @@ The two inodes stay divergent until the container restarts, so
 `docker restart caddy` at a quiet moment re-pins them. That briefly drops every
 site in this Caddyfile, which is why it is not part of the deploy steps.
 
-**Bump the `?v=` on style.css when the CSS changes.** There is no build step, so
-the filename never changes on its own. Each page links
-`style.css?v=<hash>`; the hash is the first 8 characters of the file's MD5:
-
-```sh
-md5sum site/style.css | cut -c1-8
-```
-
-The stylesheet is served `must-revalidate`, so this is not strictly required
-going forward, but changing the URL is what guarantees an immediate update at
-the Cloudflare edge without a dashboard purge. Skipping it once already caused
-visitors to pair new HTML with a stale stylesheet, which rendered the whole site
-in the light theme.
-
-## Notes
+### Notes
 
 - Client IPs will log as `127.0.0.1`, because the tunnel connects over
   loopback. Fixing that needs a global `servers { trusted_proxies ... }` block
@@ -152,7 +181,7 @@ in the light theme.
 - Cloudflare compresses to the client at the edge, so `encode` here mostly
   saves loopback bytes. Harmless, and correct if the tunnel is ever removed.
 
-## Updating the site later
+### Updating the files on erebus
 
 ```sh
 rsync -av --delete site/ erebus:/nvme-mirror/static/gloam/
@@ -163,6 +192,28 @@ site block itself changes. When it does, the block is already in the Caddyfile,
 so step 2 is a replacement rather than an append: edit the existing
 `http://getgloam.org` block in place (see the `mv` trap below), then validate
 and reload as in step 3.
+
+## Extensionless page URLs
+
+Pages are served without `.html`: `/guides` reads `guides.html` off disk. The
+extension is still the filename, only never the URL. Three pieces have to agree,
+and all three live in this repo:
+
+- On Pages, this is the default behaviour, and `site/_redirects` states the
+  301s explicitly rather than inheriting them.
+- On erebus, `try_files {path} {path}.html` in the site block is what makes
+  `/guides` resolve at all, and two `redir`s send `/guides.html` and
+  `/index.html` to the clean URL. Without those both spellings answer 200,
+  which splits a page's canonical URL from its indexed one.
+- The links, canonicals, `og:url`s, `sitemap.xml` and `llms.txt` in `site/`,
+  which all name the extensionless form.
+
+On erebus, adding a page is just dropping `<name>.html` into `site/`, since
+nothing in the Caddy block enumerates pages. On Pages the page will serve, but
+its `.html` spelling needs a line in `_redirects` to be a real 301.
+
+Note that `{re.name}` is not a placeholder Caddy fills in: the capture group
+needs its index, `{re.name.1}`. Without it every `.html` URL redirects to `/`.
 
 ## Regenerating derived files
 

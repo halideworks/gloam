@@ -1,0 +1,28 @@
+# Response headers for Cloudflare Pages. This file is the reason the site can
+# leave erebus: it is the one thing GitHub Pages has no answer for. Pages reads
+# it at deploy time and does not publish it.
+#
+# Keep it in step with deploy/caddy-site-block.txt for as long as erebus is
+# still serving as a fallback. The Caddy block is the older of the two and its
+# comments explain why each header is here.
+
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://zerolens.disinfo.zone; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://zerolens.disinfo.zone; frame-ancestors 'none'; base-uri 'self'; form-action 'none'
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: geolocation=(), microphone=(), camera=()
+
+# Images and icons are stable and change name when they change.
+/assets/*
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+
+# Caddy's default type table serves .md as text/plain, which makes agents and
+# LLM crawlers treat the whitepaper as an opaque blob instead of Markdown. This
+# is the whole reason whitepaper.md is generated, so it is the header to check
+# first after any host change.
+/whitepaper.md
+  Content-Type: text/markdown; charset=utf-8
+
+/site.webmanifest
+  Content-Type: application/manifest+json

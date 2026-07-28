@@ -1,0 +1,71 @@
+name: Deploy site
+
+# The getgloam.org site is static and has no build step, so this only uploads
+# site/ to Cloudflare Pages. It is scoped to site/** because this repo also
+# carries the app: an app release should not redeploy the website.
+#
+# Pages consumes site/_headers and site/_redirects at deploy time and does not
+# publish them. Those two files carry everything the Caddy block on erebus used
+# to do, so check them first if a header or a redirect goes missing.
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'site/**'
+      - '.github/workflows/deploy-site.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# --- Required repository configuration (Settings -> Secrets and variables -> Actions) ---
+# Secret:
+#   CLOUDFLARE_API_TOKEN   token with the "Cloudflare Pages: Edit" permission on
+#                          the account that owns the `gloam` project
+# Variable:
+#   CLOUDFLARE_ACCOUNT_ID  the account id the project lives in
+
+concurrency:
+  group: deploy-site
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Publish to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy site --project-name=gloam --branch=main
+
+      # A deploy that silently loses the markdown content type or the CSP is
+      # the failure mode worth catching here, since both are invisible in the
+      # rendered page. This checks the live site, so it also catches the custom
+      # domain pointing somewhere unexpected.
+      - name: Verify the live site
+        run: |
+          set -euo pipefail
+          fail=0
+          check() {
+            local url="$1" pattern="$2" label="$3"
+            if curl -sI --max-time 20 "$url" | grep -qi "$pattern"; then
+              echo "ok   $label"
+            else
+              echo "FAIL $label"
+              curl -sI --max-time 20 "$url" | head -20
+              fail=1
+            fi
+          }
+          check https://getgloam.org/                 '^HTTP.* 200'                    'home is 200'
+          check https://getgloam.org/guides           '^HTTP.* 200'                    'extensionless /guides'
+          check https://getgloam.org/whitepaper       '^HTTP.* 200'                    'extensionless /whitepaper'
+          check https://getgloam.org/guides.html      '^location:.*/guides'            '/guides.html redirects'
+          check https://getgloam.org/whitepaper.md    'content-type: text/markdown'    'markdown content type'
+          check https://getgloam.org/                 'content-security-policy:'       'CSP header present'
+          check https://getgloam.org/                 'strict-transport-security:'     'HSTS header present'
+          check https://www.getgloam.org/             '^location:.*//getgloam.org'     'www redirects to apex'
+          exit $fail
