@@ -5,8 +5,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        Have a look at [ROADMAP.md](https://github.com/halideworks/gloam/blob/main/ROADMAP.md)
-        first. It may already be planned, or explicitly out of scope.
+        Have a look through
+        [existing issues](https://github.com/halideworks/gloam/issues?q=is%3Aissue+sort%3Aupdated-desc)
+        first, in case it is already being discussed.
 
   - type: textarea
     id: problem

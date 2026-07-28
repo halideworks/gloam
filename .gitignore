@@ -55,3 +55,8 @@ ReleasesNew/
 # Golden-sample regression fixtures are REAL measurement recordings the CI replay
 # tests depend on — they must ship in the repo despite the blanket *.csv ignore.
 !tests/Gloam.Tests/Fixtures/**/*.csv
+
+# Internal planning document. Kept locally, deliberately not published: it carries
+# competitive positioning, candid not-yet-validated notes, and unreleased plans that
+# should not be the first thing a visitor browses.
+ROADMAP.md
