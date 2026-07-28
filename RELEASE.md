@@ -49,28 +49,47 @@ The version comes from the tag. `UpdateService.RepoUrl` and the CI upload target
 ## Cutting a release
 
 1. Make sure `main` has everything you want shipped and the build is green.
-2. Pick the version `X.Y.Z`. (Optional: set `<Version>` in `Gloam.csproj`; CI overrides
-   it from the tag regardless.)
-3. Tag and push:
+2. Pick the version `X.Y.Z`. Set `<Version>` in `Gloam.csproj` to match and commit it —
+   CI overrides it from the tag anyway, but keeping them in sync means a local
+   `.\package.ps1` with no arguments builds the same version the tag will.
+3. Write the release notes at `docs/release-notes/vX.Y.Z.md` (see below).
+4. Push `main`, then tag and push:
    ```bash
+   git push origin main
    git tag vX.Y.Z
    git push origin vX.Y.Z
    ```
-4. Watch the Actions run. On success the GitHub Release is published with the Setup.exe + portable zip,
+5. Watch the Actions run. On success the GitHub Release is published with the Setup.exe + portable zip,
    both signed and timestamped.
+6. Attach the notes to the published release:
+   ```bash
+   gh release edit vX.Y.Z --notes-file docs/release-notes/vX.Y.Z.md
+   ```
+
+### Release notes
+
+`vpk upload github` publishes with an empty body, so notes are a separate step — releases
+through v1.8.0 have no notes at all for this reason. Write them for someone deciding
+whether to care, not for someone reading the diff: what changed for them, what they need
+to do about it (usually nothing), and anything that changes measured behavior.
+
+State plainly when a change affects calibration math or measured output. That is the one
+category of change where a user may want to re-run a calibration rather than let the
+update land silently.
 
 ## Pre-release validation checklist
 
 - [ ] Build green, full test suite passing.
-- [ ] **Colorimeter re-validation** of the two measured-behavior changes:
-  - [ ] Tone-curve black-subtraction (FIX 2): grayscale tracking + shadow dE on a **raised-black /
-        non-OLED** panel (OLED is unaffected).
-  - [ ] Calibration bypass: confirm an in-progress calibration is not perturbed by a slider drag /
-        night-mode tick / display-change/resume, and that normal apply + external-stomp restore still work.
-- [ ] First-release sanity: confirm the repo is at `halideworks/gloam`, the `release` environment and
-      all six variables exist, and the federated credential subject matches.
+- [ ] Strict build clean: `dotnet build src/Gloam.sln -c Release -p:GloamStrictBuild=true`.
+- [ ] `<Version>` in `Gloam.csproj` matches the tag being pushed.
+- [ ] Release notes written at `docs/release-notes/vX.Y.Z.md`.
+- [ ] **Colorimeter re-validation** — only when the release changes measured behavior
+      (calibration math, LUT generation, drift handling, refinement). Verify the specific
+      changed path on real hardware and record the before/after in the release notes.
+      Skip for releases that do not touch those paths, and say so rather than leaving the
+      box ambiguously unticked.
 
-## Verifying the first signed release
+## Verifying a signed release
 
 - The release assets show a valid Authenticode signature (publisher = your validated legal name) and a
   trusted timestamp.
@@ -79,7 +98,7 @@ The version comes from the tag. `UpdateService.RepoUrl` and the CI upload target
 - An installed older build detects the new version, downloads it, and applies on restart.
   For a local end-to-end check against the official GitHub/Velopack feed, run:
   ```powershell
-  .\scripts\Test-VelopackInstalledUpdate.ps1 -OlderSetupPath .\path\to\older\Gloam-Setup.exe -ExpectedVersion X.Y.Z -IUnderstandThisModifiesLocalInstall
+  .\scripts\Test-VelopackInstalledUpdate.ps1 -OlderSetupPath .\path\to\older\GloamApp-win-Setup.exe -ExpectedVersion X.Y.Z -IUnderstandThisModifiesLocalInstall
   ```
 
 > Note: app data (settings, logs, calibration reports) lives under `%LocalAppData%\Gloam`, separate
