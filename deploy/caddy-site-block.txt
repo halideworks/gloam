@@ -22,13 +22,36 @@
 
 http://getgloam.org, http://www.getgloam.org {
 	root * /srv/sites/gloam
-	file_server
 	encode zstd gzip
 
 	# Public scheme is https because the edge terminates TLS, so the redirect
 	# target is https:// even though this listener is plain HTTP.
 	@www host www.getgloam.org
 	redir @www https://getgloam.org{uri} permanent
+
+	# Pages are served without the .html extension: /guides reads guides.html
+	# off disk. The extension is still the filename, only never the URL.
+	#
+	# The two redirects come first so a page has exactly one address. Without
+	# them /guides and /guides.html would both answer 200, which splits the
+	# canonical URL from the indexed one and leaves the old address visible in
+	# the address bar whenever someone follows an existing link.
+	redir /index.html / permanent
+
+	@htmlfile {
+		path_regexp htmlext ^/(.+)\.html$
+		not path /404.html
+	}
+	# The trailing .1 is the capture group. {re.htmlext} on its own is not a
+	# placeholder Caddy fills in, and an empty one sends every page to /.
+	redir @htmlfile /{re.htmlext.1} permanent
+
+	# 404.html is exempt from that redirect because it is the error page, not a
+	# page anyone links to: the exemption just saves it a pointless hop. The
+	# internal error path is unaffected either way, since handle_errors below
+	# rewrites in its own route rather than through these directives.
+	try_files {path} {path}.html
+	file_server
 
 	# Caddy's default type table serves .md as text/plain, which makes agents
 	# and LLM crawlers treat the whitepaper as an opaque blob instead of
@@ -51,6 +74,13 @@ http://getgloam.org, http://www.getgloam.org {
 	# of sync.
 	@revalidate path *.html / /style.css /whitepaper.md /llms.txt /sitemap.xml /robots.txt
 	header @revalidate Cache-Control "public, max-age=0, must-revalidate"
+
+	# The same rule for the extensionless page URLs. `header` is ordered ahead
+	# of `try_files`, so the matcher above sees /guides, never the guides.html
+	# it is about to be rewritten to. Every URL this site serves that has no
+	# dot in it is a page.
+	@pagepath path_regexp pagepath ^/[^.]*$
+	header @pagepath Cache-Control "public, max-age=0, must-revalidate"
 
 	header {
 		# Same-origin except Google Fonts and the self-hosted analytics on

@@ -78,7 +78,27 @@ comments in `caddy-site-block.txt`.
    curl -s  https://getgloam.org/llms.txt | head -5
    curl -sI https://www.getgloam.org/ | grep -i location    # 301 to apex
    curl -sI https://getgloam.org/nope | head -1             # 404
+   curl -sI https://getgloam.org/guides | head -1           # 200, from guides.html
+   curl -sI https://getgloam.org/guides.html | grep -i location   # 301 to /guides
+   curl -sI https://getgloam.org/index.html | grep -i location    # 301 to /
    ```
+
+## Extensionless page URLs
+
+Pages are served without `.html`: `/guides` reads `guides.html` off disk. The
+extension is still the filename, only never the URL. Three pieces have to agree,
+and all three live in this repo:
+
+- `try_files {path} {path}.html` in the site block, which is what makes
+  `/guides` resolve at all.
+- Two `redir`s in the same block, so `/guides.html` and `/index.html` send a
+  301 to the clean URL. Without them both spellings answer 200, which splits a
+  page's canonical URL from its indexed one.
+- The links, canonicals, `og:url`s, `sitemap.xml` and `llms.txt` in `site/`,
+  which all name the extensionless form.
+
+Adding a page is still just dropping `<name>.html` into `site/`. Nothing in the
+Caddy block enumerates pages, so it needs no edit.
 
 ## Two traps worth knowing
 
@@ -139,7 +159,10 @@ rsync -av --delete site/ erebus:/nvme-mirror/static/gloam/
 ```
 
 No Caddy reload is needed for content changes. Only re-run steps 2 and 3 if the
-site block itself changes.
+site block itself changes. When it does, the block is already in the Caddyfile,
+so step 2 is a replacement rather than an append: edit the existing
+`http://getgloam.org` block in place (see the `mv` trap below), then validate
+and reload as in step 3.
 
 ## Regenerating derived files
 

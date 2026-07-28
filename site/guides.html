@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Guides - Gloam</title>
   <meta name="description" content="Current setup, Game Lab, calibration, verification, HDR refinement, and troubleshooting guides for Gloam on Windows.">
-  <link rel="canonical" href="https://getgloam.org/guides.html">
+  <link rel="canonical" href="https://getgloam.org/guides">
   <meta name="robots" content="index, follow, max-image-preview:large">
   <meta name="color-scheme" content="dark light">
   <meta name="theme-color" content="#000000">
@@ -13,7 +13,7 @@
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="Gloam">
   <meta property="og:locale" content="en_US">
-  <meta property="og:url" content="https://getgloam.org/guides.html">
+  <meta property="og:url" content="https://getgloam.org/guides">
   <meta property="og:title" content="Guides - Gloam">
   <meta property="og:description" content="Current setup, Game Lab, calibration, verification, HDR refinement, and troubleshooting guides for Gloam on Windows.">
   <meta property="og:image" content="https://getgloam.org/assets/og.jpg">
@@ -35,7 +35,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@700;800&family=Space+Grotesk:wght@400;500;700&family=Lora:ital,wght@0,500;1,500&display=swap">
-  <link rel="stylesheet" href="style.css?v=b3019a9c">
+  <link rel="stylesheet" href="/style.css?v=7e82aafc">
   <script defer src="https://zerolens.disinfo.zone/script.js" data-website-id="842b1cf0-103e-49a3-8fb0-58c8a14a0af7"></script>
   <script>
     // Must stay inline and in <head>: it has to run before first paint, or the
@@ -55,17 +55,23 @@
     <!-- Header -->
     <header class="site-header">
       <div class="wrap">
-        <a class="brand" href="index.html">
-          <span class="brand-mark" aria-hidden="true"></span>
+        <a class="brand" href="/">
+          <svg class="brand-mark" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+            <circle class="brand-mark-disc" cx="50" cy="50" r="45"/>
+            <path class="brand-mark-s" d="M15 85 C51.06 74.40 48.94 25.60 85 15"/>
+          </svg>
           Gloam
         </a>
-        <nav class="site-nav" aria-label="Site">
-          <a href="index.html">Home</a>
-          <a href="guides.html" aria-current="page">Guides</a>
-          <a href="whitepaper.html">Whitepaper</a>
-          <a href="index.html#download">Download</a>
+        <nav class="site-nav" id="siteNav" aria-label="Site">
+          <a href="/">Home</a>
+          <a href="/guides" aria-current="page">Guides</a>
+          <a href="/whitepaper">Whitepaper</a>
+          <a href="/#download">Download</a>
         </nav>
-        <button class="theme-toggle-btn" id="themeToggle" aria-label="Invert print colors">◐</button>
+        <button class="theme-toggle-btn" id="themeToggle" type="button" aria-label="Switch between the light and dark theme">◐</button>
+        <button class="nav-toggle" id="navToggle" type="button" aria-label="Menu" aria-expanded="false" aria-controls="siteNav">
+          <span class="nav-toggle-bars" aria-hidden="true"></span>
+        </button>
       </div>
     </header>
 
@@ -250,8 +256,8 @@
         <span class="footer-links">
           <a href="https://github.com/halideworks/gloam">GitHub</a>
           <a href="https://github.com/halideworks/gloam/releases">Releases</a>
-          <a href="whitepaper.html">Technical whitepaper</a>
-          <a href="guides.html">Guides</a>
+          <a href="/whitepaper">Technical whitepaper</a>
+          <a href="/guides">Guides</a>
         </span>
       </div>
     </footer>
@@ -265,12 +271,51 @@
       const themeToggle = document.getElementById('themeToggle');
       if (themeToggle) {
         themeToggle.addEventListener('click', () => {
-          document.documentElement.classList.toggle('light-theme');
-          const nowDark = !document.documentElement.classList.contains('light-theme');
+          const light = document.documentElement.classList.toggle('light-theme');
+          // The stylesheet already sets color-scheme per theme. Setting it on
+          // the element too means the UA-painted parts (scrollbars, form
+          // controls, the canvas behind an overscroll) still follow the button
+          // if the visitor is holding a cached or half-loaded stylesheet.
+          document.documentElement.style.colorScheme = light ? 'light' : 'dark';
           try {
-            localStorage.setItem('theme', nowDark ? 'dark' : 'light');
+            localStorage.setItem('theme', light ? 'light' : 'dark');
           } catch(e) {}
         });
+      }
+    })();
+
+    // Mobile navigation
+    (function () {
+      const navToggle = document.getElementById('navToggle');
+      const siteNav = document.getElementById('siteNav');
+      if (!navToggle || !siteNav) return;
+
+      function setOpen(open) {
+        siteNav.classList.toggle('is-open', open);
+        navToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      }
+
+      navToggle.addEventListener('click', () => {
+        setOpen(navToggle.getAttribute('aria-expanded') !== 'true');
+      });
+
+      // An in-page anchor never reloads, so the menu has to close itself.
+      siteNav.addEventListener('click', (e) => {
+        if (e.target.closest('a')) setOpen(false);
+      });
+
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') setOpen(false);
+      });
+
+      // Rotating to a wide viewport hands the links back to the desktop row,
+      // where the hamburger is hidden and cannot close them again.
+      const wide = window.matchMedia('(min-width: 769px)');
+      const onWide = (e) => { if (e.matches) setOpen(false); };
+      if (wide.addEventListener) {
+        wide.addEventListener('change', onWide);
+      } else if (wide.addListener) {
+        wide.addListener(onWide);
       }
     })();
 

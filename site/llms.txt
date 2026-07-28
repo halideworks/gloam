@@ -20,8 +20,8 @@ calibration installed as a Windows color profile containing an MHC2 transform
 ## Docs
 
 - [Technical whitepaper (Markdown)](https://getgloam.org/whitepaper.md): The full technical reference in Markdown. Transfer functions, live LUT synthesis, HDR headroom shoulder, linear-light adjustments, night mode and melanopic policy, Gamer Mode, measurement and adaptive patch placement, MHC2 profile mathematics, joint HDR refinement, verification and uncertainty.
-- [Technical whitepaper (HTML)](https://getgloam.org/whitepaper.html): Canonical rendered version of the same document.
-- [Guides](https://getgloam.org/guides.html): Install, set gamma, configure night mode, Game Lab, colorimeter calibration, verification, HDR refinement, troubleshooting.
+- [Technical whitepaper (HTML)](https://getgloam.org/whitepaper): Canonical rendered version of the same document.
+- [Guides](https://getgloam.org/guides): Install, set gamma, configure night mode, Game Lab, colorimeter calibration, verification, HDR refinement, troubleshooting.
 - [Home](https://getgloam.org/): Overview, the problem statement with measured ratios, feature summary, downloads, FAQ.
 
 ## Source and downloads

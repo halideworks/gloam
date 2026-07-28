@@ -118,7 +118,7 @@ Recommended flow:
 
 For HDR desktop calibration, use **HDR Desktop PQ (sRGB gamut)**. When a panel already measures close to target, prefer white-point-only correction over full gamut correction: correcting a panel that is already accurate reliably verifies worse, not better.
 
-Every number in the report is measured through the installed profile, not predicted. The method, and what it does not claim, is written up in the [whitepaper](https://getgloam.org/whitepaper.html).
+Every number in the report is measured through the installed profile, not predicted. The method, and what it does not claim, is written up in the [whitepaper](https://getgloam.org/whitepaper).
 
 ### Hardware validation
 

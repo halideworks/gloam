@@ -85,8 +85,12 @@ h1 {
   font-size: clamp(2.5rem, 6vw, 4.8rem);
 }
 
+/* The universal reset zeroes every margin, so an h2 followed by body copy sat
+   directly on its first line. The long-form pages already set their own h2
+   margins and keep overriding this one. */
 h2 {
   font-size: clamp(1.8rem, 4.5vw, 3.2rem);
+  margin-bottom: 1.5rem;
 }
 
 h3 {
@@ -206,14 +210,27 @@ kbd {
   gap: 0.5rem;
 }
 
+/* The mark is inline SVG rather than a background image so both halves of it
+   can read the theme variables. As an external file the S had to be punched
+   out with an SVG <mask>, which several mobile browsers dropped on the floor,
+   leaving a plain red disc. Here the S is simply stroked in the page colour. */
 .brand-mark {
-  width: 18px;
-  height: 18px;
-  background-image: url("assets/brand-mark.svg");
-  background-size: contain;
-  background-repeat: no-repeat;
-  background-position: center;
-  display: inline-block;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  display: block;
+  overflow: visible;
+}
+
+.brand-mark-disc {
+  fill: var(--accent);
+}
+
+.brand-mark-s {
+  fill: none;
+  stroke: var(--bg);
+  stroke-width: 13;
+  stroke-linecap: round;
 }
 
 .site-nav {
@@ -246,8 +263,8 @@ kbd {
   background: transparent;
   border: none;
   color: var(--text);
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -256,7 +273,12 @@ kbd {
   font-size: 1.25rem;
   font-weight: 700;
   line-height: 1;
-  transition: all 0.2s;
+  transition: background-color 0.2s, color 0.2s;
+  /* Opts out of the double-tap-to-zoom gesture, which otherwise makes a small
+     header button feel unresponsive on touch: the browser holds the tap back
+     to see whether a second one is coming. */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .theme-toggle-btn:hover {
@@ -264,19 +286,87 @@ kbd {
   color: var(--bg);
 }
 
-/* Mobile Header Layout Grid */
+/* Hamburger. Hidden until the mobile breakpoint, where the nav collapses. */
+.nav-toggle {
+  display: none;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.nav-toggle-bars {
+  position: relative;
+  display: block;
+  width: 22px;
+  height: 3px;
+  background: currentColor;
+}
+
+.nav-toggle-bars::before,
+.nav-toggle-bars::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  width: 22px;
+  height: 3px;
+  background: currentColor;
+  transition: transform 0.2s ease;
+}
+
+.nav-toggle-bars::before {
+  top: -7px;
+}
+
+.nav-toggle-bars::after {
+  top: 7px;
+}
+
+/* Open: the middle bar goes out and the other two cross into an X. */
+.nav-toggle[aria-expanded="true"] .nav-toggle-bars {
+  background: transparent;
+}
+
+.nav-toggle[aria-expanded="true"] .nav-toggle-bars::before {
+  transform: translateY(7px) rotate(45deg);
+}
+
+.nav-toggle[aria-expanded="true"] .nav-toggle-bars::after {
+  transform: translateY(-7px) rotate(-45deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-toggle-bars::before,
+  .nav-toggle-bars::after {
+    transition: none;
+  }
+}
+
+/* Mobile Header Layout Grid.
+   The four links used to sit permanently on a second row, which is a strip of
+   shouting uppercase above every page. On mobile they collapse behind the
+   hamburger instead, and the bar keeps only the wordmark, the theme button and
+   the toggle. */
 @media (max-width: 768px) {
   .site-header .wrap {
     display: grid;
-    grid-template-columns: 1fr auto;
-    grid-template-rows: auto auto;
-    gap: 1rem 0;
-    padding: 1rem 1.5rem;
+    grid-template-columns: 1fr auto auto;
+    align-items: center;
+    gap: 0 0.4rem;
+    padding: 0.85rem 1.25rem;
   }
   .brand {
     grid-column: 1;
     grid-row: 1;
     justify-self: start;
+    font-size: 1.6rem;
   }
   .theme-toggle-btn {
     grid-column: 2;
@@ -284,21 +374,48 @@ kbd {
     justify-self: end;
     margin-left: 0;
   }
-  .site-nav {
-    grid-column: 1 / span 2;
-    grid-row: 2;
+  .nav-toggle {
+    grid-column: 3;
+    grid-row: 1;
+    justify-self: end;
     display: flex;
-    justify-content: center;
-    width: 100%;
-    border-top: 1px dashed var(--border);
-    padding-top: 0.25rem;
-    gap: 0.5rem;
-    margin-left: 0;
   }
-  /* Reach a ~44px touch target; the desktop 25px is fine for a cursor but
-     too small to hit reliably with a thumb. */
+  .site-nav {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    display: none;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    /* Full-bleed to the header edges, and flush with its bottom border. */
+    margin: 0.85rem -1.25rem -0.85rem;
+    border-top: var(--border-thin) solid var(--border);
+  }
+  .site-nav.is-open {
+    display: flex;
+  }
   .site-nav a {
-    padding: 0.8rem 0.5rem;
+    padding: 1rem 1.25rem;
+    font-size: 1rem;
+    border-bottom: 1px dashed var(--border);
+  }
+  .site-nav a:last-child {
+    border-bottom: none;
+  }
+  /* The desktop outline marks the current page in a row of four. In a stacked
+     list it reads as a stray box, so colour carries it instead. */
+  .site-nav a[aria-current="page"] {
+    outline: none;
+    color: var(--accent);
+  }
+}
+
+/* The free-floating GLOAM wordmark is the narrow left rail of the two-column
+   hero. Below that breakpoint there is no rail: it turns into a large banner
+   repeating a word the header already carries, above the copy that matters. */
+@media (max-width: 899px) {
+  .hero-vertical-title {
+    display: none;
   }
 }
 
