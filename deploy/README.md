@@ -24,6 +24,17 @@ means a mistake in either is invisible except in the response headers:
 - `_redirects` carries the `.html` to clean-URL 301s. Unlike the Caddy version
   this cannot be a regex, so **a new page needs a new line here**.
 
+Two things the Caddy block did that this pair cannot, both worth knowing before
+assuming a redirect is in the repo:
+
+- `_redirects` matches on **path only**. A source written as a full URL, which
+  is how you would express www to apex, is accepted by wrangler without a
+  warning and then never fires. That redirect is a zone-level **Redirect Rule**
+  in the Cloudflare dashboard (Rules, Redirect Rules, the "Redirect from WWW to
+  root" template), so it is configuration that does not live in this repo.
+- There is no equivalent of the `handle_errors` block. Pages serves `404.html`
+  for an unmatched path on its own, which is the only error page this site has.
+
 The workflow curls the live site after deploying and fails the run if the
 markdown content type, the CSP, HSTS, or any of the three routes has gone
 missing. Those are the failures that do not show up in a rendered page.

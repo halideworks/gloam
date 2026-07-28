@@ -10,7 +10,8 @@
 /guides.html        /guides       301
 /whitepaper.html    /whitepaper   301
 
-# www to apex, which Caddy did with a host matcher. Both hostnames are attached
-# to the project, so without this both would answer 200 and the canonical URL
-# would split in exactly the way the redirects above exist to prevent.
-https://www.getgloam.org/*  https://getgloam.org/:splat  301
+# www to apex is deliberately NOT here. Caddy did it with a host matcher, but
+# this file matches on path only: a source written as a full URL is accepted by
+# wrangler without complaint and then never fires, which is exactly how it was
+# found. On Pages that redirect is a zone-level Redirect Rule instead, so it
+# lives in the Cloudflare dashboard rather than in this repo. See deploy/README.
