@@ -1,7 +1,7 @@
 # Troubleshooting
 
 Every entry here ends in something to actually do. If none of them fit, jump to
-[Getting help](#getting-help) — the diagnostics bundle is what makes a bug report
+[Getting help](#getting-help). The diagnostics bundle is what makes a bug report
 actionable.
 
 ---
@@ -17,14 +17,14 @@ until enough people have installed it. New releases can briefly re-trigger it.
 
 **Do this:** click **More info**, confirm the publisher line reads the expected verified
 publisher, then click **Run anyway**. If the publisher line is missing or reads something
-else, stop — do not run it, and tell us where you downloaded it from. Official builds come
+else, stop. Do not run it, and tell us where you downloaded it from. Official builds come
 only from the [releases page](https://github.com/halideworks/gloam/releases).
 
 ---
 
 ## My profile stopped applying after a Windows update
 
-**What you are seeing:** colors were right, Windows updated, now they are not — and Gloam
+**What you are seeing:** colors were right, Windows updated, now they are not, and Gloam
 still shows the calibration as installed.
 
 **Why:** Windows owns the color-profile association, and feature updates, driver updates,
@@ -39,7 +39,7 @@ measurably move toward target after installation.
 1. Open the dashboard and check the display's calibration status. If it no longer shows an
    active profile, re-install it from the calibration report's **Apply** button.
 2. If Gloam still claims it is applied but the display looks wrong, do not trust either
-   side — measure. Open the report and use **Re-verify** with the meter connected. That
+   side. Measure instead: open the report and use **Re-verify** with the meter connected. That
    re-measures through whatever is actually active now and refreshes the numbers.
 3. If verification comes back much worse than the report's recorded values, the profile is
    not being applied even though it is associated. Toggle the display's gamma mode to
@@ -66,19 +66,19 @@ correction should return on its own within a few seconds. Wait for it before int
 
 If it does not come back, or you need it back *now*:
 
-- Press `Win + Shift + F4` — panic mode, which clears the gamma ramps immediately and
+- Press `Win + Shift + F4` for panic mode, which clears the gamma ramps immediately and
   returns the display to an uncorrected state. Then re-select your gamma mode from the tray.
 - Press `Win + Shift + F1` (Gamma 2.2) or `Win + Shift + F2` (Gamma 2.4) to re-apply
   directly to the focused monitor.
 
 The ramp guard deliberately stands down for a display that is mid-calibration, so if this
-happens while a calibration is running, that is expected — finish or cancel the run first.
+happens while a calibration is running, that is expected. Finish or cancel the run first.
 
 ---
 
 ## Colors look wrong after a driver update
 
-**What you are seeing:** a GPU driver update, and now everything is off — often more
+**What you are seeing:** a GPU driver update, and now everything is off, often more
 saturated, or with a visible color cast.
 
 **Why:** driver installs commonly reset the hardware gamma ramp, and can also reset or
@@ -90,7 +90,7 @@ those.
 **Do this, in order:**
 
 1. Check the vendor control panel first. If its own digital vibrance, color enhancement, or
-   custom gamma setting got turned back on, turn it off — two corrections stacked will
+   custom gamma setting got turned back on, turn it off. Two corrections stacked will
    never look right, and Gloam cannot see or undo that one.
 2. Re-select the gamma mode from the tray to force a re-apply.
 3. If you have an installed calibration, follow the "profile stopped applying" steps above;
@@ -105,7 +105,7 @@ those.
 **Do this:**
 
 1. Check whether Windows Night Light is also on. Two warming corrections stack, and
-   Windows applies its own after Gloam. Turn Windows Night Light off — Gloam replaces it.
+   Windows applies its own after Gloam. Turn Windows Night Light off, since Gloam replaces it.
 2. Check whether the foreground application is on your night-mode exclusion list. Excluded
    applications suppress night mode while they are focused, by design.
 3. Check whether Gameplay Lock is holding the output steady for an active game session.
@@ -121,7 +121,7 @@ those.
    window. Meters that were connected through a hub or a KVM are the usual culprits.
 2. If Gloam reports the driver is missing, accept the driver-install prompt. ArgyllCMS
    needs its own USB driver for most instruments.
-3. Close any other software that talks to the meter — DisplayCAL, the vendor's own
+3. Close any other software that talks to the meter. DisplayCAL, the vendor's own
    calibration utility, and Gloam cannot hold the device at the same time.
 4. If ArgyllCMS itself is missing, start a calibration once and let Gloam download it. The
    setup build bundles it, but a portable install may need the download.
@@ -148,7 +148,7 @@ leaves `Gloam`, so an uninstall never destroys your calibration data.
 
 Use **Export Diagnostics** from the tray menu. It writes a zip to
 `%LOCALAPPDATA%\Gloam\Diagnostics` containing the log, sanitized settings, monitor and
-display-configuration state, and — if you choose **Include Reports** — your calibration
+display-configuration state, and (if you choose **Include Reports**) your calibration
 report snapshots and verification CSVs.
 
 The bundle is text-only and is sanitized before it is written, but it does describe your

@@ -753,7 +753,7 @@
             therefore exact when the calibration target is a 2.2 power law and approximate otherwise: a
             BT.1886 or piecewise-sRGB target retargets the display to a curve the live ramp does not know
             about, and the residual concentrates in the shadows, where those curves diverge most from a power
-            law. Gloam does not silently accept that configuration — install preflight warns when a non-2.2
+            law. Gloam does not silently accept that configuration: install preflight warns when a non-2.2
             SDR target is installed on a display that also has a live regrade applied, and names the fix
             (set the display to Windows Default for calibration-accurate viewing). Explicit settings previews
             temporarily take ownership from gamer mode. App exclusions can block live policy on the display
@@ -798,8 +798,8 @@
           </p>
           <p>
             A time-only multiplicative model is licensed on automatic-brightness-limiter panels because the
-            run holds patch geometry, patch size, and surround constant (§10.1), so average picture level —
-            and therefore ABL state — is approximately stationary across the sequence; what remains varying is
+            run holds patch geometry, patch size, and surround constant (§10.1), so average picture level,
+            and therefore ABL state, is approximately stationary across the sequence; what remains varying is
             warm-up and settling, which are slow functions of time.
           </p>
 

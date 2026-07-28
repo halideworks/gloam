@@ -8,7 +8,7 @@ namespace Gloam.Services
     /// Backstop for fire-and-forget async work started from an event handler.
     ///
     /// An <c>async void</c> method that lets an exception escape rethrows it on the
-    /// dispatcher, where nothing is awaiting it — that is a process crash, not a failed
+    /// dispatcher, where nothing is awaiting it. That is a process crash, not a failed
     /// click. Every such handler in this app is therefore written as
     ///
     ///     private void Foo_Click(object sender, RoutedEventArgs e)
@@ -17,7 +17,7 @@ namespace Gloam.Services
     ///     private async Task Foo_ClickAsync(...) { ...the real body... }
     ///
     /// which is airtight rather than merely careful: a C# <c>async Task</c> method never
-    /// throws synchronously — including for arguments validated before the first await —
+    /// throws synchronously (including for arguments validated before the first await),
     /// so every failure is delivered on the returned Task, and the Task is awaited inside
     /// the try below. There is no path around it.
     ///

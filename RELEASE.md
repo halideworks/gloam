@@ -49,7 +49,7 @@ The version comes from the tag. `UpdateService.RepoUrl` and the CI upload target
 ## Cutting a release
 
 1. Make sure `main` has everything you want shipped and the build is green.
-2. Pick the version `X.Y.Z`. Set `<Version>` in `Gloam.csproj` to match and commit it —
+2. Pick the version `X.Y.Z`. Set `<Version>` in `Gloam.csproj` to match and commit it.
    CI overrides it from the tag anyway, but keeping them in sync means a local
    `.\package.ps1` with no arguments builds the same version the tag will.
 3. Write the release notes at `docs/release-notes/vX.Y.Z.md` (see below).
@@ -68,7 +68,7 @@ The version comes from the tag. `UpdateService.RepoUrl` and the CI upload target
 
 ### Release notes
 
-`vpk upload github` publishes with an empty body, so notes are a separate step — releases
+`vpk upload github` publishes with an empty body, so notes are a separate step. Releases
 through v1.8.0 have no notes at all for this reason. Write them for someone deciding
 whether to care, not for someone reading the diff: what changed for them, what they need
 to do about it (usually nothing), and anything that changes measured behavior.
@@ -83,7 +83,7 @@ update land silently.
 - [ ] Strict build clean: `dotnet build src/Gloam.sln -c Release -p:GloamStrictBuild=true`.
 - [ ] `<Version>` in `Gloam.csproj` matches the tag being pushed.
 - [ ] Release notes written at `docs/release-notes/vX.Y.Z.md`.
-- [ ] **Colorimeter re-validation** — only when the release changes measured behavior
+- [ ] **Colorimeter re-validation**, only when the release changes measured behavior
       (calibration math, LUT generation, drift handling, refinement). Verify the specific
       changed path on real hardware and record the before/after in the release notes.
       Skip for releases that do not touch those paths, and say so rather than leaving the

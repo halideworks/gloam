@@ -12,7 +12,7 @@
 ## Calibration math
 
 Only if this touches `LutGenerator`, `ColorMath`, `HdrMhc2LutBuilder`, `DriftCompensator`,
-or the refinement/planner classes — delete this section otherwise.
+or the refinement/planner classes. Delete this section otherwise.
 
 - [ ] Pinning tests were added **before** the behavioral change, so the diff shows what moved.
 - [ ] The whitepaper is updated if documented behavior changed (`site/whitepaper.html` is the
@@ -21,6 +21,6 @@ or the refinement/planner classes — delete this section otherwise.
       diff is explained below.
 
 **What was measured?** Before/after numbers if you have hardware and a meter. If you do not,
-say so — it will be reviewed as a proposal rather than a result, which is fine.
+say so. It will be reviewed as a proposal rather than a result, which is fine.
 
 <!-- measurements or "not measured; no hardware" -->

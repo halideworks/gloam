@@ -1,4 +1,4 @@
-# Codebase hardening audit — July 2026
+# Codebase hardening audit, July 2026
 
 > Historical document, left as written. Solution, project, and namespace names in this
 > audit predate the internal `HDRGammaController` → `Gloam` rename; read

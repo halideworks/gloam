@@ -27,7 +27,7 @@ dotnet test src/Gloam.sln -c Release
 ```
 
 This must pass before you open a pull request. Some tests drive real WPF on an STA thread,
-so they need a desktop session — they will not run headless.
+so they need a desktop session. They will not run headless.
 
 Before submitting, also check the build is warning-free under the strict configuration,
 which is what CI enforces:
@@ -48,7 +48,7 @@ A failure there means a change altered what Gloam computes from real data. That 
 sometimes correct and sometimes a regression, and the point of the rig is that you have to
 decide which on purpose, in a diff a reviewer can see.
 
-**If you own a display we have not pinned — OLED, QD-OLED, wide-gamut LCD, mini-LED — and a
+**If you own a display we have not pinned (OLED, QD-OLED, wide-gamut LCD, mini-LED) and a
 colorimeter, contributing a fixture is the most valuable thing you can send.** It needs no
 code. See [docs/golden-fixture-contribution.md](docs/golden-fixture-contribution.md).
 
@@ -58,7 +58,7 @@ code. See [docs/golden-fixture-contribution.md](docs/golden-fixture-contribution
   handling, settings persistence, and scheduling live, and it is all testable without a
   display.
 - **Presentation-layer changes are exempt.** Window layout, styling, and view wiring under
-  `src/Gloam` do not need tests unless they carry real logic — if you find yourself writing
+  `src/Gloam` do not need tests unless they carry real logic. If you find yourself writing
   a loop or a conditional in a code-behind, that is logic, and it belongs somewhere
   testable.
 - **Keep it focused.** One change per pull request. Drive-by refactors in a bug-fix PR make
@@ -70,7 +70,7 @@ code. See [docs/golden-fixture-contribution.md](docs/golden-fixture-contribution
 
 Changes to `LutGenerator`, `ColorMath`, `HdrMhc2LutBuilder`, `DriftCompensator`, and the
 refinement and planner classes are held to a higher bar, because a subtle error there
-produces plausible numbers that are wrong — the worst possible failure for a tool whose
+produces plausible numbers that are wrong, the worst possible failure for a tool whose
 entire claim is that its output is measured rather than asserted.
 
 Such a pull request must:
@@ -79,9 +79,9 @@ Such a pull request must:
    the behavioral change, so the diff shows exactly what moved.
 2. **Update the whitepaper** if it changes documented behavior. The source is
    `site/whitepaper.html`; `site/whitepaper.md` is generated from it by
-   `python scripts/build-whitepaper-md.py` — regenerate rather than editing it by hand.
+   `python scripts/build-whitepaper-md.py`. Regenerate it rather than editing it by hand.
 3. **Say what was measured.** If you have hardware and a meter, include the before and
-   after. If you do not, say that too — an unverified math change is still worth
+   after. If you do not, say that too. An unverified math change is still worth
    discussing, but it will be reviewed as a proposal rather than a result.
 
 Do not weaken, skip, or delete an existing test to make a change pass. If a test is wrong,
@@ -90,7 +90,7 @@ that is its own pull request with its own argument.
 ## Reporting bugs
 
 Use the [bug report template](.github/ISSUE_TEMPLATE/bug_report.yml). It asks for a
-diagnostics bundle (tray → **Export Diagnostics**), which is not bureaucracy — display
+diagnostics bundle (tray → **Export Diagnostics**), which is not bureaucracy. Display
 problems depend on your Windows version, GPU driver, panel, and HDR state, and the bundle
 carries all four. A report without one usually turns into several rounds of questions.
 

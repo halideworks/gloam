@@ -8,9 +8,9 @@ Fix washed-out SDR content in Windows HDR mode. Per-monitor gamma correction, a 
 
 ![Detail of a candlelit painting shown twice. Left, decoded by Windows with the sRGB curve: the dark background washes out to a flat brown-grey haze. Right, with Gloam's Gamma 2.2 correction: the background returns to a deep black the figure sits against, while the candle flames stay exactly as bright.](docs/media/hero-comparison.png)
 
-<sub>Rendered, not photographed: the source image is pushed through the same signal path the app implements — `TransferFunctions.cs`, `LutGenerator.cs`, and the Windows SDR-in-HDR wire model — once without Gloam and once with its Gamma 2.2 LUT, then re-encoded for an ordinary SDR screen. See [`scripts/render-comparison-images.py`](scripts/render-comparison-images.py). A screenshot cannot show this: the whole problem is that what the compositor sends to the panel differs from what gets captured.</sub>
+<sub>Rendered, not photographed: the source image is pushed through the same signal path the app implements (`TransferFunctions.cs`, `LutGenerator.cs`, and the Windows SDR-in-HDR wire model), once without Gloam and once with its Gamma 2.2 LUT, then re-encoded for an ordinary SDR screen. See [`scripts/render-comparison-images.py`](scripts/render-comparison-images.py). A screenshot cannot show this: the whole problem is that what the compositor sends to the panel differs from what gets captured.</sub>
 
-Turn HDR on in Windows and SDR content goes flat and milky — Windows presents it through a curve your display was never built to decode. Gloam puts the right curve back, per monitor.
+Turn HDR on in Windows and SDR content goes flat and milky, because Windows presents it through a curve your display was never built to decode. Gloam puts the right curve back, per monitor.
 
 ## Quick start
 
@@ -127,7 +127,7 @@ Gloam's calibration model is pinned by golden fixtures: real recorded measuremen
 - **Golden-fixture validated:** Gigabyte M27Q-P, MSI MAG271QPX28.
 - **Expected to work, seeking validation data:** OLED, QD-OLED, wide-gamut LCD, mini-LED.
 
-The second list is honest rather than modest — the code carries panel-specific handling for those classes, but no recorded fixture pins it. If you have one of those displays and a supported colorimeter, [contributing a golden fixture](docs/golden-fixture-contribution.md) is the single most valuable thing you can send us.
+The second list is honest rather than modest. The code carries panel-specific handling for those classes, but no recorded fixture pins it. If you have one of those displays and a supported colorimeter, [contributing a golden fixture](docs/golden-fixture-contribution.md) is the single most valuable thing you can send us.
 
 ## Requirements
 
@@ -157,7 +157,7 @@ dotnet run --project src/Gloam.Cli -- check-lut 2.2 200 --algorithm perceptual -
 dotnet run --project src/Gloam.Cli -- night 2200 --algorithm ultra --basis rec2020 --json -
 ```
 
-Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Files
 
@@ -174,9 +174,9 @@ ArgyllCMS is AGPL v3. Gloam invokes ArgyllCMS tools as separate processes and do
 
 ## Credits
 
-Gloam began as a fork of Dylan Raga's [win11hdr-srgb-to-gamma2.2-icm](https://github.com/dylanraga/win11hdr-srgb-to-gamma2.2-icm) and retains his identification of the Windows SDR-in-HDR sRGB-to-gamma correction — the insight the whole application is built around. Gloam has since grown into a different program, but it started there, and that diagnosis was the hard part.
+Gloam began as a fork of Dylan Raga's [win11hdr-srgb-to-gamma2.2-icm](https://github.com/dylanraga/win11hdr-srgb-to-gamma2.2-icm) and retains his identification of the Windows SDR-in-HDR sRGB-to-gamma correction, the insight the whole application is built around. Gloam has since grown into a different program, but it started there, and that diagnosis was the hard part.
 
-- [ArgyllCMS](https://www.argyllcms.com/), by Graeme Gill — the measurement and profiling tools Gloam drives for every calibration.
-- [MHC2Gen](https://github.com/dantmnf/MHC2), by dantmnf — the reference for Windows MHC2 profile generation.
+- [ArgyllCMS](https://www.argyllcms.com/), by Graeme Gill: the measurement and profiling tools Gloam drives for every calibration.
+- [MHC2Gen](https://github.com/dantmnf/MHC2), by dantmnf: the reference for Windows MHC2 profile generation.
 
 Formerly HDR Gamma Controller.

@@ -10,7 +10,7 @@ body:
         game resetting your gamma all have known answers there.
 
         Display problems depend on your Windows build, GPU driver, panel, and HDR state, so
-        the fields below are not bureaucracy — without them a report usually turns into
+        the fields below are not bureaucracy. Without them a report usually turns into
         several rounds of questions.
 
   - type: textarea
@@ -47,7 +47,7 @@ body:
     id: gpu
     attributes:
       label: GPU and driver version
-      description: The exact driver version matters — driver updates change HDR behavior.
+      description: The exact driver version matters, because driver updates change HDR behavior.
       placeholder: "NVIDIA RTX 4070, driver 560.94"
     validations:
       required: true
@@ -94,7 +94,7 @@ body:
         state. Drag it into this issue.
 
         It is text-only and sanitized before writing, but it does describe your displays and
-        configuration — look through it first if that concerns you.
+        configuration, so look through it first if that concerns you.
       options:
         - label: I have attached a diagnostics bundle to this issue
           required: true

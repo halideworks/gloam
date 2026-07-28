@@ -36,7 +36,7 @@ internal static class TestProcessBootstrap
     ///
     /// SettingsManager resolves its file statically through <see cref="AppPaths.DataDir"/>,
     /// so a plain `new SettingsManager()` followed by any mutation writes
-    /// %LOCALAPPDATA%\Gloam\settings.json — the developer's REAL settings, monitor
+    /// %LOCALAPPDATA%\Gloam\settings.json: the developer's REAL settings, monitor
     /// profiles, calibration associations, and game profiles. Individual tests were
     /// already opting into <see cref="AppPaths.UseDataDirectoriesForCurrentProcess"/> and
     /// restoring it in a finally, but opt-in is the wrong shape for this: one test that
@@ -45,7 +45,7 @@ internal static class TestProcessBootstrap
     /// contributor.
     ///
     /// Redirecting here inverts the default. Tests that set their own override still work
-    /// unchanged — the value they capture and restore is this temp root rather than the
+    /// unchanged, because the value they capture and restore is this temp root rather than the
     /// real path, so even a botched restore lands somewhere harmless. Logs, reports, and
     /// downloaded tooling follow DataDir too, so the suite also stops appending to the
     /// user's real app.log.

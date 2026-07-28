@@ -9,7 +9,7 @@ Report privately through GitHub:
 That opens a private advisory visible only to the maintainers.
 
 Include what you would want if you were fixing it: what you did, what happened, what you
-expected, and — if you have one — a proof of concept. If the issue involves a file Gloam
+expected, and (if you have one) a proof of concept. If the issue involves a file Gloam
 parses, attach the file.
 
 You will get an acknowledgement. If a report turns out not to be a security issue, we will
@@ -38,7 +38,7 @@ be most consequential:
 - **ICC/MHC2 profile generation and installation**, including what Gloam writes into the
   Windows color store.
 
-Bundled ArgyllCMS is third-party. Report vulnerabilities in ArgyllCMS itself upstream — but
+Bundled ArgyllCMS is third-party. Report vulnerabilities in ArgyllCMS itself upstream. But
 if Gloam's *use* of it is what makes something exploitable, that is ours, so tell us.
 
 ## Out of scope
@@ -55,5 +55,5 @@ if Gloam's *use* of it is what makes something exploitable, that is ours, so tel
 The codebase was audited in July 2026; the findings, the verification performed, and the
 stated residual risks are in
 [docs/codebase-hardening-audit-2026-07.md](docs/codebase-hardening-audit-2026-07.md). It is
-worth reading before reporting — it is explicit about what that audit could not cover, and
+worth reading before reporting, because it is explicit about what that audit could not cover, and
 those gaps are where something is most likely still hiding.
