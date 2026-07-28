@@ -868,14 +868,19 @@ namespace Gloam
             });
         }
 
-        private async void RefreshColorimeter_Click(object sender, RoutedEventArgs e)
+        private void RefreshColorimeter_Click(object sender, RoutedEventArgs e)
+            => SafeAsync.FireAndForget(() => RefreshColorimeter_ClickAsync(sender, e), nameof(RefreshColorimeter_Click),
+                ex => Vm.SetColorimeterStatus(CalibrationViewModel.ErrorBrush,
+                    "Colorimeter check failed", ex.Message, canStart: false));
+
+        private async Task RefreshColorimeter_ClickAsync(object sender, RoutedEventArgs e)
         {
             if (_colorimeterService == null) return;
 
             Vm.SetColorimeterStatus(CalibrationViewModel.WarningBrush, "Searching for colorimeter...", "", canStart: false);
 
-            // async void: surface failures instead of letting them escape to the
-            // global dispatcher handler, which would swallow them with no feedback.
+            // Surface failures here instead of leaving them to SafeAsync's backstop,
+            // which logs but shows the user nothing.
             try
             {
                 await _colorimeterService.InitializeAsync();
@@ -933,7 +938,10 @@ namespace Gloam
             RestoreWindowMode();
         }
 
-        private async void BeginMeasurement_Click(object sender, RoutedEventArgs e)
+        private void BeginMeasurement_Click(object sender, RoutedEventArgs e)
+            => SafeAsync.FireAndForget(() => BeginMeasurement_ClickAsync(sender, e), nameof(BeginMeasurement_Click));
+
+        private async Task BeginMeasurement_ClickAsync(object sender, RoutedEventArgs e)
         {
             if (_colorimeterService is null || _calibrationTarget is null)
             {
@@ -1401,12 +1409,15 @@ namespace Gloam
             Vm.IsPauseEnabled = false;
         }
 
-        // Re-entrancy guard for Resume_Click: it's async void with a 3s countdown, and
+        // Re-entrancy guard for Resume_Click: it is fire-and-forget with a 3s countdown, and
         // both the Resume button and the Space key route here — without the guard a
         // second trigger stacks a second countdown (and a second Resume()).
         private bool _isResumeCountdownRunning;
 
-        private async void Resume_Click(object sender, RoutedEventArgs e)
+        private void Resume_Click(object sender, RoutedEventArgs e)
+            => SafeAsync.FireAndForget(() => Resume_ClickAsync(sender, e), nameof(Resume_Click));
+
+        private async Task Resume_ClickAsync(object sender, RoutedEventArgs e)
         {
             if (_isResumeCountdownRunning || !_isPaused) return;
             _isResumeCountdownRunning = true;
@@ -1975,7 +1986,10 @@ namespace Gloam
         /// <summary>
         /// Shows the driver installation dialog and offers to retry calibration.
         /// </summary>
-        private async void ShowDriverInstallDialog()
+        private void ShowDriverInstallDialog()
+            => SafeAsync.FireAndForget(ShowDriverInstallDialogAsync, nameof(ShowDriverInstallDialog));
+
+        private async Task ShowDriverInstallDialogAsync()
         {
             // First restore the previous state since calibration failed
             try

@@ -240,26 +240,7 @@ namespace Gloam
             Loaded += (_, _) => RenderCharts();
             SizeChanged += (_, _) => RenderCharts();
 
-            Loaded += async (_, _) =>
-            {
-                if (!AutoApplyOnLoad || _applyContext == null || _measurementInstallBlocked) return;
-                // async void (event handler): an installer/verify exception escaping here
-                // goes straight to the global crash dialog — surface it in the report's
-                // status strip instead.
-                try
-                {
-                    // Let the tray's window-closed re-apply land first; the verify bypass then
-                    // clears it cleanly instead of racing it.
-                    await Task.Delay(600);
-                    await ApplyAndVerifyAsync();
-                }
-                catch (Exception ex)
-                {
-                    Log.Error($"CalibrationReportWindow: auto apply+verify failed: {ex}");
-                    Vm.StatusText = $"Automatic apply failed: {ex.Message}";
-                    Vm.StatusBrush = CalibrationReportViewModel.AmberBrush;
-                }
-            };
+            Loaded += (_, _) => SafeAsync.FireAndForget(AutoApplyOnLoadAsync, "CalibrationReportWindow.AutoApplyOnLoad");
 
             // Escape aborts a running verification from this window too, and closing the
             // window mid-sweep cancels it instead of leaving the sweep running headless.
@@ -272,6 +253,28 @@ namespace Gloam
                 }
             };
             Closing += (_, _) => _verifyCts?.Cancel();
+        }
+
+        /// <summary>
+        /// Auto apply+verify on load. The catch below is the reporting path (status strip);
+        /// SafeAsync at the Loaded subscription is the backstop behind it.
+        /// </summary>
+        private async Task AutoApplyOnLoadAsync()
+        {
+            if (!AutoApplyOnLoad || _applyContext == null || _measurementInstallBlocked) return;
+            try
+            {
+                // Let the tray's window-closed re-apply land first; the verify bypass then
+                // clears it cleanly instead of racing it.
+                await Task.Delay(600);
+                await ApplyAndVerifyAsync();
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"CalibrationReportWindow: auto apply+verify failed: {ex}");
+                Vm.StatusText = $"Automatic apply failed: {ex.Message}";
+                Vm.StatusBrush = CalibrationReportViewModel.AmberBrush;
+            }
         }
 
         private void PopulateReport()
@@ -1298,11 +1301,15 @@ namespace Gloam
         /// One button, three states: Apply Profile (not yet installed) → Disable Profile
         /// (installed + active) ↔ Enable Profile (installed + toggled off for comparison).
         /// </summary>
-        private async void ApplyButton_Click(object sender, RoutedEventArgs e)
+        private void ApplyButton_Click(object sender, RoutedEventArgs e)
+            => SafeAsync.FireAndForget(() => ApplyButton_ClickAsync(sender, e), nameof(ApplyButton_Click),
+                ex => Vm.StatusText = $"Apply failed: {ex.Message}");
+
+        private async Task ApplyButton_ClickAsync(object sender, RoutedEventArgs e)
         {
-            // async void (event handler): an installer/preflight/ConfirmDialog exception
-            // escaping here goes straight to the global crash dialog — route it to the
-            // status strip instead (mirrors RefineHdrButton_Click).
+            // Event-handler body: an installer/preflight/ConfirmDialog exception belongs
+            // in the status strip, not the global crash dialog. SafeAsync at the handler
+            // boundary is the backstop behind this catch.
             try
             {
                 if (_installedProfileName is { } profileName && _applyContext is { } ctx)
@@ -1500,7 +1507,11 @@ namespace Gloam
             }
         }
 
-        private async void WhiteToolsButton_Click(object sender, RoutedEventArgs e)
+        private void WhiteToolsButton_Click(object sender, RoutedEventArgs e)
+            => SafeAsync.FireAndForget(() => WhiteToolsButton_ClickAsync(sender, e), nameof(WhiteToolsButton_Click),
+                ex => Vm.StatusText = $"White tools failed: {ex.Message}");
+
+        private async Task WhiteToolsButton_ClickAsync(object sender, RoutedEventArgs e)
         {
             if (_applyContext == null || _activeCharacterization == null)
             {
@@ -1518,9 +1529,9 @@ namespace Gloam
             };
             if (dialog.ShowDialog() != true) return;
 
-            // async void (event handler): a failure in any white-tool path (each holds the
-            // probe and/or re-installs profiles) must land in the status strip, not the
-            // global crash dialog.
+            // Event-handler body: a failure in any white-tool path (each holds the probe
+            // and/or re-installs profiles) must land in the status strip, not the global
+            // crash dialog. SafeAsync at the handler boundary is the backstop.
             try
             {
                 switch (dialog.SelectedAction)
@@ -2061,10 +2072,14 @@ namespace Gloam
             }
         }
 
-        private async void RefineHdrJointButton_Click(object sender, RoutedEventArgs e)
+        private void RefineHdrJointButton_Click(object sender, RoutedEventArgs e)
+            => SafeAsync.FireAndForget(() => RefineHdrJointButton_ClickAsync(sender, e), nameof(RefineHdrJointButton_Click),
+                ex => Vm.StatusText = $"Refinement failed: {ex.Message}");
+
+        private async Task RefineHdrJointButton_ClickAsync(object sender, RoutedEventArgs e)
         {
-            // async void (event handler): surface failures in the status strip, never the
-            // global crash dialog.
+            // Event-handler body: surface failures in the status strip, never the global
+            // crash dialog. SafeAsync at the handler boundary is the backstop.
             try
             {
                 bool refreshReport = await RefineHdrJointAsync();
@@ -2369,7 +2384,11 @@ namespace Gloam
 
         // ---- HDR tone-mapping characterization (roadmap 2.3) --------------------------------
 
-        private async void CharacterizeHdrButton_Click(object sender, RoutedEventArgs e)
+        private void CharacterizeHdrButton_Click(object sender, RoutedEventArgs e)
+            => SafeAsync.FireAndForget(() => CharacterizeHdrButton_ClickAsync(sender, e), nameof(CharacterizeHdrButton_Click),
+                ex => Vm.StatusText = $"Characterization failed: {ex.Message}");
+
+        private async Task CharacterizeHdrButton_ClickAsync(object sender, RoutedEventArgs e)
         {
             try
             {
@@ -2599,21 +2618,23 @@ namespace Gloam
         {
             var baseWhite = EffectiveTarget(ctx).WhitePoint;
             var editor = new WhiteTrimWindow { Owner = this };
-            editor.TrimChanged += async (dx, dy) =>
-            {
-                // async void (event handler): an installer exception escaping here would
-                // hit the global crash dialog mid-trim. Report it in the status strip.
-                try
+            // The inner catch reports into the status strip; SafeAsync is the backstop, so
+            // an installer failure mid-trim can never reach the dispatcher.
+            editor.TrimChanged += (dx, dy) => SafeAsync.FireAndForget(
+                async () =>
                 {
-                    await InstallTrimPreviewAsync(ctx, baseWhite, dx, dy);
-                }
-                catch (Exception ex)
-                {
-                    Log.Error($"CalibrationReportWindow: white-trim preview install failed: {ex}");
-                    Vm.StatusText = $"White-trim preview failed: {ex.Message}";
-                    Vm.StatusBrush = CalibrationReportViewModel.AmberBrush;
-                }
-            };
+                    try
+                    {
+                        await InstallTrimPreviewAsync(ctx, baseWhite, dx, dy);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error($"CalibrationReportWindow: white-trim preview install failed: {ex}");
+                        Vm.StatusText = $"White-trim preview failed: {ex.Message}";
+                        Vm.StatusBrush = CalibrationReportViewModel.AmberBrush;
+                    }
+                },
+                "CalibrationReportWindow.TrimChanged");
 
             bool? accepted = editor.ShowDialog();
 
@@ -2691,7 +2712,11 @@ namespace Gloam
         /// (normally the just-installed profile) and fills in the "after" row of the accuracy
         /// table - the honest, measured counterpart to the native "before" numbers.
         /// </summary>
-        private async void VerifyButton_Click(object sender, RoutedEventArgs e)
+        private void VerifyButton_Click(object sender, RoutedEventArgs e)
+            => SafeAsync.FireAndForget(() => VerifyButton_ClickAsync(sender, e), nameof(VerifyButton_Click),
+                ex => Vm.StatusText = $"Verification failed: {ex.Message}");
+
+        private async Task VerifyButton_ClickAsync(object sender, RoutedEventArgs e)
         {
             if (_applyContext?.Colorimeter is not { } colorimeter || _applyContext is not { } ctx)
             {

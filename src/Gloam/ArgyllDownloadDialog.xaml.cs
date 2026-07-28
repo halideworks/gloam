@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
 using Gloam.Core.Calibration;
+using Gloam.Services;
 
 namespace Gloam
 {
@@ -44,7 +45,10 @@ namespace Gloam
             Close();
         }
 
-        private async void Yes_Click(object sender, RoutedEventArgs e)
+        private void Yes_Click(object sender, RoutedEventArgs e)
+            => SafeAsync.FireAndForget(() => Yes_ClickAsync(sender, e), nameof(Yes_Click));
+
+        private async Task Yes_ClickAsync(object sender, RoutedEventArgs e)
         {
             // Switch to progress view
             ConfirmationPanel.Visibility = Visibility.Collapsed;

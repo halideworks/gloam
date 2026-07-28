@@ -257,12 +257,16 @@ namespace Gloam.ViewModels
         private bool _updateScheduled;
         private bool _updateCheckInProgress;
 
-        private async void CheckForUpdates()
+        private void CheckForUpdates()
+            => SafeAsync.FireAndForget(CheckForUpdatesAsync, nameof(CheckForUpdates));
+
+        private async Task CheckForUpdatesAsync()
         {
             if (_updateCheckInProgress) return;
             _updateCheckInProgress = true;
 
-            // async void: any escaped exception would crash the process via the dispatcher.
+            // The try/finally below owns the normal failure path and the in-progress flag;
+            // SafeAsync above is the backstop for anything it does not anticipate.
             try
             {
                 // Dev (F5) and the portable zip have no Velopack install to update.
@@ -580,9 +584,11 @@ namespace Gloam.ViewModels
         // re-applies were visible as flicker.
         private int _displayEventSeq;
 
-        public async void HandleDisplayChange() => await HandleDisplayEventAsync(1500);
+        public void HandleDisplayChange()
+            => SafeAsync.FireAndForget(() => HandleDisplayEventAsync(1500), nameof(HandleDisplayChange));
 
-        public async void HandleResume() => await HandleDisplayEventAsync(3000);
+        public void HandleResume()
+            => SafeAsync.FireAndForget(() => HandleDisplayEventAsync(3000), nameof(HandleResume));
 
         private async Task HandleDisplayEventAsync(int settleDelayMs)
         {

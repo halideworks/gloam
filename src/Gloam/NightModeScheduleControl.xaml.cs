@@ -1,11 +1,13 @@
 using System;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using Gloam.Core;
+using Gloam.Services;
 using Gloam.ViewModels;
 
 namespace Gloam
@@ -16,6 +18,22 @@ namespace Gloam
 
         public event Action? ScheduleChanged;
         public event Func<int?, Task>? PreviewTemperatureRequested;
+
+        /// <summary>
+        /// Raises <see cref="PreviewTemperatureRequested"/> without awaiting it (the drag
+        /// must stay responsive) but without dropping its failures either. A plain
+        /// <c>_ = handler.Invoke(...)</c> leaves a faulted Task unobserved, which .NET
+        /// discards silently, so a preview that stopped working would produce no log line
+        /// and no symptom other than the preview not happening.
+        /// </summary>
+        private void StartPreview(int? kelvin)
+        {
+            var handler = PreviewTemperatureRequested;
+            if (handler == null) return;
+            SafeAsync.FireAndForget(
+                () => handler.Invoke(kelvin) ?? Task.CompletedTask,
+                "NightModeScheduleControl.PreviewTemperatureRequested");
+        }
 
         private NightModeSettings _settings = null!; // Set by Initialize
 
@@ -84,7 +102,10 @@ namespace Gloam
             NotifyChange();
         }
 
-        private async void Detect_Click(object sender, RoutedEventArgs e)
+        private void Detect_Click(object sender, RoutedEventArgs e)
+            => SafeAsync.FireAndForget(() => Detect_ClickAsync(sender, e), nameof(Detect_Click));
+
+        private async Task Detect_ClickAsync(object sender, RoutedEventArgs e)
         {
             try
             {
@@ -386,9 +407,10 @@ namespace Gloam
                     Vm.IsDragOverlayVisible = true;
                     UpdateOverlay(e.GetPosition(CurveCanvas), CurveCanvas.ActualWidth, vm);
 
-                    // Start Preview
-                    // Trigger async fire
-                    _ = PreviewTemperatureRequested?.Invoke(vm.TargetKelvin);
+                    // Start Preview. Fire-and-forget through SafeAsync rather than a bare
+                    // discard: a discarded faulted Task is an unobserved exception, which
+                    // .NET drops silently, so a broken preview would leave no trace at all.
+                    StartPreview(vm.TargetKelvin);
                 }
             }
         }
@@ -473,8 +495,10 @@ namespace Gloam
 
                     if (handler != null && capturedTemp.HasValue)
                     {
-                        // Fire and forget - don't await to keep UI responsive
-                        _ = Task.Run(async () =>
+                        // Fire and forget - don't await to keep UI responsive. SafeAsync
+                        // logs a failure here; without it the exception would leave the
+                        // Task.Run lambda into a discarded Task and vanish unobserved.
+                        SafeAsync.FireAndForget(() => Task.Run(async () =>
                         {
                             try
                             {
@@ -485,7 +509,7 @@ namespace Gloam
                             {
                                 _isPreviewRunning = false;
                             }
-                        });
+                        }), "NightModeScheduleControl.PreviewDrag");
                     }
                     else
                     {
@@ -512,7 +536,7 @@ namespace Gloam
                 Vm.IsDragOverlayVisible = false;
 
                 // Stop preview, revert to schedule logic (which is now updated)
-                PreviewTemperatureRequested?.Invoke(null);
+                StartPreview(null);
 
                 Vm.RefreshPoints(); // Sync grid
                 NotifyChange(); // NOW we save

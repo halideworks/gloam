@@ -58,21 +58,29 @@ namespace Gloam
             _dedupeButton.ToolTip = "Delete redundant saved correction files whose contents are identical, " +
                                     "keeping one copy of each.";
             BrutalistChrome.Apply(this, title ?? "Find Meter Correction", BodyRoot);
-            Loaded += async (_, _) => await SearchAsync();
+            Loaded += (_, _) => SafeAsync.FireAndForget(SearchAsync, "CcssBrowserWindow.Loaded", ShowError);
         }
 
-        private async void Query_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+        /// <summary>Backstop surface for <see cref="SafeAsync"/>: the window's status line.</summary>
+        private void ShowError(Exception ex) => _status.Text = $"Something went wrong: {ex.Message}";
+
+        private void Query_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
         {
             if (e.Key == System.Windows.Input.Key.Enter)
-                await SearchAsync();
+                SafeAsync.FireAndForget(SearchAsync, nameof(Query_KeyDown), ShowError);
         }
 
-        private async void Search_Click(object sender, RoutedEventArgs e) => await SearchAsync();
+        private void Search_Click(object sender, RoutedEventArgs e)
+            => SafeAsync.FireAndForget(SearchAsync, nameof(Search_Click), ShowError);
         private void Download_Click(object sender, RoutedEventArgs e) => DownloadSelected();
-        private async void CreateSpectral_Click(object sender, RoutedEventArgs e) => await CreateFromSpectrometerAsync();
-        private async void CreateMatrix_Click(object sender, RoutedEventArgs e) => await CreateCorrectionMatrixAsync();
-        private async void Delete_Click(object sender, RoutedEventArgs e) => await DeleteSelectedAsync();
-        private async void Dedupe_Click(object sender, RoutedEventArgs e) => await RemoveDuplicatesAsync();
+        private void CreateSpectral_Click(object sender, RoutedEventArgs e)
+            => SafeAsync.FireAndForget(CreateFromSpectrometerAsync, nameof(CreateSpectral_Click), ShowError);
+        private void CreateMatrix_Click(object sender, RoutedEventArgs e)
+            => SafeAsync.FireAndForget(CreateCorrectionMatrixAsync, nameof(CreateMatrix_Click), ShowError);
+        private void Delete_Click(object sender, RoutedEventArgs e)
+            => SafeAsync.FireAndForget(DeleteSelectedAsync, nameof(Delete_Click), ShowError);
+        private void Dedupe_Click(object sender, RoutedEventArgs e)
+            => SafeAsync.FireAndForget(RemoveDuplicatesAsync, nameof(Dedupe_Click), ShowError);
         private void Close_Click(object sender, RoutedEventArgs e)
         {
             if (_captureInProgress) return;

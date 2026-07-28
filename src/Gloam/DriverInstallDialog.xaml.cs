@@ -1,8 +1,10 @@
 using System;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
 using Gloam.Core.Calibration;
+using Gloam.Services;
 
 namespace Gloam
 {
@@ -43,7 +45,10 @@ namespace Gloam
             Close();
         }
 
-        private async void Install_Click(object sender, RoutedEventArgs e)
+        private void Install_Click(object sender, RoutedEventArgs e)
+            => SafeAsync.FireAndForget(() => Install_ClickAsync(sender, e), nameof(Install_Click));
+
+        private async Task Install_ClickAsync(object sender, RoutedEventArgs e)
         {
             // Check if driver installer is available
             if (!UsbDriverHelper.IsDriverInstallerAvailable())

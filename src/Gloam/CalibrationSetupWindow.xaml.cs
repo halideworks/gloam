@@ -60,7 +60,8 @@ namespace Gloam
             DataContext = _viewModel;
             ThemeToggleButton.Content = BrutalistTheme.IsDark ? "◐" : "◑";
 
-            Loaded += async (s, e) => await _viewModel.OnLoadedAsync();
+            Loaded += (s, e) => SafeAsync.FireAndForget(
+                _viewModel.OnLoadedAsync, "CalibrationSetupWindow.Loaded");
         }
 
         private void ThemeToggle_Click(object sender, RoutedEventArgs e)

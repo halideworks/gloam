@@ -57,7 +57,9 @@ namespace Gloam
         private void OnThemeChanged() => RefreshTrend();
 
         private void Monitor_SelectionChanged(object sender, SelectionChangedEventArgs e) => RefreshTrend();
-        private async void Run_Click(object sender, RoutedEventArgs e) => await RunAsync();
+        private void Run_Click(object sender, RoutedEventArgs e)
+            => SafeAsync.FireAndForget(RunAsync, nameof(Run_Click),
+                ex => _status.Text = $"Trust check failed: {ex.Message}");
         private void Export_Click(object sender, RoutedEventArgs e) => ExportCsv();
         private void Close_Click(object sender, RoutedEventArgs e) => Close();
         private void Reminder_Checked(object sender, RoutedEventArgs e) =>
