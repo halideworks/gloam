@@ -6,7 +6,9 @@ Fix washed-out SDR content in Windows HDR mode. Per-monitor gamma correction, a 
 [![Latest release](https://img.shields.io/github/v/release/halideworks/gloam?sort=semver)](https://github.com/halideworks/gloam/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.txt)
 
-![Windows SDR in HDR before and after Gloam's Gamma 2.2 correction](docs/media/hero-comparison.png)
+![Detail of a candlelit painting shown twice. Left, decoded by Windows with the sRGB curve: the dark background washes out to a flat brown-grey haze. Right, with Gloam's Gamma 2.2 correction: the background returns to a deep black the figure sits against, while the candle flames stay exactly as bright.](docs/media/hero-comparison.png)
+
+<sub>Rendered, not photographed: the source image is pushed through the same signal path the app implements — `TransferFunctions.cs`, `LutGenerator.cs`, and the Windows SDR-in-HDR wire model — once without Gloam and once with its Gamma 2.2 LUT, then re-encoded for an ordinary SDR screen. See [`scripts/render-comparison-images.py`](scripts/render-comparison-images.py). A screenshot cannot show this: the whole problem is that what the compositor sends to the panel differs from what gets captured.</sub>
 
 Turn HDR on in Windows and SDR content goes flat and milky — Windows presents it through a curve your display was never built to decode. Gloam puts the right curve back, per monitor.
 
