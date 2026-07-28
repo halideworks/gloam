@@ -21,7 +21,8 @@ namespace Gloam.Core.Calibration
             double measuredSdrWhiteLevel,
             string? measuredDefaultProfile,
             string? currentDefaultProfile,
-            CalibrationTarget? target = null)
+            CalibrationTarget? target = null,
+            GammaMode? liveGammaMode = null)
         {
             var messages = new List<(string Severity, string Message)>();
 
@@ -70,7 +71,63 @@ namespace Gloam.Core.Calibration
                     "Continuing will replace the current profile; cancel if another calibration tool just changed it."));
             }
 
+            AddComposedTonePathMessage(messages, liveGammaMode, target);
+
             return messages;
+        }
+
+        /// <summary>Tolerance on the target exponent for "this is a 2.2 power law".</summary>
+        private const double PureGamma22Tolerance = 0.01;
+
+        /// <summary>
+        /// True when the target's EOTF is a pure 2.2 power law — the response the live
+        /// regrade's encode side assumes. A <see cref="TransferFunctionType.Gamma"/> target
+        /// with no explicit exponent counts: <c>CalibrationTarget.SafeGamma</c> falls back to
+        /// 2.2, so that is what the profile actually targets.
+        /// </summary>
+        internal static bool IsPureGamma22(CalibrationTarget target)
+            => target.TransferFunction == TransferFunctionType.Gamma &&
+               Math.Abs((target.Gamma ?? 2.2) - 2.2) <= PureGamma22Tolerance;
+
+        /// <summary>
+        /// Warns about the composed path: an installed MHC2 correction retargets the display
+        /// to the profile's EOTF, but the live regrade in
+        /// <see cref="LutGenerator"/>'s SDR branch re-encodes at a hardcoded 1/2.2 (step 3),
+        /// because it assumes the ~2.2 presentation an uncorrected Windows SDR display gives.
+        /// When the two disagree — a BT.1886 or piecewise-sRGB calibration underneath a live
+        /// Gamma 2.2/2.4 regrade — the composed tone response is approximate in the shadows,
+        /// where those curves diverge most from a 2.2 power law.
+        ///
+        /// Scoped to SDR targets on purpose. HDR (PQ/HLG) targets are corrected through the
+        /// HDR branch, which works in PQ end to end rather than through the 1/2.2 encode, so
+        /// the mismatch this warns about does not arise there — warning on the standard HDR
+        /// desktop target would be a false positive on the most common HDR flow.
+        ///
+        /// Non-blocking: the composition is approximate, not wrong, and a user who wants the
+        /// live regrade more than exact shadow tracking is making a legitimate trade.
+        ///
+        /// <paramref name="liveGammaMode"/> must be the display's EFFECTIVE mode, resolved by
+        /// the caller as saved-profile-then-monitor the way GammaApplyService does. It is not
+        /// read off <see cref="MonitorInfo.CurrentGamma"/> here on purpose: MonitorManager
+        /// does not populate that field, so a freshly enumerated monitor always carries the
+        /// Gamma24 default and this would warn on every non-2.2 SDR calibration. Null means
+        /// the caller could not determine the mode — say nothing rather than guess.
+        /// </summary>
+        private static void AddComposedTonePathMessage(
+            List<(string Severity, string Message)> messages,
+            GammaMode? liveGammaMode,
+            CalibrationTarget? target)
+        {
+            if (target == null || target.IsHdr) return;
+            if (IsPureGamma22(target)) return;
+            if (liveGammaMode is not { } live || live == GammaMode.WindowsDefault) return;
+
+            string liveMode = live == GammaMode.Gamma24 ? "Gamma 2.4" : "Gamma 2.2";
+            messages.Add((Warn,
+                $"This calibration targets {target.Name}, but the display also has a live {liveMode} " +
+                "regrade applied. The live regrade assumes a ~2.2 presentation, so with a non-2.2 " +
+                "calibration installed underneath it the composed shadow tone is approximate. " +
+                "Set this display to Windows Default for calibration-accurate viewing."));
         }
 
         private static void AddHdrLuminanceMessages(

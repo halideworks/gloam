@@ -1380,7 +1380,8 @@ namespace Gloam
                     ctx.WhiteLevel,
                     ctx.MeasurementDefaultProfile,
                     currentDefaultProfile,
-                    EffectiveTarget(ctx));
+                    EffectiveTarget(ctx),
+                    ResolveLiveGammaMode(ctx, installMonitor));
 
                 if (preflightMessages.Any(m => m.Severity == CalibrationInstallPreflight.Error))
                 {
@@ -1471,6 +1472,30 @@ namespace Gloam
             catch (Exception ex)
             {
                 Log.Info($"CalibrationReportWindow: install preflight monitor refresh failed: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// The display's effective live gamma mode, for the composed-path preflight warning.
+        /// Saved profile first, then the monitor's own field — the same precedence
+        /// GammaApplyService applies when it decides what to push to the ramp. Returns null
+        /// when neither source is available, which makes the warning stay silent rather than
+        /// fire on a default: a monitor from MonitorManager carries the Gamma24 default
+        /// whether or not any regrade is actually applied.
+        /// </summary>
+        private static GammaMode? ResolveLiveGammaMode(ApplyContext ctx, MonitorInfo? installMonitor)
+        {
+            var monitor = installMonitor ?? ctx.Monitor;
+            if (string.IsNullOrEmpty(monitor.MonitorDevicePath)) return null;
+
+            try
+            {
+                return ctx.SettingsManager?.GetMonitorProfile(monitor.MonitorDevicePath)?.GammaMode;
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"CalibrationReportWindow: live gamma mode lookup failed: {ex.Message}");
                 return null;
             }
         }
