@@ -1,8 +1,22 @@
 # Gloam
 
-Gloam is a Windows tray app for fixing washed-out SDR content in HDR mode. It applies per-monitor gamma correction, provides a better night mode, and can install verified display calibrations when you connect a colorimeter.
+Fix washed-out SDR content in Windows HDR mode. Per-monitor gamma correction, a perceptual night mode, and verified colorimeter calibration.
 
-Formerly HDR Gamma Controller.
+[![Build](https://github.com/halideworks/gloam/actions/workflows/build.yml/badge.svg)](https://github.com/halideworks/gloam/actions/workflows/build.yml)
+[![Latest release](https://img.shields.io/github/v/release/halideworks/gloam?sort=semver)](https://github.com/halideworks/gloam/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.txt)
+
+![Windows SDR in HDR before and after Gloam's Gamma 2.2 correction](docs/media/hero-comparison.png)
+
+Turn HDR on in Windows and SDR content goes flat and milky — Windows presents it through a curve your display was never built to decode. Gloam puts the right curve back, per monitor.
+
+## Quick start
+
+1. Download [`GloamApp-win-Setup.exe`](https://github.com/halideworks/gloam/releases/latest/download/GloamApp-win-Setup.exe) and run it. Per-user install, no administrator prompt.
+2. Right-click the Gloam icon in the system tray.
+3. Pick **Gamma 2.2** for the monitor you want to fix.
+
+That is the whole fix. Everything below is optional.
 
 ## What It Does
 
@@ -16,13 +30,6 @@ Formerly HDR Gamma Controller.
 - Remembers calibration setup per monitor, including target, preset, meter correction, display type, and window position.
 - Updates silently in the background when installed with the setup package.
 - Runs locally. No accounts, no telemetry.
-
-## Requirements
-
-- Windows 10 or 11.
-- HDR display for the main SDR-in-HDR gamma fix.
-- No .NET runtime install required for official builds.
-- Colorimeter optional. Calibration uses ArgyllCMS, which Gloam can download automatically.
 
 ## Install
 
@@ -48,6 +55,8 @@ If SmartScreen says "Windows protected your PC", click **More info** and confirm
 
 ## Use
 
+![Gloam's tray menu, showing per-monitor gamma modes](docs/media/tray-menu.png)
+
 1. Launch Gloam. It appears in the system tray.
 2. Right-click the tray icon.
 3. Pick a gamma mode per monitor:
@@ -57,16 +66,9 @@ If SmartScreen says "Windows protected your PC", click **More info** and confirm
 4. Enable **Start with Windows** if you want corrections restored at login.
 5. Open the dashboard for monitor status, night mode, calibration, and diagnostics.
 
-Game Lab:
+Something not behaving? See [Troubleshooting](docs/troubleshooting.md).
 
-1. Press `Win + Shift + G` from a game to open the compact Game Lab window. The dashboard section remains available for desktop setup.
-2. The foreground game's executable is prefilled. Running-game choices refresh while the window is open.
-3. Add the game and choose a picture intent. Competitive Clarity lifts the deepest shadows while protecting midtones; Cinematic HDR preserves PQ and checks the Windows signal; Night Ops uses Gloam's spectral renderer.
-4. Edits save and apply automatically. Toggle **Profile enabled** to compare the profile with the calibrated baseline.
-5. Leave **Gameplay Lock** enabled to hold schedule-derived color temperature steady during the session. The panic and manual night-mode hotkeys remain authoritative.
-6. The active-session receipt lists the gamma, shadow treatment, night policy, target display, and signal findings that Gloam can verify.
-
-The implementation and measurement boundaries are documented in [Game Lab design](docs/gamer-mode-design.md).
+![The Gloam dashboard: per-monitor status, night mode, and calibration state](docs/media/dashboard.png)
 
 Hotkeys:
 
@@ -77,7 +79,30 @@ Hotkeys:
 - `Win + Shift + N`: Toggle night mode.
 - `Win + Shift + G`: Open or dismiss the dedicated Game Lab window for the active game.
 
+## Night mode
+
+![Gloam's night mode schedule editor](docs/media/night-mode.png)
+
+Night mode warms the display on a schedule you set by fixed times or by sun position for your location. The shift is computed as a chromatic adaptation rather than a blue-channel cut, so neutrals stay neutral instead of going muddy, and transitions are paced in mired space so the change is perceptually even rather than fast at one end and slow at the other.
+
+Ultra Night pushes further for maximum blue suppression, and can use a spectral sample of your own panel when you supply one.
+
+## Game Lab
+
+![Game Lab: per-game picture intents and the live session receipt](docs/media/game-lab.png)
+
+1. Press `Win + Shift + G` from a game to open the compact Game Lab window. The dashboard section remains available for desktop setup.
+2. The foreground game's executable is prefilled. Running-game choices refresh while the window is open.
+3. Add the game and choose a picture intent. Competitive Clarity lifts the deepest shadows while protecting midtones; Cinematic HDR preserves PQ and checks the Windows signal; Night Ops uses Gloam's spectral renderer.
+4. Edits save and apply automatically. Toggle **Profile enabled** to compare the profile with the calibrated baseline.
+5. Leave **Gameplay Lock** enabled to hold schedule-derived color temperature steady during the session. The panic and manual night-mode hotkeys remain authoritative.
+6. The active-session receipt lists the gamma, shadow treatment, night policy, target display, and signal findings that Gloam can verify.
+
+The implementation and measurement boundaries are documented in [Game Lab design](docs/gamer-mode-design.md).
+
 ## Calibration
+
+![A Gloam calibration report: measured before/after, per-patch error, and the uncertainty budget](docs/media/calibration-report.png)
 
 Connect a supported colorimeter and choose **Calibrate Display** from the tray.
 
@@ -90,6 +115,24 @@ Recommended flow:
 5. Review the report. Gloam applies the profile and re-measures through it automatically.
 
 For HDR desktop calibration, use **HDR Desktop PQ (sRGB gamut)**. When a panel already measures close to target, prefer white-point-only correction over full gamut correction: correcting a panel that is already accurate reliably verifies worse, not better.
+
+Every number in the report is measured through the installed profile, not predicted. The method, and what it does not claim, is written up in the [whitepaper](https://getgloam.org/whitepaper.html).
+
+### Hardware validation
+
+Gloam's calibration model is pinned by golden fixtures: real recorded measurement sets replayed through the live pipeline on every CI run, so a modeling change that would alter what the pipeline computes from real panel data fails the build.
+
+- **Golden-fixture validated:** Gigabyte M27Q-P, MSI MAG271QPX28.
+- **Expected to work, seeking validation data:** OLED, QD-OLED, wide-gamut LCD, mini-LED.
+
+The second list is honest rather than modest — the code carries panel-specific handling for those classes, but no recorded fixture pins it. If you have one of those displays and a supported colorimeter, [contributing a golden fixture](docs/golden-fixture-contribution.md) is the single most valuable thing you can send us.
+
+## Requirements
+
+- Windows 10 or 11.
+- HDR display for the main SDR-in-HDR gamma fix.
+- No .NET runtime install required for official builds.
+- Colorimeter optional. Calibration uses ArgyllCMS, which Gloam can download automatically.
 
 ## Build From Source
 
@@ -112,6 +155,8 @@ dotnet run --project src/Gloam.Cli -- check-lut 2.2 200 --algorithm perceptual -
 dotnet run --project src/Gloam.Cli -- night 2200 --algorithm ultra --basis rec2020 --json -
 ```
 
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Files
 
 - Settings, logs, reports, corrections: `%LOCALAPPDATA%\Gloam`
@@ -124,3 +169,12 @@ Use **Export Diagnostics** from the tray when reporting issues.
 Gloam is MIT licensed.
 
 ArgyllCMS is AGPL v3. Gloam invokes ArgyllCMS tools as separate processes and does not link against AGPL code. See `THIRD_PARTY_NOTICES.txt`.
+
+## Credits
+
+Gloam began as a fork of Dylan Raga's [win11hdr-srgb-to-gamma2.2-icm](https://github.com/dylanraga/win11hdr-srgb-to-gamma2.2-icm) and retains his identification of the Windows SDR-in-HDR sRGB-to-gamma correction — the insight the whole application is built around. Gloam has since grown into a different program, but it started there, and that diagnosis was the hard part.
+
+- [ArgyllCMS](https://www.argyllcms.com/), by Graeme Gill — the measurement and profiling tools Gloam drives for every calibration.
+- [MHC2Gen](https://github.com/dantmnf/MHC2), by dantmnf — the reference for Windows MHC2 profile generation.
+
+Formerly HDR Gamma Controller.
