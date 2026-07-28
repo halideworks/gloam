@@ -60,3 +60,8 @@ ReleasesNew/
 # competitive positioning, candid not-yet-validated notes, and unreleased plans that
 # should not be the first thing a visitor browses.
 ROADMAP.md
+
+# Wrangler's local cache, written by any `wrangler pages deploy` run. Deploys
+# are normally CI's job (.github/workflows/deploy-site.yml); this only appears
+# when someone deploys the site by hand.
+.wrangler/
