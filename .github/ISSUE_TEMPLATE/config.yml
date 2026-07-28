@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Troubleshooting guide
+    url: https://github.com/halideworks/gloam/blob/main/docs/troubleshooting.md
+    about: SmartScreen, a profile that stopped applying, a game resetting your gamma, and colors wrong after a driver update all have answers here.
+  - name: Contribute a golden fixture
+    url: https://github.com/halideworks/gloam/blob/main/docs/golden-fixture-contribution.md
+    about: Own an OLED, QD-OLED, wide-gamut LCD, or mini-LED display and a colorimeter? This is the most useful thing you can send, and it needs no code.
+  - name: Report a security vulnerability
+    url: https://github.com/halideworks/gloam/security/advisories/new
+    about: Please report privately rather than in a public issue.

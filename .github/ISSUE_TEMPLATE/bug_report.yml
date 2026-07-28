@@ -1,0 +1,117 @@
+name: Bug report
+description: Something is broken or behaving unexpectedly
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, please check [docs/troubleshooting.md](https://github.com/halideworks/gloam/blob/main/docs/troubleshooting.md).
+        SmartScreen warnings, a profile that stopped applying after a Windows update, and a
+        game resetting your gamma all have known answers there.
+
+        Display problems depend on your Windows build, GPU driver, panel, and HDR state, so
+        the fields below are not bureaucracy — without them a report usually turns into
+        several rounds of questions.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+      placeholder: |
+        1. Turned HDR on in Windows display settings
+        2. Selected Gamma 2.2 for my main monitor from the tray
+        3. Expected shadows to darken; nothing changed
+    validations:
+      required: true
+
+  - type: input
+    id: gloam-version
+    attributes:
+      label: Gloam version
+      description: Tray menu → About, or the version in the installer filename.
+      placeholder: "1.0.0"
+    validations:
+      required: true
+
+  - type: input
+    id: windows-version
+    attributes:
+      label: Windows version
+      description: Run `winver`, or Settings → System → About. Include the build number.
+      placeholder: "Windows 11 23H2, build 22631.4169"
+    validations:
+      required: true
+
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and driver version
+      description: The exact driver version matters — driver updates change HDR behavior.
+      placeholder: "NVIDIA RTX 4070, driver 560.94"
+    validations:
+      required: true
+
+  - type: input
+    id: display
+    attributes:
+      label: Display model
+      description: Make, model, and panel technology if you know it. Note the connection type if it might matter.
+      placeholder: "LG 27GR93U (IPS), DisplayPort 1.4"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: hdr-state
+    attributes:
+      label: Was Windows HDR on?
+      options:
+        - "HDR on"
+        - "HDR off"
+        - "Happens in both"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install-type
+    attributes:
+      label: How did you install Gloam?
+      options:
+        - "Setup.exe (recommended installer)"
+        - "Portable zip"
+        - "Built from source"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: diagnostics-attached
+    attributes:
+      label: Diagnostics bundle
+      description: |
+        Tray menu → **Export Diagnostics**. It writes a zip to `%LOCALAPPDATA%\Gloam\Diagnostics`
+        containing the log, sanitized settings, and your monitor and display-configuration
+        state. Drag it into this issue.
+
+        It is text-only and sanitized before writing, but it does describe your displays and
+        configuration — look through it first if that concerns you.
+      options:
+        - label: I have attached a diagnostics bundle to this issue
+          required: true
+
+  - type: textarea
+    id: calibration-context
+    attributes:
+      label: Calibration details
+      description: Only if the issue involves calibration. Meter model, target, preset, and whether a `.ccss`/`.ccmx` meter correction was used.
+      placeholder: "i1 Display Pro, HDR Desktop PQ (sRGB gamut), Thorough preset, no meter correction"
+    validations:
+      required: false
+
+  - type: textarea
+    id: anything-else
+    attributes:
+      label: Anything else
+      description: Other color tools installed (DisplayCAL, vendor control panel settings), multi-monitor setup, when it started, screenshots or photos.
+    validations:
+      required: false

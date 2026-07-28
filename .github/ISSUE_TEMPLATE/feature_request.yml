@@ -1,0 +1,44 @@
+name: Feature request
+description: Suggest something Gloam should do
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have a look at [ROADMAP.md](https://github.com/halideworks/gloam/blob/main/ROADMAP.md)
+        first — it may already be planned, or explicitly out of scope.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: |
+        The situation, not the solution. What are you trying to achieve, and where does
+        Gloam get in the way today? This is the most useful part — it often turns out
+        there is a better answer than the one you had in mind.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like Gloam to do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What have you tried?
+      description: Workarounds, other tools, or Gloam features that almost do it.
+    validations:
+      required: false
+
+  - type: input
+    id: hardware
+    attributes:
+      label: Display and meter
+      description: If the request is hardware-specific, tell us what you have — it changes what is testable.
+      placeholder: "Samsung G8 OLED (QD-OLED), i1 Display Pro"
+    validations:
+      required: false
