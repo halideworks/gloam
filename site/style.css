@@ -270,7 +270,7 @@ kbd {
   align-items: center;
   justify-content: center;
   margin-left: 0.5rem;
-  font-size: 1.25rem;
+  font-size: 1.5rem;
   font-weight: 700;
   line-height: 1;
   transition: background-color 0.2s, color 0.2s;
@@ -281,7 +281,19 @@ kbd {
   -webkit-tap-highlight-color: transparent;
 }
 
-.theme-toggle-btn:hover {
+/* Hover states are guarded on every filled control. A touch browser latches
+   :hover on tap and holds it until you touch something else, so on a phone
+   this rule left a filled square sitting on the button, which reads as the
+   button's own state rather than as a pointer effect. :active gives touch the
+   same feedback without the latch. */
+@media (hover: hover) {
+  .theme-toggle-btn:hover {
+    background: var(--text);
+    color: var(--bg);
+  }
+}
+
+.theme-toggle-btn:active {
   background: var(--text);
   color: var(--bg);
 }
@@ -437,7 +449,16 @@ kbd {
   margin: 0.25rem 0;
 }
 
-.btn:hover {
+@media (hover: hover) {
+  .btn:hover {
+    transform: translate(-2px, -2px);
+    box-shadow: 4px 4px 0 var(--border);
+  }
+}
+
+/* Touch gets the lift on press instead, so a tapped button does not stay
+   inverted and raised after the finger leaves. */
+.btn:active {
   transform: translate(-2px, -2px);
   box-shadow: 4px 4px 0 var(--border);
 }
@@ -447,19 +468,21 @@ kbd {
   color: var(--bg);
 }
 
-.btn-primary:hover {
-  background: var(--bg);
-  color: var(--text);
-}
-
 .btn-secondary {
   background: transparent;
   color: var(--text);
 }
 
-.btn-secondary:hover {
-  background: var(--text);
-  color: var(--bg);
+@media (hover: hover) {
+  .btn-primary:hover {
+    background: var(--bg);
+    color: var(--text);
+  }
+
+  .btn-secondary:hover {
+    background: var(--text);
+    color: var(--bg);
+  }
 }
 
 /* Sections */
@@ -1480,7 +1503,14 @@ section {
   pointer-events: auto;
 }
 
-.back-to-top:hover {
+@media (hover: hover) {
+  .back-to-top:hover {
+    background: var(--text);
+    color: var(--bg);
+  }
+}
+
+.back-to-top:active {
   background: var(--text);
   color: var(--bg);
 }
