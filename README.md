@@ -26,13 +26,11 @@ Formerly HDR Gamma Controller.
 
 ## Install
 
-Download from GitHub Releases:
-
-https://github.com/halideworks/gloam/releases
+These links always resolve to the current release:
 
 Recommended:
 
-- `Gloam-<version>-Setup.exe`
+- [`GloamApp-win-Setup.exe`](https://github.com/halideworks/gloam/releases/latest/download/GloamApp-win-Setup.exe)
 - Per-user install, no administrator prompt.
 - Self-contained.
 - Bundles ArgyllCMS.
@@ -40,9 +38,11 @@ Recommended:
 
 Portable:
 
-- `Gloam-<version>-Portable.zip`
+- [`GloamApp-win-Portable.zip`](https://github.com/halideworks/gloam/releases/latest/download/GloamApp-win-Portable.zip)
 - Extract and run `Gloam.exe`.
 - Does not auto-update. Replace it with a newer zip to upgrade.
+
+Release notes, checksums and older versions: https://github.com/halideworks/gloam/releases
 
 If SmartScreen says "Windows protected your PC", click **More info** and confirm the verified publisher. New signed apps can still show reputation warnings until enough users have installed them.
 

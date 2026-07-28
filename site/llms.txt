@@ -1,0 +1,37 @@
+# Gloam
+
+> A free, open-source Windows tray application that corrects the SDR-in-HDR gamma
+> mismatch per display, provides a color-science-aware night mode with an optional
+> melanopic dose ceiling, applies per-game display intents, and performs measured
+> SDR and HDR calibration with a colorimeter. MIT licensed. Windows 10 and 11.
+
+Gloam addresses a specific defect: when Windows 11 enables HDR, it decodes SDR
+window content with the piecewise sRGB curve, while almost all games, films and
+desktop assets are mastered for a gamma 2.2 display. The curve mismatch adds
+light to shadows (2.87x at 5% signal, 1.59x at 10%, 1.14x at 20%, and nothing at
+40% and above). Gloam undoes the sRGB decode and re-decodes with a pure power
+law inside the HDR signal path, writing the result to the GPU's 1D LUT.
+
+Two correction layers exist and are documented separately: live per-channel 1D
+curves loaded into the hardware gamma ramp, and a measured colorimeter
+calibration installed as a Windows color profile containing an MHC2 transform
+(a 3x3 matrix plus three 1024-point tone curves).
+
+## Docs
+
+- [Technical whitepaper (Markdown)](https://getgloam.org/whitepaper.md): The full technical reference in Markdown. Transfer functions, live LUT synthesis, HDR headroom shoulder, linear-light adjustments, night mode and melanopic policy, Gamer Mode, measurement and adaptive patch placement, MHC2 profile mathematics, joint HDR refinement, verification and uncertainty.
+- [Technical whitepaper (HTML)](https://getgloam.org/whitepaper.html): Canonical rendered version of the same document.
+- [Guides](https://getgloam.org/guides.html): Install, set gamma, configure night mode, Game Lab, colorimeter calibration, verification, HDR refinement, troubleshooting.
+- [Home](https://getgloam.org/): Overview, the problem statement with measured ratios, feature summary, downloads, FAQ.
+
+## Source and downloads
+
+- [GitHub repository](https://github.com/halideworks/gloam): Source, issues, release notes. MIT licensed.
+- [Installer (always latest release)](https://github.com/halideworks/gloam/releases/latest/download/GloamApp-win-Setup.exe): Per-user install, no administrator prompt, self-contained, bundles ArgyllCMS, auto-updates.
+- [Portable zip (always latest release)](https://github.com/halideworks/gloam/releases/latest/download/GloamApp-win-Portable.zip): No install; does not auto-update.
+
+## Notes for agents
+
+- The Markdown whitepaper is generated from the HTML by scripts/build-whitepaper-md.py and is the preferred source for machine reading.
+- Numbers quoted on the site are derived from the implementation, not marketing estimates; the whitepaper states the equations and the constants.
+- Gloam is local-only: no telemetry, no account, no cloud processing. Network access is limited to GitHub update checks.

@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Page not found - Gloam</title>
+  <meta name="description" content="That page does not exist. Head back to the Gloam home page, the guides, or the technical whitepaper.">
+  <meta name="robots" content="noindex, follow">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#000000">
+
+  <link rel="icon" href="/assets/favicon.ico" sizes="any">
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+  <link rel="manifest" href="/site.webmanifest">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@700;800&family=Space+Grotesk:wght@400;500;700&family=Lora:ital,wght@0,500;1,500&display=swap">
+  <link rel="stylesheet" href="/style.css?v=b3019a9c">
+  <script defer src="https://zerolens.disinfo.zone/script.js" data-website-id="842b1cf0-103e-49a3-8fb0-58c8a14a0af7"></script>
+  <script>
+    // Must stay inline and in <head>: it has to run before first paint, or the
+    // page flashes the wrong theme on every navigation. Dark is the CSS
+    // default, so this only ever adds the light opt-in.
+    (function () {
+      try {
+        if (localStorage.getItem('theme') === 'light') {
+          document.documentElement.classList.add('light-theme');
+        }
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+  <div class="container">
+    <header class="site-header">
+      <div class="wrap">
+        <a class="brand" href="/">
+          <span class="brand-mark" aria-hidden="true"></span>
+          Gloam
+        </a>
+        <nav class="site-nav" aria-label="Site">
+          <a href="/">Home</a>
+          <a href="/guides.html">Guides</a>
+          <a href="/whitepaper.html">Whitepaper</a>
+          <a href="/#download">Download</a>
+        </nav>
+        <button class="theme-toggle-btn" id="themeToggle" aria-label="Invert print colors">◐</button>
+      </div>
+    </header>
+
+    <main>
+      <section style="padding: 5rem 1.5rem 6rem;">
+        <div class="wrap">
+          <span class="kicker">404</span>
+          <h1 style="margin-bottom: 1.5rem;">That page is not here.</h1>
+          <p class="section-lede" style="max-width: 60ch; margin-bottom: 2.5rem;">
+            The link is wrong, or the page moved. Nothing is broken on your display.
+          </p>
+          <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
+            <a class="btn btn-primary" href="/">Home</a>
+            <a class="btn btn-secondary" href="/guides.html">Guides</a>
+            <a class="btn btn-secondary" href="/whitepaper.html">Whitepaper</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="wrap">
+        <span>Gloam. MIT licensed. Free for everyone.</span>
+        <span class="footer-links">
+          <a href="https://github.com/halideworks/gloam">GitHub</a>
+          <a href="https://github.com/halideworks/gloam/releases">Releases</a>
+          <a href="/whitepaper.html">Technical whitepaper</a>
+          <a href="/guides.html">Guides</a>
+        </span>
+      </div>
+    </footer>
+  </div>
+
+  <script>
+    (function() {
+      const themeToggle = document.getElementById('themeToggle');
+      if (themeToggle) {
+        themeToggle.addEventListener('click', () => {
+          document.documentElement.classList.toggle('light-theme');
+          const nowDark = !document.documentElement.classList.contains('light-theme');
+          try {
+            localStorage.setItem('theme', nowDark ? 'dark' : 'light');
+          } catch(e) {}
+        });
+      }
+    })();
+  </script>
+</body>
+</html>

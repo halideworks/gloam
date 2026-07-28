@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+
+# Agent-readable index of this site, and the whitepaper in Markdown.
+# See https://getgloam.org/llms.txt
+
+Sitemap: https://getgloam.org/sitemap.xml

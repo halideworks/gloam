@@ -1,0 +1,74 @@
+# Gloam site block for erebus.
+#
+# Append to /nvme-mirror/apps/caddy/Caddyfile, alongside the existing static
+# sites (itssoover, stifle, dee, sigil). Same shape as those: root, file_server,
+# encode, served out of /srv/sites/<name>.
+#
+# Two deliberate differences from the neighbours:
+#
+#   1. The address is written with an explicit `http://` scheme. That is what
+#      tells Caddy to skip automatic HTTPS for THIS site only, leaving the
+#      global `acme_dns cloudflare` and every other site untouched. Without the
+#      prefix Caddy would 301 to https://, and since the Cloudflare tunnel
+#      arrives on plain HTTP that redirect loops back through the edge.
+#      There is therefore no `tls` stanza here: the tunnel terminates TLS at
+#      Cloudflare, so erebus never needs a certificate for this hostname.
+#
+#   2. A few headers the other static sites do not carry, noted inline.
+#
+# Tunnel side (configured in the Cloudflare dashboard):
+#   getgloam.org      -> http://localhost:80
+#   www.getgloam.org  -> http://localhost:80
+
+http://getgloam.org, http://www.getgloam.org {
+	root * /srv/sites/gloam
+	file_server
+	encode zstd gzip
+
+	# Public scheme is https because the edge terminates TLS, so the redirect
+	# target is https:// even though this listener is plain HTTP.
+	@www host www.getgloam.org
+	redir @www https://getgloam.org{uri} permanent
+
+	# Caddy's default type table serves .md as text/plain, which makes agents
+	# and LLM crawlers treat the whitepaper as an opaque blob instead of
+	# Markdown. This is the whole reason whitepaper.md is generated.
+	@markdown path *.md
+	header @markdown Content-Type "text/markdown; charset=utf-8"
+
+	@manifest path /site.webmanifest
+	header @manifest Content-Type "application/manifest+json"
+
+	# Images and icons are stable and change name when they change, so they can
+	# sit in cache for a day.
+	@static path /assets/*
+	header @static Cache-Control "public, max-age=86400, stale-while-revalidate=604800"
+
+	# style.css must revalidate with the HTML. There is no build step here, so
+	# the filename never changes when the CSS does; caching it independently of
+	# the markup lets a visitor pair new HTML with a stale stylesheet, which is
+	# exactly how the theme rules and the markup that depends on them fall out
+	# of sync.
+	@revalidate path *.html / /style.css /whitepaper.md /llms.txt /sitemap.xml /robots.txt
+	header @revalidate Cache-Control "public, max-age=0, must-revalidate"
+
+	header {
+		# Same-origin except Google Fonts and the self-hosted analytics on
+		# zerolens.disinfo.zone, which needs BOTH script-src (to load script.js)
+		# and connect-src (it POSTs events back to its own origin). The pages
+		# carry small inline theme and comparison-slider scripts, hence
+		# 'unsafe-inline' on script-src; tighten to hashes if those move to a file.
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://zerolens.disinfo.zone; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://zerolens.disinfo.zone; frame-ancestors 'none'; base-uri 'self'; form-action 'none'"
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(), microphone=(), camera=()"
+		-Server
+	}
+
+	handle_errors {
+		@notfound expression {err.status_code} == 404
+		rewrite @notfound /404.html
+		file_server
+	}
+}

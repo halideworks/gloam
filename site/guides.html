@@ -5,19 +5,52 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Guides - Gloam</title>
   <meta name="description" content="Current setup, Game Lab, calibration, verification, HDR refinement, and troubleshooting guides for Gloam on Windows.">
-  <link rel="stylesheet" href="style.css">
-  <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
-</head>
-<body>
+  <link rel="canonical" href="https://getgloam.org/guides.html">
+  <meta name="robots" content="index, follow, max-image-preview:large">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#000000">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="Gloam">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:url" content="https://getgloam.org/guides.html">
+  <meta property="og:title" content="Guides - Gloam">
+  <meta property="og:description" content="Current setup, Game Lab, calibration, verification, HDR refinement, and troubleshooting guides for Gloam on Windows.">
+  <meta property="og:image" content="https://getgloam.org/assets/og.jpg">
+  <meta property="og:image:type" content="image/jpeg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Gloam: a candlelit painting shown twice, with Windows' lifted shadows on the left and Gloam's gamma 2.2 correction on the right.">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Guides - Gloam">
+  <meta name="twitter:description" content="Current setup, Game Lab, calibration, verification, HDR refinement, and troubleshooting guides for Gloam on Windows.">
+  <meta name="twitter:image" content="https://getgloam.org/assets/og.jpg">
+
+  <link rel="icon" href="/assets/favicon.ico" sizes="any">
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+  <link rel="manifest" href="/site.webmanifest">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@700;800&family=Space+Grotesk:wght@400;500;700&family=Lora:ital,wght@0,500;1,500&display=swap">
+  <link rel="stylesheet" href="style.css?v=b3019a9c">
+  <script defer src="https://zerolens.disinfo.zone/script.js" data-website-id="842b1cf0-103e-49a3-8fb0-58c8a14a0af7"></script>
   <script>
-    (function() {
-      const storedTheme = localStorage.getItem('theme');
-      if (storedTheme === 'dark' || (!storedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-        document.body.classList.add('dark-theme');
-      }
+    // Must stay inline and in <head>: it has to run before first paint, or the
+    // page flashes the wrong theme on every navigation. Dark is the CSS
+    // default, so this only ever adds the light opt-in.
+    (function () {
+      try {
+        if (localStorage.getItem('theme') === 'light') {
+          document.documentElement.classList.add('light-theme');
+        }
+      } catch (e) {}
     })();
   </script>
-
+</head>
+<body>
   <div class="container">
     <!-- Header -->
     <header class="site-header">
@@ -52,7 +85,7 @@
         <ol class="steps">
           <li data-step="01">
             <h3>Install</h3>
-            <p>Head to the <a href="https://github.com/halideworks/gloam/releases">releases page</a>. Run the self-contained installer, <strong>Gloam-&lt;version&gt;-Setup.exe</strong>: it installs per-user with no administrator prompt, bundles ArgyllCMS, and updates itself in the background. Prefer no install? Grab <strong>Gloam-&lt;version&gt;-Portable.zip</strong> instead, extract it anywhere, and run the executable (it does not auto-update). Either way, Gloam lives in the system tray.</p>
+            <p>Download the self-contained installer, <a href="https://github.com/halideworks/gloam/releases/latest/download/GloamApp-win-Setup.exe"><strong>GloamApp-win-Setup.exe</strong></a>: it installs per-user with no administrator prompt, bundles ArgyllCMS, and updates itself in the background. Prefer no install? Grab <a href="https://github.com/halideworks/gloam/releases/latest/download/GloamApp-win-Portable.zip"><strong>GloamApp-win-Portable.zip</strong></a> instead, extract it anywhere, and run the executable (it does not auto-update). Either way, Gloam lives in the system tray. Both links always give you the current release; the <a href="https://github.com/halideworks/gloam/releases">releases page</a> has notes and checksums.</p>
             <p>Right-click the tray icon and enable <strong>Start with Windows</strong> so your corrections restore automatically at every boot.</p>
             <p style="font-size: 0.95rem; opacity: 0.85;"><strong>Seeing "Windows protected your PC"?</strong> That is Microsoft SmartScreen, not a problem with the download. Gloam is code-signed (click <strong>More info</strong> to see the verified publisher <strong>David Torcivia</strong>), but SmartScreen separately weighs download reputation. New signed apps can show reputation warnings until enough people have installed them. Click <strong>More info</strong>, then <strong>Run anyway</strong>.</p>
           </li>
@@ -232,8 +265,8 @@
       const themeToggle = document.getElementById('themeToggle');
       if (themeToggle) {
         themeToggle.addEventListener('click', () => {
-          document.body.classList.toggle('dark-theme');
-          const nowDark = document.body.classList.contains('dark-theme');
+          document.documentElement.classList.toggle('light-theme');
+          const nowDark = !document.documentElement.classList.contains('light-theme');
           try {
             localStorage.setItem('theme', nowDark ? 'dark' : 'light');
           } catch(e) {}

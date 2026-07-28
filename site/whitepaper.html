@@ -5,19 +5,71 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Technical Whitepaper - Gloam</title>
   <meta name="description" content="The current mathematics and implementation of Gloam: live SDR-in-HDR correction, night and gamer policy, measured display characterization, Windows MHC2 profiles, joint HDR refinement, and verification.">
-  <link rel="stylesheet" href="style.css">
-  <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
-</head>
-<body>
+  <link rel="canonical" href="https://getgloam.org/whitepaper.html">
+  <meta name="robots" content="index, follow, max-image-preview:large">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#000000">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="Gloam">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:url" content="https://getgloam.org/whitepaper.html">
+  <meta property="og:title" content="Technical Whitepaper - Gloam">
+  <meta property="og:description" content="The transfer functions, LUT synthesis, night-mode melanopic policy, adaptive patch placement, MHC2 profile mathematics, and verification methods behind Gloam.">
+  <meta property="og:image" content="https://getgloam.org/assets/og.jpg">
+  <meta property="og:image:type" content="image/jpeg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Gloam: a candlelit painting shown twice, with Windows' lifted shadows on the left and Gloam's gamma 2.2 correction on the right.">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Technical Whitepaper - Gloam">
+  <meta name="twitter:description" content="The transfer functions, LUT synthesis, night-mode melanopic policy, adaptive patch placement, MHC2 profile mathematics, and verification methods behind Gloam.">
+  <meta name="twitter:image" content="https://getgloam.org/assets/og.jpg">
+
+  <link rel="icon" href="/assets/favicon.ico" sizes="any">
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+  <link rel="manifest" href="/site.webmanifest">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@700;800&family=Space+Grotesk:wght@400;500;700&family=Lora:ital,wght@0,500;1,500&display=swap">
+  <link rel="alternate" type="text/markdown" href="/whitepaper.md" title="Whitepaper in Markdown">
+  <link rel="stylesheet" href="style.css?v=b3019a9c">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "Gloam: A Technical Whitepaper",
+    "url": "https://getgloam.org/whitepaper.html",
+    "description": "Transfer functions, live LUT synthesis, HDR headroom, night mode and melanopic policy, adaptive patch placement, MHC2 profile mathematics, joint HDR refinement, and verification methods behind Gloam.",
+    "about": ["Display calibration", "High dynamic range", "Color science", "Windows"],
+    "author": { "@type": "Person", "name": "David Torcivia" },
+    "dateModified": "2026-07-27",
+    "encoding": {
+      "@type": "MediaObject",
+      "encodingFormat": "text/markdown",
+      "contentUrl": "https://getgloam.org/whitepaper.md"
+    },
+    "image": "https://getgloam.org/assets/og.jpg"
+  }
+  </script>
+  <script defer src="https://zerolens.disinfo.zone/script.js" data-website-id="842b1cf0-103e-49a3-8fb0-58c8a14a0af7"></script>
   <script>
-    (function() {
-      const storedTheme = localStorage.getItem('theme');
-      if (storedTheme === 'dark' || (!storedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-        document.body.classList.add('dark-theme');
-      }
+    // Must stay inline and in <head>: it has to run before first paint, or the
+    // page flashes the wrong theme on every navigation. Dark is the CSS
+    // default, so this only ever adds the light opt-in.
+    (function () {
+      try {
+        if (localStorage.getItem('theme') === 'light') {
+          document.documentElement.classList.add('light-theme');
+        }
+      } catch (e) {}
     })();
   </script>
-
+</head>
+<body>
   <div class="container">
     <header class="site-header">
       <div class="wrap">
@@ -40,7 +92,7 @@
 
         <section>
           <h1>Gloam: A Technical Whitepaper</h1>
-          <p class="paper-meta">Windows display correction, measurement, and verification. Last updated July 27, 2026.</p>
+          <p class="paper-meta">Windows display correction, measurement, and verification. Last updated July 27, 2026. Also available <a href="whitepaper.md">as Markdown</a> for tools and agents.</p>
           <blockquote>A correction is trustworthy only when its signal domain, physical limits, and measured result are kept separate.</blockquote>
 
           <h2 id="abstract">Abstract</h2>
@@ -340,19 +392,102 @@
             <li>
               <strong>Perceptual.</strong> The 6500 K and target whites are blended by degree of adaptation
               <em>D</em> in CAT16 sharpened-cone space. The adapted XYZ white is then reduced to the same
-              basis-specific diagonal used by Accurate mode. The default strength is D = 0.8.
+              basis-specific diagonal used by Accurate mode. The default strength is D = 0.8. This is the
+              recommended default; it is developed in 6.3.1.
             </li>
             <li>
               <strong>Blue Reduction.</strong> A non-colorimetric heuristic keeps red at 1 while green moves
               toward 0.7 and blue toward 0.1 as the setting approaches 1900 K.
             </li>
             <li>
-              <strong>Ultra Night.</strong> The Accurate Planckian ratios are multiplied by a luminance factor
-              that reaches 0.70 near 2000 K. Blue is floored at 0.10 so Windows receives a valid, readable
-              ramp. When panel spectra are available, green may be reduced toward max(1.8B, 0.12) according
-              to its melanopic efficacy relative to red; green never falls below blue.
+              <strong>Ultra Night.</strong> A deliberately non-colorimetric amber mode for the darkest part
+              of the evening, developed in 6.3.2.
             </li>
           </ul>
+
+          <h3 id="s6-3-1">6.3.1 Degree of Adaptation as the Colour-Preserving Lever</h3>
+          <p>
+            The live correction is a one-dimensional per-channel LUT. A full 3×3 chromatic adaptation
+            transform is not separable and therefore cannot be baked into it: whatever Gloam does to the
+            white point must survive reduction to three independent curves. That constraint, not a modelling
+            preference, is what selects the mechanism. Within it the lever that best preserves colour is not
+            the target chromaticity but the <em>degree</em> of adaptation applied to it.
+          </p>
+          <p>
+            Real chromatic adaptation is never complete. Perceptual mode models the incomplete case directly:
+            for source white <strong>X</strong><sub>6500</sub>, target white <strong>X</strong><sub>T</sub>
+            and degree <em>D</em> ∈ [0, 1], the adapted white is the <em>D</em>-blend of the two taken in
+            CAT16 sharpened cone space, not in display RGB:
+          </p>
+          <div class="formula">
+            <strong>X</strong>′ = CAT16<sup>−1</sup>[ (1 − <em>D</em>)·ρ(<strong>X</strong><sub>6500</sub>) + <em>D</em>·ρ(<strong>X</strong><sub>T</sub>) ]
+          </div>
+          <p>
+            Only then is <strong>X</strong>′ reduced to per-channel display ratios, through the identical path
+            Accurate mode uses. The distinction matters: an earlier implementation eased the finished
+            multipliers toward unity in display RGB as 1 + <em>D</em>(<em>m</em> − 1), which is incomplete von
+            Kries expressed in the wrong basis. Blending the whites in a sharpened cone space and reducing
+            afterwards is the same operation performed in the space where it is defined.
+          </p>
+          <p>
+            The 6500 K reference is pushed through the same CAT16 round trip as the target rather than
+            assumed to be unity. At 6500 K the two are then bit-identical and their ratio is exactly
+            (1, 1, 1). That invariant is load-bearing rather than cosmetic: without it, switching temperature
+            algorithm at the neutral point would visibly shift the white. Because the blend is normalized
+            against the brightest channel, that channel stays at 1.0, so no headroom is consumed and no
+            clipping-induced cast is introduced. At <em>D</em> = 1 the mode reduces exactly to Accurate; at
+            <em>D</em> = 0 it is the identity.
+          </p>
+
+          <h3 id="s6-3-2">6.3.2 Ultra Night</h3>
+          <p>
+            Ultra Night targets maximum circadian protection and accepts the loss of colour accuracy that
+            requires. Blue carries most of a display's melanopic weight per unit luminance, so the mode drives
+            toward amber, cutting blue hard and green substantially while preserving red for legible text. It
+            is not a warmer Accurate; it is a different objective, and the whitepaper states that plainly
+            because the mode should not be selected for colour work.
+          </p>
+          <p>
+            With warmth factor <em>f</em> = clamp((6500 − <em>T</em>) / 4500, 0, 1) and Planckian ratios
+            (<em>a<sub>R</sub></em>, <em>a<sub>G</sub></em>, <em>a<sub>B</sub></em>) from Accurate mode in the
+            active wire basis:
+          </p>
+          <div class="formula">
+            dim = 1 − 0.30<em>f</em><br>
+            (<em>r</em>, <em>g</em>, <em>b</em>) = (<em>a<sub>R</sub></em>·dim, <em>a<sub>G</sub></em>·dim, <em>a<sub>B</sub></em>·dim)<br>
+            <em>b</em> ← max(<em>b</em>, 0.10)<br>
+            <em>g</em> ← max(<em>g</em>, <em>b</em>)
+          </div>
+          <p>
+            Three of those steps encode a defect found in practice. Building on the true Planckian ratios
+            rather than hand-authored amber keeps the hue <em>on</em> the blackbody locus; cutting green below
+            its Planckian ratio directly is what produces the magenta cast that afflicts naive blue-reduction
+            filters, and the final green floor at <em>b</em> is a second guard against the same failure.
+          </p>
+          <p>
+            The blue floor of 0.10 is a platform constraint, not a perceptual choice. A channel driven to zero
+            makes its gamma ramp map white to black, and Windows' <code>SetDeviceGammaRamp</code> rejects that
+            ramp outright, so nothing applies at all. 0.10 is the warmest blue the driver accepts and still
+            removes roughly 90% of blue output. The 30% luminance reduction is likewise deliberate: at the
+            deepest evening setting a full-brightness amber white is both uncomfortable and a needlessly high
+            melanopic dose, so the dimming is part of the mode's purpose rather than a side effect.
+          </p>
+          <p>
+            When panel spectra are available, green is biased further down in proportion to how much more
+            melanopic dose it carries per unit luminance than red. With per-primary melanopic efficacies
+            <em>μ<sub>c</sub></em> = mel<sub>c</sub> / <em>Y<sub>c</sub></em>:
+          </p>
+          <div class="formula">
+            penalty = clamp( (<em>μ<sub>G</sub></em> / <em>μ<sub>R</sub></em> − 1) / 4, 0, 1 )<br>
+            <em>g</em><sub>floor</sub> = max(1.8<em>b</em>, 0.12)<br>
+            <em>g</em> ← <em>g</em> + (min(<em>g</em>, <em>g</em><sub>floor</sub>) − <em>g</em>)·<em>f</em>·penalty
+          </div>
+          <p>
+            The readable green floor exists so that text does not degrade into harsh magenta-red on panels
+            whose green primary is unusually melanopic. Ultra Night is also excluded from the constant-Y
+            rescaling of 6.4: restoring its luminance would undo precisely the dose reduction the mode exists
+            to produce.
+          </p>
 
           <h3 id="s6-4">6.4 Constant-Y White</h3>
           <p>
@@ -411,22 +546,100 @@
 
           <h3 id="s7-3">7.3 Melanopic Estimates</h3>
           <p>
-            When a CCSS is available, Gloam forms the emitted spectral power distribution from the measured
-            red, green, and blue channel spectra and the current linear gains. Melanopic DER and photopic
-            luminance are integrated from those spectra. The percentage reduction from the same panel's
-            6500 K white is ratiometric; the absolute melanopic EDI also assumes an effective viewing solid
-            angle, 0.20 sr by default. Generic Gaussian primaries are a marked fallback, with a wider
-            uncertainty than same-panel spectra.
+            An additive display's emitted spectrum is the gain-weighted sum of its channel spectra, so with
+            per-channel linear gains <em>k<sub>c</sub></em> and measured channel SPDs <em>S<sub>c</sub></em>(λ)
+            from a CCSS, the current and unshifted spectra are:
+          </p>
+          <div class="formula">
+            <em>S</em><sub>state</sub>(λ) = <em>k<sub>R</sub>S<sub>R</sub></em>(λ) + <em>k<sub>G</sub>S<sub>G</sub></em>(λ) + <em>k<sub>B</sub>S<sub>B</sub></em>(λ)<br>
+            <em>S</em><sub>base</sub>(λ) = <em>S<sub>R</sub></em>(λ) + <em>S<sub>G</sub></em>(λ) + <em>S<sub>B</sub></em>(λ)
+          </div>
+          <p>
+            Additivity is an assumption, and it is not silently absorbed: the CCSS file's own measured white
+            row will not exactly equal the sum of its channel rows, and that residual is carried forward as a
+            named uncertainty term rather than discarded. The gains carry spectral <em>shape</em> only.
+            Brightness is deliberately excluded from them and passed separately as an absolute white
+            luminance, because dimming scales magnitude rather than shape and folding it into the gains would
+            corrupt the ratio quantities below.
+          </p>
+          <p>
+            Melanopic content is expressed as the melanopic daylight efficacy ratio, the melanopic ELR of the
+            spectrum normalized by that of CIE D65 (1.3262 mW·lm<sup>−1</sup>), so mel-DER is 1 for D65 by
+            construction. Writing <em>Y</em><sub>rel</sub> for the photopic luminance of the state relative to
+            the unshifted white, <em>L</em><sub>white</sub> for the absolute white luminance at the current
+            brightness, and Ω for the effective viewing solid angle:
+          </p>
+          <div class="formula">
+            <em>L</em><sub>screen</sub> = <em>L</em><sub>white</sub> · <em>Y</em><sub>rel</sub><br>
+            <em>E<sub>v</sub></em> ≈ <em>L</em><sub>screen</sub> · Ω<br>
+            mel-EDI = <em>E<sub>v</sub></em> · mel-DER<sub>state</sub>
+          </div>
+          <p>
+            The two numbers Gloam reports are epistemically different, and it separates them for that reason.
+            The headline figure is the reduction against the same panel's own 6500 K white:
+          </p>
+          <div class="formula">
+            reduction = 1 − (<em>Y</em><sub>rel</sub> · mel-DER<sub>state</sub>) / mel-DER<sub>base</sub>
+          </div>
+          <p>
+            Ω, brightness and the white level all cancel out of that expression. It is geometry-free and
+            immune to every assumption in the chain except the CCSS itself, which is what makes it safe to
+            quote. Absolute mel-EDI is not: it additionally requires the corneal-illuminance step
+            <em>E<sub>v</sub></em> ≈ <em>L</em>·Ω, whose Ω defaults to 0.20 sr, roughly a 27-inch 16:9 panel
+            at 60 cm viewed head-on. That assumption is exposed as a user-facing setting and appears as a
+            dominant term in the reported uncertainty. It is never presented as measured truth, because a
+            viewer at a different distance has a materially different corneal dose from an identical screen.
+          </p>
+          <p>
+            Without a CCSS, Gloam synthesizes Gaussian primaries at typical peaks and widths, 615/545/455 nm
+            at 60/70/25 nm FWHM for sRGB-class panels and 630/530/455 nm at 30/35/20 nm for wide-gamut QD and
+            OLED panels, luminance-weighted so their sum approximates a D65-like white. Every reading from
+            this path is flagged as an estimate, paired with a much wider uncertainty band and a prompt to
+            load a CCSS. The reduction percentage survives the substitution better than the absolute dose
+            does, because it is a ratio taken through the same assumed spectra on both sides.
           </p>
 
           <h3 id="s7-4">7.4 Optional Dose Ceiling</h3>
           <p>
-            A melanopic-EDI ceiling invokes a constrained search. Candidate temperatures run from the
-            scheduled value down to 1900 K in 50 K steps. At each temperature, the minimum required dimming
-            is solved directly because EDI is linear in white luminance at fixed spectral shape. Brightness
-            never increases and has a 10% floor. Among compliant candidates, Gloam chooses the smallest
-            CAM16-UCS ΔE′ from the scheduled appearance; if none can comply, it chooses the lowest remaining
-            dose and reports that the ceiling was unreachable.
+            Setting a melanopic-EDI ceiling changes the question from "what colour did the schedule ask for"
+            to "what is the least visible state that meets a biological constraint". Two levers reach the
+            ceiling, warming and dimming, and they trade against each other, so the governor is posed as a
+            constrained minimization rather than a rule.
+          </p>
+          <p>
+            The feasible set is deliberately one-sided: the governor never brightens and never cools, so it
+            can only ever move further in the direction the schedule was already going. Candidate
+            temperatures run from the scheduled value down to 1900 K in 50 K steps, and brightness from the
+            scheduled value down to a 10% floor. At fixed temperature the spectral shape is fixed, so mel-EDI
+            is exactly linear in white luminance and the minimum compliant dimming follows in closed form
+            from a single probe rather than a search:
+          </p>
+          <div class="formula">
+            <em>b</em><sub>needed</sub> = <em>b</em><sub>sched</sub> · ceiling / mel-EDI(<em>T</em>, <em>b</em><sub>sched</sub>)
+          </div>
+          <p>
+            Cost is measured as CAM16-UCS ΔE′ against the scheduled appearance. The choice of metric is the
+            substantive decision here. The candidates differ in luminance as well as chromaticity, and a
+            colour-difference metric that does not model the observer's adaptation state will misprice that:
+            ΔE ITP-style metrics under-price the adaptation benefit of dimming, while a pure-Kelvin rule
+            ignores dimming altogether and would always answer by warming. CAM16-UCS prices luminance and
+            chromaticity changes against each other under stated viewing conditions, which is exactly the
+            comparison being made.
+          </p>
+          <p>
+            Those conditions are anchored once and shared by every candidate so the comparison stays
+            apples-to-apples: the reference white is the display's <em>unshifted</em> 6500 K white at the
+            scheduled brightness, with adapting luminance <em>L<sub>A</sub></em> = <em>Y</em><sub>white</sub>/5
+            on the gray-world convention, background <em>Y<sub>b</sub></em> = 20, and a dim surround
+            appropriate to a desktop at night. Only the forward model is needed; the solver never inverts it.
+          </p>
+          <p>
+            Candidates that meet the ceiling are preferred over those that do not, and among them the
+            smallest ΔE′ wins. When no candidate can comply, the governor returns the lowest remaining dose
+            and reports the ceiling as unreachable rather than silently presenting a non-compliant state as a
+            success. Because the apply path re-evaluates on every fade tick, solutions are memoized against
+            inputs quantized to 25 K and 2% brightness, steps small enough to be imperceptible in the
+            governed trajectory.
           </p>
         </section>
 
@@ -457,9 +670,32 @@
           </div>
           <p>
             Zero and the pivot are unchanged, the derivative rejoins at one, and values above the pivot are
-            bit-identical to the underlying calibration. Minimum slope is 1 − 0.5<em>a</em>, so the permitted
-            range remains increasing. Gloam evaluates luminance with Rec.709 weights in SDR or Rec.2020
-            weights in HDR, then scales RGB together along the same hue ray, limited by channel headroom.
+            bit-identical to the underlying calibration. Gloam evaluates luminance with Rec.709 weights in SDR
+            or Rec.2020 weights in HDR, then scales RGB together along the same hue ray, limited by channel
+            headroom.
+          </p>
+          <p>
+            The squared shoulder term is what buys the <em>C</em><sup>1</sup> join. Both the lift and its
+            first derivative vanish at <em>L</em> = <em>p</em>, so the toe meets the untouched curve without a
+            visible crease at the handover, which a linear shoulder would produce. Anchoring at black rather
+            than lifting the whole curve matters for the stated purpose: a black lift raises the floor
+            everywhere and washes the image, whereas this form leaves absolute black at zero and redistributes
+            contrast only within the shadow range.
+          </p>
+          <p>
+            Monotonicity is guaranteed analytically rather than checked numerically. Differentiating the toe
+            gives a minimum slope of 1 − 1.5<em>a</em>/3 = 1 − 0.5<em>a</em> inside the pivot, which is
+            strictly positive for every <em>a</em> ∈ [0, 1]; at full strength the flattest part of the curve
+            still rises at half the identity rate. No permitted setting can invert tonal order or crush two
+            distinct shadow levels into one, which is the failure mode that makes many "black equalizer"
+            controls destroy the detail they claim to reveal.
+          </p>
+          <p>
+            This is a visibility aid, not a correction, and Gloam does not present it otherwise. It
+            deliberately departs from the calibrated transfer function, so a display running a competitive
+            toe is no longer colour-accurate in the shadows. That is why the toe is a Gamer Mode session
+            property scoped to an owning executable rather than a global setting, and why the Reference and
+            Cinematic HDR presets set it to zero.
           </p>
 
           <h3 id="s8-3">8.3 Presets and Signal Diagnostics</h3>
@@ -557,18 +793,100 @@
 
           <h3 id="s10-4">10.4 Adaptive Patch Placement</h3>
           <p>
-            The Adaptive preset begins with a coarse seed covering the gray axis, individual channel ramps,
-            primaries, secondaries, and selected mixed colors. The current model is refit after each batch.
-            Candidate points are scored on their own signal manifold by two terms: inverse-distance-weighted
-            model residual and half-weighted distance to the nearest measurement. Batches contain 12 ordinary
-            patches by default and are greedily thinned to avoid adjacent picks.
+            A fixed patch set spends its budget uniformly whether or not the panel needs it there. The
+            Adaptive preset instead treats acquisition as an experimental-design problem: measure where the
+            current display model is least trustworthy. It begins from a coarse seed covering the gray axis,
+            the individual channel ramps, primaries, secondaries and selected mixed colours, refits the model
+            after each batch, and chooses the next batch from the refitted residuals. The planner is
+            deterministic, with no randomness anywhere: identical inputs produce identical picks, so a run is
+            reproducible and a support report is meaningful.
+          </p>
+
+          <h4>Manifolds</h4>
+          <p>
+            The governing idea is that residual interpolation and coverage are only meaningful <em>along</em>
+            a manifold. A grayscale tone residual says nothing about the red-only ramp, and a point in the
+            middle of the colour cube says nothing about either. Every candidate and measurement is therefore
+            tagged as gray (R = G = B), one of the three single-channel ramps, or a general cube location, and
+            distance is defined accordingly: |Δlevel| along the one-dimensional manifolds, Euclidean in the
+            cube, and infinite between manifolds. That last case is what stops a well-sampled gray axis from
+            making the planner believe the red ramp is covered.
+          </p>
+
+          <h4>Scoring</h4>
+          <p>
+            Tone and colour errors have different units and different targets, so each residual is first
+            divided by its own accuracy target to give a normalized residual <em>n<sub>i</sub></em>, where 1.0
+            means "exactly at target" on a single shared scale. Each candidate then scores as an
+            inverse-distance-weighted interpolation of the <em>n<sub>i</sub></em> on its own manifold, plus a
+            coverage term:
+          </p>
+          <div class="formula">
+            score = Σ<em>w<sub>i</sub></em><em>n<sub>i</sub></em> / Σ<em>w<sub>i</sub></em> + 0.5·gap,
+            &nbsp;&nbsp; <em>w<sub>i</sub></em> = 1 / (<em>d<sub>i</sub></em> + 0.02)
+          </div>
+          <p>
+            The residual term is high where the model demonstrably fails nearby; the softening constant sets
+            the locality, so a residual dominates candidates within a few multiples of it and fades beyond.
+            The gap term is the distance to the nearest measured point on the same manifold, taken as full
+            scale when the manifold is entirely unmeasured. Its half weight is calibrated rather than
+            arbitrary: an unmeasured full-scale span scores like a residual at half its target, enough that
+            early rounds fill genuine coverage holes, small enough that a demonstrated error always outranks
+            mere distance from data.
           </p>
           <p>
-            Tone residuals use |ΔL*| with a 1.5 target; color residuals use ΔE2000 with a 0.8 target. Clean
-            completion requires the worst target-normalized residual to reach 1. The 90th-percentile residual
-            controls plateau detection, which requires two consecutive rounds with less than 10% improvement.
-            The ordinary-patch budget is 120. Budget or plateau stops above target are persisted as degraded
-            outcomes rather than reported as convergence.
+            Tone residuals are measured as |Δ<em>L</em>*| against a target of 1.5, roughly 1.5 lightness JND
+            on the worst predicted point, and colour residuals as ΔE2000 against 0.8. The tone metric was
+            chosen over the more obvious photometric |Δ<em>Y</em>|/(white − black): that target penalized a
+            shadow error and a highlight error of equal Δ<em>Y</em> equally, even though the shadow error is
+            far more visible. Because d<em>L</em>*/d<em>Y</em> grows toward black, the same budget now spends
+            shadow samples in proportion to their visibility, while <em>L</em>*'s linear toe keeps the
+            weighting bounded near black instead of blowing up. At mid-gray the two targets nearly coincide,
+            since |Δ<em>Y</em>| ≈ 1.5% maps to |Δ<em>L</em>*| ≈ 1.5.
+          </p>
+
+          <h4>Thinning</h4>
+          <p>
+            Scoring alone would let a single sharp residual capture an entire batch, which wastes eleven
+            measurements confirming what the first one already established. Winners are therefore visited in
+            score order and accepted only if no already-accepted winner lies within a minimum separation: one
+            candidate-pool lattice step (4 codes in 8-bit, about 1.6% signal) on the one-dimensional
+            manifolds, 0.05 Euclidean in the cube. Candidates within half a code of an existing measurement
+            are dropped as duplicates.
+          </p>
+          <p>
+            This is a spacing floor, not a farthest-point or OFPS optimizer: it does not maximize the minimum
+            inter-pick distance, and it is not claimed to. Separation is enforced only within a batch, which
+            is what allows later rounds to interleave finer samples and densify around a feature that turns
+            out to deserve it.
+          </p>
+
+          <h4>Stopping</h4>
+          <p>
+            Two different summaries of the residual distribution drive two different decisions, and
+            conflating them is the failure mode this design avoids.
+          </p>
+          <ul>
+            <li>
+              <strong>Success uses the maximum.</strong> The whole point of adaptive placement is to chase the
+              worst point, so targets are declared met only when <em>every</em> point, including a narrow
+              defect the planner is actively crowding, is at target. This is strict by design and never
+              reports clean success while the worst point is still bad.
+            </li>
+            <li>
+              <strong>Plateau detection uses the 90th percentile, with patience.</strong> A max-based plateau
+              check false-triggers constantly, because resolving the current worst point merely exposes a
+              next-worst point of similar size and the maximum barely moves. The robust summary instead
+              tracks the whole distribution shifting down. A round must improve it by more than 10% to count
+              as progress, and two consecutive shortfalls are required before stopping.
+            </li>
+          </ul>
+          <p>
+            The ordinary-patch budget is 120, excluding drift anchors, with 12 patches per round. Any stop
+            that is not "targets met", whether budget exhaustion or a genuine plateau above target, is
+            recorded as a degraded outcome and surfaced as a warning. A run that ran out of budget with the
+            worst point still at three times target is a different result from a converged one, and the
+            report says so.
           </p>
 
           <h3 id="s10-5">10.5 Display Model</h3>
@@ -639,7 +957,7 @@
           <p>
             Equivalently, a LUT input <em>p</em> is solved against desired content luminance P(<em>p</em>)/<em>s</em>.
             This composition makes the installed matrix-plus-LUT chain track absolute PQ. The HDR tone LUT is
-            neutral—identical red, green, and blue curves—because the matrix owns white point and gamut.
+            neutral (identical red, green, and blue curves), because the matrix owns white point and gamut.
           </p>
           <p>
             With a usable wire ladder, the inverse measured response is applied through the measured span and
@@ -804,8 +1122,8 @@
           </p>
           <ol class="refs">
             <li id="ref1">Poynton, C. (2003). <em>Digital Video and HDTV: Algorithms and Interfaces</em>. Morgan Kaufmann.</li>
-            <li id="ref2">IEC 61966-2-1:1999. <em>Multimedia systems and equipment — Colour management — Default RGB colour space — sRGB</em>.</li>
-            <li id="ref3">Stokes, M., Anderson, M., Chandrasekar, S., &amp; Motta, R. (1996). <em>A Standard Default Color Space for the Internet — sRGB</em>.</li>
+            <li id="ref2">IEC 61966-2-1:1999. <em>Multimedia systems and equipment - Colour management - Default RGB colour space - sRGB</em>.</li>
+            <li id="ref3">Stokes, M., Anderson, M., Chandrasekar, S., &amp; Motta, R. (1996). <em>A Standard Default Color Space for the Internet - sRGB</em>.</li>
             <li id="ref4">Raga, D. <em>win11hdr-srgb-to-gamma2.2-icm</em>. <a href="https://github.com/dylanraga/win11hdr-srgb-to-gamma2.2-icm">github.com/dylanraga/win11hdr-srgb-to-gamma2.2-icm</a>.</li>
             <li id="ref5">SMPTE ST 2084:2014. <em>High Dynamic Range Electro-Optical Transfer Function of Mastering Reference Displays</em>.</li>
             <li id="ref6">ITU-R BT.2100. <em>Image parameter values for high dynamic range television</em>.</li>
@@ -817,7 +1135,7 @@
             <li id="ref12">Kang, B. et al. (2002). Design of Advanced Color Temperature Control System for HDTV Applications. <em>Journal of the Korean Physical Society</em>, 41(6), 865–871.</li>
             <li id="ref13">Li, C. et al. (2017). Comprehensive color solutions: CAM16, CAT16, and CAM16-UCS. <em>Color Research &amp; Application</em>, 42(6), 703–718.</li>
             <li id="ref14">Ohno, Y. (2014). Practical Use and Calculation of CCT and Duv. <em>LEUKOS</em>, 10(1), 47–55.</li>
-            <li id="ref15">JCGM 100:2008. <em>Evaluation of measurement data — Guide to the expression of uncertainty in measurement</em>.</li>
+            <li id="ref15">JCGM 100:2008. <em>Evaluation of measurement data - Guide to the expression of uncertainty in measurement</em>.</li>
             <li id="ref16"><a href="https://www.argyllcms.com/">ArgyllCMS</a>, by Graeme Gill.</li>
             <li id="ref17"><a href="https://github.com/dantmnf/MHC2">MHC2Gen</a>, by dantmnf.</li>
           </ol>
@@ -845,8 +1163,8 @@
       const themeToggle = document.getElementById('themeToggle');
       if (themeToggle) {
         themeToggle.addEventListener('click', () => {
-          document.body.classList.toggle('dark-theme');
-          const nowDark = document.body.classList.contains('dark-theme');
+          document.documentElement.classList.toggle('light-theme');
+          const nowDark = !document.documentElement.classList.contains('light-theme');
           try {
             localStorage.setItem('theme', nowDark ? 'dark' : 'light');
           } catch(e) {}

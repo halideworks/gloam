@@ -1,10 +1,17 @@
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@700;800&family=Space+Grotesk:wght@400;500;700&family=Lora:ital,wght@0,500;1,500&display=swap');
+/* Fonts are loaded from each page's <head> (preconnect + stylesheet link).
+   A CSS @import here would serialise the request behind style.css. */
 
+/* Dark is the default, defined on :root rather than applied by script. The
+   previous arrangement painted the light theme first and let JavaScript swap
+   it, which is what produced a white flash on every navigation. The light
+   theme is now the opt-in class, and it sits on <html> so the inline head
+   script can set it before <body> exists and before first paint. */
 :root {
-  --bg: #FFFFFF;
-  --text: #000000;
-  --accent: #E22B1F; /* Signal Red */
-  --border: #000000;
+  color-scheme: dark;
+  --bg: #000000;
+  --text: #FFFFFF;
+  --accent: #FF3C2F;
+  --border: #FFFFFF;
   --border-thick: 4px;
   --border-thin: 2px;
   --font-display: 'Plus Jakarta Sans', sans-serif;
@@ -12,15 +19,22 @@
   --font-mono: ui-monospace, "Cascadia Code", Consolas, monospace;
   --font-math: 'Lora', Georgia, serif;
   --max-width: 1300px;
+  --number-opacity: 0.22;
+}
+
+:root.light-theme {
+  color-scheme: light;
+  --bg: #FFFFFF;
+  --text: #000000;
+  --accent: #E22B1F; /* Signal Red */
+  --border: #000000;
   --number-opacity: 0.12;
 }
 
-body.dark-theme {
-  --bg: #000000;
-  --text: #FFFFFF;
-  --accent: #FF3C2F;
-  --border: #FFFFFF;
-  --number-opacity: 0.22;
+/* Paint the canvas from the same variable so the area outside .container,
+   and the gap before <body> renders, match the theme instead of flashing. */
+html {
+  background-color: var(--bg);
 }
 
 * {
@@ -79,6 +93,19 @@ h3 {
   font-size: 1.4rem;
 }
 
+/* Unnumbered sub-subheads inside long whitepaper sections. Without a size the
+   global heading rule leaves h4 below body size, which reads as emphasis
+   rather than structure. */
+h4 {
+  font-size: 1.05rem;
+  letter-spacing: 0.02em;
+}
+
+.whitepaper h4 {
+  margin: 2rem 0 0.9rem;
+  opacity: 0.85;
+}
+
 p {
   margin-bottom: 1.25rem;
 }
@@ -96,7 +123,7 @@ code {
   color: var(--text);
 }
 
-body.dark-theme code {
+:root:not(.light-theme) code {
   background: rgba(255, 255, 255, 0.08);
 }
 
@@ -109,7 +136,7 @@ pre {
   font-family: var(--font-mono);
 }
 
-body.dark-theme pre {
+:root:not(.light-theme) pre {
   background: rgba(255, 255, 255, 0.02);
 }
 
@@ -264,9 +291,14 @@ kbd {
     justify-content: center;
     width: 100%;
     border-top: 1px dashed var(--border);
-    padding-top: 0.75rem;
-    gap: 1rem;
+    padding-top: 0.25rem;
+    gap: 0.5rem;
     margin-left: 0;
+  }
+  /* Reach a ~44px touch target; the desktop 25px is fine for a cursor but
+     too small to hit reliably with a thumb. */
+  .site-nav a {
+    padding: 0.8rem 0.5rem;
   }
 }
 
@@ -348,25 +380,31 @@ section {
   }
 }
 
+/* Mobile first: a normal horizontal wordmark. The vertical treatment only
+   makes sense once the hero is a two-column grid and this is the narrow left
+   rail; stacked on a phone it became a tall band of sideways text that pushed
+   the actual hero copy off the first screen. */
 .hero-vertical-title {
-  writing-mode: vertical-rl;
   text-transform: uppercase;
   font-family: var(--font-display);
-  font-size: clamp(3rem, 8vw, 5.5rem);
+  font-size: clamp(2.75rem, 13vw, 4rem);
   font-weight: 800;
   line-height: 0.85;
   letter-spacing: -0.05em;
-  padding: 3rem 2rem;
+  padding: 1.75rem 1.5rem;
   color: var(--accent);
   border-bottom: var(--border-thick) solid var(--border);
-  text-align: center;
+  text-align: left;
 }
 
 @media (min-width: 900px) {
   .hero-vertical-title {
+    writing-mode: vertical-rl;
+    font-size: clamp(3rem, 8vw, 5.5rem);
+    padding: 4rem 3rem;
+    text-align: center;
     border-bottom: none;
     border-right: var(--border-thick) solid var(--border);
-    padding: 4rem 3rem;
   }
 }
 
@@ -490,8 +528,14 @@ section {
 .comparison {
   position: relative;
   width: 100%;
-  height: 100%;
-  aspect-ratio: 16 / 10;
+  /* Hold the aspect ratio the pair is actually rendered at, and centre the
+     panel in its grid cell, rather than stretching to whatever height the
+     copy column happens to be. Stretching made object-fit: cover silently
+     centre-crop the frame -- by up to half its width at some viewports --
+     so the framing on screen no longer matched the framing that was
+     composed. See site/assets/CREDITS.txt. */
+  aspect-ratio: 4 / 5;
+  align-self: center;
   overflow: hidden;
   cursor: ew-resize;
   background: #000;
@@ -525,7 +569,10 @@ section {
   height: 100%;
   z-index: 2;
   overflow: hidden;
-  clip-path: polygon(0 0, var(--clip-pos, 50%) 0, var(--clip-pos, 50%) 100%, 0 100%);
+  /* Reveals the region to the RIGHT of the handle, so the base image (the
+     uncorrected "before") reads on the left and the corrected "after" on the
+     right, matching the slider's labels and aria-label. */
+  clip-path: polygon(var(--clip-pos, 50%) 0, 100% 0, 100% 100%, var(--clip-pos, 50%) 100%);
 }
 
 .comparison .after img {
@@ -585,6 +632,27 @@ section {
   border: var(--border-thin) solid var(--border);
   padding: 0.2rem 0.5rem;
   color: var(--text);
+}
+
+/* Method note + image credit, spanning the full width of the problem grid */
+.comparison-credit {
+  grid-column: 1 / -1;
+  border-top: var(--border-thick) solid var(--border);
+  padding: 1rem 1.5rem;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  opacity: 0.65;
+}
+
+@media (min-width: 900px) {
+  .comparison-credit {
+    padding: 1rem 3rem;
+  }
+}
+
+.comparison-credit code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
 }
 
 /* How it works scrollytelling */
@@ -970,6 +1038,7 @@ section {
 
 .download-option ul {
   list-style: none;
+  margin-bottom: 2rem;
 }
 
 .download-option ul li {
@@ -998,6 +1067,35 @@ section {
 .download-action-box .btn {
   width: 100%;
   max-width: 450px;
+}
+
+/* Each download card carries its own button, bottom-aligned so the two line
+   up across cards with different numbers of bullets. */
+.download-option .btn {
+  margin-top: auto;
+  align-self: center;
+}
+
+/* Both of these are secondary explanatory copy. They run the full width of
+   the band rather than a 70ch measure, so they collapse to a couple of lines
+   and read as a footnote instead of a wall of text. */
+.download-note {
+  font-size: 0.85rem;
+  line-height: 1.6;
+  opacity: 0.7;
+  max-width: none;
+  text-align: center;
+}
+
+.smartscreen-note {
+  padding: 2rem;
+}
+
+.smartscreen-note p {
+  font-size: 0.85rem;
+  line-height: 1.6;
+  opacity: 0.7;
+  max-width: none;
 }
 
 /* Guides & Whitepaper layout */
@@ -1159,6 +1257,22 @@ section {
   margin-bottom: 1.5rem;
 }
 
+/* Display equations. These were markup-only until now: .formula had no rule,
+   so every equation in the whitepaper rendered as plain body text. */
+.whitepaper .formula {
+  font-family: var(--font-math);
+  font-size: 1.05rem;
+  line-height: 1.9;
+  border-left: var(--border-thick) solid var(--accent);
+  padding: 0.9rem 1.25rem;
+  margin: 0 0 1.5rem;
+  overflow-x: auto;
+}
+
+.whitepaper .formula em {
+  font-style: italic;
+}
+
 .whitepaper p {
   font-size: 1.1rem;
   line-height: 1.55;
@@ -1189,7 +1303,7 @@ section {
   background: rgba(0,0,0,0.02);
 }
 
-body.dark-theme .whitepaper th {
+:root:not(.light-theme) .whitepaper th {
   background: rgba(255,255,255,0.03);
 }
 

@@ -1,0 +1,73 @@
+Image credits and provenance for the Gloam site
+===============================================
+
+compare_windows_srgb.webp
+compare_gloam_gamma2p2.webp
+---------------------------
+
+The before/after pair in the "01 / The problem" section of index.html.
+
+Source
+  Georges de La Tour (French, 1593-1652)
+  "The Penitent Magdalen", ca. 1640
+  Oil on canvas, 133.4 x 102.2 cm
+  The Metropolitan Museum of Art, object 436839
+  Gift of Mr. and Mrs. Charles Wrightsman, 1978
+  https://www.metmuseum.org/art/collection/search/436839
+  Scan: 2947 x 4000, sRGB.
+
+License
+  The painting is long out of copyright, and the Met releases its
+  reproduction under Open Access / CC0:
+  https://www.metmuseum.org/policy/open-access
+  No attribution is legally required; the page credits it anyway.
+
+Why this image
+  The shadow lift Gloam corrects is largest, in code-value terms, for
+  content sitting just above black -- about +7 to +8 codes across the
+  1-5% signal range, tapering to nothing by 40%. A single-candle
+  chiaroscuro scene puts a lot of tonal mass exactly there: roughly half
+  the frame sits below 1% display light, while the candle flames clip
+  white. So the correction is visible as the background recovering its
+  depth, with the flames provably unmoved -- which is the actual claim
+  the section makes.
+
+  The crop is a 16:10 band through the candle, hands and skull, inset
+  from the gold frame edge and the black border of the museum scan.
+
+How the pair was made
+  scripts/render-comparison-images.py, which ports the transfer-function
+  math 1:1 from src/HDRGammaController.Core/TransferFunctions.cs and
+  LutGenerator.cs. Both frames come from the same source pixels; the only
+  difference is the decode curve:
+
+    compare_windows_srgb.webp    what an HDR display emits when Windows
+                                 decodes the SDR frame with the piecewise
+                                 sRGB curve
+    compare_gloam_gamma2p2.webp  what it emits with Gloam's gamma 2.2
+                                 GPU LUT applied
+
+  The frame is encoded to PQ at a 200-nit SDR white level and quantized
+  to the 10-bit wire before either branch, so the simulation includes the
+  real signal path rather than just the curve algebra. The emitted-light
+  ratios between the two reproduce the figures quoted on the page:
+  2.87x at 5% signal, 1.59x at 10%, 1.14x at 20%, 1.00x at 40% and above.
+  Deeper than the page's lowest stat card the ratio keeps climbing --
+  8.7x at 2% signal, 60x at code value 1 -- though in absolute nits those
+  are small differences.
+
+  Both are re-encoded for an ordinary SDR reader on the assumption that
+  their display follows a ~gamma 2.2 EOTF -- the same premise the page
+  and the app rest on. Under that assumption the Gloam branch is the
+  untouched source and the Windows branch is the lifted one, which is the
+  honest direction: Windows *adds* light to shadows relative to
+  mastering intent.
+
+  Re-render with:
+    python scripts/render-comparison-images.py
+  after placing magdalen.jpg (the Met's original-size scan) beside it.
+
+  WebP quality 92, 4:4:4, no chroma subsampling. Verified: the 8px-
+  integrated difference between the two frames survives compression to
+  within 0.19 code values against a mean difference of 4.8, so the effect
+  the page demonstrates is not a compression artifact.
