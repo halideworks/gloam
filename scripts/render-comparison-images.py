@@ -4,9 +4,9 @@ through the *actual* Windows-HDR signal path, once without Gloam and once
 with Gloam's gamma 2.2 GPU LUT.
 
 Math is ported 1:1 from:
-  src/HDRGammaController.Core/TransferFunctions.cs   (PQ, sRGB)
-  src/HDRGammaController.Core/LutGenerator.cs        (regrade + shoulder)
-  src/HDRGammaController.Core/Calibration/HdrMhc2LutBuilder.cs:104
+  src/Gloam.Core/TransferFunctions.cs   (PQ, sRGB)
+  src/Gloam.Core/LutGenerator.cs        (regrade + shoulder)
+  src/Gloam.Core/Calibration/HdrMhc2LutBuilder.cs:104
       (the Windows SDR-in-HDR wire model)
 
 Pipeline, per pixel, per channel:

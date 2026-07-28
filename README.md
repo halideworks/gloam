@@ -96,7 +96,7 @@ For HDR desktop calibration, use **HDR Desktop PQ (sRGB gamut)**. When a panel a
 ```powershell
 git clone https://github.com/halideworks/gloam.git
 cd gloam
-dotnet run --project src/HDRGammaController
+dotnet run --project src/Gloam
 ```
 
 Package locally:
@@ -108,8 +108,8 @@ Package locally:
 Headless checks:
 
 ```powershell
-dotnet run --project src/HDRGammaController.Cli -- check-lut 2.2 200 --algorithm perceptual --temp-k 2700 --json artifacts\cli-lut-check.json
-dotnet run --project src/HDRGammaController.Cli -- night 2200 --algorithm ultra --basis rec2020 --json -
+dotnet run --project src/Gloam.Cli -- check-lut 2.2 200 --algorithm perceptual --temp-k 2700 --json artifacts\cli-lut-check.json
+dotnet run --project src/Gloam.Cli -- night 2200 --algorithm ultra --basis rec2020 --json -
 ```
 
 ## Files

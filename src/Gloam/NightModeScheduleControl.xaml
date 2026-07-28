@@ -1,0 +1,271 @@
+<UserControl x:Class="Gloam.NightModeScheduleControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             mc:Ignorable="d"
+             d:DesignHeight="400" d:DesignWidth="480">
+    <UserControl.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="pack://application:,,,/Gloam;component/Themes/Brutalist.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+
+            <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+        </ResourceDictionary>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/> <!-- Title/Summary -->
+            <RowDefinition Height="180"/>  <!-- Graph -->
+            <RowDefinition Height="Auto"/> <!-- Toolbar -->
+            <RowDefinition Height="Auto"/> <!-- Rendering algorithm -->
+            <RowDefinition Height="Auto"/>    <!-- List -->
+        </Grid.RowDefinitions>
+
+        <!-- Summary and Location -->
+        <Grid Grid.Row="0" Margin="0,0,0,12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" Background="Transparent" Foreground="{DynamicResource ThemeTextDim}"
+                       FontFamily="{DynamicResource BodyFont}" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center">
+                Drag points to adjust. Double-click to add.
+            </TextBlock>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                 <Button x:Name="DetectBtn" Content="Auto-detect location" Click="Detect_Click"
+                         FontSize="11" Padding="12,6" Margin="0,0,10,0"/>
+
+                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                     <TextBlock Text="Lat" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                     <TextBox Text="{Binding LatitudeText, UpdateSourceTrigger=PropertyChanged}" Width="56"
+                              Padding="5,3" FontSize="11" LostFocus="Location_LostFocus"/>
+                     <TextBlock Text="Lon" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" Margin="10,0,4,0"/>
+                     <TextBox Text="{Binding LongitudeText, UpdateSourceTrigger=PropertyChanged}" Width="56"
+                              Padding="5,3" FontSize="11" LostFocus="Location_LostFocus"/>
+                 </StackPanel>
+            </StackPanel>
+        </Grid>
+
+        <!-- Graph Container -->
+        <Border Grid.Row="1" Background="{DynamicResource ThemeBg}" BorderBrush="{DynamicResource ThemeBorder}"
+                BorderThickness="1" Margin="0,0,0,8">
+            <Grid>
+                 <Canvas x:Name="GridCanvas" IsHitTestVisible="False"/>
+                 <Canvas x:Name="CurveCanvas" ClipToBounds="True" Background="Transparent"
+                        MouseLeftButtonDown="GraphCanvas_MouseDown"
+                        MouseMove="GraphCanvas_MouseMove"
+                        MouseLeftButtonUp="GraphCanvas_MouseUp"
+                        SizeChanged="GraphCanvas_SizeChanged"/>
+
+                 <!-- Drag Readout Popup (In-Canvas Overlay) -->
+                 <Border x:Name="DragOverlay" HorizontalAlignment="Left" VerticalAlignment="Top"
+                         Background="{DynamicResource ThemeSurface}" BorderBrush="{DynamicResource ThemeBorder}" BorderThickness="1"
+                         Padding="8" IsHitTestVisible="False"
+                         Visibility="{Binding IsDragOverlayVisible, Converter={StaticResource BoolToVis}}">
+                     <StackPanel>
+                         <TextBlock Text="{Binding OverlayTimeText}" Foreground="{DynamicResource ThemeText}"
+                                    FontFamily="{DynamicResource MonoFont}" FontWeight="Bold"/>
+                         <TextBlock Text="{Binding OverlayTempText}" Foreground="{DynamicResource ThemeAccent}"
+                                    FontFamily="{DynamicResource MonoFont}"/>
+                     </StackPanel>
+                 </Border>
+            </Grid>
+        </Border>
+
+        <!-- Toolbar -->
+        <Grid Grid.Row="2" Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0" Orientation="Horizontal">
+                <Button Content="Add point" Click="AddPoint_Click" Padding="12,6" Margin="0,0,8,0"/>
+                <Button Content="Reset default" Click="Reset_Click" Padding="12,6"/>
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                <CheckBox IsChecked="{Binding UseUltraWarmMode}" IsEnabled="{Binding IsUltraWarmApplicable}"
+                          VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <TextBlock Foreground="{DynamicResource ThemeText}" FontFamily="{DynamicResource BodyFont}"
+                           FontSize="12" VerticalAlignment="Center">
+                    <Run Text="Ultra Warm" FontWeight="Bold"/>
+                    <Run Text=" - Enhanced warmth below 2800K" Foreground="{DynamicResource ThemeTextDim}"/>
+                </TextBlock>
+            </StackPanel>
+        </Grid>
+
+        <!-- Rendering algorithm -->
+        <StackPanel Grid.Row="3" Margin="0,4,0,12">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock Text="Rendering" Style="{StaticResource FieldLabel}"
+                           VerticalAlignment="Center" Margin="0,0,10,0"/>
+                <ComboBox MinWidth="220" HorizontalAlignment="Left"
+                          ItemsSource="{Binding AvailableAlgorithms}"
+                          DisplayMemberPath="Label"
+                          SelectedValuePath="Value"
+                          SelectedValue="{Binding Algorithm}"/>
+            </StackPanel>
+            <TextBlock Text="{Binding AlgorithmDescription}" TextWrapping="Wrap"
+                       Foreground="{DynamicResource ThemeTextDim}" FontFamily="{DynamicResource BodyFont}"
+                       FontSize="11" Margin="0,6,0,0"/>
+
+            <!-- Perceptual intensity (only meaningful for the Perceptual algorithm) -->
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,10,0,0"
+                        Visibility="{Binding IsPerceptualSelected, Converter={StaticResource BoolToVis}}">
+                <TextBlock Text="Intensity" Style="{StaticResource FieldLabel}"
+                           VerticalAlignment="Center" Margin="0,0,10,0"/>
+                <Slider Width="200" Minimum="0" Maximum="100" VerticalAlignment="Center"
+                        TickFrequency="5" IsSnapToTickEnabled="True"
+                        Value="{Binding PerceptualStrengthPercent, Mode=TwoWay}"/>
+                <TextBlock Text="{Binding PerceptualStrengthPercent, StringFormat={}{0:0}%}"
+                           VerticalAlignment="Center" Margin="10,0,0,0" MinWidth="34"
+                           FontFamily="{DynamicResource MonoFont}" Foreground="{DynamicResource ThemeTextDim}"/>
+                <TextBlock Text="less warm ← → more warm / more blue cut"
+                           VerticalAlignment="Center" Margin="14,0,0,0" FontSize="10"
+                           FontFamily="{DynamicResource BodyFont}" Foreground="{DynamicResource ThemeTextDim}"/>
+            </StackPanel>
+
+            <!-- Constant-Y luminance preservation (hidden for Ultra Night, whose dimming is deliberate) -->
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,10,0,0"
+                        Visibility="{Binding IsPreserveLuminanceApplicable, Converter={StaticResource BoolToVis}}"
+                        ToolTip="Compensates the brightness the warm shift removes, within available headroom: full effect needs HDR headroom above SDR white (or a dimmed SDR screen). On SDR at 100% brightness there is no headroom and the default dimmer warm white applies.">
+                <CheckBox IsChecked="{Binding PreserveLuminance}"
+                          VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <TextBlock Foreground="{DynamicResource ThemeText}" FontFamily="{DynamicResource BodyFont}"
+                           FontSize="12" VerticalAlignment="Center">
+                    <Run Text="Preserve brightness" FontWeight="Bold"/>
+                    <Run Text=" - constant-luminance warm shift (uses HDR headroom)" Foreground="{DynamicResource ThemeTextDim}"/>
+                </TextBlock>
+            </StackPanel>
+
+            <!-- Dose-based circadian ceiling (roadmap 3.2) -->
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,10,0,0"
+                        ToolTip="While night mode is active, keeps the screen's melanopic light dose at or under this ceiling. If the scheduled warmth alone is not enough, Gloam picks the least visible combination of extra warmth and dimming (CAM16-UCS) that complies. Typical evening targets: 10–30 mel-lx; melatonin-sensitive: under 10.">
+                <CheckBox IsChecked="{Binding DoseCeilingEnabled}"
+                          VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <TextBlock Foreground="{DynamicResource ThemeText}" FontFamily="{DynamicResource BodyFont}"
+                           FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0">
+                    <Run Text="Melanopic dose ceiling" FontWeight="Bold"/>
+                    <Run Text=" - cap circadian light at" Foreground="{DynamicResource ThemeTextDim}"/>
+                </TextBlock>
+                <TextBox Width="52" VerticalAlignment="Center" HorizontalContentAlignment="Right"
+                         Text="{Binding DoseCeilingText, UpdateSourceTrigger=LostFocus}"
+                         IsEnabled="{Binding DoseCeilingEnabled}"/>
+                <TextBlock Text="mel-lx" Foreground="{DynamicResource ThemeTextDim}"
+                           FontFamily="{DynamicResource BodyFont}" FontSize="12"
+                           VerticalAlignment="Center" Margin="6,0,0,0"/>
+            </StackPanel>
+        </StackPanel>
+
+        <!-- List -->
+        <DataGrid ItemsSource="{Binding Points}" SelectedItem="{Binding SelectedPoint}"
+                  Grid.Row="4" Background="{DynamicResource ThemeBg}" BorderThickness="0"
+                  AutoGenerateColumns="False" CanUserAddRows="False" HeadersVisibility="Column"
+                  GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="{DynamicResource ThemeTrack}"
+                  RowBackground="Transparent" Foreground="{DynamicResource ThemeText}"
+                  FontFamily="{DynamicResource BodyFont}"
+                  VerticalScrollBarVisibility="Disabled">
+            <DataGrid.Resources>
+                <Style TargetType="DataGridColumnHeader">
+                    <Setter Property="Background" Value="{DynamicResource ThemeSurface}"/>
+                    <Setter Property="Foreground" Value="{DynamicResource ThemeTextDim}"/>
+                    <Setter Property="FontFamily" Value="{DynamicResource DisplayFont}"/>
+                    <Setter Property="FontWeight" Value="Bold"/>
+                    <Setter Property="FontSize" Value="11"/>
+                    <Setter Property="Padding" Value="8,6"/>
+                    <Setter Property="BorderThickness" Value="0,0,1,1"/>
+                    <Setter Property="BorderBrush" Value="{DynamicResource ThemeBorder}"/>
+                </Style>
+                <Style TargetType="DataGridCell">
+                    <Setter Property="Padding" Value="6,4"/>
+                    <Setter Property="Foreground" Value="{DynamicResource ThemeText}"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="DataGridCell">
+                                <Border Padding="{TemplateBinding Padding}" Background="{TemplateBinding Background}" BorderThickness="0">
+                                    <ContentPresenter VerticalAlignment="Center" />
+                                </Border>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                    <Style.Triggers>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter Property="Background" Value="{DynamicResource ThemeAccent}"/>
+                            <Setter Property="Foreground" Value="{DynamicResource ThemeOnAccent}"/>
+                        </Trigger>
+                    </Style.Triggers>
+                </Style>
+            </DataGrid.Resources>
+
+            <DataGrid.Columns>
+                <!-- Trigger Type -->
+                <DataGridTemplateColumn Header="Type" Width="80">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding TriggerType}" Foreground="{DynamicResource ThemeText}"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                    <DataGridTemplateColumn.CellEditingTemplate>
+                        <DataTemplate>
+                            <ComboBox SelectedItem="{Binding TriggerType}" ItemsSource="{Binding RelativeSource={RelativeSource AncestorType=UserControl}, Path=Vm.TriggerTypes}"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellEditingTemplate>
+                </DataGridTemplateColumn>
+
+                <!-- Time / Offset -->
+                <DataGridTemplateColumn Header="Time/offset" Width="100">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding DisplayTime}" FontFamily="{DynamicResource MonoFont}" Foreground="{DynamicResource ThemeText}"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                    <DataGridTemplateColumn.CellEditingTemplate>
+                        <DataTemplate>
+                            <TextBox Text="{Binding DisplayTime, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellEditingTemplate>
+                </DataGridTemplateColumn>
+
+                <!-- Temp -->
+                <DataGridTemplateColumn Header="Temp (K)" Width="74">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding TargetKelvin}" FontFamily="{DynamicResource MonoFont}" FontWeight="Bold" Foreground="{DynamicResource ThemeText}"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                    <DataGridTemplateColumn.CellEditingTemplate>
+                        <DataTemplate>
+                             <TextBox Text="{Binding TargetKelvin, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellEditingTemplate>
+                </DataGridTemplateColumn>
+
+                <!-- Fade -->
+                <DataGridTemplateColumn Header="Fade (m)" Width="64">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding FadeMinutes}" FontFamily="{DynamicResource MonoFont}" Foreground="{DynamicResource ThemeText}"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                    <DataGridTemplateColumn.CellEditingTemplate>
+                        <DataTemplate>
+                            <TextBox Text="{Binding FadeMinutes, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellEditingTemplate>
+                </DataGridTemplateColumn>
+
+                <!-- Delete -->
+                <DataGridTemplateColumn Width="*">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <Button Content="Delete" Click="DeleteRow_Click" Padding="10,4"
+                                    FontSize="10" HorizontalAlignment="Center"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+            </DataGrid.Columns>
+        </DataGrid>
+    </Grid>
+</UserControl>

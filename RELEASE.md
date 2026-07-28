@@ -49,7 +49,7 @@ The version comes from the tag. `UpdateService.RepoUrl` and the CI upload target
 ## Cutting a release
 
 1. Make sure `main` has everything you want shipped and the build is green.
-2. Pick the version `X.Y.Z`. (Optional: set `<Version>` in `HDRGammaController.csproj`; CI overrides
+2. Pick the version `X.Y.Z`. (Optional: set `<Version>` in `Gloam.csproj`; CI overrides
    it from the tag regardless.)
 3. Tag and push:
    ```bash

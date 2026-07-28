@@ -1,0 +1,148 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using Gloam.Core.Calibration;
+using Xunit;
+
+namespace Gloam.Tests
+{
+    public class CalibrationProfilePersistenceTests
+    {
+        [Fact]
+        public void SaveToFile_SanitizesNonFiniteMetricsAndDerivedCharacteristics()
+        {
+            string path = Path.Combine(Path.GetTempPath(), $"gloam-profile-{Guid.NewGuid():N}.json");
+            try
+            {
+                var profile = new CalibrationProfile
+                {
+                    MonitorDevicePath = @"\\.\DISPLAY1",
+                    MonitorName = "Test Panel",
+                    Target = StandardTargets.SrgbGamma22,
+                    PreCalibrationDeltaE = double.NaN,
+                    PostCalibrationDeltaE = double.PositiveInfinity,
+                    MeasuredCharacteristics = new DisplayCharacteristics
+                    {
+                        MeasuredRed = new Chromaticity(double.NaN, 0.33),
+                        MeasuredGreen = new Chromaticity(0.30, double.PositiveInfinity),
+                        MeasuredBlue = new Chromaticity(0.15, 0.06),
+                        MeasuredWhite = new Chromaticity(double.NegativeInfinity, 0.32903),
+                        MeasuredGamma = double.NaN,
+                        PeakLuminance = double.PositiveInfinity,
+                        BlackLevel = 0.0
+                    },
+                    ReportSummary = new CalibrationReportSummary
+                    {
+                        AvgDeltaE = double.NaN,
+                        MaxDeltaE = 2.0,
+                        DetailedHistogram = new[] { 3, -1, 2 },
+                        DetailedPatches = new List<VerifiedPatchResult>
+                        {
+                            new VerifiedPatchResult { Name = "bad", DeltaE = double.PositiveInfinity },
+                            new VerifiedPatchResult { Name = "ok", Category = "Grayscale", DeltaE = 1.25 }
+                        },
+                        DetailedGrayscaleDeltaE = double.NegativeInfinity,
+                        VerificationDetailText = "Verified diagnostics",
+                        PqTrackingDetailText = "PQ diagnostics",
+                        ColoredHdrDetailText = "Color diagnostics",
+                        ToneMapping = new ToneMappingCharacterization
+                        {
+                            ClaimedPeakNits = 1000,
+                            MeasuredPeakNits = 742,
+                            KneeNits = 610,
+                            Ladder = new[]
+                            {
+                                new ToneMapLadderPoint(400, 398),
+                                new ToneMapLadderPoint(double.NaN, 500),
+                            },
+                            AplSweep = new[]
+                            {
+                                new AplPoint(10, 720),
+                                new AplPoint(101, 300),
+                            },
+                            HgigPeakNits = 742,
+                            SuggestedMaxCllNits = double.PositiveInfinity,
+                        }
+                    }
+                };
+
+                profile.SaveToFile(path);
+                string json = File.ReadAllText(path);
+
+                Assert.DoesNotContain("NaN", json);
+                Assert.DoesNotContain("Infinity", json);
+                Assert.DoesNotContain("ContrastRatio", json);
+
+                var loaded = CalibrationProfile.LoadFromFile(path);
+
+                Assert.Null(loaded.PreCalibrationDeltaE);
+                Assert.Null(loaded.PostCalibrationDeltaE);
+                Assert.Equal(Chromaticity.Rec709Red.X, loaded.MeasuredCharacteristics!.MeasuredRed.X);
+                Assert.Equal(100.0, loaded.MeasuredCharacteristics.PeakLuminance);
+                Assert.Equal(0.0, loaded.MeasuredCharacteristics.BlackLevel);
+                Assert.Null(loaded.ReportSummary!.AvgDeltaE);
+                Assert.Equal(2.0, loaded.ReportSummary.MaxDeltaE);
+                Assert.Equal(new[] { 3, 0, 2 }, loaded.ReportSummary.DetailedHistogram);
+                var patch = Assert.Single(loaded.ReportSummary.DetailedPatches!);
+                Assert.Equal("ok", patch.Name);
+                Assert.Equal(1.25, patch.DeltaE);
+                Assert.Equal("Verified diagnostics", loaded.ReportSummary.VerificationDetailText);
+                Assert.Equal("PQ diagnostics", loaded.ReportSummary.PqTrackingDetailText);
+                Assert.Equal("Color diagnostics", loaded.ReportSummary.ColoredHdrDetailText);
+                Assert.Equal(742, loaded.ReportSummary.ToneMapping!.MeasuredPeakNits);
+                Assert.Equal(0, loaded.ReportSummary.ToneMapping.SuggestedMaxCllNits);
+                Assert.Single(loaded.ReportSummary.ToneMapping.Ladder);
+                Assert.Single(loaded.ReportSummary.ToneMapping.AplSweep);
+            }
+            finally
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+        }
+
+        [Fact]
+        public void SaveToFile_SanitizesChromaticitiesOutsidePhysicalPlane()
+        {
+            string path = Path.Combine(Path.GetTempPath(), $"gloam-profile-{Guid.NewGuid():N}.json");
+            try
+            {
+                var profile = new CalibrationProfile
+                {
+                    MonitorDevicePath = @"\\.\DISPLAY1",
+                    MonitorName = "Test Panel",
+                    Target = StandardTargets.SrgbGamma22,
+                    MeasuredCharacteristics = new DisplayCharacteristics
+                    {
+                        MeasuredRed = new Chromaticity(0.70, 0.35),
+                        MeasuredGreen = Chromaticity.Rec709Green,
+                        MeasuredBlue = Chromaticity.Rec709Blue,
+                        MeasuredWhite = new Chromaticity(0.70, 0.35),
+                        MeasuredGamma = 2.2,
+                        PeakLuminance = 120.0,
+                        BlackLevel = 0.05
+                    }
+                };
+
+                profile.SaveToFile(path);
+                var loaded = CalibrationProfile.LoadFromFile(path);
+
+                Assert.Equal(Chromaticity.Rec709Red, loaded.MeasuredCharacteristics!.MeasuredRed);
+                Assert.Equal(Chromaticity.D65, loaded.MeasuredCharacteristics.MeasuredWhite);
+                var matrix = loaded.MeasuredCharacteristics.RgbToXyzMatrix;
+                for (int r = 0; r < 3; r++)
+                for (int c = 0; c < 3; c++)
+                    Assert.True(double.IsFinite(matrix[r, c]));
+            }
+            finally
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+        }
+    }
+}

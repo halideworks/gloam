@@ -1,5 +1,10 @@
 # Codebase hardening audit — July 2026
 
+> Historical document, left as written. Solution, project, and namespace names in this
+> audit predate the internal `HDRGammaController` → `Gloam` rename; read
+> `src/HDRGammaController.sln` as `src/Gloam.sln` and so on. Runtime identity
+> (`Gloam.exe`, `%LOCALAPPDATA%\Gloam`, the Velopack `GloamApp` package id) is unchanged.
+
 ## Verdict
 
 Gloam is in strong shape for a Windows desktop application that crosses managed code,

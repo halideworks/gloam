@@ -46,7 +46,6 @@ argyll_cache/
 argyll_cache.zip
 argyll_cache_*/
 argyll_cache_*.zip
-HDRGammaController_*.zip
 Gloam_*.zip
 Releases/
 ReleasesNew/
@@ -55,4 +54,4 @@ ReleasesNew/
 
 # Golden-sample regression fixtures are REAL measurement recordings the CI replay
 # tests depend on — they must ship in the repo despite the blanket *.csv ignore.
-!tests/HDRGammaController.Tests/Fixtures/**/*.csv
+!tests/Gloam.Tests/Fixtures/**/*.csv

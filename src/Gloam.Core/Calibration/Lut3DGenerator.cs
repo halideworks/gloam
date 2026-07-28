@@ -1,0 +1,1482 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Gloam.Core.Calibration
+{
+    /// <summary>
+    /// Generates a 3D color correction LUT from colorimeter measurements.
+    /// </summary>
+    /// <remarks>
+    /// The generator builds a forward display model from measurements (RGB → XYZ),
+    /// then creates a correction LUT that maps input RGB to corrected RGB such that
+    /// the display produces the target color.
+    ///
+    /// Algorithm overview:
+    /// 1. Analyze measurements to build a display characterization model
+    /// 2. For each 3D LUT grid point:
+    ///    a. Calculate target XYZ (what this RGB should produce per target color space)
+    ///    b. Use inverse model to find corrected RGB that produces target XYZ
+    /// 3. Apply gamut mapping for out-of-gamut colors
+    ///
+    /// References:
+    /// - ICC.1:2022 - ICC Profile specification
+    /// - Color Appearance Models (Fairchild)
+    /// - Real-Time 3D LUT Color Correction (NVIDIA)
+    /// </remarks>
+    public class Lut3DGenerator
+    {
+        private readonly CalibrationTarget _target;
+        private readonly IReadOnlyList<MeasurementResult> _measurements;
+        private readonly int _lutSize;
+
+        // Characterization data extracted from measurements
+        private DisplayCharacterization? _characterization;
+
+        /// <summary>
+        /// Gets the generated display characterization from measurements.
+        /// </summary>
+        public DisplayCharacterization? Characterization => _characterization;
+
+        /// <summary>
+        /// Creates a new 3D LUT generator.
+        /// </summary>
+        /// <param name="target">The target color space to calibrate to</param>
+        /// <param name="measurements">The colorimeter measurements</param>
+        /// <param name="lutSize">LUT grid size (default 17 for 17x17x17)</param>
+        public Lut3DGenerator(CalibrationTarget target, IReadOnlyList<MeasurementResult> measurements, int lutSize = 17)
+        {
+            _target = target ?? throw new ArgumentNullException(nameof(target));
+            _measurements = measurements ?? throw new ArgumentNullException(nameof(measurements));
+            _lutSize = Math.Clamp(lutSize, 9, 65);
+
+            if (measurements.Count < 10)
+                throw new ArgumentException("At least 10 measurements are required for calibration", nameof(measurements));
+        }
+
+        /// <summary>
+        /// Generates the 3D correction LUT.
+        /// </summary>
+        /// <param name="progress">Optional progress callback (0-100)</param>
+        /// <returns>The correction 3D LUT</returns>
+        public Lut3D Generate(Action<double>? progress = null)
+        {
+            // Step 0: Reject obviously-broken measurement sets BEFORE building a profile
+            // from them. Without this, a probe that connected but never actually read the
+            // screen (ambient light, a sharing-violation returning stale/zero data) yields
+            // a garbage LUT that the app would report as a successful calibration.
+            progress?.Invoke(5);
+            BuildCharacterizationOnly(hdrMode: false);
+
+            // Step 2: Create the correction LUT
+            progress?.Invoke(10);
+            var lut = new Lut3D(_lutSize);
+
+            int totalPoints = _lutSize * _lutSize * _lutSize;
+            int processedPoints = 0;
+
+            // For each LUT grid point, calculate the correction
+            for (int ri = 0; ri < _lutSize; ri++)
+            {
+                double r = ri / (double)(_lutSize - 1);
+
+                for (int gi = 0; gi < _lutSize; gi++)
+                {
+                    double g = gi / (double)(_lutSize - 1);
+
+                    for (int bi = 0; bi < _lutSize; bi++)
+                    {
+                        double b = bi / (double)(_lutSize - 1);
+
+                        // Calculate corrected RGB for this input
+                        var inputRgb = new LinearRgb(r, g, b);
+                        var correctedRgb = CalculateCorrection(inputRgb);
+
+                        lut.SetEntry(ri, gi, bi,
+                            (float)correctedRgb.R,
+                            (float)correctedRgb.G,
+                            (float)correctedRgb.B);
+
+                        processedPoints++;
+                    }
+                }
+
+                // Update progress (10% for characterization, 90% for LUT generation)
+                progress?.Invoke(10 + (processedPoints * 90.0 / totalPoints));
+            }
+
+            progress?.Invoke(100);
+            return lut;
+        }
+
+        /// <summary>
+        /// Validates measurements and builds the display characterization without emitting a
+        /// generic 3D LUT. HDR calibration uses this path because the installed correction is
+        /// synthesized later as a Windows Advanced Color MHC2 profile from the measured PQ wire
+        /// ladder, not from the SDR-oriented .cube correction model.
+        /// </summary>
+        public DisplayCharacterization BuildCharacterizationOnly(bool hdrMode = false)
+        {
+            var validation = CalibrationMeasurementValidator.ValidateForProfile(_measurements, _target, hdrMode);
+            if (!validation.IsValid)
+                throw new InvalidOperationException(validation.Error);
+
+            _characterization = BuildCharacterization();
+            return _characterization;
+        }
+
+        /// <summary>
+        /// Builds a display characterization model from measurements.
+        /// </summary>
+        private DisplayCharacterization BuildCharacterization()
+        {
+            var char_ = new DisplayCharacterization();
+
+            // Extract black and white points
+            var blackMeasurement = FindMeasurementByRgb(0, 0, 0);
+            var whiteMeasurement = FindMeasurementByRgb(1, 1, 1);
+
+            char_.BlackXyz = blackMeasurement?.Xyz ?? new CieXyz(0, 0, 0);
+            char_.WhiteXyz = whiteMeasurement?.Xyz ?? new CieXyz(0.95047, 1.0, 1.08883);
+            char_.BlackLevel = char_.BlackXyz.Y;
+            char_.PeakLuminance = char_.WhiteXyz.Y;
+
+            // Extract primaries (100% saturated colors)
+            var redMeasurement = FindMeasurementByRgb(1, 0, 0);
+            var greenMeasurement = FindMeasurementByRgb(0, 1, 0);
+            var blueMeasurement = FindMeasurementByRgb(0, 0, 1);
+
+            char_.RedPrimary = redMeasurement?.Chromaticity ?? Chromaticity.Rec709Red;
+            char_.GreenPrimary = greenMeasurement?.Chromaticity ?? Chromaticity.Rec709Green;
+            char_.BluePrimary = blueMeasurement?.Chromaticity ?? Chromaticity.Rec709Blue;
+            char_.WhitePoint = whiteMeasurement?.Chromaticity ?? Chromaticity.D65;
+
+            // Build the shared NEUTRAL tone response curve from grayscale measurements. Its
+            // output is total luminance Y of neutral patches, so on its own it can only
+            // correct luminance/gamma tracking, not a level-dependent gray cast.
+            var luminanceToneCurve = ExtractToneCurve(PatchCategory.Grayscale, m => m.Patch.DisplayRgb.R);
+            char_.NeutralToneCurve = luminanceToneCurve;
+
+            // E4: TRUE per-channel tone curves from single-channel R/G/B ramps when the
+            // patch set measured them (Thorough/Full presets). Each channel's ramp gives
+            // that channel's real EOTF (Y at signal v relative to the channel's full-drive
+            // Y), which is what enables level-dependent gray-cast correction — the classic
+            // VCGT construction LUT_c = f_c⁻¹∘target. Channels without usable ramp data
+            // fall back to the shared neutral curve (identity delta), so sets without
+            // ramps behave exactly as before.
+            var redCurve = ExtractSingleChannelToneCurve(0, "red");
+            var greenCurve = ExtractSingleChannelToneCurve(1, "green");
+            var blueCurve = ExtractSingleChannelToneCurve(2, "blue");
+            char_.RedToneCurve = redCurve ?? luminanceToneCurve;
+            char_.GreenToneCurve = greenCurve ?? luminanceToneCurve;
+            char_.BlueToneCurve = blueCurve ?? luminanceToneCurve;
+            char_.HasPerChannelToneCurves = redCurve != null || greenCurve != null || blueCurve != null;
+
+            // Calculate RGB to XYZ matrix from measured primaries
+            char_.RgbToXyzMatrix = CalculateMeasuredMatrix(char_);
+
+            // Calculate average gamma from grayscale
+            char_.MeasuredGamma = CalculateAverageGamma();
+
+            return char_;
+        }
+
+        /// <summary>
+        /// Extracts a tone response curve from measurements.
+        /// </summary>
+        private ToneCurve ExtractToneCurve(PatchCategory category, Func<MeasurementResult, double> getChannelValue)
+        {
+            var grayscaleMeasurements = _measurements
+                .Where(m => m.Patch.Category == category && m.IsValid)
+                .OrderBy(m => getChannelValue(m))
+                .ToList();
+
+            if (grayscaleMeasurements.Count < 3)
+            {
+                // Fallback to 2.2 gamma curve
+                return ToneCurve.CreateGamma(2.2);
+            }
+
+            // Build lookup table from measurements
+            var points = new List<(double input, double output)>();
+
+            // Anchor normalization to the measured black/white patches. Near-white
+            // samples can legitimately land a percent or two above white from meter
+            // noise, ABL/local-dimming behavior or settling; treating that sample as
+            // reference white compresses the entire fitted curve.
+            double whiteLuminance = FindMeasurementByRgb(1, 1, 1)?.Xyz.Y
+                                    ?? grayscaleMeasurements.Max(m => m.Xyz.Y);
+            if (whiteLuminance <= 0) whiteLuminance = 1;
+
+            double blackLuminance = FindMeasurementByRgb(0, 0, 0)?.Xyz.Y
+                                    ?? grayscaleMeasurements.Min(m => m.Xyz.Y);
+            double luminanceRange = Math.Max(whiteLuminance - blackLuminance, 1e-6);
+
+            foreach (var m in grayscaleMeasurements)
+            {
+                double inputLevel = getChannelValue(m);
+                double normalizedLuminance = (m.Xyz.Y - blackLuminance) / luminanceRange;
+                normalizedLuminance = Clamp01(normalizedLuminance);
+                points.Add((inputLevel, normalizedLuminance));
+            }
+
+            return ToneCurve.CreateFromPoints(points);
+        }
+
+        // E4 single-channel ramp fitting -------------------------------------------------
+
+        /// <summary>
+        /// Ramp samples below this signal are ignored: a single channel at low drive emits
+        /// so little light that colorimeter chroma noise dominates. Matches the patch-set
+        /// design (ramps start at 0.25; the 0.2 floor admits the 8-bit-snapped 0.251 while
+        /// excluding low grid axis nodes like 42/255).
+        /// </summary>
+        private const double MinSingleChannelSignal = 0.2;
+
+        /// <summary>
+        /// Maximum xy distance a ramp sample's chromaticity may stray from the measured
+        /// full-drive primary before it is discarded as a meter/stray-light outlier. A
+        /// clean single-channel patch sits essentially AT the primary's chromaticity at
+        /// every level (additivity); large excursions mean the reading is contaminated.
+        /// </summary>
+        private const double SingleChannelChromaTolerance = 0.05;
+
+        /// <summary>
+        /// Fits one channel's true tone response from single-channel ramp measurements
+        /// (patches with exactly one nonzero channel — the E4 ramps plus any grid axis
+        /// nodes). Output is the channel's linear emission at signal v, normalized to the
+        /// channel's own full-drive emission (black-subtracted), so the curve ends at
+        /// exactly 1.0: per-channel corrections built from these curves agree at full
+        /// drive by construction and never re-balance white (that is the matrix's job).
+        /// Returns null when there is no full-drive anchor or fewer than 3 usable ramp
+        /// samples — the caller then falls back to the shared neutral curve.
+        /// </summary>
+        private ToneCurve? ExtractSingleChannelToneCurve(int channel, string channelName)
+        {
+            double Signal(LinearRgb rgb) => channel switch { 0 => rgb.R, 1 => rgb.G, _ => rgb.B };
+            bool IsSingleChannel(LinearRgb rgb)
+            {
+                double others = channel switch
+                {
+                    0 => Math.Max(rgb.G, rgb.B),
+                    1 => Math.Max(rgb.R, rgb.B),
+                    _ => Math.Max(rgb.R, rgb.G),
+                };
+                return others <= 1e-6 && Signal(rgb) >= MinSingleChannelSignal;
+            }
+
+            var samples = _measurements
+                .Where(m => m.IsValid && m.Patch.Nits is null && IsSingleChannel(m.Patch.DisplayRgb))
+                .OrderBy(m => Signal(m.Patch.DisplayRgb))
+                .ToList();
+            if (samples.Count == 0)
+                return null;
+
+            // The full-drive primary is the ramp's top anchor: it defines both the
+            // normalization scale and the reference chromaticity for outlier gating.
+            var fullDrive = samples.LastOrDefault(m => Signal(m.Patch.DisplayRgb) >= 0.99);
+            if (fullDrive == null)
+                return null;
+
+            double blackY = FindMeasurementByRgb(0, 0, 0)?.Xyz.Y ?? 0.0;
+            double range = fullDrive.Xyz.Y - blackY;
+            if (!double.IsFinite(range) || range <= 1e-6)
+                return null;
+
+            var referenceChroma = fullDrive.Chromaticity;
+            var points = new List<(double input, double output)> { (0.0, 0.0) };
+            int kept = 0;
+            foreach (var m in samples)
+            {
+                double chromaDistance = m.Chromaticity.DistanceTo(referenceChroma);
+                if (chromaDistance > SingleChannelChromaTolerance)
+                {
+                    Log.Info(
+                        $"Lut3DGenerator: discarding {channelName}-ramp sample '{m.Patch.Name}' — " +
+                        $"chromaticity strays {chromaDistance:F4} in xy from the measured primary " +
+                        "(meter noise or stray light); not used for the per-channel tone fit.");
+                    continue;
+                }
+
+                points.Add((Signal(m.Patch.DisplayRgb), Clamp01((m.Xyz.Y - blackY) / range)));
+                kept++;
+            }
+
+            // Need the full-drive anchor plus at least four interior samples for the
+            // PCHIP fit to carry real shape information. The dedicated E4 ramps provide
+            // five; the incidental single-read grid axis nodes of shorter presets (three
+            // in Standard) deliberately stay below this bar, so noisy non-ramp data can
+            // never fabricate a per-channel cast correction on its own.
+            if (kept < 5)
+            {
+                Log.Info($"Lut3DGenerator: only {kept} usable {channelName}-ramp samples; " +
+                         "using the shared neutral tone curve for this channel.");
+                return null;
+            }
+
+            return ToneCurve.CreateFromPoints(points);
+        }
+
+        /// <summary>
+        /// Calculates the RGB to XYZ matrix from measured primaries.
+        /// </summary>
+        private double[,] CalculateMeasuredMatrix(DisplayCharacterization char_)
+        {
+            // Use ColorMath to calculate the matrix from measured chromaticities
+            return ColorMath.CalculateRgbToXyzMatrix(
+                char_.RedPrimary,
+                char_.GreenPrimary,
+                char_.BluePrimary,
+                char_.WhitePoint);
+        }
+
+        /// <summary>
+        /// Calculates average gamma from grayscale measurements.
+        /// </summary>
+        private double CalculateAverageGamma()
+        {
+            var grayscale = _measurements
+                .Where(m => m.Patch.Category == PatchCategory.Grayscale && m.IsValid)
+                .Where(m => m.Patch.DisplayRgb.R > 0.05 && m.Patch.DisplayRgb.R < 0.95) // Exclude extremes
+                .ToList();
+
+            if (grayscale.Count < 3)
+                return 2.2; // Default
+
+            double whiteLuminance = _measurements
+                .Where(m => m.Patch.DisplayRgb.R >= 0.99 && m.Patch.DisplayRgb.G >= 0.99 && m.Patch.DisplayRgb.B >= 0.99)
+                .Select(m => m.Xyz.Y)
+                .FirstOrDefault();
+
+            if (whiteLuminance <= 0) whiteLuminance = 1;
+
+            double blackLuminance = _measurements
+                .Where(m => m.Patch.DisplayRgb.R <= 0.01 && m.Patch.DisplayRgb.G <= 0.01 && m.Patch.DisplayRgb.B <= 0.01)
+                .Select(m => m.Xyz.Y)
+                .DefaultIfEmpty(0)
+                .Min();
+
+            double luminanceRange = Math.Max(whiteLuminance - blackLuminance, 1e-6);
+
+            // Least-squares fit of gamma in log-log space. For a power law
+            // output = input^gamma, taking logs gives ln(output) = gamma * ln(input),
+            // a line through the origin whose best-fit slope is
+            //   gamma = Σ(ln in * ln out) / Σ(ln in)^2.
+            // This weights all points jointly instead of averaging per-point gamma
+            // estimates (which over-weights the noisy near-black samples where small
+            // luminance errors swing the ratio wildly).
+            double sumXY = 0, sumXX = 0;
+            int n = 0;
+            foreach (var m in grayscale)
+            {
+                double input = m.Patch.DisplayRgb.R;
+                double output = Clamp01((m.Xyz.Y - blackLuminance) / luminanceRange);
+
+                if (output > 0 && input > 0)
+                {
+                    double lx = Math.Log(input);
+                    double ly = Math.Log(output);
+                    sumXY += lx * ly;
+                    sumXX += lx * lx;
+                    n++;
+                }
+            }
+
+            if (n == 0 || sumXX <= 0) return 2.2;
+
+            double gamma = sumXY / sumXX;
+            // Clamp to a physically-plausible display range; outside it the fit is
+            // dominated by bad data and the 2.2 default is safer.
+            return (gamma > 1.5 && gamma < 3.5) ? gamma : 2.2;
+        }
+
+        /// <summary>
+        /// Calculates the corrected RGB for an input RGB to achieve the target color.
+        /// </summary>
+        private LinearRgb CalculateCorrection(LinearRgb inputRgb)
+        {
+            if (_characterization == null)
+                return inputRgb;
+
+            // Step 1: Calculate target XYZ (what this input should produce)
+            CieXyz targetXyz = CalculateTargetXyz(inputRgb);
+
+            // Step 2: Use inverse display model to find RGB that produces target XYZ
+            LinearRgb correctedRgb = InverseDisplayModel(targetXyz);
+
+            // Step 3: Apply gamut mapping if needed
+            correctedRgb = ApplyGamutMapping(correctedRgb);
+
+            return correctedRgb;
+        }
+
+        /// <summary>
+        /// Calculates what XYZ the target color space says this RGB should produce.
+        /// </summary>
+        private CieXyz CalculateTargetXyz(LinearRgb rgb)
+        {
+            // Apply target transfer function (decode to linear light)
+            double linearR = _target.ApplyEotf(rgb.R);
+            double linearG = _target.ApplyEotf(rgb.G);
+            double linearB = _target.ApplyEotf(rgb.B);
+
+            // Convert to XYZ using target color space matrix
+            return _target.LinearRgbToXyz(new LinearRgb(linearR, linearG, linearB));
+        }
+
+        /// <summary>
+        /// Applies the inverse display model to find RGB that produces the target XYZ.
+        /// </summary>
+        private LinearRgb InverseDisplayModel(CieXyz targetXyz)
+        {
+            if (_characterization == null)
+                return new LinearRgb(0, 0, 0);
+
+            // Step 1: Adapt XYZ from target white point to display white point if needed
+            CieXyz adaptedXyz = targetXyz;
+            if (_characterization.WhitePoint != _target.WhitePoint)
+            {
+                var targetWhiteXyz = _target.WhitePoint.ToXyz(1.0);
+                var displayWhiteXyz = _characterization.WhitePoint.ToXyz(1.0);
+                adaptedXyz = ColorMath.ChromaticAdaptation(targetXyz, targetWhiteXyz, displayWhiteXyz);
+            }
+
+            // Step 2: Convert XYZ to linear RGB using display's inverse matrix
+            var displayXyzToRgb = ColorMath.Invert3x3(_characterization.RgbToXyzMatrix);
+            double[] xyzVec = { adaptedXyz.X, adaptedXyz.Y, adaptedXyz.Z };
+            double linearR = displayXyzToRgb[0, 0] * xyzVec[0] + displayXyzToRgb[0, 1] * xyzVec[1] + displayXyzToRgb[0, 2] * xyzVec[2];
+            double linearG = displayXyzToRgb[1, 0] * xyzVec[0] + displayXyzToRgb[1, 1] * xyzVec[1] + displayXyzToRgb[1, 2] * xyzVec[2];
+            double linearB = displayXyzToRgb[2, 0] * xyzVec[0] + displayXyzToRgb[2, 1] * xyzVec[1] + displayXyzToRgb[2, 2] * xyzVec[2];
+
+            // Step 3: Apply inverse tone curves to get signal values
+            double signalR = _characterization.RedToneCurve.InverseLookup(linearR);
+            double signalG = _characterization.GreenToneCurve.InverseLookup(linearG);
+            double signalB = _characterization.BlueToneCurve.InverseLookup(linearB);
+
+            return new LinearRgb(signalR, signalG, signalB);
+        }
+
+        /// <summary>
+        /// Applies gamut mapping for out-of-gamut colors.
+        /// </summary>
+        private LinearRgb ApplyGamutMapping(LinearRgb rgb)
+        {
+            return CompressToGamut(rgb);
+        }
+
+        /// <summary>Oklab lightness of sRGB white (1,1,1); the top of the representable L range.</summary>
+        private static readonly double OklabWhiteLightness = ColorMath.LinearSrgbToOklab(1.0, 1.0, 1.0).L;
+
+        /// <summary>
+        /// Hue-preserving gamut compression in Oklab (a hue-linear perceptual space).
+        ///
+        /// Two-step policy:
+        ///  1. Lightness: if the color's Oklab L falls outside the representable range
+        ///     [0, L(white)] (e.g. HDR overshoot brighter than display white, or inputs
+        ///     darker than black), L is clamped into that range first. A lightness error
+        ///     cannot be absorbed by reducing chroma at the original L (no chroma at an
+        ///     unrepresentable L is in gamut), so it is resolved by clamping alone.
+        ///  2. Chroma: holding the (possibly clamped) L and the hue angle h = atan2(b, a)
+        ///     fixed, bisect on chroma C = hypot(a, b) toward 0 for the largest C whose
+        ///     linear-sRGB image lands inside [0, 1]^3. This walks straight to the gamut
+        ///     boundary along a line of constant perceived hue and lightness, avoiding
+        ///     both the hue skews of per-channel clipping and the merely approximate hue
+        ///     stability of the previous signal-space (Rec.709-luma-anchored) compression.
+        ///
+        /// In-gamut inputs are returned unchanged (bit-exact), so grays and already-valid
+        /// colors pass through untouched. Non-finite components are sanitized first
+        /// (NaN → 0, ±Inf → a wide finite bound) so the result is always finite and in gamut.
+        /// </summary>
+        internal static LinearRgb CompressToGamut(LinearRgb rgb)
+        {
+            if (rgb.IsInGamut)
+                return rgb;
+
+            // Sanitize non-finite channels: NaN carries no direction (treat as 0), while
+            // ±Inf is "very far out in this channel" (clamp to a wide finite bound so the
+            // Oklab math stays finite but the compression direction survives).
+            double r = SanitizeChannel(rgb.R);
+            double g = SanitizeChannel(rgb.G);
+            double b = SanitizeChannel(rgb.B);
+
+            var sanitized = new LinearRgb(r, g, b);
+            if (sanitized.IsInGamut)
+                return sanitized;
+
+            var (lightness, labA, labB) = ColorMath.LinearSrgbToOklab(r, g, b);
+
+            // Step 1: clamp lightness into the representable range.
+            lightness = Math.Clamp(lightness, 0.0, OklabWhiteLightness);
+
+            double chroma = Math.Sqrt(labA * labA + labB * labB);
+            if (chroma <= 0)
+                return ColorMath.OklabToLinearSrgb(lightness, 0.0, 0.0).Clamp();
+
+            // Unit hue direction, held fixed throughout the search.
+            double dirA = labA / chroma;
+            double dirB = labB / chroma;
+
+            // Full chroma may fit once L has been clamped (the color was out of gamut on
+            // lightness alone).
+            var atFullChroma = ColorMath.OklabToLinearSrgb(lightness, labA, labB);
+            if (atFullChroma.IsInGamut)
+                return atFullChroma;
+
+            // Step 2: bisect on chroma. The achromatic axis at a representable L is inside
+            // the cube (up to rounding, handled by the Clamp fallback), so [lo, hi]
+            // brackets the gamut boundary. 40 halvings resolve chroma to ~1e-12.
+            var best = ColorMath.OklabToLinearSrgb(lightness, 0.0, 0.0);
+            if (!best.IsInGamut)
+                best = best.Clamp();
+
+            double lo = 0.0;
+            double hi = 1.0;
+            for (int i = 0; i < 40; i++)
+            {
+                double mid = (lo + hi) * 0.5;
+                var candidate = ColorMath.OklabToLinearSrgb(
+                    lightness, dirA * chroma * mid, dirB * chroma * mid);
+                if (candidate.IsInGamut)
+                {
+                    lo = mid;
+                    best = candidate;
+                }
+                else
+                {
+                    hi = mid;
+                }
+            }
+
+            return best;
+        }
+
+        /// <summary>
+        /// Maximum magnitude a sanitized channel may take. Wide enough that ±Inf inputs
+        /// still compress from far outside the gamut, small enough to keep the cube roots
+        /// and matrix products well-conditioned.
+        /// </summary>
+        private const double SanitizedChannelBound = 65504.0;
+
+        private static double SanitizeChannel(double value) =>
+            double.IsNaN(value) ? 0.0 : Math.Clamp(value, -SanitizedChannelBound, SanitizedChannelBound);
+
+        private static double Clamp01(double value) =>
+            double.IsFinite(value) ? Math.Clamp(value, 0.0, 1.0) : 0.0;
+
+        /// <summary>
+        /// E4: rewrites channel-identical (neutral) SDR tone LUTs into TRUE per-channel
+        /// correction LUTs using the per-channel tone curves fitted from single-channel
+        /// ramps: for each channel c, output = f_c⁻¹(f_neutral(lut(v))).
+        ///
+        /// Why that composition is right in BOTH install flows:
+        ///  • Open-loop with shared curves only: the incoming LUT is f_neutral⁻¹(t(v)), so
+        ///    the rewrite yields f_c⁻¹(t(v)) — exactly the classic VCGT construction that
+        ///    makes each channel's linear emission track the target EOTF, holding grays at
+        ///    the white point at every level.
+        ///  • Closed-loop: CalibrationWindow ships DecomposeCorrection's refined NEUTRAL
+        ///    curve N identically on all channels (the static white gains it strips belong
+        ///    to the profile matrix). N satisfies f_neutral(N(v)) ≈ t(v) as verified on
+        ///    screen; the rewrite produces f_c⁻¹(f_neutral(N(v))) — the per-channel DELTA
+        ///    (f_c⁻¹∘f_neutral) applied on top of the verified neutral tone.
+        ///
+        /// Only the LEVEL-DEPENDENT part of the per-channel behavior is added: the fitted
+        /// f_c are normalized to the channel's own full drive (f_c(1) = 1), so the delta
+        /// is identity at white and cannot double-apply the white balance the matrix (or
+        /// the closed loop's stripped gains) already handles.
+        ///
+        /// LUTs that already differ per channel are returned untouched: they were built
+        /// through LutGenerator's per-channel inversion of these same curves (the open-loop
+        /// path when ramp data exists), so composing again would double-correct. Channels
+        /// whose curve fell back to the shared neutral fit also pass through unchanged
+        /// (the delta is identity by construction). On a perfectly-behaved panel
+        /// (f_c == f_neutral) the rewrite reproduces the shared-curve result.
+        /// </summary>
+        public static (double[] R, double[] G, double[] B) ComposePerChannelToneLuts(
+            DisplayCharacterization? characterization, double[] lutR, double[] lutG, double[] lutB)
+        {
+            if (characterization == null ||
+                !characterization.HasPerChannelToneCurves ||
+                characterization.NeutralToneCurve == null ||
+                lutR == null || lutG == null || lutB == null ||
+                lutR.Length < 2 || lutG.Length != lutR.Length || lutB.Length != lutR.Length)
+            {
+                return (lutR!, lutG!, lutB!);
+            }
+
+            if (!ChannelLutsIdentical(lutR, lutG, lutB))
+                return (lutR, lutG, lutB); // already per-channel (built by LutGenerator's inversion)
+
+            var neutral = characterization.NeutralToneCurve;
+            return (ComposeChannelDelta(characterization.RedToneCurve, neutral, lutR),
+                    ComposeChannelDelta(characterization.GreenToneCurve, neutral, lutG),
+                    ComposeChannelDelta(characterization.BlueToneCurve, neutral, lutB));
+        }
+
+        private static bool ChannelLutsIdentical(double[] r, double[] g, double[] b)
+        {
+            for (int i = 0; i < r.Length; i++)
+            {
+                if (Math.Abs(r[i] - g[i]) > 1e-9 || Math.Abs(r[i] - b[i]) > 1e-9)
+                    return false;
+            }
+            return true;
+        }
+
+        private static double[] ComposeChannelDelta(ToneCurve channelCurve, ToneCurve neutralCurve, double[] lut)
+        {
+            // Channel fell back to the shared curve → delta is identity; keep the input
+            // array (also preserves reference equality for "unchanged" detection/logging).
+            if (channelCurve == null || ReferenceEquals(channelCurve, neutralCurve))
+                return lut;
+
+            var result = new double[lut.Length];
+            for (int i = 0; i < lut.Length; i++)
+                result[i] = Clamp01(channelCurve.InverseLookup(neutralCurve.Lookup(Clamp01(lut[i]))));
+
+            // Numerical LUT sampling can leave sub-1e-9 inversions the MHC2 writer's
+            // monotonicity gate would reject; pin them.
+            for (int i = 1; i < result.Length; i++)
+            {
+                if (result[i] < result[i - 1])
+                    result[i] = result[i - 1];
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Finds a measurement matching the specified RGB values.
+        /// </summary>
+        private MeasurementResult? FindMeasurementByRgb(double r, double g, double b, double tolerance = 0.02)
+        {
+            return _measurements
+                .Where(m => m.IsValid)
+                .Where(m =>
+                    Math.Abs(m.Patch.DisplayRgb.R - r) < tolerance &&
+                    Math.Abs(m.Patch.DisplayRgb.G - g) < tolerance &&
+                    Math.Abs(m.Patch.DisplayRgb.B - b) < tolerance)
+                .FirstOrDefault();
+        }
+
+        /// <summary>
+        /// Calculates verification metrics by comparing measured values to target. Shares its
+        /// math (including the absolute→normalized luminance handling) with the post-apply
+        /// verify pass, so the report's before and after numbers are directly comparable.
+        /// </summary>
+        public CalibrationMetrics CalculateMetrics() =>
+            CalibrationVerifier.ComputeMetrics(_measurements, _target);
+
+        #region Adaptive placement: model residuals (1.1, ADDITIVE)
+
+        /// <summary>
+        /// Minimum measured normalized luminance (fraction of white) for a color residual
+        /// to be computed. Below this (~5% of white, L*≈27) chroma measurement is
+        /// noise-dominated and CIELAB's a*/b* amplify tiny luminance/fit differences into
+        /// large spurious ΔE — the same near-black chroma regime the ramp fit's signal
+        /// floor and the multi-read logic already avoid. Those patches still drive the
+        /// tone term (which is bounded and meaningful at any level).
+        ///
+        /// KNOWN BLIND SPOT: gating chroma here means a genuine shadow gray-CAST below ~5%
+        /// of white (L*≈27) does not raise a color residual, so the adaptive planner will
+        /// not spend extra samples chasing it. This is a deliberate noise trade-off — below
+        /// this level the meter's own chroma noise would fabricate larger spurious ΔE than
+        /// any real cast — and the shadow TONE (luminance) error is still scored via the
+        /// perceptual |ΔL*| tone term (FIX 4), which is now up-weighted exactly where it
+        /// matters. Lowering this floor would need noise-safe shadow chroma data the current
+        /// single/median reads do not guarantee, so it is left conservative.
+        /// </summary>
+        private const double ColorResidualMinNormLuminance = 0.05;
+
+        /// <summary>
+        /// Exposes where the fitted display model is most uncertain, for
+        /// <see cref="AdaptivePatchPlanner"/> (roadmap 1.1). ADDITIVE — it neither
+        /// changes the LUT/characterization output nor is called by the existing paths.
+        ///
+        /// Two residual families, each tagged with its signal-domain location and
+        /// manifold:
+        /// <list type="bullet">
+        /// <item><b>Tone (leave-one-out)</b> — for the gray axis and each single-channel
+        /// ramp: the point is removed, the 1D curve is refit from the rest, and the
+        /// held-out point is predicted. The recorded magnitude is the PERCEPTUAL tone error
+        /// |ΔL*| (CIE 1976 lightness) between the predicted and measured relative luminance
+        /// (FIX 4) — a bounded criterion that up-weights shadow errors by visibility (the
+        /// eye's near-constant ΔL*/contrast sensitivity), unlike the old photometric-linear
+        /// |ΔY|/(white−black) which penalized equal-ΔY shadow and highlight errors equally.
+        /// L*'s linear toe bounds it near black (a raw |ΔY|/Y would explode there). LOO is
+        /// what makes this an honest PREDICTIVE error: a plain fit residual is ~0 at points
+        /// the fit used.</item>
+        /// <item><b>Color (interpolation, chroma-only)</b> — every accuracy patch is
+        /// predicted through the current forward model (per-channel tone curves + measured
+        /// RGB→XYZ matrix) and compared to its measurement in ΔE2000 at MATCHED lightness,
+        /// so only the chromatic (a*/b*) disagreement counts. The lightness/tone error is
+        /// already the Tone term; isolating chroma keeps the two families independent and
+        /// avoids the CIELAB near-black amplification that a full ΔE would suffer. On the
+        /// gray axis and ramps this is the cast error; on cube patches it is the genuine
+        /// chroma interpolation error of the shared-matrix model.</item>
+        /// </list>
+        /// </summary>
+        public IReadOnlyList<ModelResidual> ComputeModelResiduals()
+        {
+            var characterization = _characterization ??= BuildCharacterization();
+
+            double whiteY = FindMeasurementByRgb(1, 1, 1)?.Xyz.Y ?? characterization.PeakLuminance;
+            double blackY = FindMeasurementByRgb(0, 0, 0)?.Xyz.Y ?? characterization.BlackLevel;
+            if (!(whiteY > 0)) whiteY = 1.0;
+            double range = Math.Max(whiteY - blackY, 1e-6);
+
+            var labWhite = _target.WhitePoint.Equals(Chromaticity.D65)
+                ? ColorMath.D65White
+                : _target.WhitePoint.ToXyz(1.0);
+
+            var residuals = new List<ModelResidual>();
+
+            AddToneResiduals(residuals, SignalManifold.Gray, blackY, range,
+                m => IsNeutralSignal(m.Patch.DisplayRgb), m => m.Patch.DisplayRgb.R);
+            AddToneResiduals(residuals, SignalManifold.RedRamp, blackY, range,
+                m => IsSingleChannelSignal(m.Patch.DisplayRgb, 0), m => m.Patch.DisplayRgb.R);
+            AddToneResiduals(residuals, SignalManifold.GreenRamp, blackY, range,
+                m => IsSingleChannelSignal(m.Patch.DisplayRgb, 1), m => m.Patch.DisplayRgb.G);
+            AddToneResiduals(residuals, SignalManifold.BlueRamp, blackY, range,
+                m => IsSingleChannelSignal(m.Patch.DisplayRgb, 2), m => m.Patch.DisplayRgb.B);
+
+            AddColorResiduals(residuals, characterization, whiteY, labWhite);
+
+            return residuals;
+        }
+
+        /// <summary>
+        /// Leave-one-out tone residuals for one 1D manifold. The lowest and highest
+        /// samples are treated as anchors and never held out: predicting an endpoint means
+        /// EXTRAPOLATING from one side, which always reports a large error that no amount
+        /// of interior sampling can reduce (for the gray axis these endpoints are black and
+        /// white; for a channel ramp they are its dimmest and full-drive samples). Each
+        /// remaining interior point is held out in turn, the curve is refit from the rest,
+        /// and the held-out point is predicted; the magnitude is the perceptual tone error
+        /// |ΔL*| between the predicted and measured relative luminance (FIX 4).
+        /// </summary>
+        private void AddToneResiduals(
+            List<ModelResidual> residuals, SignalManifold manifold, double blackY, double range,
+            Func<MeasurementResult, bool> belongs, Func<MeasurementResult, double> signalOf)
+        {
+            var samples = _measurements
+                .Where(m => m.IsValid && m.Patch.Nits is null && belongs(m))
+                .Select(m => (signal: signalOf(m), norm: Clamp01((m.Xyz.Y - blackY) / range)))
+                .GroupBy(s => Math.Round(s.signal, 6))
+                .Select(g => (signal: g.Key, norm: g.Average(s => s.norm)))
+                .OrderBy(s => s.signal)
+                .ToList();
+
+            if (samples.Count < 4)
+                return; // too few to refit a curve without a point
+
+            for (int i = 0; i < samples.Count; i++)
+            {
+                // The dimmest and brightest samples of each manifold are extrapolation
+                // anchors (see remarks) — never left out.
+                if (i == 0 || i == samples.Count - 1)
+                    continue;
+                double signal = samples[i].signal;
+                if (signal <= 1e-6 || signal >= 1.0 - 1e-6)
+                    continue;
+
+                var fitPoints = new List<(double input, double output)>(samples.Count - 1);
+                for (int j = 0; j < samples.Count; j++)
+                    if (j != i)
+                        fitPoints.Add((samples[j].signal, samples[j].norm));
+
+                var curve = ToneCurve.CreateFromPoints(fitPoints);
+                double predicted = curve.Lookup(signal);
+                double measured = samples[i].norm;
+                // FIX 4 (perceptual tone target): score the tone error in CIE L*, not in
+                // photometric-linear |ΔY|. Both predicted and measured are relative
+                // luminance (Y/Yn over white−black, so white = 1); |ΔL*| between them weights
+                // shadow errors more than highlight errors in proportion to visibility, and
+                // L*'s linear toe keeps it bounded near black. The planner target is
+                // AdaptivePatchPlanner.ToneTargetDeltaLstar (≈ 1 L*).
+                double toneError = Math.Abs(
+                    RelativeLuminanceToLstar(predicted) - RelativeLuminanceToLstar(measured));
+
+                double s = signal;
+                var location = manifold switch
+                {
+                    SignalManifold.Gray => new SignalPoint(s, s, s, manifold),
+                    SignalManifold.RedRamp => new SignalPoint(s, 0, 0, manifold),
+                    SignalManifold.GreenRamp => new SignalPoint(0, s, 0, manifold),
+                    _ => new SignalPoint(0, 0, s, manifold),
+                };
+                residuals.Add(new ModelResidual(location, ResidualKind.Tone, toneError));
+            }
+        }
+
+        /// <summary>
+        /// Forward-model interpolation residuals: predict each accuracy patch through the
+        /// characterization (per-channel tone curves then RGB→XYZ matrix) and compare to
+        /// the measurement in ΔE2000, both normalized to measured white.
+        /// </summary>
+        private void AddColorResiduals(
+            List<ModelResidual> residuals, DisplayCharacterization characterization,
+            double whiteY, CieXyz labWhite)
+        {
+            foreach (var m in _measurements)
+            {
+                if (!m.IsValid || m.Patch.Nits is not null)
+                    continue;
+
+                var rgb = m.Patch.DisplayRgb;
+                if (IsNeutralSignal(rgb) && rgb.R <= 1e-6)
+                    continue; // pure black: Lab unstable, no useful color residual
+
+                double measuredNormY = m.Xyz.Y / whiteY;
+                if (!(measuredNormY >= ColorResidualMinNormLuminance))
+                    continue;
+
+                var predicted = ForwardPredictNormalizedXyz(characterization, rgb);
+                var measuredNorm = new CieXyz(m.Xyz.X / whiteY, m.Xyz.Y / whiteY, m.Xyz.Z / whiteY);
+
+                // Chroma-only: compare at the MEASURED lightness so only the a*/b*
+                // disagreement contributes. The lightness/tone error is the Tone residual;
+                // this keeps the families independent and avoids CIELAB's near-black ΔE
+                // blow-up (where a tiny luminance error reads as a large ΔL*).
+                var measuredLab = ColorMath.XyzToLab(measuredNorm, labWhite);
+                var predictedLab = ColorMath.XyzToLab(predicted, labWhite);
+                double deltaE = measuredLab.DeltaE2000(
+                    new CieLab(measuredLab.L, predictedLab.A, predictedLab.B));
+                if (!double.IsFinite(deltaE))
+                    continue;
+
+                residuals.Add(new ModelResidual(
+                    AdaptivePatchPlanner.ClassifySignal(rgb), ResidualKind.Color, deltaE));
+            }
+        }
+
+        /// <summary>
+        /// Forward display model for the CHROMA residual: signal RGB → normalized XYZ
+        /// (white ≈ Y=1) using the SHARED NEUTRAL tone curve on every channel, combined
+        /// through the measured RGB→XYZ matrix (which maps full-drive [1,1,1] to the
+        /// measured white). Using the neutral curve (not the per-channel curves) is
+        /// deliberate: it makes the prediction the base "neutral-tone + 3×3-matrix" model,
+        /// so the chroma residual measures exactly the deviation that base model CANNOT
+        /// represent — a level-dependent gray cast or a gamut-interpolation error — which
+        /// is what extra sampling addresses. It also avoids a spurious near-black cast that
+        /// independently-fitted per-channel curves would inject on a truly neutral panel
+        /// (they disagree slightly at a shared gray, and CIELAB amplifies that near black).
+        /// </summary>
+        private static CieXyz ForwardPredictNormalizedXyz(DisplayCharacterization c, LinearRgb signal)
+        {
+            var tone = c.NeutralToneCurve ?? c.RedToneCurve;
+            double lr = tone.Lookup(Clamp01(signal.R));
+            double lg = tone.Lookup(Clamp01(signal.G));
+            double lb = tone.Lookup(Clamp01(signal.B));
+            var m = c.RgbToXyzMatrix;
+            return new CieXyz(
+                m[0, 0] * lr + m[0, 1] * lg + m[0, 2] * lb,
+                m[1, 0] * lr + m[1, 1] * lg + m[1, 2] * lb,
+                m[2, 0] * lr + m[2, 1] * lg + m[2, 2] * lb);
+        }
+
+        /// <summary>
+        /// Signal-luminance below which the perceptual-lightness weight is CAPPED. Above it
+        /// the metric is exact CIE L*; below it the curve continues LINEARLY with the L*
+        /// slope evaluated here, so the shadow up-weighting saturates at dL*/dY(0.05) ≈ 2.4×
+        /// the mid-gray (Y=0.18) slope instead of the ≈7× the pure toe would reach at black.
+        /// This keeps the desired perceptual emphasis on shadow tone error while preventing
+        /// the deep-black region — where a colorimeter is noise-dominated and finite sampling
+        /// leaves interpolation gaps — from dominating the planner's acquisition and forcing
+        /// endless near-black over-sampling on even a well-behaved panel.
+        /// </summary>
+        private const double ToneLstarShadowCapY = 0.05;
+
+        /// <summary>
+        /// Bounded perceptual lightness of a neutral at relative luminance <paramref name="yr"/>
+        /// (Y/Yn, white = 1), feeding the FIX 4 tone residual as |ΔL*|. Exact CIE 1976 L*
+        /// (L* = 116·yr^⅓ − 16) at and above <see cref="ToneLstarShadowCapY"/>; a linear
+        /// extension of matched slope below it. Monotone and continuous, so |ΔL*| is a valid
+        /// bounded tone-error metric that up-weights shadow errors by visibility (the eye's
+        /// near-constant ΔL*/contrast sensitivity) without the unbounded near-black gain of
+        /// the raw toe. Only differences are used, so the linear part's offset is irrelevant.
+        /// </summary>
+        private static double RelativeLuminanceToLstar(double yr)
+        {
+            yr = Clamp01(yr);
+            const double cap = ToneLstarShadowCapY;
+            if (yr >= cap)
+                return 116.0 * Math.Cbrt(yr) - 16.0;
+            double lCap = 116.0 * Math.Cbrt(cap) - 16.0;
+            double slopeCap = (116.0 / 3.0) * Math.Pow(cap, -2.0 / 3.0);
+            return lCap + slopeCap * (yr - cap);
+        }
+
+        private static bool IsNeutralSignal(LinearRgb rgb) =>
+            Math.Abs(rgb.R - rgb.G) < 1e-6 && Math.Abs(rgb.G - rgb.B) < 1e-6;
+
+        private static bool IsSingleChannelSignal(LinearRgb rgb, int channel)
+        {
+            double driven = channel switch { 0 => rgb.R, 1 => rgb.G, _ => rgb.B };
+            double others = channel switch
+            {
+                0 => Math.Max(rgb.G, rgb.B),
+                1 => Math.Max(rgb.R, rgb.B),
+                _ => Math.Max(rgb.R, rgb.G),
+            };
+            return driven > 1e-6 && others <= 1e-6;
+        }
+
+        #endregion
+    }
+
+    /// <summary>
+    /// Display characterization data extracted from measurements.
+    /// </summary>
+    public class DisplayCharacterization
+    {
+        /// <summary>Black point XYZ (minimum luminance).</summary>
+        public CieXyz BlackXyz { get; set; }
+
+        /// <summary>White point XYZ (maximum luminance).</summary>
+        public CieXyz WhiteXyz { get; set; }
+
+        /// <summary>Measured red primary chromaticity.</summary>
+        public Chromaticity RedPrimary { get; set; }
+
+        /// <summary>Measured green primary chromaticity.</summary>
+        public Chromaticity GreenPrimary { get; set; }
+
+        /// <summary>Measured blue primary chromaticity.</summary>
+        public Chromaticity BluePrimary { get; set; }
+
+        /// <summary>Measured white point chromaticity.</summary>
+        public Chromaticity WhitePoint { get; set; }
+
+        /// <summary>Black level in cd/m².</summary>
+        public double BlackLevel { get; set; }
+
+        /// <summary>Peak luminance in cd/m².</summary>
+        public double PeakLuminance { get; set; }
+
+        /// <summary>Measured average gamma.</summary>
+        public double MeasuredGamma { get; set; }
+
+        /// <summary>
+        /// Red channel tone response curve. When <see cref="HasPerChannelToneCurves"/> is
+        /// true this is the channel's TRUE response fitted from single-channel ramps
+        /// (normalized to the channel's own full drive); otherwise it references the
+        /// shared neutral luminance fit.
+        /// </summary>
+        public ToneCurve RedToneCurve { get; set; } = ToneCurve.CreateGamma(2.2);
+
+        /// <summary>Green channel tone response curve (see <see cref="RedToneCurve"/>).</summary>
+        public ToneCurve GreenToneCurve { get; set; } = ToneCurve.CreateGamma(2.2);
+
+        /// <summary>Blue channel tone response curve (see <see cref="RedToneCurve"/>).</summary>
+        public ToneCurve BlueToneCurve { get; set; } = ToneCurve.CreateGamma(2.2);
+
+        /// <summary>
+        /// The shared NEUTRAL luminance tone curve fitted from grayscale patches (total Y
+        /// of neutral stimuli vs signal). This is the light domain of the closed-loop
+        /// corrector and the reference the per-channel deltas are computed against in
+        /// <see cref="Lut3DGenerator.ComposePerChannelToneLuts"/>. Null only for
+        /// characterizations restored from persistence, which never carried it.
+        /// </summary>
+        public ToneCurve? NeutralToneCurve { get; set; }
+
+        /// <summary>
+        /// True when at least one of the channel tone curves was fitted from genuine
+        /// single-channel ramp data (E4) rather than the shared neutral fit — the gate for
+        /// per-channel gray-tracking correction at install time.
+        /// </summary>
+        public bool HasPerChannelToneCurves { get; set; }
+
+        /// <summary>RGB to XYZ conversion matrix for this display.</summary>
+        public double[,] RgbToXyzMatrix { get; set; } = ColorMath.SrgbToXyzMatrix;
+
+        /// <summary>Contrast ratio (peak/black).</summary>
+        public double ContrastRatio => BlackLevel > 0 ? PeakLuminance / BlackLevel : double.PositiveInfinity;
+    }
+
+    /// <summary>
+    /// Represents a 1D tone response curve (gamma/transfer function).
+    /// </summary>
+    public class ToneCurve
+    {
+        private readonly double[]? _lookupTable;
+        private readonly double _gamma;
+        private readonly bool _useLut;
+        private readonly bool _isMonotonic;
+
+        /// <summary>LUT size for interpolated curves.</summary>
+        public const int LutSize = 4096;
+
+        /// <summary>
+        /// Gets whether the tone curve is monotonically increasing.
+        /// Non-monotonic curves may produce incorrect results in InverseLookup.
+        /// </summary>
+        public bool IsMonotonic => _isMonotonic;
+
+        private ToneCurve(double gamma)
+        {
+            _gamma = gamma;
+            _useLut = false;
+            _lookupTable = null;
+            _isMonotonic = true; // Gamma curves are always monotonic
+        }
+
+        private ToneCurve(double[] lut, bool isMonotonic)
+        {
+            _lookupTable = lut;
+            _useLut = true;
+            _gamma = 2.2; // Not used
+            _isMonotonic = isMonotonic;
+        }
+
+        /// <summary>
+        /// Creates a simple gamma curve.
+        /// </summary>
+        public static ToneCurve CreateGamma(double gamma)
+        {
+            return new ToneCurve(SafeGamma(gamma));
+        }
+
+        /// <summary>
+        /// Creates a tone curve from measured points.
+        /// </summary>
+        /// <param name="points">Measured (input, output) pairs</param>
+        /// <param name="enforceMonotonic">If true, corrects non-monotonic segments</param>
+        public static ToneCurve CreateFromPoints(IEnumerable<(double input, double output)> points, bool enforceMonotonic = true)
+        {
+            var sortedPoints = points
+                .Where(p => double.IsFinite(p.input) && double.IsFinite(p.output))
+                .Select(p => (input: Clamp01(p.input), output: Clamp01(p.output)))
+                .OrderBy(p => p.input)
+                .ToList();
+
+            if (sortedPoints.Count < 2)
+                return CreateGamma(2.2);
+
+            // Build interpolated LUT. Measured tone data is monotone (PAVA below repairs any
+            // meter-noise inversions), so we fit a monotone cubic Hermite (Fritsch–Carlson PCHIP)
+            // through the measured points instead of piecewise-linear: it tracks a smooth power-law
+            // response far more accurately while never overshooting between samples. With too few
+            // points to define curvature we fall back to linear interpolation.
+            var lut = new double[LutSize];
+            double[]? pchipSlopes = sortedPoints.Count >= 4 ? ComputePchipSlopes(sortedPoints) : null;
+
+            for (int i = 0; i < LutSize; i++)
+            {
+                double x = i / (double)(LutSize - 1);
+                lut[i] = pchipSlopes != null
+                    ? EvaluatePchip(sortedPoints, pchipSlopes, x)
+                    : InterpolatePoints(sortedPoints, x);
+            }
+
+            // Check and optionally fix monotonicity
+            bool isMonotonic = CheckMonotonicity(lut);
+
+            if (!isMonotonic && enforceMonotonic)
+            {
+                EnforceMonotonicity(lut);
+                isMonotonic = true; // After enforcement
+            }
+
+            return new ToneCurve(lut, isMonotonic);
+        }
+
+        /// <summary>
+        /// Checks if a LUT is monotonically non-decreasing.
+        /// </summary>
+        private static bool CheckMonotonicity(double[] lut)
+        {
+            for (int i = 1; i < lut.Length; i++)
+            {
+                if (lut[i] < lut[i - 1] - 1e-10) // Small epsilon for floating point
+                    return false;
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Enforces monotonicity by smoothing non-monotonic segments.
+        /// Uses the "pool adjacent violators" algorithm (isotonic regression).
+        /// </summary>
+        private static void EnforceMonotonicity(double[] lut)
+        {
+            // Pool Adjacent Violators Algorithm (PAVA)
+            // This produces the best monotonic approximation in L2 sense
+            int n = lut.Length;
+            var pooled = new double[n];
+            var weight = new int[n];
+
+            for (int i = 0; i < n; i++)
+            {
+                pooled[i] = lut[i];
+                weight[i] = 1;
+            }
+
+            int j = 0;
+            for (int i = 1; i < n; i++)
+            {
+                // Check if current value violates monotonicity
+                if (pooled[i] < pooled[j])
+                {
+                    // Merge current block with previous block
+                    double totalWeight = weight[j] + weight[i];
+                    pooled[j] = (pooled[j] * weight[j] + pooled[i] * weight[i]) / totalWeight;
+                    weight[j] = (int)totalWeight;
+
+                    // Check if we need to merge further back
+                    while (j > 0 && pooled[j] < pooled[j - 1])
+                    {
+                        j--;
+                        totalWeight = weight[j] + weight[j + 1];
+                        pooled[j] = (pooled[j] * weight[j] + pooled[j + 1] * weight[j + 1]) / totalWeight;
+                        weight[j] = (int)totalWeight;
+                    }
+                }
+                else
+                {
+                    j++;
+                    pooled[j] = pooled[i];
+                    weight[j] = 1;
+                }
+            }
+
+            // Expand pooled values back to original LUT
+            int idx = 0;
+            for (int block = 0; block <= j; block++)
+            {
+                for (int k = 0; k < weight[block]; k++)
+                {
+                    lut[idx++] = pooled[block];
+                }
+            }
+
+            // Ensure endpoints are correct
+            lut[0] = Math.Max(0, lut[0]);
+            lut[n - 1] = Math.Min(1, lut[n - 1]);
+        }
+
+        /// <summary>
+        /// Looks up the output value for a given input.
+        /// </summary>
+        public double Lookup(double input)
+        {
+            input = Clamp01(input);
+
+            if (!_useLut || _lookupTable == null)
+                return Math.Pow(input, _gamma);
+
+            // LUT interpolation
+            double index = input * (LutSize - 1);
+            int i0 = (int)index;
+            int i1 = Math.Min(i0 + 1, LutSize - 1);
+            double frac = index - i0;
+
+            return _lookupTable[i0] + frac * (_lookupTable[i1] - _lookupTable[i0]);
+        }
+
+        /// <summary>
+        /// Looks up the input value that produces the given output (inverse).
+        /// </summary>
+        public double InverseLookup(double output)
+        {
+            output = Clamp01(output);
+
+            if (!_useLut || _lookupTable == null)
+                return Math.Pow(output, 1.0 / _gamma);
+
+            // Binary search for inverse
+            int lo = 0, hi = LutSize - 1;
+            while (lo < hi)
+            {
+                int mid = (lo + hi) / 2;
+                if (_lookupTable[mid] < output)
+                    lo = mid + 1;
+                else
+                    hi = mid;
+            }
+
+            // Interpolate between adjacent entries. Only short-circuit to the
+            // endpoints when the target is at/outside the curve's actual range;
+            // otherwise interpolate the first and last intervals exactly like the
+            // interior. (The old code snapped any target in the last interval
+            // [lut[LutSize-2], lut[LutSize-1]] straight to full scale.)
+            if (output <= _lookupTable[0]) return 0;
+            if (output >= _lookupTable[LutSize - 1]) return 1;
+
+            double y0 = _lookupTable[lo - 1];
+            double y1 = _lookupTable[lo];
+
+            if (Math.Abs(y1 - y0) < 1e-10)
+                return lo / (double)(LutSize - 1);
+
+            double frac = (output - y0) / (y1 - y0);
+            return ((lo - 1) + frac) / (LutSize - 1);
+        }
+
+        private static double InterpolatePoints(List<(double input, double output)> points, double x)
+        {
+            if (points.Count == 0) return x;
+            if (points.Count == 1) return points[0].output;
+
+            // Find surrounding points
+            int i = 0;
+            while (i < points.Count - 1 && points[i + 1].input < x)
+                i++;
+
+            if (i >= points.Count - 1)
+                return points[^1].output;
+
+            if (x <= points[0].input)
+                return points[0].output;
+
+            // Linear interpolation
+            var p0 = points[i];
+            var p1 = points[i + 1];
+
+            if (Math.Abs(p1.input - p0.input) < 1e-10)
+                return p0.output;
+
+            double t = (x - p0.input) / (p1.input - p0.input);
+            return p0.output + t * (p1.output - p0.output);
+        }
+
+        /// <summary>
+        /// Fritsch–Carlson monotone-cubic (PCHIP) tangents at each sample. Where the secant slope
+        /// changes sign (a local extremum) the tangent is set to zero and interior tangents are a
+        /// weighted harmonic mean of neighbouring secants, which is what guarantees no overshoot
+        /// between samples. Endpoints use the standard non-centred (Fritsch–Carlson) formula.
+        /// Assumes strictly increasing inputs (caller sorts and, for the tone curve, PAVA-repairs).
+        /// </summary>
+        private static double[] ComputePchipSlopes(List<(double input, double output)> pts)
+        {
+            int n = pts.Count;
+            var h = new double[n - 1];
+            var delta = new double[n - 1];
+            for (int k = 0; k < n - 1; k++)
+            {
+                h[k] = pts[k + 1].input - pts[k].input;
+                delta[k] = h[k] > 1e-12 ? (pts[k + 1].output - pts[k].output) / h[k] : 0.0;
+            }
+
+            var m = new double[n];
+
+            // Interior tangents: weighted harmonic mean, zeroed at sign changes / flats.
+            for (int k = 1; k < n - 1; k++)
+            {
+                if (delta[k - 1] * delta[k] <= 0.0)
+                {
+                    m[k] = 0.0;
+                }
+                else
+                {
+                    double w1 = 2.0 * h[k] + h[k - 1];
+                    double w2 = h[k] + 2.0 * h[k - 1];
+                    m[k] = (w1 + w2) / (w1 / delta[k - 1] + w2 / delta[k]);
+                }
+            }
+
+            // Endpoint tangents (Fritsch–Carlson non-centred, with monotonicity guards).
+            m[0] = PchipEndpointSlope(h[0], h.Length > 1 ? h[1] : h[0], delta[0], n > 2 ? delta[1] : delta[0]);
+            m[n - 1] = PchipEndpointSlope(h[n - 2], n > 2 ? h[n - 3] : h[n - 2], delta[n - 2], n > 2 ? delta[n - 3] : delta[n - 2]);
+
+            return m;
+        }
+
+        private static double PchipEndpointSlope(double hEdge, double hInner, double dEdge, double dInner)
+        {
+            double slope = ((2.0 * hEdge + hInner) * dEdge - hEdge * dInner) / (hEdge + hInner);
+            if (Math.Sign(slope) != Math.Sign(dEdge))
+                slope = 0.0;
+            else if (Math.Sign(dEdge) != Math.Sign(dInner) && Math.Abs(slope) > 3.0 * Math.Abs(dEdge))
+                slope = 3.0 * dEdge;
+            return slope;
+        }
+
+        /// <summary>
+        /// Evaluates the PCHIP curve defined by <paramref name="pts"/> and tangents
+        /// <paramref name="m"/> at x, via the cubic Hermite basis. Inputs at or beyond the sample
+        /// range clamp to the endpoint outputs, so the endpoints reproduce exactly.
+        /// </summary>
+        private static double EvaluatePchip(List<(double input, double output)> pts, double[] m, double x)
+        {
+            int n = pts.Count;
+            if (x <= pts[0].input) return pts[0].output;
+            if (x >= pts[n - 1].input) return pts[n - 1].output;
+
+            int lo = 0, hi = n - 1;
+            while (hi - lo > 1)
+            {
+                int mid = (lo + hi) >> 1;
+                if (pts[mid].input <= x) lo = mid; else hi = mid;
+            }
+
+            double h = pts[hi].input - pts[lo].input;
+            if (h <= 1e-12) return pts[lo].output;
+
+            double t = (x - pts[lo].input) / h;
+            double t2 = t * t;
+            double t3 = t2 * t;
+            double h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+            double h10 = t3 - 2.0 * t2 + t;
+            double h01 = -2.0 * t3 + 3.0 * t2;
+            double h11 = t3 - t2;
+            return h00 * pts[lo].output + h10 * h * m[lo]
+                 + h01 * pts[hi].output + h11 * h * m[hi];
+        }
+
+        #region Serialization
+
+        /// <summary>
+        /// Exports the tone curve to an array for serialization.
+        /// For gamma-based curves, generates the equivalent LUT.
+        /// </summary>
+        public double[] ToArray()
+        {
+            if (_useLut && _lookupTable != null)
+            {
+                return (double[])_lookupTable.Clone();
+            }
+
+            // Generate LUT from gamma curve
+            var lut = new double[LutSize];
+            for (int i = 0; i < LutSize; i++)
+            {
+                double x = i / (double)(LutSize - 1);
+                lut[i] = Math.Pow(x, _gamma);
+            }
+            return lut;
+        }
+
+        /// <summary>
+        /// Creates a tone curve from a serialized array.
+        /// </summary>
+        /// <param name="data">The LUT data (expected to be normalized 0-1 values).</param>
+        /// <param name="enforceMonotonic">If true, corrects non-monotonic segments.</param>
+        public static ToneCurve CreateFromArray(double[] data, bool enforceMonotonic = false)
+        {
+            if (data == null || data.Length < 2)
+                return CreateGamma(2.2);
+            if (data.Any(v => !double.IsFinite(v)))
+                return CreateGamma(2.2);
+
+            // Resample if needed to match LutSize
+            double[] lut;
+            if (data.Length == LutSize)
+            {
+                lut = data.Select(Clamp01).ToArray();
+            }
+            else
+            {
+                lut = new double[LutSize];
+                for (int i = 0; i < LutSize; i++)
+                {
+                    double srcIndex = i * (data.Length - 1) / (double)(LutSize - 1);
+                    int i0 = (int)srcIndex;
+                    int i1 = Math.Min(i0 + 1, data.Length - 1);
+                    double frac = srcIndex - i0;
+                    lut[i] = Clamp01(data[i0] + frac * (data[i1] - data[i0]));
+                }
+            }
+
+            bool isMonotonic = CheckMonotonicity(lut);
+
+            if (!isMonotonic && enforceMonotonic)
+            {
+                EnforceMonotonicity(lut);
+                isMonotonic = true;
+            }
+
+            return new ToneCurve(lut, isMonotonic);
+        }
+
+        private static double Clamp01(double value) =>
+            double.IsFinite(value) ? Math.Clamp(value, 0.0, 1.0) : 0.0;
+
+        private static double SafeGamma(double gamma) =>
+            double.IsFinite(gamma) ? Math.Clamp(gamma, 1.0, 4.0) : 2.2;
+
+        #endregion
+    }
+
+    /// <summary>
+    /// Calibration quality metrics.
+    /// </summary>
+    public class CalibrationMetrics
+    {
+        /// <summary>Average Delta E 2000 across all patches.</summary>
+        public double AverageDeltaE { get; set; }
+
+        /// <summary>Maximum Delta E 2000.</summary>
+        public double MaxDeltaE { get; set; }
+
+        /// <summary>Minimum Delta E 2000.</summary>
+        public double MinDeltaE { get; set; }
+
+        /// <summary>Median Delta E 2000.</summary>
+        public double MedianDeltaE { get; set; }
+
+        /// <summary>Delta E values for grayscale patches.</summary>
+        public List<double> GrayscaleDeltaEs { get; } = new();
+
+        /// <summary>Delta E values for primary color patches.</summary>
+        public List<double> PrimaryDeltaEs { get; } = new();
+
+        /// <summary>Grayscale error decomposed: lightness-axis component per gray patch.</summary>
+        public List<double> GrayscaleToneDeltaEs { get; } = new();
+
+        /// <summary>Grayscale error decomposed: chromatic component per gray patch.</summary>
+        public List<double> GrayscaleColorDeltaEs { get; } = new();
+
+        /// <summary>ΔE ITP (BT.2124) per patch, absolute-luminance HDR metric. ~3× ΔE2000 scale.</summary>
+        public List<double> ItpDeltaEs { get; } = new();
+
+        /// <summary>
+        /// Per-patch results in measurement order (name, category, ΔE2000). Populated by
+        /// <see cref="CalibrationVerifier.ComputeMetrics"/> for the detailed-verification
+        /// analysis; other metric producers may leave it empty.
+        /// </summary>
+        public List<PatchDeltaE> PatchResults { get; } = new();
+
+        /// <summary>Average grayscale tone-axis (lightness) error.</summary>
+        public double AverageGrayscaleToneDeltaE => GrayscaleToneDeltaEs.Count > 0 ? GrayscaleToneDeltaEs.Average() : 0;
+
+        /// <summary>Average grayscale chromatic (cast) error.</summary>
+        public double AverageGrayscaleColorDeltaE => GrayscaleColorDeltaEs.Count > 0 ? GrayscaleColorDeltaEs.Average() : 0;
+
+        /// <summary>Average ΔE ITP across all patches.</summary>
+        public double AverageItpDeltaE => ItpDeltaEs.Count > 0 ? ItpDeltaEs.Average() : 0;
+
+        /// <summary>Maximum ΔE ITP across all patches.</summary>
+        public double MaxItpDeltaE => ItpDeltaEs.Count > 0 ? ItpDeltaEs.Max() : 0;
+
+        /// <summary>Average grayscale Delta E.</summary>
+        public double AverageGrayscaleDeltaE => GrayscaleDeltaEs.Count > 0 ? GrayscaleDeltaEs.Average() : 0;
+
+        /// <summary>Average primary Delta E.</summary>
+        public double AveragePrimaryDeltaE => PrimaryDeltaEs.Count > 0 ? PrimaryDeltaEs.Average() : 0;
+
+        /// <summary>
+        /// Quality grade from average ΔE2000. Scaled to perceptual reality, not exam scores:
+        /// ΔE &lt; 1 is at/below the just-noticeable-difference threshold (reference), 1–2 is
+        /// excellent (visible only to trained eyes in direct A/B), 2–3 good for general use,
+        /// 3–4 noticeable in side-by-side. A consumer panel averaging 1.5 after calibration
+        /// is performing very well and the grade should say so.
+        /// </summary>
+        public CalibrationGrade GetGrade()
+        {
+            return AverageDeltaE switch
+            {
+                < 0.6 => CalibrationGrade.APLus,  // Reference — below the JND
+                < 1.2 => CalibrationGrade.A,      // Excellent
+                < 1.8 => CalibrationGrade.AMinus, // Very good
+                < 2.5 => CalibrationGrade.BPlus,  // Good
+                < 3.25 => CalibrationGrade.B,
+                < 4.0 => CalibrationGrade.BMinus,
+                < 5.0 => CalibrationGrade.CPlus,  // Acceptable for general use
+                < 6.5 => CalibrationGrade.C,
+                < 8.0 => CalibrationGrade.CMinus,
+                < 10.0 => CalibrationGrade.D,
+                _ => CalibrationGrade.F           // Poor
+            };
+        }
+    }
+
+}

@@ -110,8 +110,8 @@ function Test-LaunchSmoke {
 $requiredFiles = @(
     "Gloam.exe",
     "Gloam.dll",
-    "HDRGammaController.Core.dll",
-    "HDRGammaController.Interop.dll",
+    "Gloam.Core.dll",
+    "Gloam.Interop.dll",
     "README.md",
     "LICENSE.txt",
     "THIRD_PARTY_NOTICES.txt",

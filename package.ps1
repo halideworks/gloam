@@ -16,7 +16,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$projectPath = "src\HDRGammaController\HDRGammaController.csproj"
+$projectPath = "src\Gloam\Gloam.csproj"
 $argyllVersion = "Argyll_V3.5.0"
 $argyllUrl = "https://www.argyllcms.com/${argyllVersion}_win64_exe.zip"
 $argyllZip = "argyll_cache_3.5.0.zip"
@@ -163,7 +163,7 @@ vpk pack `
     --packTitle "Gloam" `
     --packAuthors "David Torcivia" `
     --outputDir $ReleaseDir `
-    --icon (Join-Path $repoRoot "src\HDRGammaController\app.ico")
+    --icon (Join-Path $repoRoot "src\Gloam\app.ico")
 if ($LASTEXITCODE -ne 0) { throw "vpk pack failed ($LASTEXITCODE)" }
 
 Write-Host "`nPackaging complete. Artifacts in '$ReleaseDir':"

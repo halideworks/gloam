@@ -37,7 +37,7 @@ Why this image
 
 How the pair was made
   scripts/render-comparison-images.py, which ports the transfer-function
-  math 1:1 from src/HDRGammaController.Core/TransferFunctions.cs and
+  math 1:1 from src/Gloam.Core/TransferFunctions.cs and
   LutGenerator.cs. Both frames come from the same source pixels; the only
   difference is the decode curve:
 

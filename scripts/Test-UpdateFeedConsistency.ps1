@@ -13,7 +13,7 @@ function Read-RepoFile([string]$RelativePath) {
 
 $failures = New-Object System.Collections.Generic.List[string]
 
-$updateService = Read-RepoFile "src/HDRGammaController/Services/UpdateService.cs"
+$updateService = Read-RepoFile "src/Gloam/Services/UpdateService.cs"
 if ($updateService -notmatch 'private const string RepoUrl = "([^"]+)"') {
     $failures.Add("UpdateService.RepoUrl was not found.")
 } elseif ($Matches[1] -ne $ExpectedRepoUrl) {

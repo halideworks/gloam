@@ -1,0 +1,287 @@
+using System;
+using System.Collections.Generic;
+
+namespace Gloam.Core.Calibration
+{
+    /// <summary>
+    /// Manages display correction state during calibration.
+    /// Saves the current state, bypasses all corrections for accurate measurements,
+    /// and restores or applies new corrections after calibration.
+    /// </summary>
+    public class CalibrationStateManager
+    {
+        private readonly DispwinRunner _dispwinRunner;
+        private readonly NightModeService _nightModeService;
+        private readonly Dictionary<string, SavedMonitorState> _savedStates = new();
+        private bool _wasBypassActive;
+        private DateTime? _nightModePauseEndTime;
+
+        /// <summary>
+        /// Saved state for a single monitor.
+        /// </summary>
+        public class SavedMonitorState
+        {
+            public required string MonitorDevicePath { get; init; }
+            public required MonitorInfo Monitor { get; init; }
+            public GammaMode GammaMode { get; init; }
+            public CalibrationSettings? CalibrationSettings { get; init; }
+            public bool WasActive { get; init; }
+        }
+
+        /// <summary>
+        /// Gets whether bypass mode is currently active.
+        /// </summary>
+        public bool IsBypassActive => _wasBypassActive;
+
+        /// <summary>
+        /// Gets the saved states for all monitors.
+        /// </summary>
+        public IReadOnlyDictionary<string, SavedMonitorState> SavedStates => _savedStates;
+
+        public CalibrationStateManager(DispwinRunner dispwinRunner, NightModeService nightModeService)
+        {
+            _dispwinRunner = dispwinRunner ?? throw new ArgumentNullException(nameof(dispwinRunner));
+            _nightModeService = nightModeService ?? throw new ArgumentNullException(nameof(nightModeService));
+        }
+
+        // Static registry of device paths currently measuring with corrections bypassed,
+        // so UI surfaces (dashboard cards) can label the monitor as mid-calibration
+        // instead of showing its saved profile values as if they were applied.
+        private static readonly object ActiveBypassLock = new();
+        private static readonly HashSet<string> ActiveBypassPaths = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// The single key under which a monitor's bypass state is registered and looked up.
+        /// Registration (EnterBypassMode) and every lookup (IsDeviceInBypass, the ramp guard,
+        /// the apply-path guards) MUST derive the key from this one helper, or a monitor whose
+        /// MonitorDevicePath is empty would register under one key and be looked up under
+        /// another, silently no-opping the bypass guard. Prefer the non-empty device path, fall
+        /// back to the non-empty GDI device name, then a fixed sentinel.
+        /// </summary>
+        public static string BypassKey(MonitorInfo monitor)
+        {
+            if (monitor == null) return "unknown";
+            if (!string.IsNullOrEmpty(monitor.MonitorDevicePath)) return monitor.MonitorDevicePath;
+            if (!string.IsNullOrEmpty(monitor.DeviceName)) return monitor.DeviceName;
+            return "unknown";
+        }
+
+        /// <summary>Whether a calibration currently has this display's corrections bypassed.</summary>
+        public static bool IsDeviceInBypass(string? devicePath)
+        {
+            if (string.IsNullOrEmpty(devicePath)) return false;
+            lock (ActiveBypassLock) return ActiveBypassPaths.Contains(devicePath);
+        }
+
+        /// <summary>
+        /// Bypass-state lookup keyed off a <see cref="MonitorInfo"/>. Derives the registry key
+        /// via <see cref="BypassKey"/> internally so callers cannot accidentally probe the wrong
+        /// field (device path vs. device name) and miss a registration.
+        /// </summary>
+        public static bool IsDeviceInBypass(MonitorInfo monitor) => IsDeviceInBypass(BypassKey(monitor));
+
+        private void UnregisterActiveBypass()
+        {
+            lock (ActiveBypassLock)
+            {
+                foreach (var path in _savedStates.Keys) ActiveBypassPaths.Remove(path);
+            }
+        }
+
+        /// <summary>
+        /// Saves the current correction state for a monitor and enters bypass mode.
+        /// All color corrections (gamma, night mode, etc.) are disabled for accurate measurement.
+        /// </summary>
+        /// <param name="monitor">The monitor being calibrated.</param>
+        /// <param name="currentMode">The current gamma mode applied.</param>
+        /// <param name="currentSettings">The current calibration settings (temperature, etc.).</param>
+        public void EnterBypassMode(MonitorInfo monitor, GammaMode currentMode, CalibrationSettings? currentSettings = null)
+        {
+            if (monitor == null) throw new ArgumentNullException(nameof(monitor));
+
+            // Save current state. Register under the shared BypassKey so the apply-path and
+            // ramp-guard lookups (which derive the same key) always find this registration —
+            // even when MonitorDevicePath is empty and we fall back to the GDI device name.
+            var devicePath = BypassKey(monitor);
+            _savedStates[devicePath] = new SavedMonitorState
+            {
+                MonitorDevicePath = devicePath,
+                Monitor = monitor,
+                GammaMode = currentMode,
+                CalibrationSettings = currentSettings,
+                WasActive = currentMode != GammaMode.WindowsDefault || _nightModeService.IsNightModeActive
+            };
+
+            // Pause night mode for the duration of calibration (generous timeout)
+            // We'll explicitly restore it later, but this prevents auto-updates
+            _nightModePauseEndTime = DateTime.Now.AddHours(2);
+            _nightModeService.PauseUntil(_nightModePauseEndTime.Value);
+
+            // Register the bypass BEFORE clearing the ramp: a live/background apply whose
+            // hardware write races this method must see the bypass and skip, rather than
+            // writing a correction on top of the identity ramp we are about to set for
+            // measurement. (Registering after the clear left a window where a racing apply
+            // could land between the clear and the registration.)
+            lock (ActiveBypassLock) ActiveBypassPaths.Add(devicePath);
+
+            // Clear all gamma corrections - set to identity/passthrough
+            try
+            {
+                _dispwinRunner.ClearGamma(monitor);
+                Log.Info($"CalibrationStateManager: Entered bypass mode for {monitor.FriendlyName ?? devicePath}");
+            }
+            catch (Exception ex)
+            {
+                // Roll back the registration so a failed entry does not leave a stale bypass.
+                lock (ActiveBypassLock) ActiveBypassPaths.Remove(devicePath);
+                Log.Info($"CalibrationStateManager: Failed to clear gamma: {ex.Message}");
+                throw;
+            }
+
+            _wasBypassActive = true;
+        }
+
+        /// <summary>
+        /// Loads a raw per-channel correction onto the monitor under test. Used by the
+        /// closed loop to apply a candidate correction and re-measure it. No-op unless we're
+        /// in bypass mode (i.e. a calibration is in progress).
+        /// </summary>
+        public void ApplyCorrectionLut(MonitorInfo monitor, double[] r, double[] g, double[] b)
+        {
+            if (!_wasBypassActive) return;
+            _dispwinRunner.ApplyCorrectionLut(monitor, r, g, b);
+        }
+
+        /// <summary>
+        /// Exits bypass mode and restores the previous correction state.
+        /// Call this if calibration is cancelled or fails.
+        /// </summary>
+        public void RestorePreviousState()
+        {
+            if (!_wasBypassActive) return;
+
+            foreach (var state in _savedStates.Values)
+            {
+                try
+                {
+                    if (state.WasActive)
+                    {
+                        // Re-apply the previous gamma mode and settings
+                        _dispwinRunner.ApplyGamma(
+                            state.Monitor,
+                            state.GammaMode,
+                            state.Monitor.SdrWhiteLevel,
+                            state.CalibrationSettings ?? CalibrationSettings.Default);
+
+                        Log.Info($"CalibrationStateManager: Restored previous state for {state.Monitor.FriendlyName}");
+                    }
+                    else
+                    {
+                        // "Defaults" means an identity ramp — but the closed loop (or a
+                        // crashed run) may have left its last candidate correction loaded.
+                        // Skipping here would strand that ramp on screen, so assert identity.
+                        _dispwinRunner.ClearGamma(state.Monitor);
+                        Log.Info($"CalibrationStateManager: Monitor {state.Monitor.FriendlyName} was at defaults; cleared ramp to identity");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Info($"CalibrationStateManager: Failed to restore state for {state.Monitor.FriendlyName}: {ex.Message}");
+                }
+            }
+
+            // Resume night mode service
+            ResumeNightMode();
+            UnregisterActiveBypass();
+            _wasBypassActive = false;
+        }
+
+        /// <summary>
+        /// Applies the new calibration LUT without any additional corrections.
+        /// The display will show only the calibration correction.
+        /// </summary>
+        /// <param name="monitor">The calibrated monitor.</param>
+        /// <param name="lut">The generated 3D LUT.</param>
+        public void ApplyCalibrationOnly(MonitorInfo monitor, Lut3D? lut)
+        {
+            if (!_wasBypassActive) return;
+
+            try
+            {
+                // For now, we stay in bypass mode (identity) since the LUT would need to be
+                // integrated into the display pipeline. The user can export the LUT and load it
+                // in their color management system.
+                //
+                // In the future, this could:
+                // 1. Apply the LUT via MHC2 profile
+                // 2. Use a custom shader pipeline
+                // 3. Integrate with Windows color management
+
+                Log.Info($"CalibrationStateManager: Applied calibration-only mode for {monitor.FriendlyName}");
+                Log.Info("Note: 3D LUT application requires integration with display color management.");
+
+                // Keep night mode paused - pure calibration view
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"CalibrationStateManager: Failed to apply calibration: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Applies the new calibration LUT combined with the previous correction settings.
+        /// This shows what the display will look like in normal use with calibration applied.
+        /// </summary>
+        /// <param name="monitor">The calibrated monitor.</param>
+        /// <param name="lut">The generated 3D LUT.</param>
+        public void ApplyCalibrationWithPreviousSettings(MonitorInfo monitor, Lut3D? lut)
+        {
+            if (!_wasBypassActive) return;
+
+            var devicePath = BypassKey(monitor);
+            if (!_savedStates.TryGetValue(devicePath, out var state))
+            {
+                Log.Info($"CalibrationStateManager: No saved state for {devicePath}");
+                return;
+            }
+
+            try
+            {
+                // Re-apply the previous gamma mode and settings
+                // In the future, this would also incorporate the LUT
+                _dispwinRunner.ApplyGamma(
+                    monitor,
+                    state.GammaMode,
+                    monitor.SdrWhiteLevel,
+                    state.CalibrationSettings ?? CalibrationSettings.Default);
+
+                Log.Info($"CalibrationStateManager: Applied calibration with previous settings for {monitor.FriendlyName}");
+
+                // Resume night mode so user can see the full effect
+                ResumeNightMode();
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"CalibrationStateManager: Failed to apply with previous settings: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Cleans up and exits bypass mode without applying any changes.
+        /// </summary>
+        public void ExitBypassMode()
+        {
+            ResumeNightMode();
+            UnregisterActiveBypass();
+            _savedStates.Clear();
+            _wasBypassActive = false;
+        }
+
+        private void ResumeNightMode()
+        {
+            // Resume by pausing until "now" which effectively unpauses
+            _nightModeService.PauseUntil(DateTime.Now);
+            _nightModePauseEndTime = null;
+        }
+    }
+}

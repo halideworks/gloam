@@ -19,7 +19,7 @@ $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 $setupPath = (Resolve-Path -LiteralPath $OlderSetupPath).Path
 
 if ([string]::IsNullOrWhiteSpace($ExpectedVersion)) {
-    [xml]$projectXml = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "src/HDRGammaController/HDRGammaController.csproj")
+    [xml]$projectXml = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "src/Gloam/Gloam.csproj")
     $ExpectedVersion = $projectXml.Project.PropertyGroup.Version | Select-Object -First 1
 }
 
