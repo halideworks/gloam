@@ -5,7 +5,7 @@
 
 # Gloam: A Technical Whitepaper
 
-Windows display correction, measurement, and verification. Last updated July 27, 2026.
+Windows display correction, measurement, and verification. Last updated July 28, 2026. Also available [as Markdown](whitepaper.md) for tools and agents.
 
 A correction is trustworthy only when its signal domain, physical limits, and measured result are kept separate.
 
@@ -352,7 +352,7 @@ In an HDR profile, ordinary ICC matrix/TRC tags describe the app-facing sRGB pre
 
 ### 9.3 Composition Rules
 
-The native MHC2 profile corrects the panel at the compositor. The live ramp remains available for the user's gamma, night, and gamer policy and is synthesized as though it were feeding an ideal corrected display. Explicit settings previews temporarily take ownership from gamer mode. App exclusions can block live policy on the display intersecting an excluded foreground window without removing the measured panel profile.
+The native MHC2 profile corrects the panel at the compositor. The live ramp remains available for the user's gamma, night, and gamer policy. Its SDR encode side assumes a ~2.2 presentation, which is what an uncorrected Windows SDR display gives. Composition with an installed MHC2 correction is therefore exact when the calibration target is a 2.2 power law and approximate otherwise: a BT.1886 or piecewise-sRGB target retargets the display to a curve the live ramp does not know about, and the residual concentrates in the shadows, where those curves diverge most from a power law. Gloam does not silently accept that configuration — install preflight warns when a non-2.2 SDR target is installed on a display that also has a live regrade applied, and names the fix (set the display to Windows Default for calibration-accurate viewing). Explicit settings previews temporarily take ownership from gamer mode. App exclusions can block live policy on the display intersecting an excluded foreground window without removing the measured panel profile.
 
 ## 10. Measurement and Characterization
 
@@ -369,6 +369,8 @@ Near-black patches, white, and full primaries receive multiple reads; their repo
 ### 10.3 Drift
 
 Thorough, Full, and Adaptive sequences interleave white anchors every 25 ordinary patches and black anchors every 50. White drift is modeled as a multiplicative luminance factor, interpolated linearly in time; XYZ is divided by that factor, preserving chromaticity. Drift up to 8% can be normalized. Larger drift is left untouched so validation can fail the run instead of concealing an unstable display. Black re-reads are analyzed as an additive-domain diagnostic and are not used in the multiplicative correction.
+
+A time-only multiplicative model is licensed on automatic-brightness-limiter panels because the run holds patch geometry, patch size, and surround constant (§10.1), so average picture level — and therefore ABL state — is approximately stationary across the sequence; what remains varying is warm-up and settling, which are slow functions of time.
 
 ### 10.4 Adaptive Patch Placement
 
@@ -477,6 +479,8 @@ out′ = P−1(P(out) / e′)
 
 At least four valid rungs below the identity region are required. A rung beyond ±35% refuses the touch-up as evidence of a different failure. Average absolute error below 1% is converged. The correction fades to one before the identity blend and preserves endpoints and monotonicity.
 
+A refusal here or in the color fit below is not silent: the reason is recorded in that pass's record and surfaced in the report, and the prior best-measured installed state is retained rather than replaced by an unverified candidate.
+
 ### 12.3 Color Residual
 
 The color sweep uses target-container R, G, B, C, M, Y, plus white anchors at 100, 203, and 400 cd/m² when the display peak can reach the rung. A stimulus producing less than 85% of target luminance is classified as hardware-limited and excluded from the matrix fit. A matrix cannot recover saturated light the panel did not emit.
@@ -548,6 +552,8 @@ Gloam builds on Dylan Raga's identification and implementation of the Windows SD
 1. JCGM 100:2008. _Evaluation of measurement data - Guide to the expression of uncertainty in measurement_.
 1. [ArgyllCMS](https://www.argyllcms.com/), by Graeme Gill.
 1. [MHC2Gen](https://github.com/dantmnf/MHC2), by dantmnf.
+
+Revision of July 28, 2026: bounded the §9.3 composition claim to what the live ramp actually assumes and noted the preflight warning that covers the non-2.2 case; stated in §10.3 why a time-only multiplicative drift model is licensed on ABL panels; recorded in §12.2 that refusals are reported with their reason and that the prior best-measured state is retained.
 
 Revision of July 27, 2026: corrected the polar day/night fallback in §7.1 to the fixed 07:00/19:00 sentinels the schedule resolver actually emits.
 

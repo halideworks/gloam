@@ -46,7 +46,7 @@
     "description": "Transfer functions, live LUT synthesis, HDR headroom, night mode and melanopic policy, adaptive patch placement, MHC2 profile mathematics, joint HDR refinement, and verification methods behind Gloam.",
     "about": ["Display calibration", "High dynamic range", "Color science", "Windows"],
     "author": { "@type": "Person", "name": "David Torcivia" },
-    "dateModified": "2026-07-27",
+    "dateModified": "2026-07-28",
     "encoding": {
       "@type": "MediaObject",
       "encodingFormat": "text/markdown",
@@ -92,7 +92,7 @@
 
         <section>
           <h1>Gloam: A Technical Whitepaper</h1>
-          <p class="paper-meta">Windows display correction, measurement, and verification. Last updated July 27, 2026. Also available <a href="whitepaper.md">as Markdown</a> for tools and agents.</p>
+          <p class="paper-meta">Windows display correction, measurement, and verification. Last updated July 28, 2026. Also available <a href="whitepaper.md">as Markdown</a> for tools and agents.</p>
           <blockquote>A correction is trustworthy only when its signal domain, physical limits, and measured result are kept separate.</blockquote>
 
           <h2 id="abstract">Abstract</h2>
@@ -748,10 +748,16 @@
           <h3 id="s9-3">9.3 Composition Rules</h3>
           <p>
             The native MHC2 profile corrects the panel at the compositor. The live ramp remains available for
-            the user's gamma, night, and gamer policy and is synthesized as though it were feeding an ideal
-            corrected display. Explicit settings previews temporarily take ownership from gamer mode. App
-            exclusions can block live policy on the display intersecting an excluded foreground window
-            without removing the measured panel profile.
+            the user's gamma, night, and gamer policy. Its SDR encode side assumes a ~2.2 presentation, which
+            is what an uncorrected Windows SDR display gives. Composition with an installed MHC2 correction is
+            therefore exact when the calibration target is a 2.2 power law and approximate otherwise: a
+            BT.1886 or piecewise-sRGB target retargets the display to a curve the live ramp does not know
+            about, and the residual concentrates in the shadows, where those curves diverge most from a power
+            law. Gloam does not silently accept that configuration — install preflight warns when a non-2.2
+            SDR target is installed on a display that also has a live regrade applied, and names the fix
+            (set the display to Windows Default for calibration-accurate viewing). Explicit settings previews
+            temporarily take ownership from gamer mode. App exclusions can block live policy on the display
+            intersecting an excluded foreground window without removing the measured panel profile.
           </p>
         </section>
 
@@ -789,6 +795,12 @@
             normalized. Larger drift is left untouched so validation can fail the run instead of concealing an
             unstable display. Black re-reads are analyzed as an additive-domain diagnostic and are not used in
             the multiplicative correction.
+          </p>
+          <p>
+            A time-only multiplicative model is licensed on automatic-brightness-limiter panels because the
+            run holds patch geometry, patch size, and surround constant (§10.1), so average picture level —
+            and therefore ABL state — is approximately stationary across the sequence; what remains varying is
+            warm-up and settling, which are slow functions of time.
           </p>
 
           <h3 id="s10-4">10.4 Adaptive Patch Placement</h3>
@@ -1005,6 +1017,11 @@
             touch-up as evidence of a different failure. Average absolute error below 1% is converged. The
             correction fades to one before the identity blend and preserves endpoints and monotonicity.
           </p>
+          <p>
+            A refusal here or in the color fit below is not silent: the reason is recorded in that pass's
+            record and surfaced in the report, and the prior best-measured installed state is retained rather
+            than replaced by an unverified candidate.
+          </p>
 
           <h3 id="s12-3">12.3 Color Residual</h3>
           <p>
@@ -1139,6 +1156,12 @@
             <li id="ref16"><a href="https://www.argyllcms.com/">ArgyllCMS</a>, by Graeme Gill.</li>
             <li id="ref17"><a href="https://github.com/dantmnf/MHC2">MHC2Gen</a>, by dantmnf.</li>
           </ol>
+          <p class="paper-meta">
+            Revision of July 28, 2026: bounded the §9.3 composition claim to what the live ramp actually
+            assumes and noted the preflight warning that covers the non-2.2 case; stated in §10.3 why a
+            time-only multiplicative drift model is licensed on ABL panels; recorded in §12.2 that refusals
+            are reported with their reason and that the prior best-measured state is retained.
+          </p>
           <p class="paper-meta">
             Revision of July 27, 2026: corrected the polar day/night fallback in §7.1 to the fixed
             07:00/19:00 sentinels the schedule resolver actually emits.
