@@ -1,0 +1,8 @@
+{
+  "name": "gloam-site-tools",
+  "private": true,
+  "description": "Build-time tooling for site/. Not shipped: the site itself stays static, with no runtime JavaScript beyond the small inline scripts on each page.",
+  "devDependencies": {
+    "katex": "^0.16.9"
+  }
+}

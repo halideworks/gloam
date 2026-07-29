@@ -38,6 +38,14 @@ INLINE_OPEN = {
 # tool will expect.
 PASSTHROUGH = {"span", "abbr", "small", "br", "nav", "svg", "text", "g", "path", "rect", "line", "polyline", "circle"}
 
+# The MathML half of KaTeX's output. It is skipped rather than converted: the
+# LaTeX in each data-tex attribute is the source, and reading it back out beats
+# reconstructing maths from the rendered tree. Listed explicitly so that a tag
+# KaTeX has not emitted before still trips the unhandled-tag guard.
+KATEX_TAGS = {"math", "semantics", "annotation", "mrow", "mi", "mo", "mn", "msup",
+              "msub", "msubsup", "mfrac", "msqrt", "mtext", "mspace", "mstyle",
+              "munderover", "mover", "munder", "mpadded", "mphantom", "menclose"}
+
 
 class Extractor(HTMLParser):
     """Pulls the <main> subtree out as a light tag tree."""
@@ -94,6 +102,10 @@ def render(tokens):
     scripts = []
     list_stack = []
     in_formula = False
+    formula_depth = 0
+    in_eq = False
+    # Depth inside a rendered inline expression, whose spans nest arbitrarily.
+    inline_depth = 0
     formula_lines = []
     table = None
 
@@ -106,6 +118,10 @@ def render(tokens):
 
     for kind, a, attrs in tokens:
         if kind == "text":
+            # Inside a rendered equation the text is glyph soup plus KaTeX's own
+            # MathML annotation. Its LaTeX already came from data-tex.
+            if in_eq or inline_depth:
+                continue
             if in_formula:
                 formula_lines.append(a)
             else:
@@ -122,7 +138,15 @@ def render(tokens):
             elif tag == "div" and attrs.get("class") == "formula":
                 flush()
                 in_formula = True
+                formula_depth = 1
                 formula_lines = []
+            elif tag == "div" and in_formula:
+                formula_depth += 1
+                # The rendered KaTeX markup is disposable output. data-tex is the
+                # source, and it is what belongs in a machine-readable copy.
+                if attrs.get("class") == "eq" and attrs.get("data-tex"):
+                    formula_lines.append(html.unescape(attrs["data-tex"]) + "\n")
+                    in_eq = True
             elif tag == "br":
                 if in_formula:
                     formula_lines.append("\n")
@@ -146,6 +170,14 @@ def render(tokens):
                 if not in_formula:
                     buf.append("[")
                     stack.append(("a", attrs.get("href", "")))
+            elif tag == "span":
+                if inline_depth:
+                    inline_depth += 1
+                elif attrs.get("class") == "m" and attrs.get("data-tex"):
+                    # Inline maths: emit the LaTeX and skip the rendered tree.
+                    tex = html.unescape(attrs["data-tex"])
+                    (formula_lines if in_formula else buf).append(f"${tex}$")
+                    inline_depth = 1
             elif tag in ("sub", "sup"):
                 # Unlike emphasis, these are written even inside a formula: the
                 # code fence is exactly where losing them does the most damage.
@@ -158,13 +190,15 @@ def render(tokens):
                 # emphasis inside them must not leak markers into the text buffer.
                 if not in_formula:
                     buf.append(INLINE_OPEN[tag])
-            elif tag in PASSTHROUGH or tag in ("article", "section", "div", "header", "footer", "aside", "figure", "figcaption", "tbody", "thead", "tfoot", "colgroup", "col", "caption", "details", "summary", "dl", "dt", "dd", "blockquote", "hr", "img", "kbd", "var", "samp", "u", "s", "mark", "time"):
+            elif tag in KATEX_TAGS or tag in PASSTHROUGH or tag in ("article", "section", "div", "header", "footer", "aside", "figure", "figcaption", "tbody", "thead", "tfoot", "colgroup", "col", "caption", "details", "summary", "dl", "dt", "dd", "blockquote", "hr", "img", "kbd", "var", "samp", "u", "s", "mark", "time"):
                 pass
             else:
                 raise ValueError("unhandled start tag: " + tag)
 
         else:  # end
-            if tag in ("sub", "sup"):
+            if tag == "span" and inline_depth:
+                inline_depth -= 1
+            elif tag in ("sub", "sup"):
                 if scripts and scripts[-1][0] == tag:
                     _, target, start = scripts.pop()
                     inner = "".join(target[start:]).strip()
@@ -182,11 +216,19 @@ def render(tokens):
             elif tag == "p":
                 flush()
             elif tag == "div" and in_formula:
+                formula_depth -= 1
+                if formula_depth > 1:
+                    continue
+                if formula_depth == 1:
+                    # closing one .eq; its LaTeX was taken from data-tex
+                    in_eq = False
+                    continue
                 in_formula = False
                 raw = "".join(formula_lines)
                 lines = [collapse(x).strip() for x in raw.split("\n")]
                 lines = [x for x in lines if x]
-                md.append("```")
+                # `math`, because the fence now holds LaTeX rather than prose maths
+                md.append("```math")
                 md.extend(lines)
                 md.append("```")
                 md.append("")

@@ -1,0 +1,102 @@
+{
+  "_note": "LaTeX source for the whitepaper's display equations, in document order. build-whitepaper-math.mjs injects these as data-tex and renders them with KaTeX. The rendered markup is disposable output; this file is the source.",
+  "equations": [
+    [
+      "L = v^{\\gamma}"
+    ],
+    [
+      "E_{\\text{sRGB}}(v) = \\frac{v}{12.92}, \\qquad v \\le 0.04045",
+      "E_{\\text{sRGB}}(v) = \\left(\\frac{v + 0.055}{1.055}\\right)^{2.4}, \\qquad v > 0.04045"
+    ],
+    [
+      "L = 10000 \\cdot \\left(\\frac{\\max\\!\\left(V^{1/m_2} - c_1,\\; 0\\right)}{c_2 - c_3 V^{1/m_2}}\\right)^{1/m_1}"
+    ],
+    [
+      "\\ell = x^{\\gamma_{\\text{target}}}",
+      "(r, g, b) = A(\\ell, \\ell, \\ell)",
+      "\\mathrm{LUT}_c(x) = c^{1/2.2}"
+    ],
+    [
+      "q = E_{\\text{sRGB}}^{-1}\\!\\left(\\frac{P(V)}{W}\\right)",
+      "L_{\\gamma} = W \\cdot q^{\\gamma_{\\text{target}}}"
+    ],
+    [
+      "W = \\frac{\\text{raw} \\cdot 80}{1000}\\ \\mathrm{cd/m^2}"
+    ],
+    [
+      "t = \\operatorname{clamp}\\!\\left(\\frac{V - \\mathrm{PQ}(W)}{1 - \\mathrm{PQ}(W)},\\; 0,\\; 1\\right)",
+      "s(t) = t^2(3 - 2t)",
+      "\\text{output} = \\text{corrected} + s(t)\\left(\\text{headroom} - \\text{corrected}\\right)"
+    ],
+    [
+      "H(L) = A\\left(\\frac{L}{W}\\right)^{\\gamma'}, \\qquad \\gamma' = \\frac{\\ln(10000/A)}{\\ln(10000/W)}"
+    ],
+    [
+      "\\mu_{\\text{effective}} = \\mu_{\\text{manual}} + \\mu_{\\text{schedule}} - \\mu_{6500}"
+    ],
+    [
+      "\\mathbf{X}' = \\mathrm{CAT16}^{-1}\\left[\\,(1 - D)\\,\\rho(\\mathbf{X}_{6500}) + D\\,\\rho(\\mathbf{X}_T)\\,\\right]"
+    ],
+    [
+      "\\text{dim} = 1 - 0.30f",
+      "(r, g, b) = (a_R \\cdot \\text{dim},\\; a_G \\cdot \\text{dim},\\; a_B \\cdot \\text{dim})",
+      "b \\leftarrow \\max(b,\\; 0.10)",
+      "g \\leftarrow \\max(g,\\; b)"
+    ],
+    [
+      "\\text{penalty} = \\operatorname{clamp}\\!\\left(\\frac{\\mu_G/\\mu_R - 1}{4},\\; 0,\\; 1\\right)",
+      "g_{\\text{floor}} = \\max(1.8b,\\; 0.12)",
+      "g \\leftarrow g + \\left(\\min(g,\\; g_{\\text{floor}}) - g\\right) \\cdot f \\cdot \\text{penalty}"
+    ],
+    [
+      "s = \\min\\!\\left(\\frac{1}{Y(\\mathbf{m})},\\; \\frac{c}{d \\cdot \\max(\\mathbf{m})}\\right)"
+    ],
+    [
+      "g = 1 + 0.3(1 - b)",
+      "D(x, b) = b \\cdot x^{1/g}"
+    ],
+    [
+      "S_{\\text{state}}(\\lambda) = k_R S_R(\\lambda) + k_G S_G(\\lambda) + k_B S_B(\\lambda)",
+      "S_{\\text{base}}(\\lambda) = S_R(\\lambda) + S_G(\\lambda) + S_B(\\lambda)"
+    ],
+    [
+      "L_{\\text{screen}} = L_{\\text{white}} \\cdot Y_{\\text{rel}}",
+      "E_v \\approx L_{\\text{screen}} \\cdot \\Omega",
+      "\\text{mel-EDI} = E_v \\cdot \\text{mel-DER}_{\\text{state}}"
+    ],
+    [
+      "\\text{reduction} = 1 - \\frac{Y_{\\text{rel}} \\cdot \\text{mel-DER}_{\\text{state}}}{\\text{mel-DER}_{\\text{base}}}"
+    ],
+    [
+      "b_{\\text{needed}} = b_{\\text{sched}} \\cdot \\frac{\\text{ceiling}}{\\text{mel-EDI}(T,\\; b_{\\text{sched}})}"
+    ],
+    [
+      "L' = \\min\\!\\left(p,\\; L + 1.5aL\\left(1 - \\frac{L}{p}\\right)^{2}\\right)"
+    ],
+    [
+      "\\text{score} = \\frac{\\sum w_i n_i}{\\sum w_i} + 0.5 \\cdot \\text{gap}, \\qquad w_i = \\frac{1}{d_i + 0.02}"
+    ],
+    [
+      "\\mathbf{M} = \\mathbf{D}^{-1}\\mathbf{T}"
+    ],
+    [
+      "s = \\min\\!\\left(1,\\; \\frac{1}{\\text{maxTargetDrive}}\\right)"
+    ],
+    [
+      "\\mathbf{M}_{\\text{tag}} = \\mathbf{S}(s\\mathbf{M})\\mathbf{S}^{-1}"
+    ],
+    [
+      "p_{\\text{in}}(v) = P^{-1}\\!\\left(s \\cdot P(v)\\right)"
+    ],
+    [
+      "e' = \\operatorname{clamp}\\!\\left(1 + \\lambda(e - 1),\\; 0.7,\\; 1.4\\right)",
+      "\\text{out}' = P^{-1}\\!\\left(\\frac{P(\\text{out})}{e'}\\right)"
+    ],
+    [
+      "J = \\sqrt{\\left(\\frac{\\text{tone}}{0.01}\\right)^{2} + \\left(\\frac{\\text{color}}{2}\\right)^{2}}"
+    ],
+    [
+      "\\Delta E_{\\text{ITP}} = 720\\sqrt{\\Delta I^2 + \\Delta T^2 + \\Delta P^2}, \\qquad T = 0.5\\,C_T"
+    ]
+  ]
+}

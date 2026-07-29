@@ -65,3 +65,7 @@ ROADMAP.md
 # are normally CI's job (.github/workflows/deploy-site.yml); this only appears
 # when someone deploys the site by hand.
 .wrangler/
+
+# Build-time tooling only (KaTeX, used by scripts/build-whitepaper-math.mjs).
+# The site itself ships no runtime JavaScript beyond its small inline scripts.
+node_modules/

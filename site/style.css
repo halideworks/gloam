@@ -1413,6 +1413,35 @@ section {
   font-style: italic;
 }
 
+/* KaTeX, pre-rendered by scripts/build-whitepaper-math.mjs. Its defaults centre
+   display maths and give each block a 1em margin, which leaves the equation
+   stranded away from the accent rule that introduces it. These equations are a
+   left-aligned column under that rule, so the alignment and the spacing are reset
+   here rather than in the vendored stylesheet, which stays as shipped. */
+.whitepaper .formula .katex-display,
+.whitepaper .formula .katex-display > .katex {
+  text-align: left;
+}
+
+.whitepaper .formula .katex-display {
+  margin: 0.55rem 0;
+  padding: 0;
+}
+
+.whitepaper .formula .katex-display:first-child {
+  margin-top: 0.15rem;
+}
+
+.whitepaper .formula .katex-display:last-child {
+  margin-bottom: 0.15rem;
+}
+
+/* The maths carries its own metrics; the block's reading line-height would
+   otherwise stretch the fraction rules apart. */
+.whitepaper .formula {
+  line-height: 1.4;
+}
+
 .whitepaper p {
   font-size: 1.1rem;
   line-height: 1.55;

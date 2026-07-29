@@ -88,7 +88,7 @@ http://getgloam.org, http://www.getgloam.org {
 		# and connect-src (it POSTs events back to its own origin). The pages
 		# carry small inline theme and comparison-slider scripts, hence
 		# 'unsafe-inline' on script-src; tighten to hashes if those move to a file.
-		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://zerolens.disinfo.zone; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://zerolens.disinfo.zone; frame-ancestors 'none'; base-uri 'self'; form-action 'none'"
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://zerolens.disinfo.zone; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://zerolens.disinfo.zone; frame-ancestors 'none'; base-uri 'self'; form-action 'none'"
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "strict-origin-when-cross-origin"
