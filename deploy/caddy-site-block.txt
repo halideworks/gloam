@@ -85,10 +85,14 @@ http://getgloam.org, http://www.getgloam.org {
 	header {
 		# Same-origin except Google Fonts and the self-hosted analytics on
 		# zerolens.disinfo.zone, which needs BOTH script-src (to load script.js)
-		# and connect-src (it POSTs events back to its own origin). The pages
+		# and connect-src (it POSTs events back to its own origin). Cloudflare
+		# injects its own Web Analytics beacon on Pages, which needs a second
+		# pair: the script comes from static.cloudflareinsights.com and the
+		# measurements POST to cloudflareinsights.com, without the subdomain.
+		# The pages
 		# carry small inline theme and comparison-slider scripts, hence
 		# 'unsafe-inline' on script-src; tighten to hashes if those move to a file.
-		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://zerolens.disinfo.zone; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://zerolens.disinfo.zone; frame-ancestors 'none'; base-uri 'self'; form-action 'none'"
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://zerolens.disinfo.zone https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://zerolens.disinfo.zone https://cloudflareinsights.com; frame-ancestors 'none'; base-uri 'self'; form-action 'none'"
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "strict-origin-when-cross-origin"

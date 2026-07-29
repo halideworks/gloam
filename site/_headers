@@ -6,8 +6,13 @@
 # still serving as a fallback. The Caddy block is the older of the two and its
 # comments explain why each header is here.
 
+# Two analytics stacks run here. The self-hosted one on zerolens needs
+# script-src and connect-src for its own origin; Cloudflare's Web Analytics
+# beacon, injected automatically on Pages, loads from
+# static.cloudflareinsights.com and POSTs to cloudflareinsights.com. Both pairs
+# have to be present or the beacon loads and then fails silently.
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://zerolens.disinfo.zone; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://zerolens.disinfo.zone; frame-ancestors 'none'; base-uri 'self'; form-action 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://zerolens.disinfo.zone https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://zerolens.disinfo.zone https://cloudflareinsights.com; frame-ancestors 'none'; base-uri 'self'; form-action 'none'
   Strict-Transport-Security: max-age=31536000; includeSubDomains
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
