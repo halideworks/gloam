@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using Gloam.Interop;
 
 namespace Gloam.Core
@@ -12,16 +13,75 @@ namespace Gloam.Core
     /// </summary>
     public static class NativeGammaRamp
     {
+        // Windows validates every SetDeviceGammaRamp call (win32k, not the driver) unless
+        // the ICM "GdiIcmGammaRange" registry override is set: each entry's HIGH BYTE must
+        // stay within ±128 of its own index — |(ramp[i] >> 8) − i| ≤ 128, i.e. an entry may
+        // deviate from the identity line by at most half of full scale. One violating entry
+        // rejects the whole call and NOTHING applies. Measured on Windows 11 22621
+        // (monotonicity is NOT required; the bound is per entry, anchored at the index).
+        //
+        // This is why night mode used to silently no-op on SDR displays: 2700K cuts blue to
+        // ~0.21 linear, whose gamma-encoded ramp tops out at 0.489 of full scale — a hair
+        // below the 0.496 the envelope allows at index 255. The HDR path never hit it
+        // because its PQ LUTs stay near identity at the top (headroom passthrough).
+        internal const int GdiEnvelopeHalfRangeHighBytes = 128;
+
+        /// <summary>Test seam for the GdiIcmGammaRange registry probe.</summary>
+        internal static bool? GammaRangeUnlockOverride;
+        private static bool? _gammaRangeUnlockedCache;
+
+        /// <summary>
+        /// True when the user has disabled Windows' gamma-range validation via the
+        /// well-known ICM registry override (HKLM\...\ICM\GdiIcmGammaRange = 0x100,
+        /// the same unlock f.lux and ArgyllCMS document). Cached for the process
+        /// lifetime — the value only takes effect after sign-out anyway.
+        /// </summary>
+        internal static bool IsGammaRangeUnlocked()
+        {
+            if (GammaRangeUnlockOverride.HasValue) return GammaRangeUnlockOverride.Value;
+            if (_gammaRangeUnlockedCache.HasValue) return _gammaRangeUnlockedCache.Value;
+
+            bool unlocked = false;
+            try
+            {
+                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+                    @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ICM");
+                unlocked = key?.GetValue("GdiIcmGammaRange") is int v && v == 0x100;
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"NativeGammaRamp: GdiIcmGammaRange probe failed ({ex.Message}); assuming locked range.");
+            }
+            _gammaRangeUnlockedCache = unlocked;
+            return unlocked;
+        }
+
+        /// <summary>Lowest ramp value Windows' validation accepts at entry <paramref name="i"/>.</summary>
+        internal static ushort GdiEnvelopeLower(int i) =>
+            (ushort)(i <= GdiEnvelopeHalfRangeHighBytes ? 0 : (i - GdiEnvelopeHalfRangeHighBytes) * 256);
+
+        /// <summary>Highest ramp value Windows' validation accepts at entry <paramref name="i"/>.</summary>
+        internal static ushort GdiEnvelopeUpper(int i) =>
+            (ushort)Math.Min(65535, (i + GdiEnvelopeHalfRangeHighBytes + 1) * 256 - 1);
+
         /// <summary>
         /// Resamples a LUT (any length ≥ 2, values in [0,1]) onto the fixed 256-entry
         /// 16-bit hardware ramp using linear interpolation — the same resampling
-        /// dispwin performs when loading a 1024-point .cal.
+        /// dispwin performs when loading a 1024-point .cal. Unless the user has
+        /// unlocked the range in the registry, entries are clamped into Windows'
+        /// validation envelope: applying the closest ACCEPTED ramp (the clamp only
+        /// bends the extreme end of an aggressive channel) beats the alternative,
+        /// which is win32k rejecting the whole call and the screen not changing at all.
         /// </summary>
-        public static ushort[] BuildRampChannel(double[] lut)
+        public static ushort[] BuildRampChannel(double[] lut) =>
+            BuildRampChannel(lut, applyGdiEnvelope: !IsGammaRangeUnlocked(), out _);
+
+        internal static ushort[] BuildRampChannel(double[] lut, bool applyGdiEnvelope, out bool clamped)
         {
             if (lut == null || lut.Length < 2)
                 throw new ArgumentException("LUT must have at least 2 entries", nameof(lut));
 
+            clamped = false;
             var ramp = new ushort[256];
             for (int i = 0; i < 256; i++)
             {
@@ -31,10 +91,22 @@ namespace Gloam.Core
                 double frac = pos - lo;
                 double value = lut[lo] + (lut[hi] - lut[lo]) * frac;
                 value = double.IsFinite(value) ? Math.Clamp(value, 0.0, 1.0) : 0.0;
-                ramp[i] = (ushort)Math.Clamp(Math.Round(value * 65535.0), 0, 65535);
+                ushort word = (ushort)Math.Clamp(Math.Round(value * 65535.0), 0, 65535);
+
+                if (applyGdiEnvelope)
+                {
+                    ushort bounded = Math.Clamp(word, GdiEnvelopeLower(i), GdiEnvelopeUpper(i));
+                    if (bounded != word) clamped = true;
+                    word = bounded;
+                }
+                ramp[i] = word;
             }
             return ramp;
         }
+
+        // One log line per display the first time the envelope actually bends a ramp —
+        // fades re-apply several times a second and must not flood the log.
+        private static readonly ConcurrentDictionary<string, bool> EnvelopeLoggedByDevice = new();
 
         /// <summary>
         /// Sets the hardware gamma ramp for the given GDI display (e.g. @"\\.\DISPLAY1").
@@ -45,10 +117,21 @@ namespace Gloam.Core
         {
             if (string.IsNullOrEmpty(deviceName)) return false;
 
+            bool applyEnvelope = !IsGammaRangeUnlocked();
             var ramp = Gdi32.GammaRamp.Create();
-            ramp.Red = BuildRampChannel(lutR);
-            ramp.Green = BuildRampChannel(lutG);
-            ramp.Blue = BuildRampChannel(lutB);
+            ramp.Red = BuildRampChannel(lutR, applyEnvelope, out bool clampedR);
+            ramp.Green = BuildRampChannel(lutG, applyEnvelope, out bool clampedG);
+            ramp.Blue = BuildRampChannel(lutB, applyEnvelope, out bool clampedB);
+
+            if ((clampedR || clampedG || clampedB) && EnvelopeLoggedByDevice.TryAdd(deviceName, true))
+            {
+                Log.Info(
+                    $"NativeGammaRamp: {deviceName}: Windows' gamma-range validation limits the requested " +
+                    $"correction; applied the closest accepted ramp instead (channels clamped:" +
+                    $"{(clampedR ? " R" : "")}{(clampedG ? " G" : "")}{(clampedB ? " B" : "")}). " +
+                    "For the full range set HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ICM\\" +
+                    "GdiIcmGammaRange (DWORD) = 0x100 and sign out and back in.");
+            }
 
             return SetRamp(deviceName, ref ramp);
         }

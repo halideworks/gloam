@@ -104,12 +104,31 @@ those.
 
 **Do this:**
 
-1. Check whether Windows Night Light is also on. Two warming corrections stack, and
+1. Update to a version newer than v1.8.1 if you are on an SDR (non-HDR) display. Older
+   versions could lose the entire night shift on SDR: Windows validates hardware gamma
+   ramps and rejects any write that deviates more than half of full scale from neutral,
+   and the default 2700K setting sat just past that limit, so nothing applied at all.
+   Current versions apply the closest ramp Windows accepts instead (the difference is a
+   slight loss of warmth at pure white only).
+2. Check whether Windows Night Light is also on. Two warming corrections stack, and
    Windows applies its own after Gloam. Turn Windows Night Light off, since Gloam replaces it.
-2. Check whether the foreground application is on your night-mode exclusion list. Excluded
+3. Check whether the foreground application is on your night-mode exclusion list. Excluded
    applications suppress night mode while they are focused, by design.
-3. Check whether Gameplay Lock is holding the output steady for an active game session.
+4. Check whether Gameplay Lock is holding the output steady for an active game session.
    That is also by design; the manual toggle (`Win + Shift + N`) stays authoritative.
+
+**Optional, for the full warm range on SDR:** Windows' gamma-ramp limit itself can be
+lifted with the same registry override f.lux and ArgyllCMS document. As Administrator, add
+a DWORD value named `GdiIcmGammaRange` set to `0x100` under
+`HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ICM`, then sign out and back in. Gloam
+detects the override and stops limiting the ramp. Without it, temperatures below roughly
+2750K are applied at slightly reduced strength near pure white.
+
+**Still stuck?** Right-click the tray icon and choose **Export Diagnostics**, then attach
+the bundle it writes to `%LOCALAPPDATA%\Gloam\Diagnostics` to a GitHub issue. The bundle
+includes `app.log`; the line to look for is
+`NativeGammaRamp: SetDeviceGammaRamp rejected` (a driver refused the ramp) or
+`Windows' gamma-range validation limits the requested correction` (the limiter engaged).
 
 ---
 
