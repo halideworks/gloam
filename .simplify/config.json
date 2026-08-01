@@ -1,0 +1,36 @@
+{
+  "stacks": ["cpp"],
+  "test_command": "pwsh -NoProfile -File .simplify/run-tests.ps1",
+  "collect_command": "pwsh -NoProfile -Command \"Write-Output 'collect: n/a for dotnet -- per-test ids live in the testids.txt golden'\"",
+  "warn_command": "dotnet build src/Gloam.sln -c Release --no-incremental",
+  "golden_paths": [
+    ".simplify/testids.txt",
+    "tests/Gloam.Tests/Fixtures/Golden/**/*.json",
+    "tests/Gloam.Tests/Fixtures/Golden/**/*.csv"
+  ],
+  "source_globs": [
+    "src/**/*.cs",
+    "tests/**/*.cs",
+    "gen-srgb-to-gamma-lut/**/*.cs",
+    "site/**/*.js",
+    "site/**/*.ts",
+    "scripts/**/*.ps1"
+  ],
+  "exclude_globs": [
+    "**/node_modules/**",
+    "**/bin/**",
+    "**/obj/**",
+    "**/build/**",
+    "**/dist/**",
+    "**/target/**",
+    "**/.venv/**",
+    "**/venv/**",
+    "**/vendor/**",
+    "**/__pycache__/**",
+    "**/*.min.js",
+    "**/*.lock",
+    "**/third_party/**"
+  ],
+  "test_timeout_sec": 1800,
+  "warn_timeout_sec": 900
+}

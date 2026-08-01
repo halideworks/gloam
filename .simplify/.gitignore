@@ -1,0 +1,6 @@
+baseline*.json
+survey.json
+jscpd/
+snapshot*.json
+trx/
+testids.txt
