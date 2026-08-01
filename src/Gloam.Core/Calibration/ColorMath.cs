@@ -748,7 +748,14 @@ namespace Gloam.Core.Calibration
             8.307527e-05, 5.870652e-05, 4.150994e-05,
         };
 
-        private static readonly double[] Cmf1931Y =
+        /// <summary>
+        /// The 1931 2° ȳ(λ) column. Internal rather than private because it is also the CIE 1924
+        /// photopic luminous efficiency V(λ) — the two are the same function by definition, so
+        /// <see cref="CcssMelanopicEstimator"/> weights its SPDs with this exact table rather
+        /// than keeping a second copy that could be corrected in only one place. Read-only by
+        /// contract: never write through this reference.
+        /// </summary>
+        internal static readonly double[] Cmf1931Y =
         {
             3.900000e-05, 6.400000e-05, 1.200000e-04, 2.170000e-04, 3.960000e-04, 6.400000e-04,
             1.210000e-03, 2.180000e-03, 4.000000e-03, 7.300000e-03, 1.160000e-02, 1.684000e-02,

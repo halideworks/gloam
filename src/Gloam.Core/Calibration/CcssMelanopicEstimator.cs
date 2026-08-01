@@ -452,7 +452,9 @@ namespace Gloam.Core.Calibration
         //   PhotopicSensitivity  = CIE 1924 V(λ) (identical to the CIE 1931 ȳ colour-matching fn).
         //   MelanopicSensitivity = CIE S 026:2018 melanopic action spectrum s_mel(λ), peak 1 at 490 nm.
 
-        private static double PhotopicSensitivity(double nm) => InterpolateTable(VLambda1924, nm);
+        // V(λ), the CIE 1924 photopic luminous efficiency, IS the CIE 1931 2° ȳ(λ) column, so
+        // this shares ColorMath's table instead of carrying a second copy of the same 81 values.
+        private static double PhotopicSensitivity(double nm) => InterpolateTable(ColorMath.Cmf1931Y, nm);
         private static double MelanopicSensitivity(double nm) => InterpolateTable(SMelS026, nm);
 
         private const double TableStartNm = 380.0;
@@ -469,25 +471,6 @@ namespace Gloam.Core.Calibration
             double f = pos - i;
             return table[i] + f * (table[i + 1] - table[i]);
         }
-
-        // CIE 1924 photopic luminous efficiency V(λ) = CIE 1931 2° ȳ(λ), 5 nm, 380–780 nm.
-        private static readonly double[] VLambda1924 =
-        {
-            3.900000e-05, 6.400000e-05, 1.200000e-04, 2.170000e-04, 3.960000e-04, 6.400000e-04,
-            1.210000e-03, 2.180000e-03, 4.000000e-03, 7.300000e-03, 1.160000e-02, 1.684000e-02,
-            2.300000e-02, 2.980000e-02, 3.800000e-02, 4.800000e-02, 6.000000e-02, 7.390000e-02,
-            9.098000e-02, 1.126000e-01, 1.390200e-01, 1.693000e-01, 2.080200e-01, 2.586000e-01,
-            3.230000e-01, 4.073000e-01, 5.030000e-01, 6.082000e-01, 7.100000e-01, 7.932000e-01,
-            8.620000e-01, 9.148501e-01, 9.540000e-01, 9.803000e-01, 9.949501e-01, 1.000000e+00,
-            9.950000e-01, 9.786000e-01, 9.520000e-01, 9.154000e-01, 8.700000e-01, 8.163000e-01,
-            7.570000e-01, 6.949000e-01, 6.310000e-01, 5.668000e-01, 5.030000e-01, 4.412000e-01,
-            3.810000e-01, 3.210000e-01, 2.650000e-01, 2.170000e-01, 1.750000e-01, 1.382000e-01,
-            1.070000e-01, 8.160000e-02, 6.100000e-02, 4.458000e-02, 3.200000e-02, 2.320000e-02,
-            1.700000e-02, 1.192000e-02, 8.210000e-03, 5.723000e-03, 4.102000e-03, 2.929000e-03,
-            2.091000e-03, 1.484000e-03, 1.047000e-03, 7.400000e-04, 5.200000e-04, 3.611000e-04,
-            2.492000e-04, 1.719000e-04, 1.200000e-04, 8.480000e-05, 6.000000e-05, 4.240000e-05,
-            3.000000e-05, 2.120000e-05, 1.499000e-05,
-        };
 
         // CIE S 026:2018 melanopic action spectrum s_mel(λ), 5 nm, 380–780 nm, peak 1.0 at 490 nm.
         private static readonly double[] SMelS026 =
