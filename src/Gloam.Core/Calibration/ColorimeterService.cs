@@ -799,49 +799,6 @@ namespace Gloam.Core.Calibration
             StatusChanged?.Invoke(this, new ColorimeterStatusEventArgs(status, message));
         }
 
-        /// <summary>
-        /// Gets the path to the ArgyllCMS USB driver installer if available.
-        /// </summary>
-        private static string GetUsbDriverInstallerPath()
-        {
-            string? discoveredBin = ArgyllPathFinder.FindArgyllBinPath();
-            if (!string.IsNullOrEmpty(discoveredBin))
-            {
-                string? root = Directory.GetParent(discoveredBin)?.FullName;
-                if (root != null)
-                {
-                    string discovered = Path.Combine(root, "usb", "ArgyllCMS_install_USB.exe");
-                    if (File.Exists(discovered)) return discovered;
-                }
-            }
-
-            // Check our downloaded ArgyllCMS first
-            string localArgyllDir = Path.Combine(AppPaths.DataDir, "Argyll");
-
-            string installerPath = Path.Combine(localArgyllDir, "usb", "ArgyllCMS_install_USB.exe");
-            if (File.Exists(installerPath))
-                return installerPath;
-
-            // Check standard installation paths
-            var searchPaths = new[]
-            {
-                @"C:\Program Files\ArgyllCMS",
-                @"C:\Program Files (x86)\ArgyllCMS",
-                @"C:\Program Files\Argyll_V3.5.0",
-                @"C:\Program Files\Argyll_V3.3.0",
-                @"C:\ArgyllCMS"
-            };
-
-            foreach (var basePath in searchPaths)
-            {
-                installerPath = Path.Combine(basePath, "usb", "ArgyllCMS_install_USB.exe");
-                if (File.Exists(installerPath))
-                    return installerPath;
-            }
-
-            return string.Empty;
-        }
-
         public void Dispose()
         {
             // Close any dangling spotread session. We use fire-and-forget here because
