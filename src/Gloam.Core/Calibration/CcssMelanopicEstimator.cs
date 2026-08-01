@@ -51,31 +51,10 @@ namespace Gloam.Core.Calibration
 
         public static NightMelanopicCoefficients? TryEstimate(string content, string sourceName = "CCSS")
         {
-            var validation = CgatsValidator.Validate(content, "ccss");
-            if (!validation.IsValid)
+            var primaries = SelectPrimaries(content);
+            if (primaries == null)
                 return null;
-
-            var parsed = Parse(content);
-            if (parsed == null || parsed.Rows.Count < 3)
-                return null;
-
-            var rows = parsed.Rows
-                .Select(r => new SpectralRow(r.Name, parsed.Wavelengths, r.Values))
-                .Where(r => r.Total > 1e-9)
-                .ToList();
-            if (rows.Count < 3) return null;
-
-            // Remove an obvious black/leakage row before inferring primaries.
-            double medianTotal = rows.Select(r => r.Total).OrderBy(v => v).ElementAt(rows.Count / 2);
-            if (medianTotal > 0)
-                rows = rows.Where(r => r.Total > medianTotal * 0.08).ToList();
-            if (rows.Count < 3) return null;
-
-            var red = SelectDistinct(rows, null, r => r.RedPurity);
-            var green = SelectDistinct(rows, new[] { red }, r => r.GreenPurity);
-            var blue = SelectDistinct(rows, new[] { red, green }, r => r.BluePurity);
-            if (red == null || green == null || blue == null)
-                return null;
+            var (_, _, red, green, blue) = primaries.Value;
 
             return new NightMelanopicCoefficients(
                 red.Melanopic, green.Melanopic, blue.Melanopic,
@@ -166,30 +145,10 @@ namespace Gloam.Core.Calibration
         /// </summary>
         public static CcssSpectra? TryParseSpectra(string content, string sourceName = "CCSS")
         {
-            var validation = CgatsValidator.Validate(content, "ccss");
-            if (!validation.IsValid)
+            var primaries = SelectPrimaries(content);
+            if (primaries == null)
                 return null;
-
-            var parsed = Parse(content);
-            if (parsed == null || parsed.Rows.Count < 3)
-                return null;
-
-            var rows = parsed.Rows
-                .Select(r => new SpectralRow(r.Name, parsed.Wavelengths, r.Values))
-                .Where(r => r.Total > 1e-9)
-                .ToList();
-            if (rows.Count < 3) return null;
-
-            double medianTotal = rows.Select(r => r.Total).OrderBy(v => v).ElementAt(rows.Count / 2);
-            if (medianTotal > 0)
-                rows = rows.Where(r => r.Total > medianTotal * 0.08).ToList();
-            if (rows.Count < 3) return null;
-
-            var red = SelectDistinct(rows, null, r => r.RedPurity);
-            var green = SelectDistinct(rows, new[] { red }, r => r.GreenPurity);
-            var blue = SelectDistinct(rows, new[] { red, green }, r => r.BluePurity);
-            if (red == null || green == null || blue == null)
-                return null;
+            var (parsed, rows, red, green, blue) = primaries.Value;
 
             // White: the brightest remaining (non-primary) row; else synthesize R+G+B.
             var white = rows
@@ -242,6 +201,44 @@ namespace Gloam.Core.Calibration
         /// <summary>Melanopic integral ∫SPD·s_mel(λ)dλ (CIE S 026).</summary>
         public static double Melanopic(IReadOnlyList<double> wavelengths, IReadOnlyList<double> values)
             => TrapezoidIntegrate(wavelengths, values, MelanopicSensitivity);
+
+        /// <summary>
+        /// The CCSS front end both public entry points share: validate, parse, drop leakage
+        /// rows, then pick the three primaries by band purity. Returns the parse and the
+        /// surviving rows too — <see cref="TryParseSpectra"/> needs the wavelength grid, and
+        /// identifies the white row by reference against the three selected here.
+        /// </summary>
+        private static (ParsedCcss Parsed, IReadOnlyList<SpectralRow> Rows,
+                        SpectralRow Red, SpectralRow Green, SpectralRow Blue)? SelectPrimaries(string content)
+        {
+            var validation = CgatsValidator.Validate(content, "ccss");
+            if (!validation.IsValid)
+                return null;
+
+            var parsed = Parse(content);
+            if (parsed == null || parsed.Rows.Count < 3)
+                return null;
+
+            var rows = parsed.Rows
+                .Select(r => new SpectralRow(r.Name, parsed.Wavelengths, r.Values))
+                .Where(r => r.Total > 1e-9)
+                .ToList();
+            if (rows.Count < 3) return null;
+
+            // Remove an obvious black/leakage row before inferring primaries.
+            double medianTotal = rows.Select(r => r.Total).OrderBy(v => v).ElementAt(rows.Count / 2);
+            if (medianTotal > 0)
+                rows = rows.Where(r => r.Total > medianTotal * 0.08).ToList();
+            if (rows.Count < 3) return null;
+
+            var red = SelectDistinct(rows, null, r => r.RedPurity);
+            var green = SelectDistinct(rows, new[] { red }, r => r.GreenPurity);
+            var blue = SelectDistinct(rows, new[] { red, green }, r => r.BluePurity);
+            if (red == null || green == null || blue == null)
+                return null;
+
+            return (parsed, rows, red, green, blue);
+        }
 
         /// <summary>
         /// Greedy per-channel selector: picks the highest-purity row for each primary. This band
