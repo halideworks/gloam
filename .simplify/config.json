@@ -1,12 +1,12 @@
 {
-  "stacks": ["cpp"],
-  "test_command": "pwsh -NoProfile -File .simplify/run-tests.ps1",
-  "collect_command": "pwsh -NoProfile -Command \"Write-Output 'collect: n/a for dotnet -- per-test ids live in the testids.txt golden'\"",
-  "warn_command": "dotnet build src/Gloam.sln -c Release --no-incremental",
+  "stacks": ["csharp"],
+  "test_command": "dotnet test src/Gloam.sln -c Release --nologo --logger \"console;verbosity=normal\"",
+  "collect_command": "dotnet test src/Gloam.sln -c Release --nologo --list-tests",
+  "warn_command": "dotnet build src/Gloam.sln -c Release --no-incremental --nologo",
   "golden_paths": [
-    ".simplify/testids.txt",
     "tests/Gloam.Tests/Fixtures/Golden/**/*.json",
-    "tests/Gloam.Tests/Fixtures/Golden/**/*.csv"
+    "tests/Gloam.Tests/Fixtures/Golden/**/*.csv",
+    "tests/**/*.verified.*"
   ],
   "source_globs": [
     "src/**/*.cs",

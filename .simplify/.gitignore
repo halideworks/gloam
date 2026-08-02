@@ -1,6 +1,7 @@
 baseline*.json
-survey.json
+survey*.json
 jscpd/
 snapshot*.json
 trx/
-testids.txt
+expected.json
+expected-applied-*.json
