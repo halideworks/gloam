@@ -99,6 +99,58 @@ namespace Gloam.Core.Calibration
         /// <summary>Pause between repeated reads of the same patch (no display change to settle).</summary>
         internal int InterReadDelayMs { get; set; } = 150;
 
+        // ------- High-APL settling -------
+        // A fixed settle cannot absorb a panel-level luminance transient. On OLED an
+        // automatic brightness limiter releases headroom during sustained dark content,
+        // so the first full-field white after a long dark sequence reads well above the
+        // panel's steady state and then decays over SECONDS as the limiter clamps back.
+        // Observed on a MAG 271QP X28: a white drift anchor following a blue-ramp run read
+        // 265.7 -> 263.4 -> 260.9 cd/m² across its 1.2s burst while the run's other three
+        // whites all sat at 242-243. The median of that decaying burst (263.4) is not a
+        // measurement of the display, it is a sample of a transient, and it tripped the
+        // validator's 8% repeated-white gate and failed the whole run.
+        //
+        // A longer fixed settle is the wrong lever (the transient outlasts any sane cap and
+        // every other patch would pay for it). Instead: read, DETECT a monotonic trend, and
+        // keep reading until consecutive reads agree. A settled panel exits after the normal
+        // burst and pays nothing; only a genuinely drifting patch spends extra reads.
+
+        /// <summary>
+        /// Signal level at/above which a patch loads the panel enough for a brightness
+        /// limiter to act on it. Rec.709-weighted signal, so this covers white, near-white
+        /// grays and the high-luminance primaries/secondaries.
+        /// </summary>
+        internal const double HighAplKeyThreshold = 0.5;
+
+        /// <summary>
+        /// Consecutive reads of a high-APL patch must agree within this fraction of their
+        /// mean for the patch to count as settled. Sized from measured hardware: a settled
+        /// white burst spans ~0.14% of its mean, a limiter transient ~1.8%.
+        /// </summary>
+        internal double SettledRelativeSpread { get; set; } = 0.003;
+
+        /// <summary>
+        /// Extra reads spent chasing a high-APL settle before recording the best available
+        /// value and flagging the patch as unsettled. At <see cref="SettleReadDelayMs"/>
+        /// plus probe integration this bounds the chase at roughly 25 seconds per patch.
+        /// </summary>
+        internal int MaxSettleReads { get; set; } = 24;
+
+        /// <summary>
+        /// Pause between settle reads. Longer than <see cref="InterReadDelayMs"/>: this is
+        /// waiting out a panel transient, not just averaging meter noise.
+        /// </summary>
+        internal int SettleReadDelayMs { get; set; } = 400;
+
+        /// <summary>
+        /// Patches whose reading never stopped drifting within <see cref="MaxSettleReads"/>.
+        /// Surfaced so a report can say the panel would not hold a stable output rather than
+        /// silently recording a transient.
+        /// </summary>
+        public IReadOnlyList<string> UnsettledPatches => _unsettledPatches;
+
+        private readonly List<string> _unsettledPatches = new();
+
         // ------- Variance-adaptive integration (1.4) -------
         // The M8 multi-read set is fixed a priori (near-black/white/primaries). This
         // extends it with a LIVE noise model: every multi-read burst records its observed
@@ -417,6 +469,10 @@ namespace Gloam.Core.Calibration
                     {
                         LastDriftAnalysis = DriftCompensator.Compensate(_measurements);
                         PhaseChanged?.Invoke(this, LastDriftAnalysis.Summary);
+                        // The drift verdict decides whether the run passes validation, so it
+                        // belongs in the log and not only in a transient UI phase label.
+                        Log.Info($"CalibrationOrchestrator: drift analysis: {LastDriftAnalysis.Summary}");
+                        LogRepeatedAnchors();
                         if (LastDriftAnalysis.Applied)
                         {
                             var compensated = new List<MeasurementResult>(LastDriftAnalysis.Measurements);
@@ -913,13 +969,166 @@ namespace Gloam.Core.Calibration
                 reads.Add(await MeasurePatchWithRetryAsync(patch, cancellationToken));
             }
 
-            // 1.4: feed the noise model with the burst's final spread so later patches
-            // in this luminance decade adapt (escalation + settle).
-            NoiseModel.Record(
-                reads.Average(r => r.Xyz.Y),
-                reads.Max(r => r.Xyz.Y) - reads.Min(r => r.Xyz.Y));
+            // High-APL settle: the spread gate above is symmetric and deliberately loose,
+            // so a steady one-way decay slips straight through it (4.8 cd/m² of drift
+            // against a 13.2 cd/m² threshold, in the failure this was built for). Test the
+            // burst for DIRECTION instead, and if it is still moving keep reading until it
+            // holds still. Only the settled tail is recorded.
+            var window = await SettleHighAplAsync(patch, reads, cancellationToken);
 
-            return MedianMeasurement(patch, reads);
+            // 1.4: feed the noise model with the SETTLED window's spread. Feeding it the
+            // whole decaying series would report the transient as meter noise and wrongly
+            // mark the entire luminance decade noisy for the rest of the run.
+            NoiseModel.Record(
+                window.Average(r => r.Xyz.Y),
+                window.Max(r => r.Xyz.Y) - window.Min(r => r.Xyz.Y));
+
+            return MedianMeasurement(patch, window);
+        }
+
+        /// <summary>
+        /// Keeps reading a high-APL patch until consecutive readings agree, and returns the
+        /// settled window (the reads actually used for the recorded value). Returns the
+        /// original burst untouched for low-APL patches or when the burst is already steady,
+        /// so a well-behaved panel pays nothing for this.
+        /// </summary>
+        private async Task<IReadOnlyList<MeasurementResult>> SettleHighAplAsync(
+            ColorPatch patch, List<MeasurementResult> reads, CancellationToken cancellationToken)
+        {
+            if (patch.Nits is not null || PatchKeyLuminance(patch) < HighAplKeyThreshold)
+                return reads;
+
+            var window = TailWindow(reads);
+            if (!IsDrifting(window))
+                return reads;
+
+            double startY = window[0].Xyz.Y;
+            int extraReads = 0;
+            while (IsDrifting(window) && extraReads < MaxSettleReads)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await Task.Delay(SettleReadDelayMs, cancellationToken);
+                reads.Add(await MeasurePatchWithRetryAsync(patch, cancellationToken));
+                extraReads++;
+                window = TailWindow(reads);
+            }
+
+            double endY = window[^1].Xyz.Y;
+            bool settled = !IsDrifting(window);
+            string detail =
+                $"{patch.Name}: {startY:F2} -> {endY:F2} cd/m² after {extraReads} extra read(s)";
+            if (settled)
+            {
+                Log.Info($"CalibrationOrchestrator: high-APL patch settled. {detail}.");
+            }
+            else
+            {
+                _unsettledPatches.Add(patch.Name ?? "(unnamed patch)");
+                Log.Info(
+                    $"CalibrationOrchestrator: high-APL patch did NOT settle within {MaxSettleReads} reads. " +
+                    $"{detail}. Recording the last readings; the display is not holding a steady output.");
+            }
+            return window;
+        }
+
+        /// <summary>The last <see cref="MultiReadCount"/> readings, in the order taken.</summary>
+        private static List<MeasurementResult> TailWindow(List<MeasurementResult> reads) =>
+            reads.Count <= MultiReadCount
+                ? new List<MeasurementResult>(reads)
+                : reads.GetRange(reads.Count - MultiReadCount, MultiReadCount);
+
+        /// <summary>
+        /// Smallest step in a drifting window, as a fraction of the largest. A panel
+        /// transient decays smoothly, so its consecutive steps are of comparable size
+        /// (the failing hardware case stepped -2.35 then -2.42, a ratio of 0.97). A single
+        /// glitched reading followed by good ones also moves one way, but with wildly
+        /// uneven steps (-49 then -1, a ratio of 0.02). Requiring comparable steps keeps
+        /// the multi-read median's glitch rejection intact instead of chasing a spike.
+        /// </summary>
+        internal double MinDriftStepRatio { get; set; } = 0.25;
+
+        /// <summary>
+        /// True when a read window is still moving one way rather than jittering around a
+        /// value. Requires a consistent direction (every step the same sign, which meter
+        /// noise does not sustain), a total excursion beyond
+        /// <see cref="SettledRelativeSpread"/> of the mean so ordinary noise in a steady
+        /// burst is not mistaken for a transient, and comparable step sizes so a lone
+        /// glitched reading is not mistaken for one either.
+        /// </summary>
+        private bool IsDrifting(IReadOnlyList<MeasurementResult> window)
+        {
+            if (window.Count < 2) return false;
+
+            double mean = window.Average(r => r.Xyz.Y);
+            if (!double.IsFinite(mean) || mean <= 0) return false;
+
+            double spread = window.Max(r => r.Xyz.Y) - window.Min(r => r.Xyz.Y);
+            if (spread <= mean * SettledRelativeSpread) return false;
+
+            int direction = Math.Sign(window[1].Xyz.Y - window[0].Xyz.Y);
+            if (direction == 0) return false;
+
+            double smallestStep = double.MaxValue, largestStep = 0;
+            for (int i = 1; i < window.Count; i++)
+            {
+                double step = window[i].Xyz.Y - window[i - 1].Xyz.Y;
+                if (Math.Sign(step) != direction) return false;
+                double magnitude = Math.Abs(step);
+                smallestStep = Math.Min(smallestStep, magnitude);
+                largestStep = Math.Max(largestStep, magnitude);
+            }
+
+            return largestStep > 0 && smallestStep >= largestStep * MinDriftStepRatio;
+        }
+
+        /// <summary>
+        /// Logs every repeated white and black anchor with its burst spread. These are the
+        /// exact values the validator's drift gates judge the run on, and without them a
+        /// "repeated white patches drifted" failure cannot be told apart from a genuine
+        /// warm-up problem without parsing the raw colorimeter transcript.
+        /// </summary>
+        private void LogRepeatedAnchors()
+        {
+            if (_measurements == null) return;
+
+            static bool IsNeutralAnchor(MeasurementResult m, bool white)
+            {
+                if (m.Patch.Nits is not null) return false;
+                if (m.Patch.Category != PatchCategory.Grayscale &&
+                    m.Patch.Category != PatchCategory.DriftCheck) return false;
+                var rgb = m.Patch.DisplayRgb;
+                return white
+                    ? rgb.R >= 0.99 && rgb.G >= 0.99 && rgb.B >= 0.99
+                    : rgb.R <= 0.01 && rgb.G <= 0.01 && rgb.B <= 0.01;
+            }
+
+            foreach (bool white in new[] { true, false })
+            {
+                var anchors = _measurements.Where(m => m.IsValid && IsNeutralAnchor(m, white)).ToList();
+                if (anchors.Count < 2) continue;
+
+                string label = white ? "white" : "black";
+                double min = anchors.Min(m => m.Xyz.Y);
+                double max = anchors.Max(m => m.Xyz.Y);
+                string spread = white && min > 0
+                    ? $"{(max - min) / min:P2} spread"
+                    : $"{max - min:F3} cd/m² spread";
+                Log.Info($"CalibrationOrchestrator: {anchors.Count} repeated {label} anchors, {spread}:");
+                foreach (var a in anchors)
+                {
+                    Log.Info(
+                        $"  {a.Patch.Name}: Y={a.Xyz.Y:F2} cd/m² " +
+                        $"({a.ReadingCount} read(s), burst spread {a.ReadingSpreadY?.ToString("F2") ?? "n/a"}) " +
+                        $"at {a.Timestamp:HH:mm:ss.fff}");
+                }
+            }
+
+            if (_unsettledPatches.Count > 0)
+            {
+                Log.Info(
+                    "CalibrationOrchestrator: patches that never stopped drifting: " +
+                    string.Join(", ", _unsettledPatches));
+            }
         }
 
         /// <summary>Tracks the run's peak measured luminance for bin PREDICTION only (settle heuristic).</summary>

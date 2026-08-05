@@ -119,7 +119,12 @@ namespace Gloam.Core.Calibration
         {
             var validation = CalibrationMeasurementValidator.ValidateForProfile(_measurements, _target, hdrMode);
             if (!validation.IsValid)
+            {
+                // This is the single most common way a calibration run dies, and the reason
+                // used to reach the UI only. Log it so a failure is diagnosable afterwards.
+                Log.Error($"Lut3DGenerator: measurement validation failed (hdrMode={hdrMode}): {validation.Error}");
                 throw new InvalidOperationException(validation.Error);
+            }
 
             _characterization = BuildCharacterization();
             return _characterization;
