@@ -54,8 +54,13 @@ namespace Gloam.Tests
             Assert.Contains("previous.icm", platform.CurrentProfiles);
         }
 
+        /// <summary>
+        /// Re-activating a profile that is already associated must succeed. The add is
+        /// always attempted now (list membership is not knowable, see the 25H2 note), so
+        /// Windows answers ERROR_ALREADY_EXISTS and that has to be treated as success.
+        /// </summary>
         [Fact]
-        public void ActivateInstalled_ProfileAlreadyInInactiveUserList_SelectsWithoutDuplicateAdd()
+        public void ActivateInstalled_ProfileAlreadyAssociated_ToleratesAlreadyExists()
         {
             var platform = new FakeAdvancedColorPlatform { PerUserEnabled = false };
             platform.CurrentProfiles.Add("parked.icm");
@@ -64,23 +69,76 @@ namespace Gloam.Tests
                 Monitor(), "parked.icm", out _, out string? error, platform);
 
             Assert.True(success, error);
-            Assert.Equal(0, platform.AddCalls);
             Assert.Equal("parked.icm", platform.CurrentDefault);
             Assert.True(platform.PerUserEnabled);
         }
 
         [Fact]
-        public void RemoveCurrentUser_UsesOfficialListAndConfirmsRemoval()
+        public void RemoveCurrentUser_RemovesAssociation_AndConfirmsViaTheDefault()
         {
             var platform = new FakeAdvancedColorPlatform { PerUserEnabled = true };
             platform.CurrentProfiles.Add("Gloam old.icm");
+            platform.CurrentDefault = "Gloam old.icm";
 
             bool success = AdvancedColorProfileAssociation.TryRemoveCurrentUser(
                 Monitor(), "Gloam old.icm", out string? error, platform);
 
             Assert.True(success, error);
             Assert.DoesNotContain("Gloam old.icm", platform.CurrentProfiles);
-            Assert.True(platform.GetListCalls >= 2);
+            Assert.NotEqual("Gloam old.icm", platform.CurrentDefault);
+        }
+
+        // ---- Windows 11 25H2 regression cover -------------------------------------
+        // ColorProfileGetDisplayList returns S_OK/zero profiles even for a live
+        // association. Requiring list membership made every HDR install fail
+        // verification and roll back a working association ("Windows did not retain the
+        // requested Advanced Color profile"), which is how calibration became
+        // uninstallable after the 23H2 to 25H2 update.
+
+        [Fact]
+        public void ActivateInstalled_WhenWindowsReportsAnEmptyList_StillSucceeds()
+        {
+            var platform = new FakeAdvancedColorPlatform { PerUserEnabled = false, ListAlwaysEmpty = true };
+
+            bool success = AdvancedColorProfileAssociation.TryActivateInstalled(
+                Monitor(), "Gloam new.icm", out var receipt, out string? error, platform);
+
+            Assert.True(success, error);
+            Assert.NotNull(receipt);
+            Assert.Equal("Gloam new.icm", platform.CurrentDefault);
+            Assert.True(platform.PerUserEnabled);
+        }
+
+        [Fact]
+        public void VerifiedCurrentUserDefault_WhenWindowsReportsAnEmptyList_TrustsTheDefault()
+        {
+            var platform = new FakeAdvancedColorPlatform
+            {
+                PerUserEnabled = true,
+                ListAlwaysEmpty = true,
+                CurrentDefault = "Gloam active.icm",
+            };
+
+            bool queried = AdvancedColorProfileAssociation.TryIsVerifiedCurrentUserDefault(
+                Monitor(), "Gloam active.icm", out bool active, out string? error, platform);
+
+            Assert.True(queried, error);
+            Assert.True(active, "a profile that IS the current-user default must read as active");
+        }
+
+        [Fact]
+        public void RemoveCurrentUser_WhenWindowsReportsAnEmptyList_StillRemoves()
+        {
+            var platform = new FakeAdvancedColorPlatform { PerUserEnabled = true, ListAlwaysEmpty = true };
+            platform.CurrentProfiles.Add("Gloam stale.icm");
+            platform.CurrentDefault = "Gloam stale.icm";
+
+            bool success = AdvancedColorProfileAssociation.TryRemoveCurrentUser(
+                Monitor(), "Gloam stale.icm", out string? error, platform);
+
+            Assert.True(success, error);
+            Assert.DoesNotContain("Gloam stale.icm", platform.CurrentProfiles);
+            Assert.NotEqual("Gloam stale.icm", platform.CurrentDefault);
         }
 
         [Fact]
@@ -155,10 +213,21 @@ namespace Gloam.Tests
             return 0;
         }
 
+        /// <summary>
+        /// Reproduces Windows 11 25H2: ColorProfileGetDisplayList returns S_OK with zero
+        /// profiles even when the association is live and the default reads back correctly.
+        /// </summary>
+        public bool ListAlwaysEmpty { get; set; }
+
         public int GetDisplayList(Wcs.WCS_PROFILE_MANAGEMENT_SCOPE scope,
             AdvancedColorDisplayIdentity identity, out IReadOnlyList<string> profiles)
         {
             GetListCalls++;
+            if (ListAlwaysEmpty)
+            {
+                profiles = Array.Empty<string>();
+                return 0;
+            }
             profiles = (scope == Wcs.WCS_PROFILE_MANAGEMENT_SCOPE.WCS_PROFILE_MANAGEMENT_SCOPE_CURRENT_USER
                 ? CurrentProfiles
                 : SystemProfiles).ToArray();
@@ -178,7 +247,9 @@ namespace Gloam.Tests
             AdvancedColorDisplayIdentity identity, bool setAsDefault)
         {
             AddCalls++;
-            Profiles(scope).Add(profileName);
+            // Windows returns ERROR_ALREADY_EXISTS rather than silently re-adding.
+            if (!Profiles(scope).Add(profileName))
+                return unchecked((int)0x800700B7);
             if (setAsDefault && !IgnoreDefaultWrites) SetDefault(scope, profileName);
             return 0;
         }

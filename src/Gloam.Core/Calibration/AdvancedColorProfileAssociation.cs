@@ -37,10 +37,34 @@ namespace Gloam.Core.Calibration
     /// system and per-user lists and consults only the selected list; writing to an inactive
     /// current-user list reports success but applies no calibration. Every activation here
     /// therefore selects current-user mode, sets the Extended Display Color Mode default,
-    /// and queries both the list and default back before reporting success.
+    /// and reads the default back before reporting success.
+    ///
+    /// LIST MEMBERSHIP IS NOT A VALID TEST (Windows 11 25H2, build 26200.8973).
+    /// ColorProfileGetDisplayList returns S_OK with a count of ZERO for both scopes even
+    /// when the association is live: measured directly against a real display, the profile
+    /// was written to ICMProfileAC in the registry, ColorProfileGetDisplayDefault read it
+    /// straight back, and the list was still empty. Requiring the profile to appear in that
+    /// list made every HDR install fail verification, roll back a perfectly good
+    /// association, and report "Windows did not retain the requested Advanced Color
+    /// profile" — which is how a working calibration became uninstallable after the 23H2
+    /// to 25H2 update. The DEFAULT association in the scope Windows consults is the
+    /// authoritative signal: if our profile is that default, it is associated by
+    /// definition. The list is still read for diagnostics, never to fail an operation.
     /// </summary>
     internal static class AdvancedColorProfileAssociation
     {
+        /// <summary>HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS).</summary>
+        private const int HResultAlreadyExists = unchecked((int)0x800700B7);
+
+        /// <summary>
+        /// "There was nothing there" HRESULTs: FILE_NOT_FOUND, PATH_NOT_FOUND and
+        /// NOT_FOUND. Removing an association that does not exist is a success, not a fault.
+        /// </summary>
+        private static bool IsNotFound(int hr) =>
+            hr == unchecked((int)0x80070002) ||
+            hr == unchecked((int)0x80070003) ||
+            hr == unchecked((int)0x80070490);
+
         internal static IAdvancedColorProfilePlatform Platform { get; set; } = new WindowsAdvancedColorProfilePlatform();
 
         internal sealed record ActivationReceipt(
@@ -49,7 +73,15 @@ namespace Gloam.Core.Calibration
             Wcs.WCS_PROFILE_MANAGEMENT_SCOPE PriorSelectedScope,
             string? PriorCurrentUserDefault,
             IReadOnlyList<string> PriorCurrentUserProfiles,
-            string ActivatedProfile);
+            string ActivatedProfile)
+        {
+            /// <summary>
+            /// True when THIS activation created the association (as opposed to finding it
+            /// already present). Rollback removes only what it added; the prior-profiles
+            /// list can no longer answer that question on 25H2.
+            /// </summary>
+            internal bool AddedAssociation { get; init; }
+        }
 
         internal static bool TryGetSelectedDefault(
             MonitorInfo monitor, out string? profileName, out string? error,
@@ -135,13 +167,6 @@ namespace Gloam.Core.Calibration
                 return true;
             }
 
-            hr = platform.GetDisplayList(currentScope, identity, out var profiles);
-            if (hr != 0)
-            {
-                error = $"ColorProfileGetDisplayList failed (HRESULT 0x{hr:X8}).";
-                return false;
-            }
-
             hr = platform.GetDisplayDefault(currentScope, identity, out string? activeDefault);
             if (hr != 0)
             {
@@ -149,8 +174,9 @@ namespace Gloam.Core.Calibration
                 return true;
             }
 
-            isActive = profiles.Contains(profileName, StringComparer.OrdinalIgnoreCase) &&
-                       string.Equals(activeDefault, profileName, StringComparison.OrdinalIgnoreCase);
+            // Default only: see the 25H2 note on this class. Being the consulted scope's
+            // Extended Display Color Mode default IS the association.
+            isActive = string.Equals(activeDefault, profileName, StringComparison.OrdinalIgnoreCase);
             error = null;
             return true;
         }
@@ -209,29 +235,42 @@ namespace Gloam.Core.Calibration
                 return false;
             }
 
-            // Re-activation commonly finds the profile already parked in an inactive
-            // current-user list. Adding it again can return ERROR_ALREADY_EXISTS; in that
-            // case the correct operation is simply to select it as the HDR default.
-            hr = priorProfiles.Contains(profileName, StringComparer.OrdinalIgnoreCase)
-                ? 0
-                : platform.AddDisplayAssociation(currentScope, profileName, identity, setAsDefault: true);
+            // Re-activation commonly finds the profile already associated. The list can no
+            // longer tell us (see the 25H2 note), so always attempt the add and treat
+            // ERROR_ALREADY_EXISTS as success — the correct follow-up either way is to
+            // select it as the HDR default.
+            hr = platform.AddDisplayAssociation(currentScope, profileName, identity, setAsDefault: true);
+            bool addedByUs = hr == 0;
+            if (hr == HResultAlreadyExists)
+                hr = 0;
             if (hr == 0)
                 hr = platform.SetDisplayDefault(currentScope, profileName, identity);
             if (hr != 0)
             {
+                pending = pending with { AddedAssociation = addedByUs };
                 TryRollback(monitor, pending, platform, out _);
                 error = $"Windows refused the Advanced Color default (HRESULT 0x{hr:X8}).";
                 return false;
             }
+            pending = pending with { AddedAssociation = addedByUs };
 
-            if (platform.GetDisplayList(currentScope, identity, out var installedProfiles) != 0 ||
-                !installedProfiles.Contains(profileName, StringComparer.OrdinalIgnoreCase) ||
-                platform.GetDisplayDefault(currentScope, identity, out string? installedDefault) != 0 ||
+            if (platform.GetDisplayDefault(currentScope, identity, out string? installedDefault) != 0 ||
                 !string.Equals(installedDefault, profileName, StringComparison.OrdinalIgnoreCase))
             {
                 TryRollback(monitor, pending, platform, out _);
                 error = "Windows did not retain the requested Advanced Color profile as the active HDR default.";
                 return false;
+            }
+
+            // Diagnostics only. An empty list alongside a correct default is the expected
+            // 25H2 shape, and must never fail the install.
+            if (platform.GetDisplayList(currentScope, identity, out var installedProfiles) == 0 &&
+                !installedProfiles.Contains(profileName, StringComparer.OrdinalIgnoreCase))
+            {
+                Log.Info(
+                    $"AdvancedColorProfileAssociation: ColorProfileGetDisplayList reported {installedProfiles.Count} " +
+                    $"profile(s) and did not include '{profileName}', but it IS the active Extended Display Color Mode " +
+                    "default. Trusting the default (expected on Windows 11 25H2).");
             }
 
             receipt = pending;
@@ -247,8 +286,11 @@ namespace Gloam.Core.Calibration
             var currentScope = Wcs.WCS_PROFILE_MANAGEMENT_SCOPE.WCS_PROFILE_MANAGEMENT_SCOPE_CURRENT_USER;
             var failures = new List<string>();
 
-            if (!receipt.PriorCurrentUserProfiles.Contains(
-                    receipt.ActivatedProfile, StringComparer.OrdinalIgnoreCase))
+            // Remove only an association this activation actually created. The prior-list
+            // snapshot cannot be used for this decision any more (see the 25H2 note): it
+            // comes back empty, which would make rollback tear down a pre-existing
+            // association that was never ours to touch.
+            if (receipt.AddedAssociation)
             {
                 int removeHr = platform.RemoveDisplayAssociation(
                     currentScope, receipt.ActivatedProfile, receipt.Identity);
@@ -287,24 +329,23 @@ namespace Gloam.Core.Calibration
             }
 
             var scope = Wcs.WCS_PROFILE_MANAGEMENT_SCOPE.WCS_PROFILE_MANAGEMENT_SCOPE_CURRENT_USER;
-            if (platform.GetDisplayList(scope, identity, out var profiles) != 0 ||
-                !profiles.Contains(profileName, StringComparer.OrdinalIgnoreCase))
-            {
-                error = null;
-                return true;
-            }
 
+            // No list precheck: it comes back empty on 25H2 (see the class note), which
+            // turned every retire into a silent no-op and left stale associations behind.
+            // Ask Windows to remove it and treat "there was nothing to remove" as success.
             int hr = platform.RemoveDisplayAssociation(scope, profileName, identity);
-            if (hr != 0)
+            if (hr is not 0 and not HResultAlreadyExists && !IsNotFound(hr))
             {
                 error = $"ColorProfileRemoveDisplayAssociation failed (HRESULT 0x{hr:X8}).";
                 return false;
             }
 
-            if (platform.GetDisplayList(scope, identity, out profiles) == 0 &&
-                profiles.Contains(profileName, StringComparer.OrdinalIgnoreCase))
+            // Confirm via the default, not the list: a retired profile must no longer be the
+            // Extended Display Color Mode default. An empty list proves nothing either way.
+            if (platform.GetDisplayDefault(scope, identity, out string? stillDefault) == 0 &&
+                string.Equals(stillDefault, profileName, StringComparison.OrdinalIgnoreCase))
             {
-                error = "Windows still reports the retired profile in the Advanced Color list.";
+                error = "Windows still reports the retired profile as the Advanced Color default.";
                 return false;
             }
 

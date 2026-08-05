@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using Gloam.Interop;
 
 namespace Gloam.Core.Calibration
@@ -388,11 +389,15 @@ namespace Gloam.Core.Calibration
                 {
                     if (!TryInstallVerified(srcPath, profileName,
                             AdvancedColorProfileAssociation.Platform, out bool newlyInstalled, out string? installError))
+                    {
+                        Log.Error($"CalibrationProfileInstaller: color-store install failed for '{profileName}': {installError}");
                         return new InstallResult(false, profileName, installError);
+                    }
 
                     if (!AdvancedColorProfileAssociation.TryActivateInstalled(
                             monitor, profileName, out _, out string? associationError))
                     {
+                        Log.Error($"CalibrationProfileInstaller: Advanced Color association failed for '{profileName}': {associationError}");
                         if (newlyInstalled)
                             AdvancedColorProfileAssociation.Platform.UninstallColorProfile(profileName, delete: true);
                         return new InstallResult(false, profileName, associationError);
@@ -403,8 +408,12 @@ namespace Gloam.Core.Calibration
                     if (!Wcs.InstallColorProfile(null, srcPath))
                         Log.Info($"CalibrationProfileInstaller: InstallColorProfile returned false for {profileName} (may already exist).");
                     if (!Wcs.AssociateColorProfileWithDevice(null, srcPath, monitor.MonitorDevicePath))
+                    {
+                        Log.Error($"CalibrationProfileInstaller: SDR association failed for '{profileName}' " +
+                                  $"(Win32 {Marshal.GetLastWin32Error()}).");
                         return new InstallResult(false, profileName,
                             "Windows refused to associate the profile with the display. Make sure the monitor is active.");
+                    }
 
                     if (!Wcs.WcsSetDefaultColorProfile(
                             Wcs.WCS_PROFILE_MANAGEMENT_SCOPE.WCS_PROFILE_MANAGEMENT_SCOPE_CURRENT_USER,
