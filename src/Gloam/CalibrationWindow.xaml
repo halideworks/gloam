@@ -386,8 +386,13 @@
                     <Viewbox.RenderTransform>
                         <TranslateTransform x:Name="MeasurementPatchTransform"/>
                     </Viewbox.RenderTransform>
+                    <!-- Cursor="None" is scoped to the PATCH ONLY, and this panel exists
+                         only once measurement has begun. A pointer resting on the patch is
+                         measured along with it; everywhere else on this screen the cursor
+                         must stay visible or the Pause/Cancel/Mute buttons below become
+                         unclickable. Placement keeps its own SizeAll cursor. -->
                     <Border x:Name="ColorPatchBorder" Width="250" Height="250"
-                            Background="White" BorderThickness="0">
+                            Background="White" BorderThickness="0" Cursor="None">
                         <!-- Patch color is set programmatically -->
                     </Border>
                 </Viewbox>

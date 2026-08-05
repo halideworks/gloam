@@ -25,7 +25,7 @@ namespace Gloam
     /// </summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
         "Design", "CA1001:Types that own disposable fields should be disposable",
-        Justification = "WPF owns the window lifecycle; Closing and run-finally paths release the renderer and cancellation source.")]
+        Justification = "WPF owns the window lifecycle; Closing and run-finally paths release the renderer, cancellation source and keyboard hook.")]
     public partial class CalibrationWindow : Window
     {
         #region Win32 Imports
@@ -154,6 +154,17 @@ namespace Gloam
         // Animated "Shutting down calibration..." wait dialog while a cancel drains
         private BusyDialog? _shutdownDialog;
 
+        // Holds the patch in front while the probe is reading it. Anything that covers the
+        // patch mid-read is measured AS the patch, so alt-tabbing away silently corrupts
+        // the run rather than interrupting it visibly.
+        private Services.MeasurementForegroundGuard? _foregroundGuard;
+
+        // Stops the shell shortcuts that paint over the patch (Alt+Tab above all) from
+        // firing at all while a reading is in progress. The foreground guard alone is a
+        // recovery, and a recovery is too late: the switcher has already been drawn over
+        // the patch by the time we are told we lost activation.
+        private readonly Services.MeasurementInputLock _inputLock = new();
+
         // Patch placement offset (shared by positioning + measurement patches)
         private double _patchOffsetX, _patchOffsetY;
         private bool _isDraggingPatch;
@@ -201,6 +212,8 @@ namespace Gloam
             // Keep the patch opaque if the user (or a stray hover) triggers Aero Peek mid-run,
             // so the probe never reads the desktop instead of the patch.
             Services.WindowTheme.ExcludeFromPeek(this);
+            _foregroundGuard = Services.MeasurementForegroundGuard.Attach(
+                this, () => _isCalibrationRunning && !_isPaused && !_isCancelled);
             _calibrationPreset = CalibrationPreset.Standard;
         }
 
@@ -332,6 +345,9 @@ namespace Gloam
                 _isCancelled = true;
                 _cancellationTokenSource?.Cancel();
             }
+
+            // Never leave a system-wide keyboard hook installed behind a closed window.
+            _inputLock.Release();
 
             DisposeHdrWireRenderer();
 
@@ -1101,6 +1117,12 @@ namespace Gloam
             _isCalibrationRunning = true;
             _isPaused = false;
             _isCancelled = false;
+
+            // The fullscreen patch was positioned with SWP_NOACTIVATE so it would land on
+            // the target monitor without stealing focus during setup. Take the foreground
+            // now, before the first reading, and hold it for the rest of the run.
+            _foregroundGuard?.ClaimForeground();
+            _inputLock.Engage();
             _currentPatchIndex = 0;
             _totalPatches = _sessionCoordinator.TotalPatches;
             using var runCancellation = new CancellationTokenSource();
@@ -1261,6 +1283,12 @@ namespace Gloam
             {
                 _isCalibrationRunning = false;
                 _elapsedTimer.Stop();
+                _inputLock.Release();
+                if (_foregroundGuard is { Recoveries: > 0 } guard)
+                {
+                    Log.Info($"CalibrationWindow: the patch was covered and recovered {guard.Recoveries} time(s) " +
+                             "during this run; readings taken at those moments may be contaminated.");
+                }
                 UnwireOrchestratorEvents();
 
                 // Teardown is done (state restored, session closed) - release the
@@ -1319,11 +1347,16 @@ namespace Gloam
                         Vm.IsPauseOverlayVisible = true;
                         Vm.PauseButtonText = "Paused";
                         Vm.IsPauseEnabled = false;
+                        // Nothing is being read while paused, so give the desktop back:
+                        // holding Alt+Tab hostage through a pause would be indefensible.
+                        _inputLock.Release();
                         break;
                     case CalibrationState.Running:
                         Vm.IsPauseOverlayVisible = false;
                         Vm.PauseButtonText = "Pause";
                         Vm.IsPauseEnabled = true;
+                        if (_isCalibrationRunning)
+                            _inputLock.Engage();
                         break;
                 }
             });
@@ -1890,6 +1923,10 @@ namespace Gloam
             }
             else
             {
+                // Every failure path funnels through here, so this is the one place that
+                // guarantees the reason survives past the dialog the user dismisses.
+                Log.Error($"CalibrationWindow: calibration failed: {message}");
+
                 Vm.CompletionIcon = "FAILED";
                 Vm.CompletionIconBrush = FindResource("ErrorBrush") as SolidColorBrush ?? CalibrationViewModel.ErrorBrush;
                 Vm.CompletionTitle = "Calibration Failed";

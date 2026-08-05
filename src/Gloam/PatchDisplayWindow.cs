@@ -15,6 +15,9 @@ namespace Gloam
     /// patch name). Windows applies the installed MHC2 profile at the compositor, so what
     /// the probe sees through this window IS the corrected output.
     /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design", "CA1001:Types that own disposable fields should be disposable",
+        Justification = "WPF owns the window lifecycle; the Closed handler releases the keyboard hook.")]
     public sealed class PatchDisplayWindow : Window
     {
         [System.Runtime.InteropServices.DllImport("user32.dll")]
@@ -42,6 +45,11 @@ namespace Gloam
         private readonly StackPanel _controlsRow;
         private readonly Border _sweepOverlay;
         private readonly ProbePlacementControl _placement;
+
+        // Blocks Alt+Tab and friends while the sweep is reading a patch; released during
+        // placement and on teardown. See MeasurementInputLock for why a topmost re-assert
+        // is not enough on its own.
+        private readonly Services.MeasurementInputLock _inputLock = new();
         private readonly Button _muteButton;
         private Action? _cancelRequested;
 
@@ -78,6 +86,13 @@ namespace Gloam
             // Hovering a taskbar icon mid-sweep triggers Aero Peek; without this the patch
             // fades to glass and the probe reads the desktop instead of the patch.
             Services.WindowTheme.ExcludeFromPeek(this);
+            // Same reason, for the rest of the desktop: hold the patch in front while the
+            // sweep is running. Placement is exempt so the user can still reach other
+            // windows while positioning the probe.
+            Services.MeasurementForegroundGuard.Attach(
+                this, () => IsLoaded && _placement.Visibility != Visibility.Visible);
+            // A system-wide keyboard hook must never outlive the window that installed it.
+            Closed += (_, _) => _inputLock.Release();
 
             PreviewKeyDown += (_, e) =>
             {
@@ -139,6 +154,11 @@ namespace Gloam
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 RenderTransform = new TranslateTransform(offsetX, offsetY),
+                // Scoped to the patch alone: a pointer resting on it is measured with it.
+                // The rest of the window keeps a normal cursor so the sweep controls stay
+                // clickable. (Dropped by accident in cfa0f75, and briefly over-applied to
+                // the whole window, which made every button unreachable.)
+                Cursor = System.Windows.Input.Cursors.None,
             };
 
             _progress = new ProgressBar
@@ -317,6 +337,8 @@ namespace Gloam
             _patch.Visibility = Visibility.Collapsed;
             _sweepOverlay.Visibility = Visibility.Collapsed;
             _placement.Visibility = Visibility.Visible;
+            // Placement is not a reading: the desktop belongs to the user again.
+            _inputLock.Release();
             _placement.Focus();
         }
 
@@ -325,6 +347,8 @@ namespace Gloam
             _placement.Visibility = Visibility.Collapsed;
             _patch.Visibility = Visibility.Visible;
             _sweepOverlay.Visibility = Visibility.Visible;
+            // The sweep is about to read this patch; keep the shell off it.
+            _inputLock.Engage();
             Focus();
         }
 
