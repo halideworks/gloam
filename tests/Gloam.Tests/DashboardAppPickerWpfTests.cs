@@ -286,7 +286,13 @@ namespace Gloam.Tests
                     try { gameLabWindow?.Close(); } catch { }
                     try { window?.Close(); } catch { }
                     nightMode?.Dispose();
-                    try { app?.Shutdown(); } catch { }
+                    // Deliberately NOT app.Shutdown(). Both windows are already closed above,
+                    // and Shutdown is a PROCESS-level teardown: it tears down WPF's input
+                    // stack for the whole test run, after which Mouse.Capture silently fails
+                    // in every later test (ProbePlacementDragTests, which exists because a
+                    // capture bug froze the calibration window, cannot then verify anything).
+                    // An idle Application object costs the test process nothing.
+                    _ = app;
                     AppPaths.UseDataDirectoriesForCurrentProcess(originalData, originalRoaming);
                     try { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); } catch { }
                 }

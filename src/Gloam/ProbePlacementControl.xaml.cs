@@ -84,7 +84,14 @@ namespace Gloam
             _dragStart = e.GetPosition(this);
             _dragStartX = OffsetX;
             _dragStartY = OffsetY;
-            CaptureMouse();
+            // Capture on the SURFACE that carries the move/up handlers, not on the
+            // UserControl. CaptureMouse() here captured `this`, and CaptureMode.Element
+            // routes every following mouse event to the captured element alone — its
+            // children are skipped. So the surface's MouseMove/MouseLeftButtonUp never
+            // fired: the target would not drag, the capture was never released, and with
+            // the control holding capture the Begin Measurement and Back buttons stopped
+            // receiving clicks entirely. The window looked frozen while the app ran on.
+            ((UIElement)sender).CaptureMouse();
             Focus();
         }
 
@@ -113,8 +120,15 @@ namespace Gloam
         {
             if (!_dragging) return;
             _dragging = false;
-            ReleaseMouseCapture();
+            ((UIElement)sender).ReleaseMouseCapture();
         }
+
+        /// <summary>
+        /// Anything can take the capture away mid-drag (a tray menu, alt-tab, a dialog
+        /// opening on another thread). End the drag when that happens so the flag cannot
+        /// latch true and leave the surface convinced it is still dragging.
+        /// </summary>
+        private void Surface_LostMouseCapture(object sender, MouseEventArgs e) => _dragging = false;
 
         private void Control_PreviewKeyDown(object sender, KeyEventArgs e)
         {

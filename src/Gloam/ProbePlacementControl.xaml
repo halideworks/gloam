@@ -16,7 +16,8 @@
           Cursor="SizeAll"
           MouseLeftButtonDown="Surface_MouseLeftButtonDown"
           MouseMove="Surface_MouseMove"
-          MouseLeftButtonUp="Surface_MouseLeftButtonUp">
+          MouseLeftButtonUp="Surface_MouseLeftButtonUp"
+          LostMouseCapture="Surface_LostMouseCapture">
         <Border x:Name="WindowedBanner"
                 Background="#3A2A10"
                 VerticalAlignment="Top"
