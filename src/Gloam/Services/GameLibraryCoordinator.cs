@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -20,15 +21,24 @@ namespace Gloam.Services
             IReadOnlyList<string> AppNames,
             IReadOnlyDictionary<string, string> ExecutablePaths);
 
-        private readonly GameDiscoveryService _discoveryService;
+        private readonly Func<CancellationToken, IProgress<GameDiscoveryProgress>?, IReadOnlyList<DiscoveredGame>> _scan;
+        private readonly object _discoveryLock = new();
+        [SuppressMessage("Usage", "CA2213:Disposable fields should be disposed",
+            Justification = "ScanLibrariesAsync owns and disposes each source in finally after its worker exits; shutdown only requests cancellation.")]
         private CancellationTokenSource? _discoveryCancellation;
         private int _discoveryGeneration;
         private int _runningAppGeneration;
-        private bool _disposed;
+        private volatile bool _disposed;
 
         internal GameLibraryCoordinator(GameDiscoveryService? discoveryService = null)
         {
-            _discoveryService = discoveryService ?? new GameDiscoveryService();
+            _scan = (discoveryService ?? new GameDiscoveryService()).Scan;
+        }
+
+        internal GameLibraryCoordinator(
+            Func<CancellationToken, IProgress<GameDiscoveryProgress>?, IReadOnlyList<DiscoveredGame>> scan)
+        {
+            _scan = scan;
         }
 
         internal async Task<RunningAppScan?> RefreshRunningAppsAsync()
@@ -44,17 +54,23 @@ namespace Gloam.Services
         internal async Task<IReadOnlyList<DiscoveredGame>> ScanLibrariesAsync(
             IProgress<GameDiscoveryProgress>? progress = null)
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            CancelLibraryScan();
-
-            var cancellation = new CancellationTokenSource();
-            _discoveryCancellation = cancellation;
-            int generation = Interlocked.Increment(ref _discoveryGeneration);
+            CancellationTokenSource cancellation;
+            CancellationToken token;
+            int generation;
+            lock (_discoveryLock)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                CancelLibraryScan();
+                cancellation = new CancellationTokenSource();
+                token = cancellation.Token;
+                _discoveryCancellation = cancellation;
+                generation = Interlocked.Increment(ref _discoveryGeneration);
+            }
             var guardedProgress = progress == null
                 ? null
                 : new Progress<GameDiscoveryProgress>(value =>
                 {
-                    if (!_disposed && !cancellation.IsCancellationRequested &&
+                    if (!_disposed && !token.IsCancellationRequested &&
                         generation == Volatile.Read(ref _discoveryGeneration))
                         progress.Report(value);
                 });
@@ -62,28 +78,34 @@ namespace Gloam.Services
             try
             {
                 var games = await Task.Run(
-                    () => _discoveryService.Scan(cancellation.Token, guardedProgress),
-                    cancellation.Token);
-                cancellation.Token.ThrowIfCancellationRequested();
+                    () => _scan(token, guardedProgress),
+                    token);
+                token.ThrowIfCancellationRequested();
                 if (_disposed || generation != Volatile.Read(ref _discoveryGeneration))
-                    throw new OperationCanceledException(cancellation.Token);
+                    throw new OperationCanceledException(token);
                 return games;
             }
             finally
             {
-                if (ReferenceEquals(_discoveryCancellation, cancellation))
-                    _discoveryCancellation = null;
-                cancellation.Dispose();
+                lock (_discoveryLock)
+                {
+                    if (ReferenceEquals(_discoveryCancellation, cancellation))
+                        _discoveryCancellation = null;
+                    cancellation.Dispose();
+                }
             }
         }
 
         internal void CancelLibraryScan()
         {
-            Interlocked.Increment(ref _discoveryGeneration);
-            var cancellation = Interlocked.Exchange(ref _discoveryCancellation, null);
-            if (cancellation == null) return;
-            cancellation.Cancel();
-            cancellation.Dispose();
+            lock (_discoveryLock)
+            {
+                Interlocked.Increment(ref _discoveryGeneration);
+                var cancellation = _discoveryCancellation;
+                _discoveryCancellation = null;
+                // Serialize Cancel with the async owner's final disposal.
+                cancellation?.Cancel();
+            }
         }
 
         private static RunningAppScan ScanRunningApps()
@@ -140,15 +162,12 @@ namespace Gloam.Services
 
         public void Dispose()
         {
-            if (_disposed) return;
-            _disposed = true;
-            Interlocked.Increment(ref _runningAppGeneration);
-            Interlocked.Increment(ref _discoveryGeneration);
-            if (_discoveryCancellation != null)
+            lock (_discoveryLock)
             {
-                _discoveryCancellation.Cancel();
-                _discoveryCancellation.Dispose();
-                _discoveryCancellation = null;
+                if (_disposed) return;
+                _disposed = true;
+                Interlocked.Increment(ref _runningAppGeneration);
+                CancelLibraryScan();
             }
         }
     }
