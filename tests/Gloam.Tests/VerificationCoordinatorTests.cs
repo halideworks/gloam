@@ -75,4 +75,34 @@ public class VerificationCoordinatorTests
                     MeasureAsync: (_, _) => throw new InvalidOperationException("must not measure")),
                 cancellation.Token));
     }
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RunAsync_CancellationDuringFinalPatchCannotPublishSuccess(bool cancelDuringDelay)
+    {
+        using var cancellation = new CancellationTokenSource();
+        bool captured = false;
+        bool measured = false;
+        await Assert.ThrowsAsync<OperationCanceledException>(() => VerificationCoordinator.RunAsync(
+            new VerificationCoordinator.Config(
+                new[] { new ColorPatch { Name = "White", DisplayRgb = new LinearRgb(1, 1, 1) } },
+                StandardTargets.SrgbGamma22, null, _ => { }, (_, _, _, _) => { },
+                (patch, _) =>
+                {
+                    measured = true;
+                    cancellation.Cancel();
+                    return Task.FromResult(new MeasurementResult
+                    {
+                        Patch = patch, Xyz = new CieXyz(95, 100, 109), IsValid = true
+                    });
+                },
+                MeasurementCaptured: () => captured = true,
+                DelayAsync: (_, _) =>
+                {
+                    if (cancelDuringDelay) cancellation.Cancel();
+                    return Task.CompletedTask;
+                }), cancellation.Token));
+        Assert.False(captured);
+        Assert.Equal(!cancelDuringDelay, measured);
+    }
 }

@@ -60,6 +60,7 @@ namespace Gloam
             DataContext = _viewModel;
             ThemeToggleButton.Content = BrutalistTheme.IsDark ? "◐" : "◑";
 
+            Closed += (_, _) => _viewModel.StopDetection();
             Loaded += (s, e) => SafeAsync.FireAndForget(
                 _viewModel.OnLoadedAsync, "CalibrationSetupWindow.Loaded");
         }

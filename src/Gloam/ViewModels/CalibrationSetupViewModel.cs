@@ -100,6 +100,11 @@ namespace Gloam.ViewModels
         private readonly SettingsManager? _settingsManager;
         private bool _colorimeterReady;
         private bool _updatingTargetSelection;
+        private bool _closed;
+        private bool _detectionRunning;
+        private CancellationTokenSource? _detectionCancellation;
+        internal Func<ColorimeterService, CancellationToken, Task> InitializeInstrumentAsync { get; set; } =
+            async (service, token) => { await service.InitializeAsync(token); };
 
         public ObservableCollection<MonitorChoice> Monitors { get; }
         public ObservableCollection<TargetOption> Targets { get; }
@@ -179,7 +184,7 @@ namespace Gloam.ViewModels
             }
 
             IdentifyCommand = new RelayCommand(IdentifySelectedMonitor);
-            RefreshColorimeterCommand = new AsyncRelayCommand(RefreshColorimeterAsync);
+            RefreshColorimeterCommand = new AsyncRelayCommand(RefreshColorimeterAsync, () => !_closed && !_detectionRunning);
             StartCommand = new RelayCommand(Start);
             CancelCommand = new RelayCommand(() => CloseRequested?.Invoke(false));
             RefreshPreflight();
@@ -188,11 +193,12 @@ namespace Gloam.ViewModels
         /// <summary>Identify flash + colorimeter detection; called once from the view's Loaded.</summary>
         public async Task OnLoadedAsync()
         {
+            if (_closed) return;
             IdentifySelectedMonitor();
             if (ColorimeterService != null)
                 UpdateColorimeterStatus();
             else
-                await InitializeColorimeterAsync();
+                await RefreshColorimeterAsync();
         }
 
         private MonitorChoice? _selectedMonitor;
@@ -789,7 +795,7 @@ namespace Gloam.ViewModels
         private void RefreshCanStart()
         {
             var criticalError = CriticalStartError();
-            CanStart = _colorimeterReady && criticalError == null;
+            CanStart = !_closed && !_detectionRunning && _colorimeterReady && criticalError == null;
             StartBlockReason = criticalError != null
                 ? criticalError.Message
                 : !_colorimeterReady
@@ -826,8 +832,9 @@ namespace Gloam.ViewModels
 
         #region Colorimeter init
 
-        private async Task InitializeColorimeterAsync()
+        private async Task InitializeColorimeterAsync(CancellationTokenSource cancellation)
         {
+            CancellationToken cancellationToken = cancellation.Token;
             StatusText = "Finding ArgyllCMS...";
             StatusBrush = WarningBrush;
             StatusDetailText = "";
@@ -886,28 +893,20 @@ namespace Gloam.ViewModels
                 StatusDetailText = $"Using: {binDirName}";
                 Log.Info($"CalibrationSetupViewModel: Using ArgyllCMS from {argyllBinPath}");
 
+                cancellationToken.ThrowIfCancellationRequested();
                 ColorimeterService = new ColorimeterService(argyllBinPath);
 
-                // Add timeout for initialization
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-                try
-                {
-                    await ColorimeterService.InitializeAsync(cts.Token);
-                }
-                catch (OperationCanceledException)
-                {
-                    StatusText = "Detection timed out";
-                    StatusBrush = ErrorBrush;
-                    StatusDetailText = "Check colorimeter connection and USB drivers";
-                    _colorimeterReady = false;
-                    RefreshCanStart();
-                    return;
-                }
+                // Download/confirmation dialogs can stay open longer than detection's limit.
+                cancellation.CancelAfter(TimeSpan.FromSeconds(15));
+                await InitializeInstrumentAsync(ColorimeterService, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
 
                 UpdateColorimeterStatus();
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
+                if (_closed) return;
                 StatusText = $"Error: {ex.Message}";
                 StatusBrush = ErrorBrush;
                 StatusDetailText = "Check console for details";
@@ -935,27 +934,72 @@ namespace Gloam.ViewModels
             }
         }
 
-        private async Task RefreshColorimeterAsync()
+        internal async Task RefreshColorimeterAsync()
         {
+            if (_closed || _detectionRunning) return;
+            _detectionRunning = true;
+            ((AsyncRelayCommand)RefreshColorimeterCommand).NotifyCanExecuteChanged();
             StatusText = "Searching...";
             StatusBrush = WarningBrush;
             StatusDetailText = "";
             _colorimeterReady = false;
             RefreshCanStart();
 
-            if (ColorimeterService != null)
+            using var cancellation = new CancellationTokenSource();
+            _detectionCancellation = cancellation;
+            try
             {
-                await ColorimeterService.InitializeAsync();
-                UpdateColorimeterStatus();
+                if (ColorimeterService == null)
+                    await InitializeColorimeterAsync(cancellation);
+                else
+                {
+                    cancellation.CancelAfter(TimeSpan.FromSeconds(15));
+                    await InitializeInstrumentAsync(ColorimeterService, cancellation.Token);
+                    cancellation.Token.ThrowIfCancellationRequested();
+                    UpdateColorimeterStatus();
+                }
             }
-            else
+            catch (OperationCanceledException)
             {
-                await InitializeColorimeterAsync();
+                if (!_closed)
+                {
+                    StatusText = "Detection timed out";
+                    StatusBrush = ErrorBrush;
+                    StatusDetailText = "Check colorimeter connection and USB drivers, then click Refresh.";
+                }
             }
+            catch (Exception ex)
+            {
+                if (!_closed)
+                {
+                    StatusText = $"Error: {ex.Message}";
+                    StatusBrush = ErrorBrush;
+                    StatusDetailText = "Check colorimeter connection and USB drivers, then click Refresh.";
+                    Log.Info($"Colorimeter detection failed: {ex}");
+                }
+            }
+            finally
+            {
+                _detectionCancellation = null;
+                _detectionRunning = false;
+                RefreshCanStart();
+                ((AsyncRelayCommand)RefreshColorimeterCommand).NotifyCanExecuteChanged();
+            }
+        }
+
+        internal void StopDetection()
+        {
+            _closed = true;
+            _colorimeterReady = false;
+            // The async detection owns disposal once the instrument call has unwound.
+            _detectionCancellation?.Cancel();
+            RefreshCanStart();
+            ((AsyncRelayCommand)RefreshColorimeterCommand).NotifyCanExecuteChanged();
         }
 
         private void UpdateColorimeterStatus()
         {
+            if (_closed) return;
             if (ColorimeterService == null)
             {
                 StatusText = "Colorimeter service unavailable";

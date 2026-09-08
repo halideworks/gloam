@@ -48,7 +48,12 @@ namespace Gloam.Services
                 config.ReportProgress(i + 1, config.Patches.Count, patch, next);
                 config.ShowPatch(patch);
                 await delay(TimeSpan.FromMilliseconds(i == 0 ? 1200 : 500), cancellationToken);
-                results.Add(await config.MeasureAsync(patch, cancellationToken));
+                cancellationToken.ThrowIfCancellationRequested();
+                var measurement = await config.MeasureAsync(patch, cancellationToken);
+                // A driver may finish its read despite cancellation. Do not publish it as
+                // successful verification when the user stopped the final patch.
+                cancellationToken.ThrowIfCancellationRequested();
+                results.Add(measurement);
                 config.MeasurementCaptured?.Invoke();
             }
 
