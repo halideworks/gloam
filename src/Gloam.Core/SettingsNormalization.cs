@@ -92,9 +92,14 @@ namespace Gloam.Core
             data.ExcludedApps = ExcludedApps(data.ExcludedApps);
             data.GamerProfiles = GamerProfiles(data.GamerProfiles);
 
-            foreach (var profile in data.MonitorProfiles.Values)
+            foreach (var key in data.MonitorProfiles.Keys.ToList())
             {
-                if (profile == null) continue;
+                var profile = data.MonitorProfiles[key];
+                if (profile == null)
+                {
+                    data.MonitorProfiles.Remove(key);
+                    continue;
+                }
                 profile.Brightness = ClampFinite(profile.Brightness, 10.0, 100.0, 100.0);
                 profile.Temperature = ClampFinite(profile.Temperature, -50.0, 50.0, 0.0);
                 profile.TemperatureOffset = ClampFinite(profile.TemperatureOffset, -50.0, 50.0, 0.0);

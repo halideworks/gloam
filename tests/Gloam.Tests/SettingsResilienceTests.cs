@@ -199,6 +199,69 @@ namespace Gloam.Tests
             Assert.Contains($"\"SchemaVersion\": {SettingsManager.CurrentSchemaVersion}", File.ReadAllText(SettingsPath));
         }
 
+        [Fact]
+        public void Load_LegacyExclusions_PreservesOtherSettings()
+        {
+            File.WriteAllText(SettingsPath, """
+                { "DarkTheme": true, "TrustCheckReminderDays": 14,
+                  "ExcludedApps": ["game.exe"] }
+                """);
+
+            var sm = new SettingsManager();
+
+            Assert.False(sm.LoadFailedPreservingFile);
+            Assert.True(sm.DarkTheme);
+            Assert.Equal("game.exe", Assert.Single(sm.ExcludedApps).AppName);
+            Assert.Equal(14, sm.TrustCheckReminderDays);
+            Assert.True(new SettingsManager().DarkTheme);
+        }
+
+        [Theory]
+        [InlineData("ExcludedApps", "[\"game.exe\"]")]
+        [InlineData("DarkTheme", "{\"future\": true}")]
+        public void Load_NewerSchemaWithIncompatibleProperty_NeverOverwritesFile(string name, string value)
+        {
+            string json = "{\"sChEmAvErSiOn\": 99,\"" + name + "\":" + value + "}";
+            File.WriteAllText(SettingsPath, json);
+
+            var sm = new SettingsManager();
+
+            Assert.True(sm.SettingsFileFromNewerVersion);
+            Assert.False(sm.Save());
+            sm.SetDarkTheme(false);
+            Assert.Equal(json, File.ReadAllText(SettingsPath));
+        }
+
+        [Theory]
+        [InlineData("null")]
+        [InlineData("{\"DarkTheme\": \"invalid\"}")]
+        public void Load_InvalidSettingsShape_PreservesFile(string json)
+        {
+            File.WriteAllText(SettingsPath, json);
+
+            var sm = new SettingsManager();
+
+            Assert.True(sm.LoadFailedPreservingFile);
+            Assert.False(sm.Save());
+            Assert.Equal(json, File.ReadAllText(SettingsPath));
+        }
+
+        [Fact]
+        public void Load_NullMonitorProfile_DropsInvalidEntryAndAllowsReplacement()
+        {
+            File.WriteAllText(SettingsPath, """
+                { "MonitorProfiles": { "broken": null, "valid": { "GammaMode": "Gamma24" } } }
+                """);
+
+            var sm = new SettingsManager();
+
+            Assert.False(sm.LoadFailedPreservingFile);
+            Assert.Null(sm.GetProfileForMonitor("broken"));
+            Assert.Equal(GammaMode.Gamma24, sm.GetProfileForMonitor("valid"));
+            sm.SetProfileForMonitor("broken", GammaMode.Gamma22);
+            Assert.Equal(GammaMode.Gamma22, new SettingsManager().GetProfileForMonitor("broken"));
+        }
+
         public void Dispose()
         {
             AppPaths.UseDataDirectoriesForCurrentProcess(_originalDataDir, _originalRoamingDir);

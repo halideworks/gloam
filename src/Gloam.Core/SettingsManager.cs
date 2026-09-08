@@ -1251,11 +1251,5 @@ namespace Gloam.Core
             public Dictionary<string, bool> UiSectionExpanded { get; set; } = new Dictionary<string, bool>();
         }
 
-        internal class LegacySettingsData
-        {
-            public Dictionary<string, MonitorProfileData> MonitorProfiles { get; set; } = new Dictionary<string, MonitorProfileData>();
-            public NightModeSettingsData NightMode { get; set; } = new NightModeSettingsData();
-            public List<string> ExcludedApps { get; set; } = new List<string>();
-        }
     }
 }

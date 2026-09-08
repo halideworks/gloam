@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Gloam.Core
 {
@@ -30,48 +31,53 @@ namespace Gloam.Core
                 if (new FileInfo(path).Length > maximumBytes)
                     throw new InvalidDataException("settings.json exceeds the size limit.");
 
-                string json = File.ReadAllText(path);
-                var options = ReadOptions();
+                string json = TextFileStore.ReadBounded(path, maximumBytes, (int)Math.Min(maximumBytes, int.MaxValue));
+                var options = ReadOptions;
                 try
                 {
-                    loaded = JsonSerializer.Deserialize<SettingsManager.SettingsData>(json, options)
-                        ?? new SettingsManager.SettingsData();
+                    var root = JsonNode.Parse(json) as JsonObject
+                        ?? throw new JsonException("Settings must be a JSON object.");
+
+                    // Read the version before decoding fields whose shape may have changed.
+                    // Even a failed best-effort load must never make a future file writable.
+                    foreach (var property in root)
+                    {
+                        if (property.Key.Equals(nameof(SettingsManager.SettingsData.SchemaVersion),
+                                StringComparison.OrdinalIgnoreCase) &&
+                            property.Value is JsonValue version && version.TryGetValue<int>(out int number))
+                            newerSchema |= number > currentSchemaVersion;
+                    }
+
+                    // Only the old string exclusion list needs conversion. Rebuilding the
+                    // entire document from a legacy DTO silently drops every other setting.
+                    bool convertedLegacy = false;
+                    foreach (var property in root.ToList())
+                    {
+                        if (!property.Key.Equals(nameof(SettingsManager.SettingsData.ExcludedApps),
+                                StringComparison.OrdinalIgnoreCase) || property.Value is not JsonArray apps)
+                            continue;
+                        for (int i = 0; i < apps.Count; i++)
+                        {
+                            if (apps[i] is JsonValue value && value.TryGetValue<string>(out string? appName))
+                            {
+                                apps[i] = new JsonObject { [nameof(AppExclusionRule.AppName)] = appName };
+                                convertedLegacy = true;
+                            }
+                        }
+                    }
+
+                    loaded = root.Deserialize<SettingsManager.SettingsData>(options)
+                        ?? throw new JsonException("Settings must be a JSON object.");
                     SettingsMigration.Apply(loaded);
                     SettingsNormalization.Validate(loaded);
-                    newerSchema = loaded.SchemaVersion > currentSchemaVersion;
+                    migratedLegacy = convertedLegacy;
                 }
                 catch (Exception ex)
                 {
-                    Log.Info($"SettingsPersistence: primary deserialization failed ({ex.Message}); attempting legacy migration.");
-                    try
-                    {
-                        var legacy = JsonSerializer.Deserialize<SettingsManager.LegacySettingsData>(json, options);
-                        if (legacy != null)
-                        {
-                            loaded = new SettingsManager.SettingsData
-                            {
-                                MonitorProfiles = legacy.MonitorProfiles,
-                                NightMode = legacy.NightMode,
-                                ExcludedApps = legacy.ExcludedApps?
-                                    .Select(value => new AppExclusionRule { AppName = value })
-                                    .ToList() ?? new(),
-                            };
-                            SettingsMigration.Apply(loaded);
-                            SettingsNormalization.Validate(loaded);
-                            migratedLegacy = true;
-                        }
-                        else
-                        {
-                            parseFailed = true;
-                        }
-                    }
-                    catch (Exception innerEx)
-                    {
-                        Log.Error($"SettingsPersistence: legacy migration failed ({innerEx.Message}); preserving the original file.");
-                        TryCopyCorruptBackup(path);
-                        loaded = new SettingsManager.SettingsData();
-                        parseFailed = true;
-                    }
+                    Log.Error($"SettingsPersistence: deserialization failed ({ex.Message}); preserving the original file.");
+                    TryCopyCorruptBackup(path);
+                    loaded = new SettingsManager.SettingsData();
+                    parseFailed = true;
                 }
             }
             catch (Exception ex)
@@ -90,16 +96,10 @@ namespace Gloam.Core
         }
 
         internal static string Serialize(SettingsManager.SettingsData data) =>
-            JsonSerializer.Serialize(data, WriteOptions());
+            JsonSerializer.Serialize(data, WriteOptions);
 
-        internal static void WriteAtomic(string path, string json)
-        {
-            string? directory = Path.GetDirectoryName(path);
-            if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
-            string tempPath = path + $".{Guid.NewGuid():N}.tmp";
-            File.WriteAllText(tempPath, json);
-            File.Move(tempPath, path, overwrite: true);
-        }
+        internal static void WriteAtomic(string path, string json) =>
+            TextFileStore.WriteAtomic(path, json, SettingsManager.MaxSettingsFileBytes);
 
         internal static string? TryCreateBackup(string path, string label)
         {
@@ -112,13 +112,13 @@ namespace Gloam.Core
             return backupPath;
         }
 
-        private static JsonSerializerOptions ReadOptions() => new()
+        private static readonly JsonSerializerOptions ReadOptions = new()
         {
             PropertyNameCaseInsensitive = true,
             Converters = { new TolerantJsonStringEnumConverter() },
         };
 
-        private static JsonSerializerOptions WriteOptions() => new()
+        private static readonly JsonSerializerOptions WriteOptions = new()
         {
             WriteIndented = true,
             Converters = { new TolerantJsonStringEnumConverter() },

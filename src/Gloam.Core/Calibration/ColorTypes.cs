@@ -1,4 +1,5 @@
 using System;
+using System.Text.Json.Serialization;
 
 namespace Gloam.Core.Calibration
 {
@@ -26,6 +27,7 @@ namespace Gloam.Core.Calibration
         /// <summary>Implicit z coordinate: z = 1 - x - y</summary>
         public double Z => 1.0 - X - Y;
 
+        [JsonConstructor]
         public Chromaticity(double x, double y)
         {
             X = x;
@@ -151,6 +153,7 @@ namespace Gloam.Core.Calibration
         public double Y { get; }
         public double Z { get; }
 
+        [JsonConstructor]
         public CieXyz(double x, double y, double z)
         {
             X = x;
@@ -269,6 +272,7 @@ namespace Gloam.Core.Calibration
         /// <summary>Blue-Yellow axis (typically -128 to +128)</summary>
         public double B { get; }
 
+        [JsonConstructor]
         public CieLab(double l, double a, double b)
         {
             L = l;
@@ -493,6 +497,7 @@ namespace Gloam.Core.Calibration
         public double G { get; }
         public double B { get; }
 
+        [JsonConstructor]
         public LinearRgb(double r, double g, double b)
         {
             R = r;

@@ -311,9 +311,7 @@ namespace Gloam.Core.Calibration
         {
             var json = JsonSerializer.Serialize(CreatePersistableCopy(), JsonOptions);
             // Write-then-rename so a crash mid-write can't corrupt an existing profile.
-            string tmp = path + ".tmp";
-            File.WriteAllText(tmp, json);
-            File.Move(tmp, path, overwrite: true);
+            TextFileStore.WriteAtomic(path, json, MaxProfileFileBytes, MaxProfileCharacters);
         }
 
         /// <summary>
@@ -326,7 +324,7 @@ namespace Gloam.Core.Calibration
             if (new FileInfo(path).Length > MaxProfileFileBytes)
                 throw new InvalidDataException("Calibration profile exceeds the size limit.");
 
-            var json = File.ReadAllText(path);
+            var json = TextFileStore.ReadBounded(path, MaxProfileFileBytes, MaxProfileCharacters);
             return FromJson(json);
         }
 

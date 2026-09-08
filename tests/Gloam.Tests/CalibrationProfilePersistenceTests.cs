@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Gloam.Core.Calibration;
 using Xunit;
 
@@ -8,6 +10,44 @@ namespace Gloam.Tests
 {
     public class CalibrationProfilePersistenceTests
     {
+        [Fact]
+        public void SaveToFile_PreservesCompleteCalibrationTarget()
+        {
+            string path = Path.Combine(Path.GetTempPath(), $"gloam-target-{Guid.NewGuid():N}.json");
+            try
+            {
+                var target = StandardTargets.Rec709Gamma24
+                    .WithWhitePoint(new Chromaticity(0.33, 0.34)).WithBlackLevel(0.15).AsWhitePointOnly();
+                var profile = new CalibrationProfile
+                {
+                    MonitorName = "Panel", MonitorDevicePath = "panel", Target = target
+                };
+                profile.SaveToFile(path);
+                var loaded = CalibrationProfile.LoadFromFile(path);
+                Assert.Equal(JsonSerializer.Serialize(target), JsonSerializer.Serialize(loaded.Target));
+            }
+            finally { File.Delete(path); }
+        }
+
+        [Fact]
+        public void LoadFromFile_LegacyTargetNameStillResolves()
+        {
+            string path = Path.Combine(Path.GetTempPath(), $"gloam-target-{Guid.NewGuid():N}.json");
+            try
+            {
+                var profile = new CalibrationProfile
+                {
+                    MonitorName = "Panel", MonitorDevicePath = "panel", Target = StandardTargets.Rec709Gamma24
+                };
+                profile.SaveToFile(path);
+                var json = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+                json.Remove("Target");
+                File.WriteAllText(path, json.ToJsonString());
+                Assert.Equal(StandardTargets.Rec709Gamma24.Name, CalibrationProfile.LoadFromFile(path).Target.Name);
+            }
+            finally { File.Delete(path); }
+        }
+
         [Fact]
         public void SaveToFile_SanitizesNonFiniteMetricsAndDerivedCharacteristics()
         {

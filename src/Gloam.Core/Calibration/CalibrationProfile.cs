@@ -23,6 +23,8 @@ namespace Gloam.Core.Calibration
     /// </remarks>
     public class CalibrationProfile
     {
+        private const long MaxFileBytes = 16L * 1024 * 1024;
+        private const int MaxFileCharacters = 8_000_000;
         private static readonly JsonSerializerOptions PersistenceJsonOptions = new()
         {
             WriteIndented = true,
@@ -267,6 +269,7 @@ namespace Gloam.Core.Calibration
                 IsActive = IsActive,
                 Notes = Notes,
                 TargetName = Target.Name,
+                Target = Target,
                 LutSize = Math.Max(2, LutSize),
                 CorrectionLutData = CorrectionLutData,
                 MeasuredCharacteristics = SanitizeMeasuredCharacteristics(MeasuredCharacteristics),
@@ -282,9 +285,7 @@ namespace Gloam.Core.Calibration
 
             string json = JsonSerializer.Serialize(data, PersistenceJsonOptions);
             // Write-then-rename: a crash mid-write can't corrupt an existing profile.
-            string tmp = path + ".tmp";
-            File.WriteAllText(tmp, json);
-            File.Move(tmp, path, overwrite: true);
+            TextFileStore.WriteAtomic(path, json, MaxFileBytes, MaxFileCharacters);
         }
 
         /// <summary>
@@ -292,12 +293,13 @@ namespace Gloam.Core.Calibration
         /// </summary>
         public static CalibrationProfile LoadFromFile(string path)
         {
-            string json = File.ReadAllText(path);
+            string json = TextFileStore.ReadBounded(path, MaxFileBytes, MaxFileCharacters);
             var data = JsonSerializer.Deserialize<CalibrationProfileData>(json)
                        ?? throw new InvalidDataException("Failed to deserialize profile");
 
-            // Find the matching target
-            var target = StandardTargets.GetByName(data.TargetName ?? "sRGB")
+            // Preserve the actual target, including white trim, measured black and
+            // white-point-only intent. Name lookup is only for older saved profiles.
+            var target = data.Target ?? StandardTargets.GetByName(data.TargetName ?? "sRGB")
                          ?? StandardTargets.SrgbGamma22;
 
             var profile = new CalibrationProfile
@@ -578,6 +580,7 @@ namespace Gloam.Core.Calibration
         public bool IsActive { get; set; }
         public string? Notes { get; set; }
         public string? TargetName { get; set; }
+        public CalibrationTarget? Target { get; set; }
         public int LutSize { get; set; }
         public byte[]? CorrectionLutData { get; set; }
         public DisplayCharacteristics? MeasuredCharacteristics { get; set; }
