@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -72,8 +73,11 @@ namespace Gloam.Core.Calibration
 
         public static string GetHistoryPath(string monitorDevicePath)
         {
-            string safe = Sanitize(monitorDevicePath);
-            return Path.Combine(GetTrendDirectory(), $"{safe}.jsonl");
+            string identity = (monitorDevicePath ?? string.Empty).ToUpperInvariant();
+            string safe = Sanitize(identity);
+            if (safe.Length > 40) safe = safe[..40];
+            string hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)));
+            return Path.Combine(GetTrendDirectory(), $"{safe}_{hash}.jsonl");
         }
 
         public static void Append(TrustCheckEntry entry)
@@ -90,25 +94,30 @@ namespace Gloam.Core.Calibration
         /// <summary>Loads the monitor's history, oldest first; malformed lines are skipped.</summary>
         public static IReadOnlyList<TrustCheckEntry> Load(string monitorDevicePath)
         {
-            string path = GetHistoryPath(monitorDevicePath);
-            if (!File.Exists(path)) return Array.Empty<TrustCheckEntry>();
-
+            // Read legacy files too: older sanitized names could combine multiple monitors.
+            string[] paths = { GetHistoryPath(monitorDevicePath),
+                Path.Combine(GetTrendDirectory(), Sanitize(monitorDevicePath) + ".jsonl") };
             var entries = new List<TrustCheckEntry>();
-            foreach (string line in File.ReadLines(path))
+            foreach (string path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-                try
+                if (!File.Exists(path)) continue;
+                foreach (string line in File.ReadLines(path))
                 {
-                    var entry = JsonSerializer.Deserialize<TrustCheckEntry>(line, JsonOptions);
-                    if (entry != null) entries.Add(entry);
-                }
-                catch (JsonException)
-                {
-                    // A torn/corrupt trailing line (crash mid-append) must not poison the
-                    // rest of the history.
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+                    try
+                    {
+                        var entry = JsonSerializer.Deserialize<TrustCheckEntry>(line, JsonOptions);
+                        if (entry != null && string.Equals(entry.MonitorDevicePath, monitorDevicePath,
+                                StringComparison.OrdinalIgnoreCase))
+                            entries.Add(entry);
+                    }
+                    catch (JsonException)
+                    {
+                        // A torn/corrupt line must not poison the rest of the history.
+                    }
                 }
             }
-            return entries;
+            return entries.OrderBy(e => e.TimestampUtc).ToList();
         }
 
         public sealed record DriftVerdict(
@@ -130,8 +139,9 @@ namespace Gloam.Core.Calibration
         {
             if (history == null || history.Count < 2) return null;
 
-            var latest = history[^1];
-            var baseline = history.FirstOrDefault(e =>
+            var ordered = history.OrderBy(e => e.TimestampUtc).ToList();
+            var latest = ordered[^1];
+            var baseline = ordered.FirstOrDefault(e =>
                 e.ProfileId == latest.ProfileId && e.HdrMode == latest.HdrMode);
             if (baseline == null || ReferenceEquals(baseline, latest)) return null;
 

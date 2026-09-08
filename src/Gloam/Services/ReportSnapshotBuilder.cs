@@ -74,19 +74,19 @@ namespace Gloam.Services
                 ToneMapping = request.ToneMapping,
             };
 
-            string path = request.ExistingPath ?? BuildPath(request.Profile);
+            string path = request.ExistingPath ?? BuildPath(request.Profile, DateTime.Now);
             request.Profile.ReportSummary = summary;
             request.Profile.SaveToFile(path);
             SaveMeasurements(request, path);
             return new Result(path, summary);
         }
 
-        private static string BuildPath(CalibrationProfile profile)
+        internal static string BuildPath(CalibrationProfile profile, DateTime savedAt)
         {
             string safeName = string.Join("_", profile.MonitorName.Split(Path.GetInvalidFileNameChars()));
             return Path.Combine(
                 CalibrationProfile.GetReportsDirectory(),
-                $"{safeName}_{DateTime.Now:yyyyMMdd_HHmmss}.json");
+                $"{safeName}_{savedAt:yyyyMMdd_HHmmss}_{profile.Id:N}.json");
         }
 
         private static void SaveMeasurements(Request request, string path)

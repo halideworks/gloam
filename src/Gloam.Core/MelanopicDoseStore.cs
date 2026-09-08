@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
@@ -51,7 +52,7 @@ namespace Gloam.Core
         }
 
         private static string PathForDay(DateTime localDate)
-            => Path.Combine(GetDirectory(), $"{localDate:yyyy-MM-dd}.jsonl");
+            => Path.Combine(GetDirectory(), localDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + ".jsonl");
 
         public static void Append(MelanopicDoseSample sample)
         {
@@ -65,14 +66,20 @@ namespace Gloam.Core
         }
 
         /// <summary>
-        /// Loads all samples at or after <paramref name="sinceLocal"/>, oldest first
-        /// (spans at most the two day-files the window can touch).
+        /// Loads all samples at or after <paramref name="sinceLocal"/>, oldest first,
+        /// visiting each local calendar day in the requested window.
         /// </summary>
-        public static IReadOnlyList<MelanopicDoseSample> LoadSince(DateTime sinceLocal)
+        public static IReadOnlyList<MelanopicDoseSample> LoadSince(DateTime sinceLocal) =>
+            LoadSince(sinceLocal, DateTime.Now, TimeZoneInfo.Local);
+
+        internal static IReadOnlyList<MelanopicDoseSample> LoadSince(
+            DateTime sinceLocal, DateTime nowLocal, TimeZoneInfo timeZone)
         {
             var samples = new List<MelanopicDoseSample>();
-            var sinceUtc = sinceLocal.Kind == DateTimeKind.Utc ? sinceLocal : sinceLocal.ToUniversalTime();
-            for (DateTime day = sinceLocal.Date; day <= DateTime.Now.Date; day = day.AddDays(1))
+            var sinceUtc = sinceLocal.Kind == DateTimeKind.Utc ? sinceLocal
+                : TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(sinceLocal, DateTimeKind.Unspecified), timeZone);
+            var firstDay = TimeZoneInfo.ConvertTimeFromUtc(sinceUtc, timeZone).Date;
+            for (DateTime day = firstDay; day <= nowLocal.Date; day = day.AddDays(1))
             {
                 string path = PathForDay(day);
                 if (!File.Exists(path)) continue;
@@ -129,7 +136,7 @@ namespace Gloam.Core
                 foreach (string file in Directory.EnumerateFiles(GetDirectory(), "????-??-??.jsonl"))
                 {
                     string stem = Path.GetFileNameWithoutExtension(file);
-                    if (DateTime.TryParseExact(stem, "yyyy-MM-dd", null,
+                    if (DateTime.TryParseExact(stem, "yyyy-MM-dd", CultureInfo.InvariantCulture,
                             System.Globalization.DateTimeStyles.None, out var day) &&
                         day < cutoff)
                     {

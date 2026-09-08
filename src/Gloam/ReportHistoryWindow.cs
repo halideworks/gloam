@@ -40,6 +40,7 @@ namespace Gloam
 
             _list = new ListView
             {
+                SelectionMode = SelectionMode.Single,
                 BorderThickness = new Thickness(1),
                 Margin = new Thickness(0, 0, 0, 10),
             };
@@ -85,6 +86,9 @@ namespace Gloam
             var open = Make("Open", (_, _) => Open(), accent: true);
             var delete = Make("Delete…", (_, _) => Delete());
             var close = Make("Close", (_, _) => Close());
+            open.IsEnabled = delete.IsEnabled = false;
+            _list.SelectionChanged += (_, _) =>
+                open.IsEnabled = delete.IsEnabled = Selected != null;
             Grid.SetColumn(open, 1);
             Grid.SetColumn(delete, 2);
             Grid.SetColumn(close, 3);
@@ -199,13 +203,13 @@ namespace Gloam
             try
             {
                 File.Delete(row.FilePath);
+                Refresh();
                 _status.Text = $"Deleted: {row.Monitor} ({row.Date})";
             }
             catch (Exception ex)
             {
                 _status.Text = $"Could not delete the report: {ex.Message}";
             }
-            Refresh();
         }
     }
 }
