@@ -445,7 +445,9 @@ namespace Gloam.Core.Calibration
         /// </summary>
         public byte[] ToBytes()
         {
-            using var ms = new MemoryStream();
+            // Exact size avoids stream growth and a second full-size ToArray copy.
+            var data = new byte[17 + 12 * EntryCount];
+            using var ms = new MemoryStream(data, writable: true);
             using var writer = new BinaryWriter(ms);
 
             // Header
@@ -472,7 +474,7 @@ namespace Gloam.Core.Calibration
                 }
             }
 
-            return ms.ToArray();
+            return data;
         }
 
         /// <summary>
@@ -480,6 +482,8 @@ namespace Gloam.Core.Calibration
         /// </summary>
         public static Lut3D FromBytes(byte[] data)
         {
+            ArgumentNullException.ThrowIfNull(data);
+            if (data.Length < 17) throw new InvalidDataException("Truncated LUT3D header.");
             using var ms = new MemoryStream(data);
             using var reader = new BinaryReader(ms);
 
@@ -499,6 +503,9 @@ namespace Gloam.Core.Calibration
             if (!float.IsFinite(domainMin) || !float.IsFinite(domainMax) || !(domainMax > domainMin))
                 throw new InvalidDataException("Invalid LUT3D domain.");
 
+            // Validate the declared payload before the constructor allocates three cubes.
+            if (size < 2 || size > 256 || data.LongLength != 17L + 12L * size * size * size)
+                throw new InvalidDataException("LUT3D size does not match its payload.");
             var lut = new Lut3D(size) { DomainMin = domainMin, DomainMax = domainMax };
 
             for (int ri = 0; ri < size; ri++)
