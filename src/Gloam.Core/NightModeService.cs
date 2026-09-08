@@ -269,6 +269,7 @@ namespace Gloam.Core
             {
                 _pauseUntil = until;
                 blend = UpdateStateLocked(); // Immediate apply
+                ScheduleNextTickLocked();
             }
             if (blend.HasValue) BlendChanged?.Invoke(blend.Value);
         }
@@ -414,6 +415,14 @@ namespace Gloam.Core
         private void ScheduleNextTickLocked()
         {
             if (_disposed) return;
+            if (_settings.Enabled && _pauseUntil.HasValue && DateTime.Now < _pauseUntil.Value)
+            {
+                // Manual mode normally stops the timer, but a temporary pause must expire.
+                _timer.Interval = Math.Clamp((_pauseUntil.Value - DateTime.Now).TotalMilliseconds,
+                    MaxFadeTickMs, IdleTickMs);
+                _timer.Start();
+                return;
+            }
             if (!_settings.Enabled || _settings.ManualOverrideEnabled)
             {
                 _timer.Stop();
@@ -437,6 +446,15 @@ namespace Gloam.Core
                 return ForceDayModeLocked();
             }
 
+            if (_pauseUntil.HasValue)
+            {
+                if (DateTime.Now < _pauseUntil.Value)
+                {
+                    return ForceDayModeLocked();
+                }
+                _pauseUntil = null; // Expired
+            }
+
             if (_settings.ManualOverrideEnabled)
             {
                 _inFadeWindow = false;
@@ -448,15 +466,6 @@ namespace Gloam.Core
                     return 1.0;
                 }
                 return null;
-            }
-
-            if (_pauseUntil.HasValue)
-            {
-                if (DateTime.Now < _pauseUntil.Value)
-                {
-                    return ForceDayModeLocked();
-                }
-                _pauseUntil = null; // Expired
             }
 
             _settings.EnsureSchedule(_settings.Latitude, _settings.Longitude);

@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text.Json;
 using Gloam.Core.Calibration;
 
 namespace Gloam.Core
@@ -35,9 +37,9 @@ namespace Gloam.Core
             bool Adjusted);
 
         private sealed record CacheKey(
-            int ScheduledKelvin, int BrightnessKey, NightModeAlgorithm Algorithm,
-            int StrengthKey, bool UltraWarm, bool Preserve, double CeilingKey,
-            int WhiteNitsKey, double OmegaKey, string SpectraSource);
+            int ScheduledKelvin, double BrightnessKey, NightModeAlgorithm Algorithm,
+            double StrengthKey, bool UltraWarm, bool Preserve, double CeilingKey,
+            double WhiteNitsKey, double OmegaKey, string SpectralFingerprint, bool ExactState);
 
         private static readonly ConcurrentDictionary<CacheKey, Solution> Cache = new();
         private const int MaxCacheEntries = 512;
@@ -66,28 +68,69 @@ namespace Gloam.Core
             if (!double.IsFinite(ceilingMelLux) || ceilingMelLux <= 0)
                 throw new ArgumentOutOfRangeException(nameof(ceilingMelLux));
 
-            // Quantize the scheduled inputs so a night-mode fade (which changes kelvin every
-            // step) mostly HITS the memo instead of re-running the CAM16 scan per tick on the
-            // apply/UI thread. 25 K and 2% steps are imperceptible in the governed trajectory.
+            perceptualStrength = NightModeSettings.ClampPerceptualStrength(perceptualStrength);
+            string fingerprint = Convert.ToHexString(SHA256.HashData(
+                JsonSerializer.SerializeToUtf8Bytes(new { spectra, melanopic })));
+            var exactKey = new CacheKey(scheduledKelvin, scheduledBrightnessPercent, algorithm,
+                perceptualStrength, useUltraWarmMode, preserveLuminance, ceilingMelLux,
+                sdrWhiteNits, viewingSolidAngleSr, fingerprint, ExactState: true);
+            if (Cache.TryGetValue(exactKey, out var exact)) return exact;
+            int requestedKelvin = scheduledKelvin;
+            double requestedBrightness = scheduledBrightnessPercent;
+            var requestedGains = TemperatureGains(scheduledKelvin, algorithm, perceptualStrength,
+                useUltraWarmMode, preserveLuminance, melanopic);
+            double requestedEdi = MelanopicCalculator.Compute(spectra, requestedGains,
+                sdrWhiteNits * scheduledBrightnessPercent / 100.0, viewingSolidAngleSr).MelanopicEdiLux;
+            if (requestedEdi <= ceilingMelLux)
+            {
+                var unchanged = new Solution(scheduledKelvin, scheduledBrightnessPercent, requestedEdi,
+                    0.0, CeilingMet: true, Adjusted: false);
+                if (Cache.Count >= MaxCacheEntries) Cache.Clear();
+                Cache[exactKey] = unchanged;
+                return unchanged;
+            }
+
+            // Bucket only the candidate search, never the initial compliance check. Physical
+            // inputs and the ceiling remain exact; same-name spectra can contain new data.
             scheduledKelvin = (int)(Math.Round(scheduledKelvin / (double)KelvinCacheBucket) * KelvinCacheBucket);
             scheduledKelvin = Math.Clamp(scheduledKelvin, MinKelvin, 10000);
             scheduledBrightnessPercent = Math.Round(scheduledBrightnessPercent / 2.0) * 2.0;
+            var key = exactKey with
+            {
+                ScheduledKelvin = scheduledKelvin, BrightnessKey = scheduledBrightnessPercent,
+                ExactState = false
+            };
+            if (!Cache.TryGetValue(key, out var solution))
+            {
+                solution = SolveCore(spectra, algorithm, perceptualStrength, useUltraWarmMode,
+                    preserveLuminance, scheduledKelvin, scheduledBrightnessPercent, sdrWhiteNits,
+                    viewingSolidAngleSr, ceilingMelLux, melanopic);
+                if (Cache.Count >= MaxCacheEntries) Cache.Clear();
+                Cache[key] = solution;
+            }
 
-            var key = new CacheKey(
-                scheduledKelvin, (int)Math.Round(scheduledBrightnessPercent), algorithm,
-                (int)Math.Round(perceptualStrength * 100), useUltraWarmMode, preserveLuminance,
-                Math.Round(ceilingMelLux, 2), (int)Math.Round(sdrWhiteNits),
-                Math.Round(viewingSolidAngleSr, 3), spectra.SourceName);
-            if (Cache.TryGetValue(key, out var cached))
-                return cached;
-
-            var solution = SolveCore(spectra, algorithm, perceptualStrength, useUltraWarmMode,
-                preserveLuminance, scheduledKelvin, scheduledBrightnessPercent, sdrWhiteNits,
-                viewingSolidAngleSr, ceilingMelLux, melanopic);
-
-            if (Cache.Count >= MaxCacheEntries) Cache.Clear();
-            Cache[key] = solution;
+            // Rounding a search anchor upward must never brighten or cool the requested
+            // state. Nor may a compliant bucket conceal an actual violation at its edge.
+            if (solution.Kelvin > requestedKelvin || solution.BrightnessPercent > requestedBrightness ||
+                !solution.Adjusted)
+                return SolveCore(spectra, algorithm, perceptualStrength, useUltraWarmMode,
+                    preserveLuminance, requestedKelvin, requestedBrightness, sdrWhiteNits,
+                    viewingSolidAngleSr, ceilingMelLux, melanopic);
             return solution;
+        }
+
+        private static (double R, double G, double B) TemperatureGains(
+            int kelvin, NightModeAlgorithm algorithm, double strength, bool ultraWarm,
+            bool preserve, NightMelanopicCoefficients? melanopic)
+        {
+            var gains = ColorAdjustments.GetTemperatureMultipliers(
+                (kelvin - 6500) / 70.0, algorithm, ultraWarm, strength, melanopic, NightBasis.Srgb);
+            if (preserve && algorithm != NightModeAlgorithm.UltraNight)
+            {
+                // Nominal headroom for the scheduling estimate, as in JndPacedFade.
+                gains = ColorAdjustments.RescaleToConstantLuminance(gains, NightBasis.Srgb, 2.0, 1.0);
+            }
+            return gains;
         }
 
         private static Solution SolveCore(
@@ -105,19 +148,8 @@ namespace Gloam.Core
                 => MelanopicCalculator.Compute(
                     spectra, GainsAt(kelvin), WhiteNitsAt(brightnessPercent), omega, hasSpectra: true);
 
-            (double R, double G, double B) GainsAt(int kelvin)
-            {
-                double scale = (kelvin - 6500) / 70.0;
-                var m = ColorAdjustments.GetTemperatureMultipliers(
-                    scale, algorithm, ultraWarm, strength, melanopic, NightBasis.Srgb);
-                if (preserve && algorithm != NightModeAlgorithm.UltraNight)
-                {
-                    // Nominal ceiling for the estimate; per-monitor exactness is not
-                    // warranted for a scheduling decision (same convention as JndPacedFade).
-                    m = ColorAdjustments.RescaleToConstantLuminance(m, NightBasis.Srgb, 2.0, 1.0);
-                }
-                return m;
-            }
+            (double R, double G, double B) GainsAt(int kelvin) =>
+                TemperatureGains(kelvin, algorithm, strength, ultraWarm, preserve, melanopic);
 
             CieXyz StateXyz(int kelvin, double brightnessPercent)
             {
@@ -142,8 +174,11 @@ namespace Gloam.Core
             var scheduledJab = Cam16Ucs.ToJabPrime(StateXyz(scheduledKelvin, scheduledBrightness), vc);
 
             Solution? best = null;
-            for (int kelvin = scheduledKelvin; kelvin >= MinKelvin; kelvin -= KelvinStep)
+            int steps = (scheduledKelvin - MinKelvin + KelvinStep - 1) / KelvinStep;
+            for (int step = 0; step <= steps; step++)
             {
+                // Always include the warmest endpoint, even off the 50 K grid.
+                int kelvin = Math.Max(MinKelvin, scheduledKelvin - step * KelvinStep);
                 // Mel-EDI is linear in white nits at fixed kelvin: solve the minimum dimming
                 // in closed form from a probe at the scheduled brightness.
                 var probe = ReadingAt(kelvin, scheduledBrightness);
@@ -159,7 +194,7 @@ namespace Gloam.Core
                 double cost = Cam16Ucs.DeltaEPrime(
                     scheduledJab, Cam16Ucs.ToJabPrime(StateXyz(kelvin, brightness), vc));
 
-                var candidate = new Solution(kelvin, Math.Round(brightness, 1), edi, cost,
+                var candidate = new Solution(kelvin, brightness, edi, cost,
                     CeilingMet: feasible || edi <= ceiling + 1e-9, Adjusted: true);
 
                 // Prefer ceiling-met candidates; among them, minimum ΔE′. Among unmet ones

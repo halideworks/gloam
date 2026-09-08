@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Gloam.Core;
 using Gloam.Core.Calibration;
 using Xunit;
@@ -151,13 +152,124 @@ namespace Gloam.Tests
             // Nearby kelvins within a 25 K bucket must share the cached solution — this is
             // what keeps a night-mode fade (kelvin changing every step) from re-running the
             // CAM16 scan per tick on the apply/UI thread (the freeze this prevents).
-            var a = Solve(kelvin: 3810, brightness: 90, ceiling: 12.0);
-            var b = Solve(kelvin: 3799, brightness: 90, ceiling: 12.0); // same 3800 bucket
+            // Use a violating ceiling: compliant states must retain their exact requested
+            // kelvin, so they cannot share a result across different temperatures.
+            var a = Solve(kelvin: 3810, brightness: 90, ceiling: 5.0);
+            var b = Solve(kelvin: 3799, brightness: 90, ceiling: 5.0); // same 3800 bucket
+            Assert.True(a.Adjusted);
+            Assert.True(a.CeilingMet);
+            Assert.True(b.Kelvin <= 3799);
             Assert.Same(a, b);
 
             // A kelvin a full bucket away is a different (but still valid) solve.
-            var far = Solve(kelvin: 3700, brightness: 90, ceiling: 12.0);
+            var far = Solve(kelvin: 3700, brightness: 90, ceiling: 5.0);
             Assert.NotSame(a, far);
+        }
+
+        [Fact]
+        public void CompliantFractionalSchedule_IsReturnedExactlyUnchanged()
+        {
+            var result = Solve(3813, 81.3, 1000);
+            Assert.False(result.Adjusted);
+            Assert.Equal(3813, result.Kelvin);
+            Assert.Equal(81.3, result.BrightnessPercent);
+        }
+
+        [Fact]
+        public void ReportedDose_MatchesReturnedBrightnessWithoutRoundingOvershoot()
+        {
+            var result = Solve(3400, 100, 9.876);
+            double actual = EdiOf(result.Kelvin, result.BrightnessPercent);
+            Assert.Equal(actual, result.MelanopicEdiLux, 10);
+            Assert.True(actual <= 9.876 + 1e-9);
+        }
+
+        [Fact]
+        public void UnreachableCeiling_SearchIncludesWarmestEndpoint()
+        {
+            var result = Solve(1925, 100, 0.001);
+            Assert.Equal(1900, result.Kelvin);
+            Assert.False(result.CeilingMet);
+        }
+
+        [Fact]
+        public void CachedDose_UsesExactViewingGeometry()
+        {
+            CircadianDoseGovernor.Solution At(double omega) => CircadianDoseGovernor.Solve(
+                Spectra, NightModeAlgorithm.Perceptual, 0.8, false, false,
+                3400, 100, 200, omega, 9.8123);
+            var first = At(0.2001);
+            var second = At(0.2004);
+            double actual = EdiOf(second.Kelvin, second.BrightnessPercent) * 0.2004 / 0.20;
+            Assert.NotSame(first, second);
+            Assert.Equal(actual, second.MelanopicEdiLux, 10);
+            Assert.True(actual <= 9.8123 + 1e-9);
+        }
+
+        [Fact]
+        public void Cache_DistinguishesChangedSpectraWithSameSourceName()
+        {
+            var spectra = Spectra;
+            var changed = spectra with { Green = spectra.Green.Select(x => x * 2).ToArray() };
+            CircadianDoseGovernor.Solution At(CcssMelanopicEstimator.CcssSpectra input) =>
+                CircadianDoseGovernor.Solve(input, NightModeAlgorithm.Perceptual, 0.8,
+                    false, false, 3400, 100, 200, 0.2, 9.7654);
+            var first = At(spectra);
+            var second = At(changed);
+            Assert.NotSame(first, second);
+            var gains = ColorAdjustments.GetTemperatureMultipliers(
+                (second.Kelvin - 6500) / 70.0, NightModeAlgorithm.Perceptual, false, 0.8);
+            double actual = MelanopicCalculator.Compute(changed, gains,
+                200 * second.BrightnessPercent / 100, 0.2).MelanopicEdiLux;
+            Assert.Equal(actual, second.MelanopicEdiLux, 10);
+        }
+
+        [Fact]
+        public void Cache_DistinguishesUltraNightSpectralTuning()
+        {
+            CircadianDoseGovernor.Solution At(NightMelanopicCoefficients coefficients) =>
+                CircadianDoseGovernor.Solve(Spectra, NightModeAlgorithm.UltraNight, 0.8,
+                    false, false, 3400, 100, 200, 0.2, 0.9876, coefficients);
+            var first = At(new NightMelanopicCoefficients(1, 1, 1, 1, 1, 1, "test"));
+            var second = At(new NightMelanopicCoefficients(1, 8, 1, 1, 1, 1, "test"));
+            Assert.NotSame(first, second);
+        }
+
+        [Theory]
+        [InlineData(1913, 11.3)]
+        [InlineData(3013, 81.3)]
+        [InlineData(3799, 89.1)]
+        [InlineData(6499, 99.1)]
+        public void OffGridSchedule_ResultNeverCoolsOrBrightensAndDoseIsAccurate(int kelvin, double brightness)
+        {
+            double ceiling = EdiOf(kelvin, brightness) * 0.85;
+            var result = Solve(kelvin, brightness, ceiling);
+            Assert.InRange(result.Kelvin, 1900, kelvin);
+            Assert.InRange(result.BrightnessPercent, 10, brightness);
+            double actual = EdiOf(result.Kelvin, result.BrightnessPercent);
+            Assert.Equal(actual, result.MelanopicEdiLux, 10);
+            if (result.CeilingMet) Assert.True(actual <= ceiling + 1e-9);
+        }
+
+        [Theory]
+        [InlineData(200.1, 0.801, 9.8121, 200.4, 0.801, 9.8121)]
+        [InlineData(200, 0.801, 9.8121, 200, 0.804, 9.8121)]
+        [InlineData(200, 0.8, 9.8121, 200, 0.8, 9.8148)]
+        public void Cache_PreservesExactPhysicalInputs(double whiteA, double strengthA, double ceilingA,
+            double whiteB, double strengthB, double ceilingB)
+        {
+            CircadianDoseGovernor.Solution At(double white, double strength, double ceiling) =>
+                CircadianDoseGovernor.Solve(Spectra, NightModeAlgorithm.Perceptual, strength,
+                    false, false, 3400, 100, white, 0.2, ceiling);
+            var first = At(whiteA, strengthA, ceilingA);
+            var second = At(whiteB, strengthB, ceilingB);
+            Assert.NotSame(first, second);
+            var gains = ColorAdjustments.GetTemperatureMultipliers(
+                (second.Kelvin - 6500) / 70.0, NightModeAlgorithm.Perceptual, false, strengthB);
+            double actual = MelanopicCalculator.Compute(Spectra, gains,
+                whiteB * second.BrightnessPercent / 100, 0.2).MelanopicEdiLux;
+            Assert.Equal(actual, second.MelanopicEdiLux, 10);
+            if (second.CeilingMet) Assert.True(actual <= ceilingB + 1e-9);
         }
 
         [Fact]

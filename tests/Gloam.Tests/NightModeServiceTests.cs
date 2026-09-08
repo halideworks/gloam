@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Threading.Tasks;
 using Gloam.Core;
 using Gloam.ViewModels;
 using Xunit;
@@ -166,6 +167,41 @@ namespace Gloam.Tests
             Assert.True(fired);
             Assert.Equal(3000, service.CurrentNightKelvin);
             Assert.True(service.IsNightModeActive);
+        }
+
+        [Fact]
+        public void Pause_OverridesManualNightAndResumesWhenCleared()
+        {
+            using var service = new NightModeService(new NightModeSettings
+            {
+                Enabled = true, ManualOverrideEnabled = true, TemperatureKelvin = 3000
+            });
+            service.Start();
+            Assert.Equal(3000, service.CurrentNightKelvin);
+            service.PauseUntil(DateTime.Now.AddHours(1));
+            Assert.Equal(6500, service.CurrentNightKelvin);
+            Assert.False(service.IsNightModeActive);
+            service.PauseUntil(DateTime.Now.AddSeconds(-1));
+            Assert.Equal(3000, service.CurrentNightKelvin);
+        }
+
+        [Fact]
+        public async Task ManualPause_ResumesAutomaticallyAfterExpiry()
+        {
+            using var service = new NightModeService(new NightModeSettings
+            {
+                Enabled = true, ManualOverrideEnabled = true, TemperatureKelvin = 3000
+            });
+            service.Start();
+            var resumed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            service.BlendChanged += blend =>
+            {
+                if (blend == 1.0) resumed.TrySetResult();
+            };
+            service.PauseUntil(DateTime.Now.AddMilliseconds(200));
+            Assert.Equal(6500, service.CurrentNightKelvin);
+            await resumed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(3000, service.CurrentNightKelvin);
         }
 
         [Fact]

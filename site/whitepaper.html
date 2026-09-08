@@ -650,9 +650,12 @@
             Candidates that meet the ceiling are preferred over those that do not, and among them the
             smallest ΔE′ wins. When no candidate can comply, the governor returns the lowest remaining dose
             and reports the ceiling as unreachable rather than silently presenting a non-compliant state as a
-            success. Because the apply path re-evaluates on every fade tick, solutions are memoized against
-            inputs quantized to 25 K and 2% brightness, steps small enough to be imperceptible in the
-            governed trajectory.
+            success. The search always includes the 1900 K endpoint and retains full brightness precision,
+            so the reported dose describes the returned state. Compliant schedules retain their exact
+            temperature and brightness. For active adjustments, candidate searches are memoized at
+            25 K and 2% brightness; a result that would cool or brighten the requested state is solved
+            again at the exact inputs. The cache retains exact white luminance, viewing geometry,
+            ceiling and adaptation strength, and identifies spectra and spectral tuning by content.
           </p>
         </section>
 
