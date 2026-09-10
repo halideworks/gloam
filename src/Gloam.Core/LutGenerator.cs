@@ -14,7 +14,7 @@ namespace Gloam.Core
     /// 3. Apply target gamma curve (2.2 or 2.4)
     /// 4. Apply calibration adjustments in linear space
     /// 5. PQ OETF encode (linear nits to signal)
-    /// 6. Blend toward passthrough in HDR headroom region
+    /// 6. Preserve HDR headroom, fading only the correction at SDR white
     ///
     /// LUT results are cached to avoid redundant computation for identical parameters.
     /// </remarks>
@@ -206,17 +206,14 @@ namespace Gloam.Core
 
             double blackLevel = 0.0;
 
-            // Precompute the PQ-signal position of SDR white. The headroom blend runs in
-            // PQ-signal space (perceptually uniform) rather than linear-nit space — with the
-            // old linear blend a 1000-nit specular was only ~8% toward passthrough, so most
-            // real HDR highlights stayed fully calibrated regardless of the user's intent.
+            // Above SDR white, preserve the headroom target's full signal range and fade
+            // only the adjustment at white. Blending a clamped SDR value toward the target
+            // instead flattens the lower highlights, even at 100% with gamma alone.
             double pqSdrWhite = TransferFunctions.PqInverseEotf(sdrWhiteLevel);
 
-            // Constant-Y boost anchor: when the SDR-region white is boosted above the plain
-            // (dimmed) white, the headroom blend's target must START at the boosted value —
-            // blending a flat boosted channel toward a target that begins below it produces a
-            // dip (non-monotonic LUT) just above the SDR/HDR boundary. The anchor is the max
-            // channel's output at input white through the full adjustment chain.
+            // Constant-Y boost anchor: start the headroom target at the brightest adjusted
+            // white channel. All channel residuals are then non-positive, so fading them
+            // toward zero preserves the target's monotonicity.
             double boostAnchorNits = 0.0;
             if (calibration.HasAdjustments && calibration.PreserveNightLuminance &&
                 calibration.NightLuminanceCeiling > 1.0 + 1e-9)
@@ -229,6 +226,9 @@ namespace Gloam.Core
                 if (anchor > plainDimmedWhite + 1e-9)
                     boostAnchorNits = anchor;
             }
+
+            double headroomWhiteSignal = ComputeHeadroomTarget(
+                sdrWhiteLevel, calibration, sdrWhiteLevel, boostAnchorNits);
 
             for (int i = 0; i < 1024; i++)
             {
@@ -294,24 +294,24 @@ namespace Gloam.Core
                 }
                 else
                 {
-                    // HDR headroom: blend the fully-calibrated output toward a
-                    // "dim-only passthrough". This preserves the creative grade of
-                    // HDR highlights (no re-gamma, no temperature tint on a 2000-nit
-                    // specular) while still honoring the brightness slider — so a
-                    // user dimming the screen sees highlights come down too.
+                    // pqR/G/B/Grey above white are the adjusted SDR-white anchor (the
+                    // SDR transfer/adjustment functions are bounded). Preserve the FULL
+                    // headroom signal, adding only each anchor's residual correction.
+                    // Gamma alone has zero residual, giving identity at EVERY HDR level;
+                    // brightness alone gives the requested dimming without a second shoulder.
                     double headroomSignal = ComputeHeadroomTarget(linear, calibration, sdrWhiteLevel, boostAnchorNits);
 
-                    // Blend in PQ-signal space (perceptually uniform) with a smoothstep
-                    // for C¹ continuity at the SDR/HDR boundary, eliminating the visible
-                    // slope-kink the old linear blend produced in smooth gradients.
+                    // Smoothstep fades the residual to zero at the PQ ceiling. It keeps
+                    // the value continuous at SDR white; the SDR curve and HDR target can
+                    // still have slightly different slopes at that boundary.
                     double t = (normalized - pqSdrWhite) / Math.Max(1.0 - pqSdrWhite, 1e-9);
                     t = Clamp01(t);
                     double blendFactor = t * t * (3.0 - 2.0 * t);
 
-                    lutR[i] = pqR + (headroomSignal - pqR) * blendFactor;
-                    lutG[i] = pqG + (headroomSignal - pqG) * blendFactor;
-                    lutB[i] = pqB + (headroomSignal - pqB) * blendFactor;
-                    lutGrey[i] = pqGrey + (headroomSignal - pqGrey) * blendFactor;
+                    lutR[i] = headroomSignal + (pqR - headroomWhiteSignal) * (1.0 - blendFactor);
+                    lutG[i] = headroomSignal + (pqG - headroomWhiteSignal) * (1.0 - blendFactor);
+                    lutB[i] = headroomSignal + (pqB - headroomWhiteSignal) * (1.0 - blendFactor);
+                    lutGrey[i] = headroomSignal + (pqGrey - headroomWhiteSignal) * (1.0 - blendFactor);
                 }
             }
 
@@ -512,6 +512,7 @@ namespace Gloam.Core
             // HDR Mode with calibration-aware compensation
             double blackLevel = safeBlackLevel;
             double pqSdrWhite = TransferFunctions.PqInverseEotf(sdrWhiteLevel);
+            double headroomWhiteSignal = ComputeHeadroomTarget(sdrWhiteLevel, calibration, sdrWhiteLevel);
 
             for (int i = 0; i < 1024; i++)
             {
@@ -583,17 +584,18 @@ namespace Gloam.Core
                 }
                 else
                 {
-                    // Headroom: blend toward a dim-aware passthrough in PQ-signal space
-                    // with a smoothstep. See GenerateLutInternal for rationale.
+                    // The measured response is bounded at SDR white. Preserve the target's
+                    // headroom range and fade only the compensated white residual, just as
+                    // in GenerateLutInternal; do not extend the bounded response as a shelf.
                     double headroomSignal = ComputeHeadroomTarget(linear, calibration, sdrWhiteLevel);
 
                     double t = Clamp01((normalized - pqSdrWhite) / Math.Max(1.0 - pqSdrWhite, 1e-9));
                     double blendFactor = t * t * (3.0 - 2.0 * t);
 
-                    lutR[i] = pqR + (headroomSignal - pqR) * blendFactor;
-                    lutG[i] = pqG + (headroomSignal - pqG) * blendFactor;
-                    lutB[i] = pqB + (headroomSignal - pqB) * blendFactor;
-                    lutGrey[i] = pqGrey + (headroomSignal - pqGrey) * blendFactor;
+                    lutR[i] = headroomSignal + (pqR - headroomWhiteSignal) * (1.0 - blendFactor);
+                    lutG[i] = headroomSignal + (pqG - headroomWhiteSignal) * (1.0 - blendFactor);
+                    lutB[i] = headroomSignal + (pqB - headroomWhiteSignal) * (1.0 - blendFactor);
+                    lutGrey[i] = headroomSignal + (pqGrey - headroomWhiteSignal) * (1.0 - blendFactor);
                 }
             }
 
