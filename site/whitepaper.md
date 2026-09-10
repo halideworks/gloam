@@ -106,7 +106,7 @@ q = E_{\text{sRGB}}^{-1}\!\left(\frac{P(V)}{W}\right)
 L_{\gamma} = W \cdot q^{\gamma_{\text{target}}}
 ```
 
-Windows Default keeps $L_{\gamma}$Lγ​ = *P*(*V*). The result is normalized by *W*, adjusted in linear Rec.2020 RGB, returned to absolute luminance, and PQ-encoded per channel. Values above SDR white transition toward the headroom target described in §5.
+Windows Default keeps $L_{\gamma}$Lγ​ = *P*(*V*). The result is normalized by *W*, adjusted in linear Rec.2020 RGB, returned to absolute luminance, and PQ-encoded per channel. Values above SDR white retain the headroom range described in §5.
 
 ### 4.3 SDR White
 
@@ -126,15 +126,17 @@ The diagnostic gray curve is derived from mean linear light, then encoded. In SD
 
 ### 5.1 PQ-Space Shoulder
 
-Gamma and white-balance controls are intended mainly for the SDR desktop region. Applying them unchanged to every HDR highlight would reshape mastered specular content. Above *W*, Gloam blends the adjusted result toward a headroom target in PQ signal space:
+Gamma and white-balance controls are intended mainly for the SDR desktop region. Applying them unchanged to every HDR highlight would reshape mastered specular content. Above *W*, Gloam preserves the headroom target and fades only the correction at SDR white. Let *B(V)* be the headroom target in PQ signal space, and *C_c(W)* the adjusted SDR-white signal for channel *c*:
 
 ```math
 t = \operatorname{clamp}\!\left(\frac{V - \mathrm{PQ}(W)}{1 - \mathrm{PQ}(W)},\; 0,\; 1\right)
 s(t) = t^2(3 - 2t)
-\text{output} = \text{corrected} + s(t)\left(\text{headroom} - \text{corrected}\right)
+\text{output}_c = B(V) + (1-s(t))\left(C_c(W) - B(\mathrm{PQ}(W))\right)
 ```
 
-Smoothstep gives zero first derivative at both ends. Blending in PQ space allocates the transition more evenly by perceptual code distance than a linear-nit blend.
+With gamma alone at 100% brightness, the residual at white is zero: every HDR value above SDR white passes through unchanged. With dimming alone, the output follows the requested dimming curve throughout headroom. Blending the clamped SDR-white value toward passthrough would instead flatten highlight differences just above white.
+
+Smoothstep fades the white-point or calibration residual to zero at the PQ ceiling. The output is continuous at SDR white, although the SDR curve and HDR target can have different slopes there. The finite hardware ramp interpolates across that boundary.
 
 ### 5.2 Dimming and Constant-Luminance Night Mode
 

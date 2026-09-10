@@ -5,7 +5,7 @@ with Gloam's gamma 2.2 GPU LUT.
 
 Math is ported 1:1 from:
   src/Gloam.Core/TransferFunctions.cs   (PQ, sRGB)
-  src/Gloam.Core/LutGenerator.cs        (regrade + shoulder)
+  src/Gloam.Core/LutGenerator.cs        (SDR regrade + HDR passthrough)
   src/Gloam.Core/Calibration/HdrMhc2LutBuilder.cs:104
       (the Windows SDR-in-HDR wire model)
 
@@ -104,14 +104,9 @@ def gloam_lut(gamma=GAMMA, sdr_white=SDR_WHITE, n=LUT_N):
     sig = srgb_oetf(nits_in / sdr_white)
     regraded = pq_inverse_eotf(sdr_white * np.power(sig, gamma))
 
-    # smoothstep shoulder to passthrough above SDR white (LutGenerator.cs:288-315).
-    # headroom target == v when brightness == 100 and no boost anchor.
-    pq_white = pq_inverse_eotf(sdr_white)
-    t = np.clip((v - pq_white) / max(1.0 - pq_white, 1e-9), 0.0, 1.0)
-    blend = t * t * (3.0 - 2.0 * t)
-    shouldered = regraded + (v - regraded) * blend
-
-    return np.where(nits_in <= sdr_white, regraded, shouldered)
+    # With gamma alone, the correction at SDR white is zero. HDR headroom
+    # therefore stays identity at every level (LutGenerator.GenerateLutInternal).
+    return np.where(nits_in <= sdr_white, regraded, v)
 
 
 def apply_lut(x, lut):

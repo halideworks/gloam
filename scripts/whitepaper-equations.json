@@ -26,7 +26,7 @@
     [
       "t = \\operatorname{clamp}\\!\\left(\\frac{V - \\mathrm{PQ}(W)}{1 - \\mathrm{PQ}(W)},\\; 0,\\; 1\\right)",
       "s(t) = t^2(3 - 2t)",
-      "\\text{output} = \\text{corrected} + s(t)\\left(\\text{headroom} - \\text{corrected}\\right)"
+      "\\text{output}_c = B(V) + (1-s(t))\\left(C_c(W) - B(\\mathrm{PQ}(W))\\right)"
     ],
     [
       "H(L) = A\\left(\\frac{L}{W}\\right)^{\\gamma'}, \\qquad \\gamma' = \\frac{\\ln(10000/A)}{\\ln(10000/W)}"
