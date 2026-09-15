@@ -249,9 +249,18 @@ namespace Gloam.Core.Calibration
         public void SetDisplayType(DisplayType type)
         {
             _displayType = type;
-            string selector = SpotreadDisplayTypeTable.Resolve(type, _connectedColorimeter?.DisplayTypes, out string reason);
-            Log($"Display type set to: {type} (spotread -y {selector}: {reason})");
+            var choice = ResolveDisplayTypeChoice(type);
+            Log($"Display type set to: {type} (spotread -y {choice.Selector}: {choice.Reason})");
         }
+
+        /// <summary>
+        /// How the connected instrument will measure <paramref name="type"/>: the selector
+        /// spotread gets and the table row it comes from. Uses the table captured at
+        /// detection (or adopted from a session), so it is exact for colorimeters with an
+        /// enumerated table and a best guess otherwise.
+        /// </summary>
+        public SpotreadDisplayTypeChoice ResolveDisplayTypeChoice(DisplayType type)
+            => SpotreadDisplayTypeTable.Resolve(type, _connectedColorimeter?.DisplayTypes);
 
         /// <summary>
         /// Gets the current display type setting.
@@ -353,7 +362,8 @@ namespace Gloam.Core.Calibration
                 await RefreshDisplayTypeTableIfUnknownAsync(cancellationToken);
                 _session = await SpotreadSession.StartAsync(
                     _spotreadPath, instrumentIndex, _displayType, hdrMode, Log, cancellationToken,
-                    _correctionFilePath, displayTypeTable: _connectedColorimeter?.DisplayTypes);
+                    _correctionFilePath, displayTypeTable: _connectedColorimeter?.DisplayTypes,
+                    instrumentDescriptor: _connectedColorimeter?.InstrumentDescriptor);
                 AdoptDisplayTypeTable(_session.EffectiveDisplayTypeTable);
                 _sessionHdrMode = hdrMode;
                 RaiseStatusChanged(ColorimeterStatus.Ready, "Spotread session ready");
@@ -395,7 +405,8 @@ namespace Gloam.Core.Calibration
             if (_connectedColorimeter == null || SpotreadDisplayTypeTable.HasInstrumentRows(_connectedColorimeter.DisplayTypes))
                 return;
             var usage = await RunSpotreadCommandAsync(TimeSpan.FromSeconds(10), cancellationToken, "-?");
-            var table = SpotreadDisplayTypeTable.Parse(usage);
+            var table = SpotreadDisplayTypeTable.ForInstrument(
+                SpotreadDisplayTypeTable.Parse(usage), _connectedColorimeter.InstrumentDescriptor);
             if (SpotreadDisplayTypeTable.HasInstrumentRows(table))
             {
                 _connectedColorimeter.DisplayTypes = table;
@@ -583,7 +594,8 @@ namespace Gloam.Core.Calibration
                 await RefreshDisplayTypeTableIfUnknownAsync(cancellationToken);
                 transient = await SpotreadSession.StartAsync(
                     _spotreadPath, instrumentIndex, _displayType, hdrMode, Log, cancellationToken,
-                    _correctionFilePath, displayTypeTable: _connectedColorimeter?.DisplayTypes);
+                    _correctionFilePath, displayTypeTable: _connectedColorimeter?.DisplayTypes,
+                    instrumentDescriptor: _connectedColorimeter?.InstrumentDescriptor);
                 AdoptDisplayTypeTable(transient.EffectiveDisplayTypeTable);
             }
             catch (InvalidOperationException ex) when (UsbDriverHelper.IsDriverError(ex.Message))
@@ -624,7 +636,7 @@ namespace Gloam.Core.Calibration
                 var deviceInfo = ParseDeviceListOutput(listResult);
                 if (deviceInfo != null)
                 {
-                    deviceInfo.DisplayTypes = displayTypes;
+                    deviceInfo.DisplayTypes = SpotreadDisplayTypeTable.ForInstrument(displayTypes, deviceInfo.InstrumentDescriptor);
                     Log($"Detected device from -?: {deviceInfo.Model}");
                     return deviceInfo;
                 }

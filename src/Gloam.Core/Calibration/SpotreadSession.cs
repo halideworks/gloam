@@ -310,7 +310,8 @@ namespace Gloam.Core.Calibration
             CancellationToken cancellationToken,
             string? correctionFilePath = null,
             bool spectralMode = false,
-            IReadOnlyList<SpotreadDisplayTypeEntry>? displayTypeTable = null)
+            IReadOnlyList<SpotreadDisplayTypeEntry>? displayTypeTable = null,
+            string? instrumentDescriptor = null)
         {
             // NOTE (flag hygiene): spotread's -H flag is HIGH-RESOLUTION SPECTRAL mode and
             // only applies to spectrometers (i1 Pro etc.) — it is NOT an "HDR mode". This
@@ -337,14 +338,15 @@ namespace Gloam.Core.Calibration
                 // The table spotread printed while rejecting the selector comes from the
                 // instrument it actually opened, so it outranks the one captured at detection
                 // (which may be empty, stale, or from another instrument). Retry once with it.
+                var table = SpotreadDisplayTypeTable.ForInstrument(rejected.Table, instrumentDescriptor);
                 var retryArgs = BuildSpotreadArguments(instrumentIndex, displayType, spectralMode, correctionFilePath,
-                    rejected.Table, out string? retryReason);
-                if (rejected.Table.Count == 0 || retryArgs.SequenceEqual(args))
+                    table, out string? retryReason);
+                if (table.Count == 0 || retryArgs.SequenceEqual(args))
                     throw;
 
                 log($"spotread rejected the -y selector; retrying with {retryReason}. " +
-                    $"Instrument -y table: {SpotreadDisplayTypeTable.Describe(rejected.Table)}");
-                return await StartProcessAsync(spotreadPath, retryArgs, spectralMode, rejected.Table, log, cancellationToken);
+                    $"Instrument -y table: {SpotreadDisplayTypeTable.Describe(table)}");
+                return await StartProcessAsync(spotreadPath, retryArgs, spectralMode, table, log, cancellationToken);
             }
         }
 

@@ -266,6 +266,71 @@ namespace Gloam.Tests
             Assert.Equal("l", SpotreadDisplayTypeTable.Resolve(DisplayType.Oled, table, out _));
         }
 
+        // Two meters enumerated at once: spotread prints one merged -y block.
+        internal const string TwoInstrumentUsage =
+            " -y n|l                i1D3: Non-Refresh display [Default,CB1]\n" +
+            "    r|c                i1D3: Refresh display [CB2]\n" +
+            "    1                  i1D3: LCD CCFL PVA (Resolve JVC CPF)\n" +
+            "    o                  Spyder4: LED OLED (imported)\n" +
+            "    e                  Spyder4: LCD White LED [Default,CB1]\n" +
+            "    l|c                Other: l = LCD, c = CRT\n" +
+            " -I illum             Set simulated instrument illumination using FWA (def -i illum):\n";
+
+        [Theory]
+        [InlineData("hid:/33 (X-Rite i1 DisplayPro, ColorMunki Display)", "i1D3")]
+        [InlineData("usb:/2 (Datacolor SpyderX2)", "SpyderX2")]
+        [InlineData("usb:/2 (Datacolor SpyderX)", "SpyderX")]
+        [InlineData("usb:/1 (X-Rite i1 Pro 2)", "i1Pro2")]
+        [InlineData("COM6", null)]
+        [InlineData(null, null)]
+        public void ShortNameForDescriptor_MapsArgyllPortNames(string? descriptor, string? expected)
+        {
+            Assert.Equal(expected, SpotreadDisplayTypeTable.ShortNameForDescriptor(descriptor));
+        }
+
+        [Fact]
+        public void ForInstrument_KeepsOnlyTheOpenedInstrumentsRows()
+        {
+            var merged = SpotreadDisplayTypeTable.Parse(TwoInstrumentUsage);
+
+            var i1d3 = SpotreadDisplayTypeTable.ForInstrument(merged, "hid:/33 (X-Rite i1 DisplayPro, ColorMunki Display)");
+            Assert.Equal(4, i1d3.Count);
+            Assert.DoesNotContain(i1d3, e => e.Instrument == "Spyder4");
+            Assert.Contains(i1d3, e => e.IsGeneric);
+            // The other meter's OLED row must not leak into this meter's resolution.
+            Assert.Equal("n", SpotreadDisplayTypeTable.Resolve(DisplayType.Oled, i1d3, out _));
+
+            var spyder = SpotreadDisplayTypeTable.ForInstrument(merged, "usb:/4 (Datacolor Spyder4)");
+            Assert.Equal(3, spyder.Count);
+            Assert.Equal("o", SpotreadDisplayTypeTable.Resolve(DisplayType.Oled, spyder, out _));
+        }
+
+        [Fact]
+        public void ForInstrument_UnknownOrAbsentInstrument_ReturnsTableUnchanged()
+        {
+            var merged = SpotreadDisplayTypeTable.Parse(TwoInstrumentUsage);
+
+            Assert.Same(merged, SpotreadDisplayTypeTable.ForInstrument(merged, "COM6"));
+            Assert.Same(merged, SpotreadDisplayTypeTable.ForInstrument(merged, "usb:/9 (Klein K-10)"));
+        }
+
+        [Fact]
+        public void Resolve_ReturnsTheMatchedRow()
+        {
+            var table = SpotreadDisplayTypeTable.Parse(EdrRichI1D3Usage);
+
+            var choice = SpotreadDisplayTypeTable.Resolve(DisplayType.Oled, table);
+            Assert.True(choice.IsTechnologyMatch);
+            Assert.Equal("o", choice.Selector);
+            Assert.StartsWith("LED OLED", choice.Entry!.Description);
+
+            var clean = SpotreadDisplayTypeTable.Resolve(DisplayType.Oled, SpotreadDisplayTypeTable.Parse(CleanI1D3Usage));
+            Assert.False(clean.IsTechnologyMatch);
+            Assert.True(clean.Entry!.IsNonRefreshBase);
+
+            Assert.Null(SpotreadDisplayTypeTable.Resolve(DisplayType.Oled, null).Entry);
+        }
+
         [Fact]
         public void Describe_ListsSelectorsAndDescriptions()
         {

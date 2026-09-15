@@ -91,6 +91,31 @@ namespace Gloam.Core.Calibration
     }
 
     /// <summary>
+    /// The outcome of resolving a <see cref="DisplayType"/> against an instrument's table.
+    /// </summary>
+    public sealed class SpotreadDisplayTypeChoice
+    {
+        public SpotreadDisplayTypeChoice(string selector, string reason, SpotreadDisplayTypeEntry? entry)
+        {
+            Selector = selector;
+            Reason = reason;
+            Entry = entry;
+        }
+
+        /// <summary>The value passed to spotread's <c>-y</c>.</summary>
+        public string Selector { get; }
+
+        /// <summary>Why it was chosen, for logs and the setup screen.</summary>
+        public string Reason { get; }
+
+        /// <summary>The table row the selector came from; null when the table was unknown.</summary>
+        public SpotreadDisplayTypeEntry? Entry { get; }
+
+        /// <summary>True when a technology-specific correction row was found on the instrument.</summary>
+        public bool IsTechnologyMatch => Entry != null && !Entry.IsBaseOrGeneric;
+    }
+
+    /// <summary>
     /// Parses spotread's per-instrument <c>-y</c> table and resolves a <see cref="DisplayType"/>
     /// to a selector that instrument actually accepts.
     /// </summary>
@@ -231,13 +256,22 @@ namespace Gloam.Core.Calibration
         /// </summary>
         public static string Resolve(DisplayType type, IReadOnlyList<SpotreadDisplayTypeEntry>? table, out string reason)
         {
+            var choice = Resolve(type, table);
+            reason = choice.Reason;
+            return choice.Selector;
+        }
+
+        /// <inheritdoc cref="Resolve(DisplayType, IReadOnlyList{SpotreadDisplayTypeEntry}?, out string)"/>
+        public static SpotreadDisplayTypeChoice Resolve(DisplayType type, IReadOnlyList<SpotreadDisplayTypeEntry>? table)
+        {
             var rule = RuleFor(type);
+            string generic = GenericSelector(type);
+            string genericName = rule.Refresh ? "CRT" : "LCD";
 
             if (table == null || table.Count == 0)
             {
-                reason = "the instrument's display-type table is unknown; using the generic " +
-                         (rule.Refresh ? "CRT" : "LCD") + " selector";
-                return GenericSelector(type);
+                return new SpotreadDisplayTypeChoice(generic,
+                    $"the instrument's display-type table is unknown; using the generic {genericName} selector", null);
             }
 
             // 1. Technology-specific rows (installed EDR/CCSS corrections) whose description
@@ -251,16 +285,13 @@ namespace Gloam.Core.Calibration
                 foreach (string sel in rule.PreferredSelectors)
                 {
                     if (entry.HasSelector(sel))
-                    {
-                        reason = $"matched the installed correction '{entry.Description}'";
-                        return sel;
-                    }
+                        return new SpotreadDisplayTypeChoice(sel, $"matched the installed correction '{entry.Description}'", entry);
                 }
             }
             if (keywordMatch != null)
             {
-                reason = $"matched the installed correction '{keywordMatch.Description}'";
-                return keywordMatch.PreferredSelector;
+                return new SpotreadDisplayTypeChoice(keywordMatch.PreferredSelector,
+                    $"matched the installed correction '{keywordMatch.Description}'", keywordMatch);
             }
 
             // 2. The instrument's base calibration for this refresh class.
@@ -268,29 +299,100 @@ namespace Gloam.Core.Calibration
             {
                 if (rule.Refresh ? entry.IsRefreshBase : entry.IsNonRefreshBase)
                 {
-                    reason = $"no {type}-specific correction is installed for this instrument; " +
-                             $"using its base calibration '{entry.Description}'";
-                    return entry.PreferredSelector;
+                    return new SpotreadDisplayTypeChoice(entry.PreferredSelector,
+                        $"no {type}-specific correction is installed for this instrument; using its base calibration '{entry.Description}'",
+                        entry);
                 }
             }
 
             // 3. Any row that accepts the generic selector (including the "Other" row).
-            string generic = GenericSelector(type);
             foreach (var entry in table)
             {
                 if (entry.HasSelector(generic))
                 {
-                    reason = $"no {type}-specific correction is installed for this instrument; " +
-                             $"using '{entry.Description}'";
-                    return generic;
+                    return new SpotreadDisplayTypeChoice(generic,
+                        $"no {type}-specific correction is installed for this instrument; using '{entry.Description}'", entry);
                 }
             }
 
             // 4. The table lists nothing usable at all (unexpected); the generic selector is
             //    still the most likely to be accepted.
-            reason = "the instrument's display-type table lists no base calibration; using the generic " +
-                     (rule.Refresh ? "CRT" : "LCD") + " selector";
-            return generic;
+            return new SpotreadDisplayTypeChoice(generic,
+                $"the instrument's display-type table lists no base calibration; using the generic {genericName} selector", null);
+        }
+
+        // Argyll insttypes.c: inst_name(), printed inside the parentheses of the -c port
+        // list, and inst_sname(), printed before every -y row. Matched longest name first so
+        // "SpyderX2" is not read as "SpyderX".
+        private static readonly (string LongName, string ShortName)[] InstrumentNames = Sorted(new[]
+        {
+            ("X-Rite DTP20", "DTP20"), ("X-Rite DTP22", "DTP22"), ("X-Rite DTP41", "DTP41"),
+            ("X-Rite DTP51", "DTP51"), ("X-Rite DTP92", "DTP92"), ("X-Rite DTP94", "DTP94"),
+            ("GretagMacbeth Spectrolino", "Spectrolino"), ("GretagMacbeth SpectroScanT", "SpectroScanT"),
+            ("GretagMacbeth SpectroScan", "SpectroScan"), ("Spectrocam", "Spectrocam"),
+            ("GretagMacbeth i1 Display 1", "i1D1"), ("GretagMacbeth i1 Display 2", "i1D2"),
+            ("X-Rite i1 DisplayPro, ColorMunki Display", "i1D3"), ("GretagMacbeth i1 Monitor", "i1 Monitor"),
+            ("GretagMacbeth i1 Pro", "i1Pro"), ("X-Rite i1 Pro 2", "i1Pro2"), ("X-Rite i1 Pro 3", "i1Pro3"),
+            ("X-Rite ColorMunki", "ColorMunki"), ("Colorimtre HCFR", "HCFR"),
+            ("ColorVision Spyder1", "Spyder1"), ("ColorVision Spyder2", "Spyder2"),
+            ("Datacolor Spyder3", "Spyder3"), ("Datacolor Spyder4", "Spyder4"), ("Datacolor Spyder5", "Spyder5"),
+            ("Datacolor SpyderX2", "SpyderX2"), ("Datacolor SpyderX", "SpyderX"), ("Datacolor Spyder 2024", "Spyder 2024"),
+            ("GretagMacbeth Huey", "Huey"), ("ColorMunki Smile", "Smile"),
+            ("JETI specbos 1201", "specbos 1201"), ("JETI specbos 2501", "specbos 2501"), ("JETI specbos", "specbos"),
+            ("JETI spectraval", "spectraval"), ("Klein K-10", "K-10"), ("Image Engineering EX1", "EX1"),
+            ("SwatchMate Cube", "Cube"), ("Hughski ColorHug2", "ColorHug2"), ("Hughski ColorHug", "ColorHug"),
+        });
+
+        private static (string LongName, string ShortName)[] Sorted((string LongName, string ShortName)[] names)
+        {
+            Array.Sort(names, (a, b) => b.LongName.Length.CompareTo(a.LongName.Length));
+            return names;
+        }
+
+        /// <summary>
+        /// The short instrument name spotread prints before each <c>-y</c> row ("i1D3") for a
+        /// port-list descriptor such as "hid:/33 (X-Rite i1 DisplayPro, ColorMunki Display)".
+        /// Null when the descriptor names no known instrument (serial ports, unknown models).
+        /// </summary>
+        public static string? ShortNameForDescriptor(string? descriptor)
+        {
+            if (string.IsNullOrWhiteSpace(descriptor)) return null;
+            foreach (var (longName, shortName) in InstrumentNames)
+            {
+                if (descriptor.Contains(longName, StringComparison.OrdinalIgnoreCase))
+                    return shortName;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Restricts a table to the rows printed by the instrument named in
+        /// <paramref name="descriptor"/> (plus the generic row). spotread prints one merged
+        /// block for every enumerated instrument, so with two meters connected a row from the
+        /// other meter would otherwise be selected. Returns the table unchanged when the
+        /// instrument is unknown or none of its rows are present.
+        /// </summary>
+        public static IReadOnlyList<SpotreadDisplayTypeEntry> ForInstrument(
+            IReadOnlyList<SpotreadDisplayTypeEntry> table, string? descriptor)
+        {
+            string? shortName = ShortNameForDescriptor(descriptor);
+            if (shortName == null || table.Count == 0) return table;
+
+            var scoped = new List<SpotreadDisplayTypeEntry>();
+            bool anyInstrumentRow = false;
+            foreach (var entry in table)
+            {
+                if (entry.IsGeneric)
+                {
+                    scoped.Add(entry);
+                }
+                else if (string.Equals(entry.Instrument, shortName, StringComparison.OrdinalIgnoreCase))
+                {
+                    scoped.Add(entry);
+                    anyInstrumentRow = true;
+                }
+            }
+            return anyInstrumentRow ? scoped : table;
         }
 
         private static bool MatchesKeyword(string description, string[] keywords)

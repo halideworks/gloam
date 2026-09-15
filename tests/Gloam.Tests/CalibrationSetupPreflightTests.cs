@@ -44,6 +44,23 @@ namespace Gloam.Tests
         }
 
         [Fact]
+        public void Preflight_MeterUsesGenericCalibration_WarnsUnlessCorrectionChosen()
+        {
+            var withoutCorrection = CalibrationSetupViewModel.BuildPreflightMessages(
+                Monitor(), StandardTargets.SrgbGamma22, selectedOption: null, DisplayType.LcdLed,
+                detectedDisplayType: null, correction: new CorrectionChoice("Built-in", null),
+                whitePointOnly: false, monitorProfile: null, meterUsesGenericCalibration: true);
+            Assert.Contains(withoutCorrection, m => m.Severity == "WARN" && m.Message.Contains("generic base calibration", StringComparison.Ordinal));
+            Assert.DoesNotContain(withoutCorrection, m => m.Message.StartsWith("Use a panel-matched", StringComparison.Ordinal));
+
+            var withCorrection = CalibrationSetupViewModel.BuildPreflightMessages(
+                Monitor(), StandardTargets.SrgbGamma22, selectedOption: null, DisplayType.LcdLed,
+                detectedDisplayType: null, correction: new CorrectionChoice("Panel", @"C:\nonexistent.ccss"),
+                whitePointOnly: false, monitorProfile: null, meterUsesGenericCalibration: true);
+            Assert.DoesNotContain(withCorrection, m => m.Message.Contains("generic base calibration", StringComparison.Ordinal));
+        }
+
+        [Fact]
         public void ViewModel_HdrInitialMonitor_SelectsOnlyHdrTarget()
         {
             var vm = new CalibrationSetupViewModel(new[] { Monitor(hdrActive: true) }.ToList(), settingsManager: null);
