@@ -30,6 +30,18 @@ namespace Gloam.Core.Calibration
         /// <summary>True for the instrument's default calibration ("[Default" marker).</summary>
         public bool IsDefault => Description.Contains("[Default", StringComparison.OrdinalIgnoreCase);
 
+        /// <summary>The description without Argyll's trailing "[Default,CB1]" marker, for UI text.</summary>
+        public string DisplayDescription
+        {
+            get
+            {
+                int bracket = Description.LastIndexOf(" [", StringComparison.Ordinal);
+                return bracket > 0 && Description.EndsWith("]", StringComparison.Ordinal)
+                    ? Description.Substring(0, bracket)
+                    : Description;
+            }
+        }
+
         // Words that mark a row as technology-specific. A default row that names a technology
         // (some drivers' "LCD, CCFL Backlight [Default,CB1]") is a correction, not a base.
         private static readonly string[] TechnologyWords =

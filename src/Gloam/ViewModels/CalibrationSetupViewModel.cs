@@ -448,11 +448,11 @@ namespace Gloam.ViewModels
             }
             else if (choice.IsTechnologyMatch)
             {
-                MeterCalibrationText = $"Meter calibration: {choice.Entry!.Description} (spotread -y {choice.Selector}).";
+                MeterCalibrationText = $"Meter calibration: {choice.Entry!.DisplayDescription} (spotread -y {choice.Selector}).";
             }
             else
             {
-                string row = choice.Entry?.Description ?? "generic calibration";
+                string row = choice.Entry?.DisplayDescription ?? "generic calibration";
                 MeterCalibrationText =
                     $"Meter calibration: no {DisplayTypeLabel(_displayType)} correction is installed on this meter, " +
                     $"so it will use its {row} (spotread -y {choice.Selector}).";

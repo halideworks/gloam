@@ -64,6 +64,9 @@ namespace Gloam.Tests
             Assert.True(table[0].IsNonRefreshBase);
             Assert.False(table[0].IsRefreshBase);
 
+            Assert.Equal("Non-Refresh display", table[0].DisplayDescription);
+            Assert.Equal("LCD CCFL PVA (Resolve JVC CPF)", table[2].DisplayDescription);
+
             Assert.Equal(new[] { "r", "c" }, table[1].Selectors);
             Assert.True(table[1].IsRefreshBase);
             Assert.False(table[1].IsNonRefreshBase);
