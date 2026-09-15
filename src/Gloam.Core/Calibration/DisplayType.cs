@@ -2,7 +2,8 @@ namespace Gloam.Core.Calibration
 {
     /// <summary>
     /// Display technology types for colorimeter measurement configuration.
-    /// These map to ArgyllCMS spotread -y flag values.
+    /// Resolved to an ArgyllCMS spotread -y selector per instrument by
+    /// <see cref="SpotreadDisplayTypeTable"/>.
     /// </summary>
     public enum DisplayType
     {
@@ -34,30 +35,22 @@ namespace Gloam.Core.Calibration
     public static class DisplayTypeExtensions
     {
         /// <summary>
-        /// Gets the ArgyllCMS spotread -y flag value for this display type.
+        /// True for technologies Argyll measures in refresh mode (CRT, plasma, DLP). OLED and
+        /// every LCD are non-refresh, matching Argyll's disptechs.c table.
         /// </summary>
         /// <remarks>
-        /// CAVEAT: these letter codes are NOT a stable ArgyllCMS contract. The -y table is
-        /// generated per instrument and per Argyll version — spotread prints the letters
-        /// that are valid for the CONNECTED probe in its usage output, and the same letter
-        /// can mean different things for different instruments (or be absent entirely).
-        /// The mapping below matches Argyll V2.2+ with an i1 Display Pro/Plus class
-        /// colorimeter, which is the hardware this app targets. Parsing the actual -y
-        /// table from `spotread -?` output for the connected instrument is future work;
-        /// until then, an unknown letter degrades to a wrong generic correction rather
-        /// than a hard failure (spotread reports "unrecognised" and exits, which surfaces
-        /// through the session's fatal-error path).
+        /// The spotread <c>-y</c> selector for a display type is NOT a fixed letter: Argyll
+        /// builds the table per instrument at run time and the technology letters only exist
+        /// when matching corrections are installed. Use
+        /// <see cref="SpotreadDisplayTypeTable.Resolve"/> with the table parsed from the
+        /// instrument's usage output.
         /// </remarks>
-        public static string ToSpotreadFlag(this DisplayType type) => type switch
+        public static bool IsRefreshTechnology(this DisplayType type) => type switch
         {
-            DisplayType.LcdLed => "e",      // LCD with white LED backlight
-            DisplayType.Oled => "o",        // OLED (since Argyll V2.2.0)
-            DisplayType.LcdWideGamut => "b", // LCD with wide gamut LED backlight
-            DisplayType.LcdCcfl => "l",     // LCD with CCFL backlight
-            DisplayType.Crt => "c",         // CRT
-            DisplayType.Plasma => "m",      // Plasma
-            DisplayType.Projector => "p",   // DLP projector
-            _ => "e"                        // Default to LED LCD
+            DisplayType.Crt => true,
+            DisplayType.Plasma => true,
+            DisplayType.Projector => true,
+            _ => false
         };
 
         /// <summary>

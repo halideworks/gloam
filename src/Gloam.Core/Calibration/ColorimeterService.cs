@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -248,7 +249,8 @@ namespace Gloam.Core.Calibration
         public void SetDisplayType(DisplayType type)
         {
             _displayType = type;
-            Log($"Display type set to: {type} (flag: -{type.ToSpotreadFlag()})");
+            string selector = SpotreadDisplayTypeTable.Resolve(type, _connectedColorimeter?.DisplayTypes, out string reason);
+            Log($"Display type set to: {type} (spotread -y {selector}: {reason})");
         }
 
         /// <summary>
@@ -350,7 +352,7 @@ namespace Gloam.Core.Calibration
             {
                 _session = await SpotreadSession.StartAsync(
                     _spotreadPath, instrumentIndex, _displayType, hdrMode, Log, cancellationToken,
-                    _correctionFilePath);
+                    _correctionFilePath, displayTypeTable: _connectedColorimeter?.DisplayTypes);
                 _sessionHdrMode = hdrMode;
                 RaiseStatusChanged(ColorimeterStatus.Ready, "Spotread session ready");
             }
@@ -542,7 +544,7 @@ namespace Gloam.Core.Calibration
             {
                 transient = await SpotreadSession.StartAsync(
                     _spotreadPath, instrumentIndex, _displayType, hdrMode, Log, cancellationToken,
-                    _correctionFilePath);
+                    _correctionFilePath, displayTypeTable: _connectedColorimeter?.DisplayTypes);
             }
             catch (InvalidOperationException ex) when (UsbDriverHelper.IsDriverError(ex.Message))
             {
@@ -567,14 +569,22 @@ namespace Gloam.Core.Calibration
 
             // Use help output to get the instrument list (spotread doesn't support -l)
             var listResult = await RunSpotreadCommandAsync(TimeSpan.FromSeconds(10), cancellationToken, "-?");
+            IReadOnlyList<SpotreadDisplayTypeEntry> displayTypes = Array.Empty<SpotreadDisplayTypeEntry>();
             if (listResult != null)
             {
                 Log($"spotread -? output: {listResult}");
+
+                // The usage text lists the -y selectors the enumerated instrument accepts.
+                // Argyll builds that table per instrument and per installed correction, so it
+                // is the only reliable source for the display-type flag (issue #7).
+                displayTypes = SpotreadDisplayTypeTable.Parse(listResult);
+                Log($"spotread -y table: {SpotreadDisplayTypeTable.Describe(displayTypes)}");
 
                 // Parse actual connected device from list
                 var deviceInfo = ParseDeviceListOutput(listResult);
                 if (deviceInfo != null)
                 {
+                    deviceInfo.DisplayTypes = displayTypes;
                     Log($"Detected device from -?: {deviceInfo.Model}");
                     return deviceInfo;
                 }
@@ -589,7 +599,8 @@ namespace Gloam.Core.Calibration
                 return new ColorimeterInfo
                 {
                     Model = "Colorimeter Detected",
-                    IsHdrCapable = true // Assume capable, actual capability tested during measurement
+                    IsHdrCapable = true, // Assume capable, actual capability tested during measurement
+                    DisplayTypes = displayTypes
                 };
             }
 
@@ -847,6 +858,13 @@ namespace Gloam.Core.Calibration
         /// Raw instrument descriptor from spotread (e.g., "hid:/10 (X-Rite i1 DisplayPro, ColorMunki Display)").
         /// </summary>
         public string? InstrumentDescriptor { get; init; }
+
+        /// <summary>
+        /// The <c>-y</c> display-type table spotread printed for the enumerated instrument(s)
+        /// at detection time. Empty when no instrument was enumerated. Settable because it is
+        /// attached after the descriptor parse that constructs this object.
+        /// </summary>
+        public IReadOnlyList<SpotreadDisplayTypeEntry> DisplayTypes { get; set; } = Array.Empty<SpotreadDisplayTypeEntry>();
 
         /// <summary>
         /// Whether this colorimeter supports HDR measurement modes.

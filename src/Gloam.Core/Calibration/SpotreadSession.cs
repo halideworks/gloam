@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -46,6 +47,12 @@ namespace Gloam.Core.Calibration
         // builds emit in non-interactive mode.
         private static readonly Regex XyzPattern = new(
             @"XYZ:\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s+([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s+([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        // "Diagnostic: Failed to locate display type matching 'o'" (spotread.c usage() call
+        // after inst_get_disptype_index fails). The selector is quoted as printed.
+        private static readonly Regex DisplayTypeRejectedPattern = new(
+            @"Failed to locate display type matching '([^']+)'",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         // Spectral header emitted by spotread -s with a spectrometer, e.g.
@@ -199,6 +206,14 @@ namespace Gloam.Core.Calibration
 
         private volatile string? _fatalError;
         private volatile bool _disposed;
+
+        // Set when spotread rejects our -y selector ("Failed to locate display type matching
+        // 'o'"). spotread then prints its usage, including the connected instrument's own -y
+        // table, and exits. Everything after the diagnostic is kept in _usageCapture so the
+        // table can be parsed and the session restarted with a selector the instrument lists.
+        private volatile bool _displayTypeRejected;
+        private readonly StringBuilder _usageCapture = new();
+        private const int MaxUsageCaptureChars = 32_000;
         private volatile bool _attemptedHidOpen;
         private volatile bool _sharingViolationSeen;
         private volatile bool _poisoned;
@@ -293,7 +308,8 @@ namespace Gloam.Core.Calibration
             Action<string> log,
             CancellationToken cancellationToken,
             string? correctionFilePath = null,
-            bool spectralMode = false)
+            bool spectralMode = false,
+            IReadOnlyList<SpotreadDisplayTypeEntry>? displayTypeTable = null)
         {
             // NOTE (flag hygiene): spotread's -H flag is HIGH-RESOLUTION SPECTRAL mode and
             // only applies to spectrometers (i1 Pro etc.) — it is NOT an "HDR mode". This
@@ -306,8 +322,68 @@ namespace Gloam.Core.Calibration
             // OS display-mode flip.
             _ = hdrMode;
 
-            var args = BuildSpotreadArguments(instrumentIndex, displayType, spectralMode, correctionFilePath);
+            var args = BuildSpotreadArguments(instrumentIndex, displayType, spectralMode, correctionFilePath,
+                displayTypeTable, out string? selectorReason);
+            if (selectorReason != null)
+                log($"spotread -y selector for {displayType}: {selectorReason}");
 
+            try
+            {
+                return await StartProcessAsync(spotreadPath, args, spectralMode, log, cancellationToken);
+            }
+            catch (DisplayTypeRejectedException rejected) when (!spectralMode)
+            {
+                // The table spotread printed while rejecting the selector comes from the
+                // instrument it actually opened, so it outranks the one captured at detection
+                // (which may be empty, stale, or from another instrument). Resolve against it
+                // and retry once.
+                int selectorIndex = args.IndexOf("-y") + 1;
+                string rejectedSelector = args[selectorIndex];
+                string retrySelector = SpotreadDisplayTypeTable.Resolve(displayType, rejected.Table, out string retryReason);
+                if (rejected.Table.Count == 0 || retrySelector == rejectedSelector)
+                    throw new InvalidOperationException(rejected.Message, rejected);
+
+                log($"spotread rejected -y {rejectedSelector}; retrying with -y {retrySelector} ({retryReason}). " +
+                    $"Instrument -y table: {SpotreadDisplayTypeTable.Describe(rejected.Table)}");
+                args[selectorIndex] = retrySelector;
+                try
+                {
+                    return await StartProcessAsync(spotreadPath, args, spectralMode, log, cancellationToken);
+                }
+                catch (DisplayTypeRejectedException rejectedAgain)
+                {
+                    throw new InvalidOperationException(rejectedAgain.Message, rejectedAgain);
+                }
+            }
+            catch (DisplayTypeRejectedException rejected)
+            {
+                throw new InvalidOperationException(rejected.Message, rejected);
+            }
+        }
+
+        /// <summary>
+        /// Thrown by <see cref="StartProcessAsync"/> when spotread exited because it did not
+        /// accept the <c>-y</c> selector. Carries the <c>-y</c> table spotread printed on
+        /// the way out (empty if the output was cut off).
+        /// </summary>
+        internal sealed class DisplayTypeRejectedException : InvalidOperationException
+        {
+            public DisplayTypeRejectedException(string message, IReadOnlyList<SpotreadDisplayTypeEntry> table)
+                : base(message)
+            {
+                Table = table;
+            }
+
+            public IReadOnlyList<SpotreadDisplayTypeEntry> Table { get; }
+        }
+
+        private static async Task<SpotreadSession> StartProcessAsync(
+            string spotreadPath,
+            List<string> args,
+            bool spectralMode,
+            Action<string> log,
+            CancellationToken cancellationToken)
+        {
             var psi = new ProcessStartInfo(spotreadPath)
             {
                 UseShellExecute = false,
@@ -333,7 +409,10 @@ namespace Gloam.Core.Calibration
             KillStraySpotread(log);
 
             var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
-            var session = new SpotreadSession(process, log) { SpectralMode = spectralMode };
+            // Owned by this method until the ready prompt arrives; the finally block tears it
+            // down on every failure path and the success path hands ownership to the caller.
+            SpotreadSession? session = new SpotreadSession(process, log) { SpectralMode = spectralMode };
+            var started = session;
 
             log($"SpotreadSession starting: {spotreadPath} {string.Join(" ", args)}");
             process.Start();
@@ -351,28 +430,85 @@ namespace Gloam.Core.Calibration
             {
                 await session._readyTcs.Task.WaitAsync(startupCts.Token);
                 log("SpotreadSession ready.");
-                return session;
+                var ready = session;
+                session = null;
+                return ready;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                await session.DisposeAsync();
                 throw;
             }
             catch (OperationCanceledException)
             {
-                string tail = session.SnapshotRecentLog();
-                await session.DisposeAsync();
+                string tail = started.SnapshotRecentLog();
                 throw new InvalidOperationException(
                     "Colorimeter did not become ready within 15 seconds. " +
                     "Another application (DisplayCAL's profile loader, i1Profiler) may be " +
                     "holding the device, or the USB driver needs to be installed.\n\n" +
                     "Recent spotread output:\n" + tail);
             }
-            catch
+            catch (Exception ex)
             {
-                await session.DisposeAsync();
+                // spotread's exit is observed before its last stderr lines are delivered, so
+                // let the redirected streams drain before deciding why it failed.
+                await started.DrainOutputAfterExitAsync();
+                if (started._displayTypeRejected)
+                {
+                    var table = started.UsageDisplayTypeTable;
+                    throw new DisplayTypeRejectedException(started.BuildDisplayTypeRejectedMessage(table, ex.Message), table);
+                }
                 throw;
             }
+            finally
+            {
+                if (session != null)
+                    await session.DisposeAsync();
+            }
+        }
+
+        /// <summary>
+        /// Waits (bounded) for the exited process's redirected output to reach EOF. Only
+        /// <see cref="Process.WaitForExit()"/> without a timeout guarantees that the
+        /// asynchronous output handlers have run for every line.
+        /// </summary>
+        private async Task DrainOutputAfterExitAsync()
+        {
+            if (_process == null) return;
+            try
+            {
+                if (!_process.HasExited && !_displayTypeRejected) return;
+                var drain = Task.Run(() => _process.WaitForExit());
+                await Task.WhenAny(drain, Task.Delay(TimeSpan.FromSeconds(3)));
+            }
+            catch
+            {
+                // Best effort: the process may already be disposed or unreachable.
+            }
+        }
+
+        /// <summary>
+        /// The <c>-y</c> table parsed from the usage text spotread printed after rejecting
+        /// our selector. Empty until <see cref="DisplayTypeRejected"/> is set.
+        /// </summary>
+        internal IReadOnlyList<SpotreadDisplayTypeEntry> UsageDisplayTypeTable
+        {
+            get
+            {
+                string captured;
+                lock (_stateLock) captured = _usageCapture.ToString();
+                return SpotreadDisplayTypeTable.Parse(captured);
+            }
+        }
+
+        /// <summary>True once spotread reported that it does not accept the -y selector.</summary>
+        internal bool DisplayTypeRejected => _displayTypeRejected;
+
+        private string BuildDisplayTypeRejectedMessage(IReadOnlyList<SpotreadDisplayTypeEntry> table, string fallback)
+        {
+            string head = _fatalError ?? fallback;
+            return table.Count > 0
+                ? $"{head} Selectors this instrument accepts: {SpotreadDisplayTypeTable.Describe(table)}"
+                : $"{head} spotread exited before listing the selectors this instrument accepts.";
         }
 
         /// <summary>
@@ -398,13 +534,31 @@ namespace Gloam.Core.Calibration
         /// Spectral mode adds -s (print the raw emission spectrum after each reading) and -H
         /// (the instrument's high-resolution spectral mode, ~3.3 nm bins on an i1 Pro).
         /// </summary>
-        internal static System.Collections.Generic.List<string> BuildSpotreadArguments(
+        internal static List<string> BuildSpotreadArguments(
             int instrumentIndex,
             DisplayType displayType,
             bool spectralMode,
-            string? correctionFilePath)
+            string? correctionFilePath,
+            IReadOnlyList<SpotreadDisplayTypeEntry>? displayTypeTable = null)
+            => BuildSpotreadArguments(instrumentIndex, displayType, spectralMode, correctionFilePath,
+                displayTypeTable, out _);
+
+        /// <param name="displayTypeTable">
+        /// The connected instrument's <c>-y</c> table as parsed from <c>spotread -?</c>, or
+        /// null/empty when the instrument was not enumerated. The selector is resolved against
+        /// it so spotread is never handed a letter the instrument does not list.
+        /// </param>
+        /// <param name="displayTypeReason">Why that selector was chosen (for the log); null in spectral mode.</param>
+        internal static List<string> BuildSpotreadArguments(
+            int instrumentIndex,
+            DisplayType displayType,
+            bool spectralMode,
+            string? correctionFilePath,
+            IReadOnlyList<SpotreadDisplayTypeEntry>? displayTypeTable,
+            out string? displayTypeReason)
         {
-            var args = new System.Collections.Generic.List<string> { "-v" };
+            displayTypeReason = null;
+            var args = new List<string> { "-v" };
 
             if (!spectralMode)
                 args.Add("-N"); // colorimeter-only: skip power-up dark calibration
@@ -416,8 +570,10 @@ namespace Gloam.Core.Calibration
             if (!spectralMode)
             {
                 // colorimeter-only: display-type correction (a spectrometer needs none)
+                string selector = SpotreadDisplayTypeTable.Resolve(displayType, displayTypeTable, out string reason);
+                displayTypeReason = $"-y {selector} ({reason})";
                 args.Add("-y");
-                args.Add(displayType.ToSpotreadFlag());
+                args.Add(selector);
             }
 
             if (spectralMode)
@@ -660,6 +816,27 @@ namespace Gloam.Core.Calibration
                 // Keep the recent-log window bounded so a very chatty spotread doesn't
                 // let it grow without bound over a long calibration.
                 if (_recentLog.Length > 4000) _recentLog.Remove(0, _recentLog.Length - 2000);
+
+                // Everything spotread prints after rejecting the -y selector is its usage
+                // text, which carries the instrument's real -y table. Keep it whole.
+                if (_displayTypeRejected && _usageCapture.Length < MaxUsageCaptureChars)
+                    _usageCapture.AppendLine(line);
+            }
+
+            // 0. spotread rejected our -y selector. It prints its usage next and exits; the
+            //    exit handler fails the session with _fatalError, and StartAsync retries with
+            //    a selector taken from the table in that usage text. Usage lines are only
+            //    captured, never classified as prompts or errors.
+            if (_displayTypeRejected)
+                return;
+            var rejected = DisplayTypeRejectedPattern.Match(line);
+            if (rejected.Success)
+            {
+                _fatalError =
+                    $"spotread does not accept display type selector '{rejected.Groups[1].Value}' " +
+                    $"for this instrument ({line.Trim()}).";
+                _displayTypeRejected = true;
+                return;
             }
 
             // 1. Did a measurement just complete?
@@ -1031,7 +1208,11 @@ namespace Gloam.Core.Calibration
             // the output alone — we only know something held the device. Surface the
             // likely cause instead of the cryptic "exited before producing a measurement".
             string msg;
-            if (_fatalError != null)
+            if (_displayTypeRejected && _fatalError != null)
+            {
+                msg = BuildDisplayTypeRejectedMessage(UsageDisplayTypeTable, _fatalError);
+            }
+            else if (_fatalError != null)
             {
                 msg = _fatalError;
             }

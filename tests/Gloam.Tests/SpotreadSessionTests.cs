@@ -422,6 +422,88 @@ namespace Gloam.Tests
         }
 
         [Fact]
+        public void BuildSpotreadArguments_Oled_CleanI1D3Table_UsesNonRefreshBase()
+        {
+            // Issue #7: "-y o" only exists when an OLED EDR is installed. On the reporter's
+            // clean install the i1D3 lists n|l, r|c and 1, so OLED must go out as -y n.
+            var table = SpotreadDisplayTypeTable.Parse(SpotreadDisplayTypeTableTests.CleanI1D3Usage);
+
+            var args = SpotreadSession.BuildSpotreadArguments(
+                1, DisplayType.Oled, spectralMode: false, correctionFilePath: null, table, out string? reason);
+
+            Assert.Equal("n", args[args.IndexOf("-y") + 1]);
+            Assert.NotNull(reason);
+            Assert.StartsWith("-y n", reason);
+        }
+
+        [Fact]
+        public void BuildSpotreadArguments_Oled_EdrTable_UsesOledLetter()
+        {
+            var table = SpotreadDisplayTypeTable.Parse(SpotreadDisplayTypeTableTests.EdrRichI1D3Usage);
+
+            var args = SpotreadSession.BuildSpotreadArguments(
+                1, DisplayType.Oled, spectralMode: false, correctionFilePath: null, table);
+
+            Assert.Equal("o", args[args.IndexOf("-y") + 1]);
+        }
+
+        [Fact]
+        public void BuildSpotreadArguments_NoTable_UsesGenericLcdSelector()
+        {
+            var args = SpotreadSession.BuildSpotreadArguments(
+                1, DisplayType.Oled, spectralMode: false, correctionFilePath: null);
+
+            Assert.Equal("l", args[args.IndexOf("-y") + 1]);
+        }
+
+        [Fact]
+        public void BuildSpotreadArguments_SpectralMode_HasNoDisplayTypeReason()
+        {
+            var args = SpotreadSession.BuildSpotreadArguments(
+                1, DisplayType.Oled, spectralMode: true, correctionFilePath: null, null, out string? reason);
+
+            Assert.DoesNotContain("-y", args);
+            Assert.Null(reason);
+        }
+
+        [Fact]
+        public void DisplayTypeRejection_CapturesUsageTableAndFailsWithoutReady()
+        {
+            // The exact stderr sequence from the issue #7 colorimeter.log.
+            var session = CreateFakeSession(out _, out _);
+
+            session.SimulateOutputLine("Measure spot values, Version 3.5.0", isError: true);
+            session.SimulateOutputLine("Diagnostic: Failed to locate display type matching 'o'", isError: true);
+            session.SimulateOutputLine("usage: spotread [-options] [logfile]", isError: true);
+            session.SimulateOutputLine(" -c listno            Set instrument port from the following list (default 1)", isError: true);
+            session.SimulateOutputLine("    1 = 'hid:/33 (X-Rite i1 DisplayPro, ColorMunki Display)'", isError: true);
+            foreach (string line in SpotreadDisplayTypeTableTests.CleanI1D3Usage.Split('\n'))
+                session.SimulateOutputLine(line, isError: true);
+
+            Assert.True(session.DisplayTypeRejected);
+            Assert.False(session.ReadyForTest);
+            Assert.Contains("'o'", session.FatalErrorForTest);
+
+            var table = session.UsageDisplayTypeTable;
+            Assert.Equal(4, table.Count);
+            Assert.Equal("n", SpotreadDisplayTypeTable.Resolve(DisplayType.Oled, table, out _));
+        }
+
+        [Fact]
+        public void DisplayTypeRejection_UsageLinesAreNotClassifiedAsPromptsOrErrors()
+        {
+            var session = CreateFakeSession(out _, out _);
+
+            session.SimulateOutputLine("Diagnostic: Failed to locate display type matching 'o'", isError: true);
+            // Usage text that would otherwise trip the ready or fatal classifiers.
+            session.SimulateOutputLine("    place instrument on the spot to take a reading", isError: true);
+            session.SimulateOutputLine("error: not really", isError: true);
+
+            Assert.False(session.ReadyForTest);
+            Assert.Contains("display type selector 'o'", session.FatalErrorForTest);
+        }
+
+        [Fact]
         public void CalibrationPrompt_InSpectralMode_IsNotTreatedAsReady()
         {
             // M1: an i1 Pro calibration prompt contains "place instrument", which is also a
