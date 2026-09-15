@@ -294,6 +294,7 @@ namespace Gloam.ViewModels
             OnPropertyChanged(nameof(IsLcdWideGamut));
             OnPropertyChanged(nameof(IsLcdCcfl));
             OnPropertyChanged(nameof(IsOledHintVisible));
+            RefreshMeterCalibrationText();
 
             // No white-point-only auto-suggestion for OLED anymore: measured results on the
             // QD-OLED were BETTER with full gamut correction, so full gamut is the default
@@ -392,7 +393,84 @@ namespace Gloam.ViewModels
             set
             {
                 if (SetProperty(ref _selectedCorrection, value))
+                {
+                    RefreshMeterCalibrationText();
                     RefreshPreflight();
+                }
+            }
+        }
+
+        private string _meterCalibrationText = "";
+
+        /// <summary>
+        /// What the connected meter will actually use for the selected display type: the
+        /// installed correction row it matched, or its generic base calibration when none
+        /// is installed. Empty until a colorimeter is connected.
+        /// </summary>
+        public string MeterCalibrationText
+        {
+            get => _meterCalibrationText;
+            private set
+            {
+                if (SetProperty(ref _meterCalibrationText, value))
+                    OnPropertyChanged(nameof(HasMeterCalibrationText));
+            }
+        }
+
+        public bool HasMeterCalibrationText => !string.IsNullOrEmpty(_meterCalibrationText);
+
+        /// <summary>
+        /// True when the connected colorimeter has no correction row for the selected display
+        /// type and will fall back to its generic base calibration.
+        /// </summary>
+        public bool MeterUsesGenericCalibration { get; private set; }
+
+        private void RefreshMeterCalibrationText()
+        {
+            var service = ColorimeterService;
+            if (service == null || !service.IsReady || service.ConnectedInstrumentIsSpectrometer)
+            {
+                MeterUsesGenericCalibration = false;
+                MeterCalibrationText = "";
+                return;
+            }
+
+            var choice = service.ResolveDisplayTypeChoice(_displayType);
+            bool tableKnown = SpotreadDisplayTypeTable.HasInstrumentRows(service.ConnectedColorimeter?.DisplayTypes);
+            // Unknown table (meter not enumerated yet): the session probes again before
+            // measuring, so this is not a missing correction and must not warn as one.
+            MeterUsesGenericCalibration = tableKnown && !choice.IsTechnologyMatch;
+
+            string correctionPath = SelectedCorrection?.Path ?? "";
+            string correctionFile = correctionPath.Length > 0 ? System.IO.Path.GetFileName(correctionPath) : "";
+            bool isMatrix = correctionPath.EndsWith(".ccmx", StringComparison.OrdinalIgnoreCase);
+            string row = choice.Entry?.DisplayDescription ?? "base calibration";
+
+            if (!tableKnown)
+            {
+                MeterCalibrationText =
+                    "Meter calibration: not read yet (the meter was not listed when Gloam looked); it is read again when measurement starts.";
+            }
+            else if (correctionFile.Length > 0 && isMatrix)
+            {
+                // A CCMX is applied on top of the -y calibration, so that row still matters.
+                MeterCalibrationText =
+                    $"Meter calibration: {row} (spotread -y {choice.Selector}), with the correction matrix {correctionFile} applied on top.";
+            }
+            else if (correctionFile.Length > 0)
+            {
+                MeterCalibrationText =
+                    $"Meter calibration: {correctionFile} supplies the spectral calibration; spotread -y {choice.Selector} only sets the base mode.";
+            }
+            else if (choice.IsTechnologyMatch)
+            {
+                MeterCalibrationText = $"Meter calibration: {row} (spotread -y {choice.Selector}).";
+            }
+            else
+            {
+                MeterCalibrationText =
+                    $"Meter calibration: no {DisplayTypeLabel(_displayType)} correction is installed on this meter, " +
+                    $"so it will use its {row} (spotread -y {choice.Selector}).";
             }
         }
 
@@ -634,7 +712,8 @@ namespace Gloam.ViewModels
             bool whitePointOnly,
             MonitorProfileData? monitorProfile,
             bool? nightLightActive = null,
-            bool? sdrAcmActive = null)
+            bool? sdrAcmActive = null,
+            bool meterUsesGenericCalibration = false)
         {
             var items = new List<(string Severity, string Message)>();
 
@@ -684,7 +763,9 @@ namespace Gloam.ViewModels
 
             bool correctionRecommended = displayType is DisplayType.Oled or DisplayType.LcdWideGamut ||
                                          detectedDisplayType is DisplayType.Oled or DisplayType.LcdWideGamut;
-            if (correctionRecommended && string.IsNullOrEmpty(correction?.Path))
+            if (meterUsesGenericCalibration && string.IsNullOrEmpty(correction?.Path))
+                items.Add(("WARN", $"The meter has no {DisplayTypeLabel(displayType)} correction installed and will use its generic base calibration. Use a panel-matched CCSS/CCMX meter correction."));
+            else if (correctionRecommended && string.IsNullOrEmpty(correction?.Path))
                 items.Add(("WARN", "Use a panel-matched CCSS/CCMX meter correction for OLED and wide-gamut displays."));
 
             if (!string.IsNullOrEmpty(correction?.Path) &&
@@ -783,7 +864,8 @@ namespace Gloam.ViewModels
                          WhitePointOnly,
                          profile,
                          nightLightActive,
-                         sdrAcmActive))
+                         sdrAcmActive,
+                         MeterUsesGenericCalibration))
             {
                 PreflightItems.Add(new CalibrationPreflightItem(item.Severity, item.Message, BrushForSeverity(item.Severity)));
             }
@@ -827,7 +909,7 @@ namespace Gloam.ViewModels
             DisplayType.Oled => "OLED",
             DisplayType.LcdWideGamut => "wide-gamut LCD",
             DisplayType.LcdCcfl => "CCFL LCD",
-            _ => type.ToString()
+            _ => type.ToDisplayName()
         };
 
         #region Colorimeter init
@@ -1016,7 +1098,6 @@ namespace Gloam.ViewModels
                 StatusBrush = SuccessBrush;
                 StatusDetailText = ColorimeterService.ConnectedColorimeter?.Model ?? "Unknown model";
                 _colorimeterReady = true;
-                RefreshCanStart();
             }
             else
             {
@@ -1024,8 +1105,9 @@ namespace Gloam.ViewModels
                 StatusBrush = WarningBrush;
                 StatusDetailText = "Connect your colorimeter and click Refresh";
                 _colorimeterReady = false;
-                RefreshCanStart();
             }
+            RefreshMeterCalibrationText();
+            RefreshPreflight();
         }
 
         #endregion
@@ -1091,7 +1173,8 @@ namespace Gloam.ViewModels
                     target.Name, _preset.ToString());
 
             Log.Info($"CalibrationSetup.Start: Monitor={ResultMonitor?.FriendlyName ?? "null"}, Target={ResultTarget?.Name ?? "null"}, DisplayType={_displayType}, " +
-                     $"Correction={(correction != null ? System.IO.Path.GetFileName(correction) : "built-in")}, Colorimeter={(ColorimeterService != null ? "present" : "null")}");
+                     $"Correction={(correction != null ? System.IO.Path.GetFileName(correction) : "built-in")}, Colorimeter={(ColorimeterService != null ? "present" : "null")}, " +
+                     $"{(MeterCalibrationText.Length > 0 ? MeterCalibrationText : "Meter calibration: n/a")}");
 
             CloseRequested?.Invoke(true);
         }
