@@ -238,21 +238,24 @@ namespace Gloam.Tests
         }
 
         [Theory]
-        [InlineData(DisplayType.Oled, "l")]
-        [InlineData(DisplayType.LcdLed, "l")]
-        [InlineData(DisplayType.Crt, "c")]
-        public void Resolve_NoInstrumentTable_UsesGenericRow(DisplayType type, string expected)
+        [InlineData(DisplayType.Oled, "n")]
+        [InlineData(DisplayType.LcdLed, "n")]
+        [InlineData(DisplayType.Crt, "r")]
+        public void Resolve_NoInstrumentTable_UsesBaseSelector(DisplayType type, string expected)
         {
+            // Only the generic "Other" row: the instrument is unknown. "n"/"r" stay the base
+            // rows on the i1D3 even when corrections are installed, whereas "l" would be the
+            // CCFL correction on such a machine.
             var table = SpotreadDisplayTypeTable.Parse(NoInstrumentUsage);
 
             Assert.Equal(expected, SpotreadDisplayTypeTable.Resolve(type, table, out _));
         }
 
         [Theory]
-        [InlineData(DisplayType.Oled, "l")]
-        [InlineData(DisplayType.LcdWideGamut, "l")]
-        [InlineData(DisplayType.Plasma, "c")]
-        public void Resolve_UnknownTable_UsesGenericSelector(DisplayType type, string expected)
+        [InlineData(DisplayType.Oled, "n")]
+        [InlineData(DisplayType.LcdWideGamut, "n")]
+        [InlineData(DisplayType.Plasma, "r")]
+        public void Resolve_UnknownTable_UsesBaseSelector(DisplayType type, string expected)
         {
             Assert.Equal(expected, SpotreadDisplayTypeTable.Resolve(type, null, out string reason));
             Assert.Contains("unknown", reason);
@@ -261,12 +264,38 @@ namespace Gloam.Tests
         }
 
         [Fact]
-        public void Resolve_TableWithoutBaseOrGenericRows_FallsBackToGenericSelector()
+        public void Resolve_DriverWithOnlyClassicRows_UsesTheRowAcceptingL()
+        {
+            // Older drivers list a single "l" LCD row with no Non-Refresh wording.
+            var table = SpotreadDisplayTypeTable.Parse(
+                " -y l                  Huey: LCD display\n" +
+                "    c                  Huey: CRT display\n");
+
+            Assert.Equal("l", SpotreadDisplayTypeTable.Resolve(DisplayType.Oled, table, out _));
+            Assert.Equal("c", SpotreadDisplayTypeTable.Resolve(DisplayType.Plasma, table, out _));
+        }
+
+        [Fact]
+        public void Resolve_TableWithoutBaseOrClassicRows_FallsBackToBaseSelector()
         {
             var table = SpotreadDisplayTypeTable.Parse(
                 " -y 1                  i1D3: LCD CCFL PVA (Resolve JVC CPF)\n");
 
-            Assert.Equal("l", SpotreadDisplayTypeTable.Resolve(DisplayType.Oled, table, out _));
+            Assert.Equal("n", SpotreadDisplayTypeTable.Resolve(DisplayType.Oled, table, out _));
+        }
+
+        [Fact]
+        public void Resolve_MatchesTechnologyNameNotFreeTextDescriptor()
+        {
+            // The parenthesised descriptor is author-supplied text and must not hijack a type.
+            var table = SpotreadDisplayTypeTable.Parse(
+                " -y n|l                i1D3: Non-Refresh display [Default,CB1]\n" +
+                "    e                  i1D3: LCD White LED IPS (checked vs OLED reference)\n" +
+                "    7                  i1D3: LED OLED (panel notes: white LED backlight comparison)\n");
+
+            Assert.Equal("7", SpotreadDisplayTypeTable.Resolve(DisplayType.Oled, table, out _));
+            Assert.Equal("e", SpotreadDisplayTypeTable.Resolve(DisplayType.LcdLed, table, out _));
+            Assert.Equal("LCD White LED IPS", table[1].TechnologySegment);
         }
 
         // Two meters enumerated at once: spotread prints one merged -y block.

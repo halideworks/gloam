@@ -42,6 +42,22 @@ namespace Gloam.Core.Calibration
             }
         }
 
+        /// <summary>
+        /// Argyll's technology name for the row: the description up to the parenthesised
+        /// free-text descriptor ("LCD White LED IPS" from "LCD White LED IPS (WLED AC LG
+        /// Samsung)"). Technology matching uses only this part, so a descriptor that happens
+        /// to mention another technology cannot hijack a display type.
+        /// </summary>
+        public string TechnologySegment
+        {
+            get
+            {
+                string d = DisplayDescription;
+                int paren = d.IndexOf(" (", StringComparison.Ordinal);
+                return paren > 0 ? d.Substring(0, paren) : d;
+            }
+        }
+
         // Words that mark a row as technology-specific. A default row that names a technology
         // (some drivers' "LCD, CCFL Backlight [Default,CB1]") is a correction, not a base.
         private static readonly string[] TechnologyWords =
@@ -255,11 +271,14 @@ namespace Gloam.Core.Calibration
         };
 
         /// <summary>
-        /// The selector to pass as <c>-y</c> for <paramref name="type"/> on an instrument
-        /// whose table is unknown. <c>l</c> (LCD) and <c>c</c> (CRT) are in every Argyll
-        /// colorimeter driver's static list, so they are the safe generic choice.
+        /// The selector to pass as <c>-y</c> for <paramref name="type"/> when the instrument's
+        /// table is unknown: <c>n</c> (Non-Refresh) or <c>r</c> (Refresh). Argyll keeps these
+        /// on the i1D3 and Spyder 3+ base rows even when corrections are installed, whereas
+        /// <c>l</c>/<c>c</c> get reassigned to CCFL and CRT corrections. Older drivers that
+        /// only know <c>l</c>/<c>c</c> reject <c>n</c>/<c>r</c>, and the session's rejection
+        /// retry then resolves from the table the instrument prints.
         /// </summary>
-        public static string GenericSelector(DisplayType type) => RuleFor(type).Refresh ? "c" : "l";
+        public static string GenericSelector(DisplayType type) => RuleFor(type).Refresh ? "r" : "n";
 
         /// <summary>
         /// Picks the <c>-y</c> selector for <paramref name="type"/> from the instrument's
@@ -278,20 +297,20 @@ namespace Gloam.Core.Calibration
         {
             var rule = RuleFor(type);
             string generic = GenericSelector(type);
-            string genericName = rule.Refresh ? "CRT" : "LCD";
+            string className = rule.Refresh ? "Refresh" : "Non-Refresh";
 
-            if (table == null || table.Count == 0)
+            if (table == null || !HasInstrumentRows(table))
             {
                 return new SpotreadDisplayTypeChoice(generic,
-                    $"the instrument's display-type table is unknown; using the generic {genericName} selector", null);
+                    $"the instrument's display-type table is unknown; using the {className} base selector", null);
             }
 
-            // 1. Technology-specific rows (installed EDR/CCSS corrections) whose description
-            //    names this technology. Prefer the row carrying Argyll's own letter for it.
+            // 1. Technology-specific rows (installed EDR/CCSS corrections) whose technology
+            //    name matches this type. Prefer the row carrying Argyll's own letter for it.
             SpotreadDisplayTypeEntry? keywordMatch = null;
             foreach (var entry in table)
             {
-                if (entry.IsBaseOrGeneric || !MatchesKeyword(entry.Description, rule.Keywords))
+                if (entry.IsBaseOrGeneric || !MatchesKeyword(entry.TechnologySegment, rule.Keywords))
                     continue;
                 keywordMatch ??= entry;
                 foreach (string sel in rule.PreferredSelectors)
@@ -317,20 +336,22 @@ namespace Gloam.Core.Calibration
                 }
             }
 
-            // 3. Any row that accepts the generic selector (including the "Other" row).
+            // 3. A driver without named base rows: the instrument row that accepts the
+            //    classic l (LCD) or c (CRT) selector.
+            string classic = rule.Refresh ? "c" : "l";
             foreach (var entry in table)
             {
-                if (entry.HasSelector(generic))
+                if (!entry.IsGeneric && entry.HasSelector(classic))
                 {
-                    return new SpotreadDisplayTypeChoice(generic,
+                    return new SpotreadDisplayTypeChoice(classic,
                         $"no {type}-specific correction is installed for this instrument; using '{entry.Description}'", entry);
                 }
             }
 
-            // 4. The table lists nothing usable at all (unexpected); the generic selector is
-            //    still the most likely to be accepted.
+            // 4. Nothing usable listed (unexpected); the base selector plus the rejection
+            //    retry is the most likely to succeed.
             return new SpotreadDisplayTypeChoice(generic,
-                $"the instrument's display-type table lists no base calibration; using the generic {genericName} selector", null);
+                $"the instrument's display-type table lists no base calibration; using the {className} base selector", null);
         }
 
         // Argyll insttypes.c: inst_name(), printed inside the parentheses of the -c port

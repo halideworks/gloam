@@ -341,6 +341,15 @@ namespace Gloam.Core.Calibration
                 var table = SpotreadDisplayTypeTable.ForInstrument(rejected.Table, instrumentDescriptor);
                 var retryArgs = BuildSpotreadArguments(instrumentIndex, displayType, spectralMode, correctionFilePath,
                     table, out string? retryReason);
+                if (retryArgs.SequenceEqual(args))
+                {
+                    // Same selector again (a merged two-meter table the descriptor could not
+                    // scope): drop every row that carries it and resolve once more.
+                    string rejectedSelector = args[args.IndexOf("-y") + 1];
+                    table = table.Where(e => !e.HasSelector(rejectedSelector)).ToList();
+                    retryArgs = BuildSpotreadArguments(instrumentIndex, displayType, spectralMode, correctionFilePath,
+                        table, out retryReason);
+                }
                 if (table.Count == 0 || retryArgs.SequenceEqual(args))
                     throw;
 
@@ -441,11 +450,13 @@ namespace Gloam.Core.Calibration
             }
             catch (Exception ex)
             {
-                // spotread prints its usage after rejecting the -y selector and only then
-                // exits, and its exit is observed before those last lines are delivered.
+                // spotread's exit is observed before its last stderr lines are delivered, and
+                // the -y rejection diagnostic and usage table are among them. Drain first,
+                // then decide why it failed.
+                if (process.HasExited || session._displayTypeRejected)
+                    await session.DrainOutputAsync();
                 if (session._displayTypeRejected)
                 {
-                    await session.DrainOutputAsync();
                     var table = session.UsageDisplayTypeTable;
                     throw new DisplayTypeRejectedException(session.BuildDisplayTypeRejectedMessage(table), table);
                 }

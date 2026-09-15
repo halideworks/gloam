@@ -436,23 +436,38 @@ namespace Gloam.ViewModels
             }
 
             var choice = service.ResolveDisplayTypeChoice(_displayType);
-            MeterUsesGenericCalibration = !choice.IsTechnologyMatch;
+            bool tableKnown = choice.Entry != null && !choice.Entry.IsGeneric;
+            // Unknown table (meter not enumerated yet): the session probes again before
+            // measuring, so this is not a missing correction and must not warn as one.
+            MeterUsesGenericCalibration = tableKnown && !choice.IsTechnologyMatch;
 
-            string correctionFile = SelectedCorrection?.Path is { } path && path.Length > 0
-                ? System.IO.Path.GetFileName(path)
-                : "";
-            if (correctionFile.Length > 0)
+            string correctionPath = SelectedCorrection?.Path ?? "";
+            string correctionFile = correctionPath.Length > 0 ? System.IO.Path.GetFileName(correctionPath) : "";
+            bool isMatrix = correctionPath.EndsWith(".ccmx", StringComparison.OrdinalIgnoreCase);
+            string row = choice.Entry?.DisplayDescription ?? "base calibration";
+
+            if (!tableKnown)
+            {
+                MeterCalibrationText =
+                    "Meter calibration: not read yet (the meter was not listed when Gloam looked); it is read again when measurement starts.";
+            }
+            else if (correctionFile.Length > 0 && isMatrix)
+            {
+                // A CCMX is applied on top of the -y calibration, so that row still matters.
+                MeterCalibrationText =
+                    $"Meter calibration: {row} (spotread -y {choice.Selector}), with the correction matrix {correctionFile} applied on top.";
+            }
+            else if (correctionFile.Length > 0)
             {
                 MeterCalibrationText =
                     $"Meter calibration: {correctionFile} supplies the spectral calibration; spotread -y {choice.Selector} only sets the base mode.";
             }
             else if (choice.IsTechnologyMatch)
             {
-                MeterCalibrationText = $"Meter calibration: {choice.Entry!.DisplayDescription} (spotread -y {choice.Selector}).";
+                MeterCalibrationText = $"Meter calibration: {row} (spotread -y {choice.Selector}).";
             }
             else
             {
-                string row = choice.Entry?.DisplayDescription ?? "generic calibration";
                 MeterCalibrationText =
                     $"Meter calibration: no {DisplayTypeLabel(_displayType)} correction is installed on this meter, " +
                     $"so it will use its {row} (spotread -y {choice.Selector}).";
@@ -894,7 +909,7 @@ namespace Gloam.ViewModels
             DisplayType.Oled => "OLED",
             DisplayType.LcdWideGamut => "wide-gamut LCD",
             DisplayType.LcdCcfl => "CCFL LCD",
-            _ => type.ToString()
+            _ => type.ToDisplayName()
         };
 
         #region Colorimeter init
@@ -1158,7 +1173,8 @@ namespace Gloam.ViewModels
                     target.Name, _preset.ToString());
 
             Log.Info($"CalibrationSetup.Start: Monitor={ResultMonitor?.FriendlyName ?? "null"}, Target={ResultTarget?.Name ?? "null"}, DisplayType={_displayType}, " +
-                     $"Correction={(correction != null ? System.IO.Path.GetFileName(correction) : "built-in")}, Colorimeter={(ColorimeterService != null ? "present" : "null")}");
+                     $"Correction={(correction != null ? System.IO.Path.GetFileName(correction) : "built-in")}, Colorimeter={(ColorimeterService != null ? "present" : "null")}, " +
+                     $"{(MeterCalibrationText.Length > 0 ? MeterCalibrationText : "Meter calibration: n/a")}");
 
             CloseRequested?.Invoke(true);
         }

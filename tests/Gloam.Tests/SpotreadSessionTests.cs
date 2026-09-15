@@ -448,12 +448,12 @@ namespace Gloam.Tests
         }
 
         [Fact]
-        public void BuildSpotreadArguments_NoTable_UsesGenericLcdSelector()
+        public void BuildSpotreadArguments_NoTable_UsesNonRefreshBaseSelector()
         {
             var args = SpotreadSession.BuildSpotreadArguments(
                 1, DisplayType.Oled, spectralMode: false, correctionFilePath: null);
 
-            Assert.Equal("l", args[args.IndexOf("-y") + 1]);
+            Assert.Equal("n", args[args.IndexOf("-y") + 1]);
         }
 
         [Fact]

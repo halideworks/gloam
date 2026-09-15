@@ -135,15 +135,30 @@ namespace Gloam.Core.Calibration
             return pending;
         }
 
+        // EDR files already handed to oeminst in this process. An EDR oeminst discards (or
+        // installs somewhere ArgyllDataDirs does not scan) would otherwise be retried on
+        // every meter initialization.
+        private static readonly HashSet<string> Attempted = new(StringComparer.OrdinalIgnoreCase);
+        private static readonly object AttemptedLock = new();
+
         /// <summary>
         /// Silent one-shot: converts any EDR files on this PC that Argyll does not have yet.
-        /// Returns null when there was nothing to do. Never throws; failures are logged.
+        /// Each file is tried at most once per process. Returns null when there was nothing
+        /// to do. Never throws; failures are logged.
         /// </summary>
         public static async Task<OemImportResult?> EnsureImportedAsync(string argyllBinPath, Action<string>? log, CancellationToken cancellationToken)
         {
             try
             {
-                var pending = PendingEdrFiles(FindEdrFiles(), ArgyllDataDirs());
+                var pending = new List<string>();
+                lock (AttemptedLock)
+                {
+                    foreach (string edr in PendingEdrFiles(FindEdrFiles(), ArgyllDataDirs()))
+                    {
+                        if (Attempted.Add(edr))
+                            pending.Add(edr);
+                    }
+                }
                 if (pending.Count == 0) return null;
                 var result = await ImportAsync(argyllBinPath, pending, log, cancellationToken);
                 log?.Invoke($"EDR import: {result.Message}");
@@ -195,14 +210,7 @@ namespace Gloam.Core.Calibration
                     "The bundled ArgyllCMS has no oeminst tool; EDR files were not converted.", "");
             }
 
-            var psi = new ProcessStartInfo(oeminst)
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                WorkingDirectory = argyllBinPath
-            };
+            var psi = new ProcessStartInfo(oeminst) { WorkingDirectory = argyllBinPath };
             psi.ArgumentList.Add("-v");
             foreach (string file in edrFiles)
                 psi.ArgumentList.Add(file);
@@ -213,24 +221,9 @@ namespace Gloam.Core.Calibration
             int exitCode;
             try
             {
-                using var process = Process.Start(psi)
-                    ?? throw new InvalidOperationException("oeminst did not start.");
-                using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                cts.CancelAfter(TimeSpan.FromMinutes(2));
-
-                var stdout = process.StandardOutput.ReadToEndAsync(cts.Token);
-                var stderr = process.StandardError.ReadToEndAsync(cts.Token);
-                try
-                {
-                    await process.WaitForExitAsync(cts.Token);
-                }
-                catch (OperationCanceledException)
-                {
-                    try { process.Kill(entireProcessTree: true); } catch { /* already gone */ }
-                    throw;
-                }
-                output = await stdout + "\n" + await stderr;
-                exitCode = process.ExitCode;
+                var run = await BoundedProcess.RunAsync(psi, TimeSpan.FromMinutes(2), cancellationToken);
+                output = run.Combined;
+                exitCode = run.ExitCode;
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {

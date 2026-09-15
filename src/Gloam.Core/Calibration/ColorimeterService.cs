@@ -401,27 +401,35 @@ namespace Gloam.Core.Calibration
             Log($"spotread -y table updated from session: {SpotreadDisplayTypeTable.Describe(table)}");
         }
 
+        // The usage text lists the -y selectors the enumerated instrument accepts. Argyll
+        // builds that table per instrument and per installed correction, so it is the only
+        // reliable source for the display-type flag (issue #7).
+        private static IReadOnlyList<SpotreadDisplayTypeEntry> ScopedDisplayTypeTable(string? usage, string? descriptor)
+        {
+            var table = SpotreadDisplayTypeTable.ForInstrument(SpotreadDisplayTypeTable.Parse(usage), descriptor);
+            Log($"spotread -y table: {SpotreadDisplayTypeTable.Describe(table)}");
+            return table;
+        }
+
+        private bool _displayTypeProbeRetried;
+
         /// <summary>
         /// Detection only sees the -y table when the instrument is enumerated at that moment
         /// (the meter may be plugged in after the app starts). If the cached table has no
-        /// instrument rows, re-run the usage probe once before opening a session.
+        /// instrument rows, re-run the usage probe once per service before opening a session.
         /// </summary>
         private async Task RefreshDisplayTypeTableIfUnknownAsync(CancellationToken cancellationToken)
         {
-            if (_connectedColorimeter == null || SpotreadDisplayTypeTable.HasInstrumentRows(_connectedColorimeter.DisplayTypes))
+            if (_connectedColorimeter == null || _displayTypeProbeRetried
+                || SpotreadDisplayTypeTable.HasInstrumentRows(_connectedColorimeter.DisplayTypes))
                 return;
+            _displayTypeProbeRetried = true;
             var usage = await RunSpotreadCommandAsync(TimeSpan.FromSeconds(10), cancellationToken, "-?");
-            var table = SpotreadDisplayTypeTable.ForInstrument(
-                SpotreadDisplayTypeTable.Parse(usage), _connectedColorimeter.InstrumentDescriptor);
+            var table = ScopedDisplayTypeTable(usage, _connectedColorimeter.InstrumentDescriptor);
             if (SpotreadDisplayTypeTable.HasInstrumentRows(table))
-            {
                 _connectedColorimeter.DisplayTypes = table;
-                Log($"spotread -y table refreshed before session: {SpotreadDisplayTypeTable.Describe(table)}");
-            }
             else
-            {
-                Log("spotread -y table still unknown (no instrument enumerated by -?); using the generic selector");
-            }
+                Log("spotread -y table still unknown (no instrument enumerated by -?); using the base selector and the rejection retry");
         }
 
         /// <summary>
@@ -632,17 +640,12 @@ namespace Gloam.Core.Calibration
             {
                 Log($"spotread -? output: {listResult}");
 
-                // The usage text lists the -y selectors the enumerated instrument accepts.
-                // Argyll builds that table per instrument and per installed correction, so it
-                // is the only reliable source for the display-type flag (issue #7).
-                displayTypes = SpotreadDisplayTypeTable.Parse(listResult);
-                Log($"spotread -y table: {SpotreadDisplayTypeTable.Describe(displayTypes)}");
-
                 // Parse actual connected device from list
                 var deviceInfo = ParseDeviceListOutput(listResult);
+                displayTypes = ScopedDisplayTypeTable(listResult, deviceInfo?.InstrumentDescriptor);
                 if (deviceInfo != null)
                 {
-                    deviceInfo.DisplayTypes = SpotreadDisplayTypeTable.ForInstrument(displayTypes, deviceInfo.InstrumentDescriptor);
+                    deviceInfo.DisplayTypes = displayTypes;
                     Log($"Detected device from -?: {deviceInfo.Model}");
                     return deviceInfo;
                 }
@@ -674,65 +677,22 @@ namespace Gloam.Core.Calibration
             if (string.IsNullOrEmpty(_spotreadPath))
                 return null;
 
-            var psi = new ProcessStartInfo(_spotreadPath)
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            };
+            var psi = new ProcessStartInfo(_spotreadPath);
             foreach (string arg in args)
-            {
                 psi.ArgumentList.Add(arg);
-            }
 
             try
             {
-                using var process = Process.Start(psi);
-                if (process == null) return null;
-
-                using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                cts.CancelAfter(timeout);
-
-                var stdoutTask = process.StandardOutput.ReadToEndAsync(cts.Token);
-                var stderrTask = process.StandardError.ReadToEndAsync(cts.Token);
-
-                try
-                {
-                    await process.WaitForExitAsync(cts.Token);
-                }
-                catch (OperationCanceledException)
-                {
-                    try
-                    {
-                        process.Kill(entireProcessTree: true);
-                    }
-                    catch (Exception ex)
-                    {
-                        Gloam.Core.Log.DebugRateLimited(
-                            "colorimeter-process-termination",
-                            $"Could not terminate the cancelled instrument process: {ex.Message}",
-                            TimeSpan.FromMinutes(10));
-                    }
-                    return null;
-                }
-
-                string output, error;
-                try
-                {
-                    output = await stdoutTask;
-                    error = await stderrTask;
-                }
-                catch (OperationCanceledException)
-                {
-                    return null;
-                }
-
-                return output + "\n" + error;
+                var result = await BoundedProcess.RunAsync(psi, timeout, cancellationToken);
+                return result.Combined;
+            }
+            catch (OperationCanceledException)
+            {
+                return null;
             }
             catch (Exception ex)
             {
-                Log($"Error running spotread {args}: {ex.Message}");
+                Log($"Error running spotread {string.Join(" ", args)}: {ex.Message}");
                 return null;
             }
         }
@@ -740,7 +700,9 @@ namespace Gloam.Core.Calibration
         /// <summary>
         /// Parses device information from spotread output.
         /// </summary>
-        private static ColorimeterInfo? ParseDeviceListOutput(string output)
+        private static readonly Regex BareSerialPortPattern = new(@"^(COM\d+|/dev/tty\S*)$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        internal static ColorimeterInfo? ParseDeviceListOutput(string output)
         {
             // Common colorimeter patterns in ArgyllCMS output
             var devicePatterns = new[]
@@ -785,9 +747,13 @@ namespace Gloam.Core.Calibration
                 }
             }
 
-            if (listMatches.Count > 0)
+            // A bare serial port ("COM6") is what every PC with a COM header lists; it is not
+            // an instrument. Argyll cannot name a serial instrument without opening it.
+            foreach (Match entry in listMatches)
             {
-                var firstEntry = listMatches[0];
+                var firstEntry = entry;
+                if (BareSerialPortPattern.IsMatch(firstEntry.Groups[2].Value.Trim()))
+                    continue;
                 if (int.TryParse(firstEntry.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int index))
                 {
                     string descriptor = firstEntry.Groups[2].Value;
