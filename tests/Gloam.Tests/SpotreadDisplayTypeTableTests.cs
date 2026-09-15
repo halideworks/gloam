@@ -186,6 +186,44 @@ namespace Gloam.Tests
         }
 
         [Fact]
+        public void Resolve_WideGamut_WithoutRgbLedRow_NeverPicksCcflWideGamutRow()
+        {
+            // "L LCD CCFL Wide Gamut IPS" is a CCFL correction; an LED wide-gamut panel must
+            // land on one of the LED phosphor rows instead.
+            string usage = EdrRichI1D3Usage.Replace(
+                "    b                  i1D3: LCD RGB LED IPS (RGBLED HP SOYO)\n", "");
+            var table = SpotreadDisplayTypeTable.Parse(usage);
+
+            string selector = SpotreadDisplayTypeTable.Resolve(DisplayType.LcdWideGamut, table, out string reason);
+
+            Assert.Equal("i", selector);
+            Assert.DoesNotContain("CCFL", reason);
+        }
+
+        [Fact]
+        public void Resolve_DefaultRowNamingATechnology_IsACorrectionNotABase()
+        {
+            // Drivers other than the i1D3 mark a technology row as the default.
+            var table = SpotreadDisplayTypeTable.Parse(
+                " -y l                  X: LCD, CCFL Backlight [Default,CB1]\n" +
+                "    2                  X: Wide Gamut LCD, CCFL Backlight\n" +
+                "    c                  X: CRT [CB2]\n");
+
+            Assert.False(table[0].IsNonRefreshBase);
+            Assert.Equal("l", SpotreadDisplayTypeTable.Resolve(DisplayType.LcdCcfl, table, out _));
+            Assert.Equal("l", SpotreadDisplayTypeTable.Resolve(DisplayType.Oled, table, out _));
+            Assert.Equal("c", SpotreadDisplayTypeTable.Resolve(DisplayType.Crt, table, out _));
+        }
+
+        [Fact]
+        public void HasInstrumentRows_FalseForGenericOnlyOrEmpty()
+        {
+            Assert.False(SpotreadDisplayTypeTable.HasInstrumentRows(null));
+            Assert.False(SpotreadDisplayTypeTable.HasInstrumentRows(SpotreadDisplayTypeTable.Parse(NoInstrumentUsage)));
+            Assert.True(SpotreadDisplayTypeTable.HasInstrumentRows(SpotreadDisplayTypeTable.Parse(CleanI1D3Usage)));
+        }
+
+        [Fact]
         public void Resolve_KeywordMatchWithoutPreferredLetter_UsesThatRow()
         {
             var table = SpotreadDisplayTypeTable.Parse(

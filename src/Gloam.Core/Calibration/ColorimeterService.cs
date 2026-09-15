@@ -350,9 +350,11 @@ namespace Gloam.Core.Calibration
             Log($"Opening persistent spotread session (instrument {instrumentIndex}, HDR={hdrMode})");
             try
             {
+                await RefreshDisplayTypeTableIfUnknownAsync(cancellationToken);
                 _session = await SpotreadSession.StartAsync(
                     _spotreadPath, instrumentIndex, _displayType, hdrMode, Log, cancellationToken,
                     _correctionFilePath, displayTypeTable: _connectedColorimeter?.DisplayTypes);
+                AdoptDisplayTypeTable(_session.EffectiveDisplayTypeTable);
                 _sessionHdrMode = hdrMode;
                 RaiseStatusChanged(ColorimeterStatus.Ready, "Spotread session ready");
             }
@@ -366,6 +368,42 @@ namespace Gloam.Core.Calibration
                     throw new UsbDriverException(
                         "Colorimeter communication failed - the ArgyllCMS USB driver may be missing or another application holds the device.\n" + ex.Message, ex);
                 throw;
+            }
+        }
+
+        /// <summary>
+        /// Keeps the table a session actually resolved against (after a rejection retry it is
+        /// the one spotread printed for the opened instrument) so later sessions start right.
+        /// </summary>
+        private void AdoptDisplayTypeTable(IReadOnlyList<SpotreadDisplayTypeEntry> table)
+        {
+            if (_connectedColorimeter == null || !SpotreadDisplayTypeTable.HasInstrumentRows(table))
+                return;
+            if (ReferenceEquals(_connectedColorimeter.DisplayTypes, table))
+                return;
+            _connectedColorimeter.DisplayTypes = table;
+            Log($"spotread -y table updated from session: {SpotreadDisplayTypeTable.Describe(table)}");
+        }
+
+        /// <summary>
+        /// Detection only sees the -y table when the instrument is enumerated at that moment
+        /// (the meter may be plugged in after the app starts). If the cached table has no
+        /// instrument rows, re-run the usage probe once before opening a session.
+        /// </summary>
+        private async Task RefreshDisplayTypeTableIfUnknownAsync(CancellationToken cancellationToken)
+        {
+            if (_connectedColorimeter == null || SpotreadDisplayTypeTable.HasInstrumentRows(_connectedColorimeter.DisplayTypes))
+                return;
+            var usage = await RunSpotreadCommandAsync(TimeSpan.FromSeconds(10), cancellationToken, "-?");
+            var table = SpotreadDisplayTypeTable.Parse(usage);
+            if (SpotreadDisplayTypeTable.HasInstrumentRows(table))
+            {
+                _connectedColorimeter.DisplayTypes = table;
+                Log($"spotread -y table refreshed before session: {SpotreadDisplayTypeTable.Describe(table)}");
+            }
+            else
+            {
+                Log("spotread -y table still unknown (no instrument enumerated by -?); using the generic selector");
             }
         }
 
@@ -542,9 +580,11 @@ namespace Gloam.Core.Calibration
             SpotreadSession transient;
             try
             {
+                await RefreshDisplayTypeTableIfUnknownAsync(cancellationToken);
                 transient = await SpotreadSession.StartAsync(
                     _spotreadPath, instrumentIndex, _displayType, hdrMode, Log, cancellationToken,
                     _correctionFilePath, displayTypeTable: _connectedColorimeter?.DisplayTypes);
+                AdoptDisplayTypeTable(transient.EffectiveDisplayTypeTable);
             }
             catch (InvalidOperationException ex) when (UsbDriverHelper.IsDriverError(ex.Message))
             {

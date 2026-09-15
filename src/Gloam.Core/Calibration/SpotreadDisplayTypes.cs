@@ -30,13 +30,33 @@ namespace Gloam.Core.Calibration
         /// <summary>True for the instrument's default calibration ("[Default" marker).</summary>
         public bool IsDefault => Description.Contains("[Default", StringComparison.OrdinalIgnoreCase);
 
+        // Words that mark a row as technology-specific. A default row that names a technology
+        // (some drivers' "LCD, CCFL Backlight [Default,CB1]") is a correction, not a base.
+        private static readonly string[] TechnologyWords =
+            { "lcd", "led", "oled", "ccfl", "crt", "plasma", "projector", "dlp", "phosphor" };
+
+        private bool NamesTechnology
+        {
+            get
+            {
+                foreach (string word in TechnologyWords)
+                {
+                    if (Description.Contains(word, StringComparison.OrdinalIgnoreCase))
+                        return true;
+                }
+                return false;
+            }
+        }
+
         /// <summary>True for the instrument's generic non-refresh base calibration.</summary>
         public bool IsNonRefreshBase =>
-            IsDefault || Description.Contains("non-refresh", StringComparison.OrdinalIgnoreCase);
+            Description.Contains("non-refresh", StringComparison.OrdinalIgnoreCase) ||
+            (IsDefault && !NamesTechnology && !IsRefreshBase);
 
         /// <summary>True for the instrument's generic refresh (CRT-style) base calibration.</summary>
         public bool IsRefreshBase =>
-            !IsNonRefreshBase && Description.Contains("refresh display", StringComparison.OrdinalIgnoreCase);
+            !Description.Contains("non-refresh", StringComparison.OrdinalIgnoreCase) &&
+            Description.Contains("refresh display", StringComparison.OrdinalIgnoreCase);
 
         /// <summary>True for the generic "Other: l = LCD, c = CRT" row spotread prints for serial ports.</summary>
         public bool IsGeneric => string.Equals(Instrument, "Other", StringComparison.OrdinalIgnoreCase);
@@ -187,8 +207,9 @@ namespace Gloam.Core.Calibration
         {
             DisplayType.LcdLed => new TypeRule(type, new[] { "e" }, new[] { "white led", "wled" }),
             DisplayType.Oled => new TypeRule(type, new[] { "o" }, new[] { "oled" }),
+            // No "wide gamut" keyword: it would match the CCFL wide-gamut EDR row.
             DisplayType.LcdWideGamut => new TypeRule(type, new[] { "b" },
-                new[] { "rgb led", "rg phosphor", "pfs phosphor", "gb-r phosphor", "wide gamut" }),
+                new[] { "rgb led", "rg phosphor", "pfs phosphor", "gb-r phosphor" }),
             DisplayType.LcdCcfl => new TypeRule(type, new[] { "l" }, new[] { "ccfl" }),
             DisplayType.Crt => new TypeRule(type, new[] { "c" }, new[] { "crt" }),
             DisplayType.Plasma => new TypeRule(type, new[] { "m" }, new[] { "plasma" }),
@@ -278,6 +299,17 @@ namespace Gloam.Core.Calibration
             {
                 if (description.Contains(keyword, StringComparison.OrdinalIgnoreCase))
                     return true;
+            }
+            return false;
+        }
+
+        /// <summary>True when the table has at least one row printed by an instrument (not just the generic row).</summary>
+        public static bool HasInstrumentRows(IReadOnlyList<SpotreadDisplayTypeEntry>? table)
+        {
+            if (table == null) return false;
+            foreach (var entry in table)
+            {
+                if (!entry.IsGeneric) return true;
             }
             return false;
         }
