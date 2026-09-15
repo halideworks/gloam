@@ -436,7 +436,7 @@ namespace Gloam.ViewModels
             }
 
             var choice = service.ResolveDisplayTypeChoice(_displayType);
-            bool tableKnown = choice.Entry != null && !choice.Entry.IsGeneric;
+            bool tableKnown = SpotreadDisplayTypeTable.HasInstrumentRows(service.ConnectedColorimeter?.DisplayTypes);
             // Unknown table (meter not enumerated yet): the session probes again before
             // measuring, so this is not a missing correction and must not warn as one.
             MeterUsesGenericCalibration = tableKnown && !choice.IsTechnologyMatch;

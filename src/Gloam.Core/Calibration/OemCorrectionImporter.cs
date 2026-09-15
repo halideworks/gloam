@@ -155,23 +155,34 @@ namespace Gloam.Core.Calibration
                 {
                     foreach (string edr in PendingEdrFiles(FindEdrFiles(), ArgyllDataDirs()))
                     {
-                        if (Attempted.Add(edr))
+                        if (!Attempted.Contains(edr))
                             pending.Add(edr);
                     }
                 }
                 if (pending.Count == 0) return null;
                 var result = await ImportAsync(argyllBinPath, pending, log, cancellationToken);
+                MarkAttempted(pending);
                 log?.Invoke($"EDR import: {result.Message}");
                 return result;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
+                // Interrupted (setup window closed): leave the files pending for next time.
                 throw;
             }
             catch (Exception ex)
             {
                 log?.Invoke($"EDR import skipped: {ex.Message}");
                 return null;
+            }
+        }
+
+        private static void MarkAttempted(IEnumerable<string> edrFiles)
+        {
+            lock (AttemptedLock)
+            {
+                foreach (string edr in edrFiles)
+                    Attempted.Add(edr);
             }
         }
 

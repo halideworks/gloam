@@ -423,8 +423,9 @@ namespace Gloam.Core.Calibration
             if (_connectedColorimeter == null || _displayTypeProbeRetried
                 || SpotreadDisplayTypeTable.HasInstrumentRows(_connectedColorimeter.DisplayTypes))
                 return;
-            _displayTypeProbeRetried = true;
             var usage = await RunSpotreadCommandAsync(TimeSpan.FromSeconds(10), cancellationToken, "-?");
+            // An interrupted probe (caller cancelled) has not used the one retry.
+            _displayTypeProbeRetried = !cancellationToken.IsCancellationRequested;
             var table = ScopedDisplayTypeTable(usage, _connectedColorimeter.InstrumentDescriptor);
             if (SpotreadDisplayTypeTable.HasInstrumentRows(table))
                 _connectedColorimeter.DisplayTypes = table;
