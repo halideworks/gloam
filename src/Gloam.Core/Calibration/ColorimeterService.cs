@@ -191,6 +191,12 @@ namespace Gloam.Core.Calibration
 
                 RaiseStatusChanged(ColorimeterStatus.Searching, "Searching for colorimeter...");
 
+                // Convert any i1Display EDR files from installed X-Rite/Calibrite software that
+                // Argyll does not have yet, so detection below sees the technology rows.
+                // No-op after the first run and on machines without that software.
+                string argyllBin = Path.GetDirectoryName(_spotreadPath) ?? _argyllBinPath;
+                await OemCorrectionImporter.EnsureImportedAsync(argyllBin, Log, cancellationToken);
+
                 // Detect connected colorimeter
                 _connectedColorimeter = await DetectColorimeterAsync(cancellationToken);
 

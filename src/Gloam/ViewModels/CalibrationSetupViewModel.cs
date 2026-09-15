@@ -113,7 +113,6 @@ namespace Gloam.ViewModels
 
         public ICommand IdentifyCommand { get; }
         public ICommand RefreshColorimeterCommand { get; }
-        public ICommand ImportOemCorrectionsCommand { get; }
         public ICommand StartCommand { get; }
         public ICommand CancelCommand { get; }
 
@@ -186,7 +185,6 @@ namespace Gloam.ViewModels
 
             IdentifyCommand = new RelayCommand(IdentifySelectedMonitor);
             RefreshColorimeterCommand = new AsyncRelayCommand(RefreshColorimeterAsync, () => !_closed && !_detectionRunning);
-            ImportOemCorrectionsCommand = new AsyncRelayCommand(ImportOemCorrectionsAsync, () => !_closed && !_detectionRunning && !_importRunning);
             StartCommand = new RelayCommand(Start);
             CancelCommand = new RelayCommand(() => CloseRequested?.Invoke(false));
             RefreshPreflight();
@@ -426,72 +424,6 @@ namespace Gloam.ViewModels
         /// type and will fall back to its generic base calibration.
         /// </summary>
         public bool MeterUsesGenericCalibration { get; private set; }
-
-        private bool _importRunning;
-        private string _importStatusText = "";
-
-        /// <summary>Result of the last EDR import, shown under the correction picker.</summary>
-        public string ImportStatusText
-        {
-            get => _importStatusText;
-            private set
-            {
-                if (SetProperty(ref _importStatusText, value))
-                    OnPropertyChanged(nameof(HasImportStatusText));
-            }
-        }
-
-        public bool HasImportStatusText => !string.IsNullOrEmpty(_importStatusText);
-
-        /// <summary>
-        /// Converts the i1Display EDR files of an installed i1Profiler / Calibrite PROFILER
-        /// into Argyll corrections with oeminst, then re-detects the meter so its -y table
-        /// gains the new technology rows and reloads the correction list.
-        /// </summary>
-        internal async Task ImportOemCorrectionsAsync()
-        {
-            if (_closed || _importRunning) return;
-            _importRunning = true;
-            ((AsyncRelayCommand)ImportOemCorrectionsCommand).NotifyCanExecuteChanged();
-            ImportStatusText = "Looking for i1Display EDR files from X-Rite or Calibrite software...";
-            try
-            {
-                string? argyllBinPath = ArgyllDownloader.IsInstalled()
-                    ? ArgyllDownloader.LocalArgyllBinDir
-                    : ArgyllPathFinder.FindArgyllBinPath();
-                if (string.IsNullOrEmpty(argyllBinPath))
-                {
-                    ImportStatusText = "ArgyllCMS is not installed yet. Click Refresh to download it, then import again.";
-                    return;
-                }
-
-                var files = OemCorrectionImporter.FindEdrFiles();
-                Log.Info($"CalibrationSetup: EDR import found {files.Count} file(s)");
-                var result = await OemCorrectionImporter.ImportAsync(argyllBinPath, files, m => Log.Info($"CalibrationSetup: {m}"), CancellationToken.None);
-                ImportStatusText = result.Message;
-                if (!result.Success) return;
-
-                string? keep = SelectedCorrection?.Path;
-                PopulateCorrectionFiles();
-                SelectCorrectionPath(keep, addIfMissing: false);
-            }
-            catch (Exception ex)
-            {
-                ImportStatusText = $"Import failed: {ex.Message}";
-                Log.Info($"CalibrationSetup: EDR import failed: {ex}");
-                return;
-            }
-            finally
-            {
-                _importRunning = false;
-                ((AsyncRelayCommand)ImportOemCorrectionsCommand).NotifyCanExecuteChanged();
-            }
-
-            // Re-detect so the new rows show up in the meter's -y table and in the
-            // "Meter calibration" line. Runs after the import lock is released because
-            // detection has its own guard.
-            await RefreshColorimeterAsync();
-        }
 
         private void RefreshMeterCalibrationText()
         {
@@ -817,7 +749,7 @@ namespace Gloam.ViewModels
             bool correctionRecommended = displayType is DisplayType.Oled or DisplayType.LcdWideGamut ||
                                          detectedDisplayType is DisplayType.Oled or DisplayType.LcdWideGamut;
             if (meterUsesGenericCalibration && string.IsNullOrEmpty(correction?.Path))
-                items.Add(("WARN", $"The meter has no {DisplayTypeLabel(displayType)} correction installed and will use its generic base calibration. Use a panel-matched CCSS/CCMX meter correction, or Import EDRs from installed X-Rite/Calibrite software."));
+                items.Add(("WARN", $"The meter has no {DisplayTypeLabel(displayType)} correction installed and will use its generic base calibration. Use a panel-matched CCSS/CCMX meter correction."));
             else if (correctionRecommended && string.IsNullOrEmpty(correction?.Path))
                 items.Add(("WARN", "Use a panel-matched CCSS/CCMX meter correction for OLED and wide-gamut displays."));
 

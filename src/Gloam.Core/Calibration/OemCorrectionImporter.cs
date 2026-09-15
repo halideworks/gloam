@@ -26,7 +26,7 @@ namespace Gloam.Core.Calibration
         /// <summary>Full paths oeminst reported writing.</summary>
         public IReadOnlyList<string> InstalledFiles { get; }
 
-        /// <summary>One or two sentences for the setup screen.</summary>
+        /// <summary>One or two sentences for the log.</summary>
         public string Message { get; }
 
         /// <summary>Raw oeminst output, for the log.</summary>
@@ -38,7 +38,8 @@ namespace Gloam.Core.Calibration
     /// PROFILER install into ArgyllCMS CCSS corrections, using Argyll's own <c>oeminst</c>.
     /// Once installed, spotread lists them as technology rows (OLED, white LED, RGB LED, ...)
     /// in its <c>-y</c> table, so a display type resolves to a matching correction instead
-    /// of the instrument's generic base calibration.
+    /// of the instrument's generic base calibration. Runs silently from
+    /// <see cref="ColorimeterService.InitializeAsync"/> before instrument detection.
     /// </summary>
     /// <remarks>
     /// The EDR files are the vendor's; nothing is downloaded. They are only converted when
@@ -91,6 +92,74 @@ namespace Gloam.Core.Calibration
             return found;
         }
 
+        /// <summary>Argyll's per-user and system data folders, where oeminst installs and spotread reads.</summary>
+        public static IReadOnlyList<string> ArgyllDataDirs()
+        {
+            var dirs = new List<string>();
+            foreach (var folder in new[] { Environment.SpecialFolder.ApplicationData, Environment.SpecialFolder.CommonApplicationData })
+            {
+                string basePath = Environment.GetFolderPath(folder);
+                if (!string.IsNullOrEmpty(basePath))
+                    dirs.Add(Path.Combine(basePath, "ArgyllCMS"));
+            }
+            return dirs;
+        }
+
+        /// <summary>
+        /// The EDR files whose converted CCSS (oeminst names it after the EDR) is in none of
+        /// <paramref name="argyllDataDirs"/>. Running oeminst on these is the only work left.
+        /// </summary>
+        public static IReadOnlyList<string> PendingEdrFiles(IReadOnlyList<string> edrFiles, IEnumerable<string> argyllDataDirs)
+        {
+            var installed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string dir in argyllDataDirs)
+            {
+                if (!Directory.Exists(dir)) continue;
+                try
+                {
+                    foreach (string f in Directory.EnumerateFiles(dir, "*.ccss"))
+                        installed.Add(Path.GetFileNameWithoutExtension(f));
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // Unreadable folder: treat as having nothing installed.
+                }
+            }
+
+            var pending = new List<string>();
+            foreach (string edr in edrFiles)
+            {
+                if (!installed.Contains(Path.GetFileNameWithoutExtension(edr)))
+                    pending.Add(edr);
+            }
+            return pending;
+        }
+
+        /// <summary>
+        /// Silent one-shot: converts any EDR files on this PC that Argyll does not have yet.
+        /// Returns null when there was nothing to do. Never throws; failures are logged.
+        /// </summary>
+        public static async Task<OemImportResult?> EnsureImportedAsync(string argyllBinPath, Action<string>? log, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var pending = PendingEdrFiles(FindEdrFiles(), ArgyllDataDirs());
+                if (pending.Count == 0) return null;
+                var result = await ImportAsync(argyllBinPath, pending, log, cancellationToken);
+                log?.Invoke($"EDR import: {result.Message}");
+                return result;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                log?.Invoke($"EDR import skipped: {ex.Message}");
+                return null;
+            }
+        }
+
         /// <summary>Path of oeminst next to spotread, or null if the Argyll bundle lacks it.</summary>
         public static string? FindOeminst(string argyllBinPath)
         {
@@ -102,10 +171,9 @@ namespace Gloam.Core.Calibration
             return null;
         }
 
-        /// <summary>Message shown when the search found nothing to import.</summary>
+        /// <summary>Message when the search found nothing to import.</summary>
         public const string NothingFoundMessage =
-            "No i1Display EDR files were found on this PC. They ship with X-Rite i1Profiler and Calibrite PROFILER; " +
-            "install either, then import again. A panel-matched correction from Find / Create is better than any EDR.";
+            "No i1Display EDR files were found on this PC (they ship with X-Rite i1Profiler and Calibrite PROFILER).";
 
         /// <summary>
         /// Runs <c>oeminst -v</c> on <paramref name="edrFiles"/> (found with
@@ -124,7 +192,7 @@ namespace Gloam.Core.Calibration
             if (oeminst == null)
             {
                 return new OemImportResult(false, Array.Empty<string>(),
-                    "The bundled ArgyllCMS has no oeminst tool. Click Refresh to reinstall ArgyllCMS, then import again.", "");
+                    "The bundled ArgyllCMS has no oeminst tool; EDR files were not converted.", "");
             }
 
             var psi = new ProcessStartInfo(oeminst)
@@ -200,7 +268,7 @@ namespace Gloam.Core.Calibration
             }
             string dir = Path.GetDirectoryName(installed[0]) ?? "";
             return new OemImportResult(true, installed,
-                $"Imported {edrCount} meter correction(s) into {dir}. Re-detecting the meter to pick them up.", output);
+                $"Imported {edrCount} meter correction(s) into {dir}.", output);
         }
 
         private static string LastNonEmptyLine(string text)

@@ -37,6 +37,48 @@ namespace Gloam.Tests
         }
 
         [Fact]
+        public void PendingEdrFiles_SkipsEdrsWhoseCcssIsAlreadyInAnyArgyllDataDir()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "gloam-pending-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                string user = Path.Combine(root, "user");
+                string system = Path.Combine(root, "system");
+                Directory.CreateDirectory(user);
+                Directory.CreateDirectory(system);
+                File.WriteAllText(Path.Combine(user, "WLEDFamily_07Feb11.ccss"), "");
+                File.WriteAllText(Path.Combine(system, "oledfamily_20jul12.ccss"), "");
+
+                var edrs = new[]
+                {
+                    @"C:\Program Files\X-Rite\Devices\i1d3\Calibrations\WLEDFamily_07Feb11.edr",
+                    @"C:\Program Files\X-Rite\Devices\i1d3\Calibrations\OLEDFamily_20Jul12.edr",
+                    @"C:\Program Files\X-Rite\Devices\i1d3\Calibrations\RGBLEDFamily_07Feb11.edr",
+                };
+
+                var pending = OemCorrectionImporter.PendingEdrFiles(edrs, new[] { user, system, Path.Combine(root, "missing") });
+
+                var only = Assert.Single(pending);
+                Assert.EndsWith("RGBLEDFamily_07Feb11.edr", only, StringComparison.Ordinal);
+            }
+            finally
+            {
+                try { Directory.Delete(root, recursive: true); } catch { }
+            }
+        }
+
+        [Fact]
+        public async System.Threading.Tasks.Task EnsureImportedAsync_NothingPending_ReturnsNullWithoutRunning()
+        {
+            // Only meaningful on a machine without vendor EDR files (CI, and most dev boxes).
+            if (OemCorrectionImporter.FindEdrFiles().Count > 0) return;
+            var result = await OemCorrectionImporter.EnsureImportedAsync(
+                Path.Combine(Path.GetTempPath(), "no-argyll-here"), null, System.Threading.CancellationToken.None);
+
+            Assert.Null(result);
+        }
+
+        [Fact]
         public void ParseOutput_CountsWrittenFilesAndExcludesArgyllsOwnCrt()
         {
             // oeminst -v output shape (Argyll 3.5.0). CRT.ccss comes from Argyll's ref

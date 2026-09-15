@@ -132,7 +132,6 @@
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                     <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 <ComboBox ItemsSource="{Binding Corrections}" SelectedItem="{Binding SelectedCorrection}">
                                     <ComboBox.ItemContainerStyle>
@@ -145,13 +144,7 @@
                                         Margin="6,0,0,0" Padding="10,2" Click="FindCorrection_Click"/>
                                 <Button Grid.Column="2" Content="Browse…"
                                         Margin="6,0,0,0" Padding="10,2" Click="BrowseCorrection_Click"/>
-                                <Button Grid.Column="3" Content="Import EDRs…"
-                                        Margin="6,0,0,0" Padding="10,2" Command="{Binding ImportOemCorrectionsCommand}"
-                                        ToolTip="Converts the i1Display EDR calibration files from an installed X-Rite i1Profiler or Calibrite PROFILER into ArgyllCMS corrections. Adds OLED, white LED and RGB LED rows to the meter's built-in calibrations. Nothing is downloaded."/>
                             </Grid>
-                            <TextBlock Foreground="{DynamicResource ThemeTextDim}" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0"
-                                       Text="{Binding ImportStatusText}"
-                                       Visibility="{Binding HasImportStatusText, Converter={StaticResource BoolToVis}}"/>
                             <TextBlock Foreground="{DynamicResource ThemeTextDim}" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0"
                                        Text="A correction file (.ccss/.ccmx) matched to this exact panel makes the colorimeter read it truthfully. Essential on QD-OLED, where generic corrections shift the white point green/magenta by several ΔE. Use Find / Create to download one from the DisplayCAL community database, or generate your own from a spectrometer or a spectrometer+colorimeter pair. Remembered per monitor."/>
                             <TextBlock Foreground="{DynamicResource ThemeTextDim}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"
