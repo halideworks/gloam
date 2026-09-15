@@ -36,7 +36,7 @@ namespace Gloam.Core.Calibration
             get
             {
                 int bracket = Description.LastIndexOf(" [", StringComparison.Ordinal);
-                return bracket > 0 && Description.EndsWith("]", StringComparison.Ordinal)
+                return bracket > 0 && Description.EndsWith(']')
                     ? Description.Substring(0, bracket)
                     : Description;
             }
