@@ -250,7 +250,7 @@ namespace Gloam.ViewModels
             var matchWindow = new DisplayMatchWindow(_monitorManager, _settingsManager, () => OnUiThread(ApplyAll));
             matchWindow.Show();
         }
-        
+
         // The downloaded-and-ready update awaiting apply. Null until one is detected and
         // fully downloaded. Scheduled silently for the next normal app exit/restart.
         private UpdateInfo? _pendingUpdate;
@@ -455,7 +455,7 @@ namespace Gloam.ViewModels
                 Log.Error($"TrayViewModel.OnUiThread: {ex.Message}");
             }
         }
-        
+
         private void RegisterHotkeys()
         {
             if (_hotkeyManager == null) return;
@@ -463,18 +463,18 @@ namespace Gloam.ViewModels
             // Win+Shift+F1 -> Gamma 2.2
             int id22 = _hotkeyManager.Register(Key.F1, ModifierKeys.Windows | ModifierKeys.Shift);
             if (id22 > 0) _hotkeyActions[id22] = m => ApplyProfile(m, GammaMode.Gamma22);
-            
+
             // Win+Shift+F2 -> Gamma 2.4
             int id24 = _hotkeyManager.Register(Key.F2, ModifierKeys.Windows | ModifierKeys.Shift);
             if (id24 > 0) _hotkeyActions[id24] = m => ApplyProfile(m, GammaMode.Gamma24);
-            
+
             // Win+Shift+F3 -> Default
             int idDef = _hotkeyManager.Register(Key.F3, ModifierKeys.Windows | ModifierKeys.Shift);
             if (idDef > 0) _hotkeyActions[idDef] = m => ApplyProfile(m, GammaMode.WindowsDefault);
-            
+
             // Panic: Win+Shift+F4
             _panicId = _hotkeyManager.Register(Key.F4, ModifierKeys.Windows | ModifierKeys.Shift);
-            
+
             // Night Mode Toggle: Win+Shift+N
             _nightModeToggleId = _hotkeyManager.Register(Key.N, ModifierKeys.Windows | ModifierKeys.Shift);
 
@@ -491,7 +491,7 @@ namespace Gloam.ViewModels
                 PanicAll();
                 return;
             }
-            
+
             if (id == _nightModeToggleId)
             {
                 // Toggle night mode on/off. Not persisted across restarts (avoids a stuck-off
@@ -516,7 +516,7 @@ namespace Gloam.ViewModels
                 var monitor = GetFocusedMonitor();
                 if (monitor != null)
                 {
-                     action(monitor);
+                    action(monitor);
                 }
                 else
                 {
@@ -526,7 +526,7 @@ namespace Gloam.ViewModels
                 }
             }
         }
-        
+
         private MonitorInfo? GetFocusedMonitor()
         {
             // A global hotkey should act on the monitor the user is pointing at: the
@@ -688,11 +688,11 @@ namespace Gloam.ViewModels
         private void ApplyProfile(MonitorInfo monitor, GammaMode mode)
         {
             RequestApply(monitor, mode);
-            
+
             // Refresh to update checkmarks
             RefreshMonitors();
         }
-        
+
         public void RequestApply(
             MonitorInfo monitor,
             GammaMode mode,
@@ -792,7 +792,7 @@ namespace Gloam.ViewModels
             // items out from under the still-open tray menu.
             if (_startupItem != null) _startupItem.Header = StartupLabel();
         }
-        
+
         private void OnMonitorProfileChanged(MonitorInfo monitor, GammaMode mode)
         {
             // Persist to settings
@@ -944,10 +944,11 @@ namespace Gloam.ViewModels
             }
             var monitors = enumerated;
             Log.Info($"TrayViewModel: Enumerated {monitors.Count} monitors.");
-            
+            TrayItems.Add(new ActionViewModel(TrayToolTipText, null, staysOpenOnClick: true));
+
             if (monitors.Count == 0)
             {
-                TrayItems.Add(new ActionViewModel("No Monitors Found", RefreshCommand)); 
+                TrayItems.Add(new ActionViewModel("No Monitors Found", RefreshCommand));
             }
             else
             {
@@ -959,7 +960,7 @@ namespace Gloam.ViewModels
                 _gameModeItem = new ActionViewModel(GamerModeLabel(), ToggleGamerModeCommand, staysOpenOnClick: true);
                 TrayItems.Add(_gameModeItem);
                 TrayItems.Add(new ActionViewModel("───────────", null));
-                
+
                 int index = 1;
                 foreach (var m in monitors)
                 {
@@ -969,14 +970,14 @@ namespace Gloam.ViewModels
                     {
                         m.CurrentGamma = savedMode.Value;
                     }
-                    else if (!string.IsNullOrEmpty(m.MonitorDevicePath) && 
+                    else if (!string.IsNullOrEmpty(m.MonitorDevicePath) &&
                         _savedConfigs.TryGetValue(m.MonitorDevicePath, out var saved))
                     {
                         // Fallback to in-memory cache
                         m.CurrentGamma = saved.CurrentGamma;
                         m.SdrWhiteLevel = saved.SdrWhiteLevel;
                     }
-                    
+
                     // Update saved mapping
                     if (!string.IsNullOrEmpty(m.MonitorDevicePath))
                     {
@@ -992,7 +993,7 @@ namespace Gloam.ViewModels
                     index++;
                 }
             }
-            
+
             // Startup toggle with checkmark
             _startupItem = new ActionViewModel(StartupLabel(), StartupCommand, staysOpenOnClick: true);
             TrayItems.Add(_startupItem);

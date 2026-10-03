@@ -538,7 +538,12 @@
                                                         <RowDefinition Height="Auto"/>
                                                         <RowDefinition Height="Auto"/>
                                                         <RowDefinition Height="Auto"/>
+                                                        <RowDefinition Height="Auto"/>
                                                     </Grid.RowDefinitions>
+                                                    <CheckBox x:Name="ApplyWhileRunningBox" Grid.Row="4" Grid.ColumnSpan="8" Margin="0,9,0,0"
+                                                              Content="Apply while the app is running, even without focus"
+                                                              IsChecked="{Binding ApplyWhileRunning, Mode=TwoWay}"
+                                                              ToolTip="Use One specific display to keep the profile active on a chosen monitor, including when the app is minimized. A focused profile takes priority; otherwise the first matching running profile is used."/>
 
                                                     <StackPanel Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,0,9,0">
                                                         <TextBlock Text="PROFILE NAME" Style="{StaticResource FieldLabel}"/>

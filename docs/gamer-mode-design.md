@@ -11,7 +11,9 @@ That boundary matters. Anti-cheat systems see an ordinary desktop color-manageme
 3. Gloam captures a session record for each selected display and runs the signal checks.
 4. The profile contributes gamma, linear-light shadow visibility, and its night policy to the normal calibration settings.
 5. The existing coalescer applies only the newest state. The ramp guard continues to restore corrections after a driver or game clears them.
-6. Leaving the game clears the session and restores the monitor's ordinary settings.
+6. Leaving the game clears the session and restores the monitor's ordinary settings, unless the profile uses "Apply while the app is running, even without focus".
+
+The optional running policy checks enabled profiles every two seconds and verifies their executable paths. It retains the profile until the app exits, including while minimized when targeting one specific display or all displays. Window targeting uses the running process's main window bounds. A focused profile takes priority; otherwise the first matching running profile in saved order owns the session. Repeated checks preserve the captured Gameplay Lock state. Pause and the emergency hotkey bypass running profiles too.
 
 `Win + Shift + G` opens a topmost Game Lab window and keeps the game that yielded focus as the policy target. A newly added profile can therefore activate before the console closes. Field edits are coalesced for 180 ms, persisted, and sent through the foreground resolver. Running executable choices refresh every 2.5 seconds without resetting typed text or an open picker. Repeated focus events preserve the original session time and locked color temperature.
 

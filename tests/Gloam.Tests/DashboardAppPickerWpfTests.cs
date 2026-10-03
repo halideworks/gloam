@@ -57,6 +57,8 @@ namespace Gloam.Tests
                     Pump(TimeSpan.FromMilliseconds(100));
 
                     var viewModel = Assert.IsType<DashboardViewModel>(window.DataContext);
+                    Assert.Equal(update.DisplayVersion,
+                        Assert.IsType<TextBlock>(window.FindName("AppVersionLabel")).Text);
                     var exclusionItem = Assert.Single(viewModel.Items.OfType<AppExclusionItem>());
                     exclusionItem.RunningApps.Add("photoshop.exe");
 
@@ -113,6 +115,15 @@ namespace Gloam.Tests
                     editor.SetExecutablePath(Path.Combine(root, "games", "arena.exe"));
                     editor.Enabled = true;
                     Pump(TimeSpan.FromMilliseconds(350));
+                    viewModel.IsGameProfileAdvancedExpanded = true;
+                    window.UpdateLayout();
+                    var dashboardRunning = Assert.IsType<CheckBox>(
+                        FindVisualChild<CheckBox>(window, "ApplyWhileRunningBox"));
+                    Assert.False(dashboardRunning.IsChecked);
+                    dashboardRunning.IsChecked = true;
+                    Pump(TimeSpan.FromMilliseconds(350));
+                    Assert.True(editor.ApplyWhileRunning);
+                    Assert.True(Assert.Single(settings.GamerProfiles).ApplyWhileRunning);
 
                     Assert.Equal("Night Play", editor.AvailablePictureIntents[3].ToString());
 
@@ -260,6 +271,12 @@ namespace Gloam.Tests
                     AssertAligned(targetDisplaysBounds.Left, peakNitsBounds.Left, melanopicBounds.Left);
                     AssertAligned(targetDisplaysBounds.Right, peakNitsBounds.Right, melanopicBounds.Right);
                     Assert.True(paperWhiteBounds.Right < peakNitsBounds.Left);
+                    var runningBox = Assert.IsType<CheckBox>(
+                        FindVisualChild<CheckBox>(viewport, "ApplyWhileRunningBox"));
+                    Assert.True(runningBox.IsChecked);
+                    runningBox.IsChecked = false;
+                    Pump(TimeSpan.FromMilliseconds(350));
+                    Assert.False(settings.GamerProfiles.Single(profile => profile.AppName == "arena.exe").ApplyWhileRunning);
                     SaveScreenshotIfRequested(gameLabWindow, "game-lab-advanced.png");
                     advanced.IsExpanded = false;
 
@@ -396,7 +413,8 @@ namespace Gloam.Tests
             {
                 try { body(); }
                 catch (Exception ex) { failure = ExceptionDispatchInfo.Capture(ex); }
-            }) { IsBackground = true };
+            })
+            { IsBackground = true };
             thread.SetApartmentState(ApartmentState.STA);
             thread.Start();
             thread.Join();

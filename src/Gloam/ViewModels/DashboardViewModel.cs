@@ -168,7 +168,7 @@ namespace Gloam.ViewModels
         public string GamerModeStateTitle => IsGamerModeEnabled ? "GAME MODE · ON" : "GAME MODE · PAUSED";
 
         public string GamerModeStateDetails => IsGamerModeEnabled
-            ? "Saved looks switch on when each game takes focus."
+            ? "Saved looks activate on focus, or while running when enabled in a profile."
             : "All game profiles are bypassed. Your settings stay saved.";
 
         public string GamerModeToggleLabel => IsGamerModeEnabled ? "Pause all profiles" : "Resume game mode";

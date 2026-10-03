@@ -260,7 +260,7 @@
                         <Border Width="1" Height="16" Background="{DynamicResource ThemeTextDim}" Opacity="0.5" Margin="12,0"/>
                         <TextBlock x:Name="WindowSectionTitle" Text="Dashboard" FontFamily="{StaticResource DisplayFont}" FontWeight="Bold"
                                    FontSize="12" Foreground="{DynamicResource ThemeTextDim}" VerticalAlignment="Center"/>
-                        <TextBlock Text="{Binding AppVersion}" FontFamily="{StaticResource DisplayFont}"
+                        <TextBlock x:Name="AppVersionLabel" Text="{Binding AppVersion}" FontFamily="{StaticResource DisplayFont}"
                                    FontSize="11" Foreground="{DynamicResource ThemeTextDim}" Opacity="0.7"
                                    VerticalAlignment="Center" Margin="10,0,0,0" ToolTip="App version"/>
                     </StackPanel>
@@ -910,6 +910,9 @@
                                                                           ItemsSource="{Binding DataContext.GamerMode.AvailableDisplays, RelativeSource={RelativeSource AncestorType=Window}}"
                                                                           DisplayMemberPath="Label" SelectedValuePath="DevicePath"
                                                                           SelectedValue="{Binding MonitorDevicePath, Mode=TwoWay}"/>
+                                                                <CheckBox x:Name="ApplyWhileRunningBox" Content="Apply while the app is running, even without focus"
+                                                                          IsChecked="{Binding ApplyWhileRunning, Mode=TwoWay}" Margin="0,10,0,0"
+                                                                          ToolTip="Use One specific display to keep the profile active on a chosen monitor, including when the app is minimized. A focused profile takes priority; otherwise the first matching running profile is used."/>
                                                                 <Grid Margin="0,10,0,0">
                                                                     <Grid.ColumnDefinitions>
                                                                         <ColumnDefinition Width="*"/>
