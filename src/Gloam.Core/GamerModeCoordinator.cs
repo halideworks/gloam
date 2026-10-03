@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -8,6 +9,8 @@ using Gloam.Interop;
 
 namespace Gloam.Core
 {
+    public sealed record RunningAppObservation(string AppName, string? ExecutablePath, Dxgi.RECT? Bounds);
+
     public sealed record GamerPolicyChange(
         string ForegroundApp,
         int NightBlockedDisplayCount,
@@ -26,6 +29,8 @@ namespace Gloam.Core
         private readonly SettingsManager _settings;
         private readonly GammaApplyService _applyService;
         private readonly Func<IReadOnlyList<MonitorInfo>> _monitorSnapshot;
+        private readonly Func<IReadOnlyList<RunningAppObservation>> _runningAppSnapshot;
+        private readonly Timer _runningAppTimer;
         private readonly LatestValueCoalescer<string, ForegroundObservation> _foregroundCoalescer;
         private readonly object _lastLock = new();
         private readonly object _evaluationLock = new();
@@ -46,11 +51,13 @@ namespace Gloam.Core
         public GamerModeCoordinator(
             SettingsManager settings,
             GammaApplyService applyService,
-            Func<IReadOnlyList<MonitorInfo>> monitorSnapshot)
+            Func<IReadOnlyList<MonitorInfo>> monitorSnapshot,
+            Func<IReadOnlyList<RunningAppObservation>>? runningAppSnapshot = null)
         {
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _applyService = applyService ?? throw new ArgumentNullException(nameof(applyService));
             _monitorSnapshot = monitorSnapshot ?? throw new ArgumentNullException(nameof(monitorSnapshot));
+            _runningAppSnapshot = runningAppSnapshot ?? (() => CaptureRunningApps(_settings.GamerProfiles));
             _foregroundCoalescer = new LatestValueCoalescer<string, ForegroundObservation>(
                 (_, observation, token) =>
                 {
@@ -62,6 +69,8 @@ namespace Gloam.Core
                 });
             _settings.GamerSettingsChanged += OnGamerSettingsChanged;
             _settings.MonitorProfileChanged += OnMonitorProfileChanged;
+            _runningAppTimer = new Timer(_ => RefreshRunningApps(), null,
+                TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
         }
 
         public event Action<GamerPolicyChange>? PolicyChanged;
@@ -107,27 +116,69 @@ namespace Gloam.Core
                     : TimeSpan.FromMilliseconds(250);
 
             var observation = new ForegroundObservation(appName, executablePath, appBounds, delay);
-            lock (_lastLock) _last = observation;
-            _foregroundCoalescer.Submit(ForegroundKey, observation);
+            lock (_lastLock)
+            {
+                _last = observation;
+                _foregroundCoalescer.Submit(ForegroundKey, observation);
+            }
         }
 
         /// <summary>Re-runs the latest foreground decision without focus churn.</summary>
         public void ReevaluateLatest(bool immediate = false)
         {
+            if (Volatile.Read(ref _disposed) != 0) return;
             ForegroundObservation observation;
-            lock (_lastLock) observation = _last;
-            if (immediate)
+            lock (_lastLock)
             {
-                _foregroundCoalescer.Cancel(ForegroundKey);
-                Evaluate(observation with { SettleDelay = TimeSpan.Zero });
+                observation = _last;
+                if (immediate)
+                    _foregroundCoalescer.Cancel(ForegroundKey);
+                else
+                {
+                    _foregroundCoalescer.Submit(ForegroundKey, observation);
+                    return;
+                }
             }
-            else
-            {
-                _foregroundCoalescer.Submit(ForegroundKey, observation);
-            }
+            Evaluate(observation);
         }
 
         public void CancelPendingForeground() => _foregroundCoalescer.Cancel(ForegroundKey);
+
+        internal void RefreshRunningApps()
+        {
+            if (Enabled && _settings.GamerProfiles.Any(profile => profile.Enabled && profile.ApplyWhileRunning))
+                ReevaluateLatest();
+        }
+
+        internal static IReadOnlyList<RunningAppObservation> CaptureRunningApps(IEnumerable<GamerProfileRule> profiles)
+        {
+            var apps = new List<RunningAppObservation>();
+            foreach (string appName in profiles
+                .Where(profile => profile.Enabled && profile.ApplyWhileRunning &&
+                    GamerExecutableSafety.IsSafeProfileTarget(profile.AppName, profile.DisplayName))
+                .Select(profile => profile.AppName).Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                foreach (Process process in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(appName)))
+                {
+                    using (process)
+                    {
+                        try
+                        {
+                            string? path = process.MainModule?.FileName;
+                            IntPtr window = process.MainWindowHandle;
+                            Dxgi.RECT? bounds = window != IntPtr.Zero && User32.GetWindowRect(window, out var rect)
+                                ? rect : null;
+                            apps.Add(new RunningAppObservation(appName, path, bounds));
+                        }
+                        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+                        {
+                            // Exited or inaccessible processes cannot prove executable identity.
+                        }
+                    }
+                }
+            }
+            return apps;
+        }
 
         /// <summary>
         /// In-memory fail-safe used by the panic hotkey. It works even if the settings
@@ -161,6 +212,7 @@ namespace Gloam.Core
             {
                 lock (_evaluationLock)
                 {
+                    if (Volatile.Read(ref _disposed) != 0) return;
                     IReadOnlyList<MonitorInfo> activeMonitors =
                         _monitorSnapshot() ?? Array.Empty<MonitorInfo>();
                     AppExclusionRule? exclusion = _settings.ExcludedApps.FirstOrDefault(rule =>
@@ -184,10 +236,16 @@ namespace Gloam.Core
                     GamerProfileRule? profile = null;
                     if (Enabled)
                     {
-                        profile = _settings.GamerProfiles.FirstOrDefault(candidate =>
+                        IReadOnlyList<GamerProfileRule> profiles = _settings.GamerProfiles;
+                        IReadOnlyList<RunningAppObservation> runningApps = profiles.Any(candidate =>
+                            candidate.Enabled && candidate.ApplyWhileRunning)
+                            ? _runningAppSnapshot() : Array.Empty<RunningAppObservation>();
+                        profile = profiles.FirstOrDefault(candidate =>
                             candidate.Enabled &&
                             GamerExecutableSafety.IsSafeProfileTarget(candidate.AppName, candidate.DisplayName) &&
-                            MatchesForeground(candidate, observation.AppName, observation.ExecutablePath));
+                            MatchesForeground(candidate, observation.AppName, observation.ExecutablePath) &&
+                            (!candidate.ApplyWhileRunning || runningApps.Any(app =>
+                                MatchesForeground(candidate, app.AppName, app.ExecutablePath))));
                         if (profile != null)
                         {
                             foreach (MonitorInfo monitor in activeMonitors)
@@ -196,13 +254,33 @@ namespace Gloam.Core
                                     assignments.Add(new GamerSessionAssignment(monitor, profile));
                             }
                         }
+                        if (assignments.Count == 0)
+                        {
+                            foreach (GamerProfileRule candidate in profiles.Where(candidate =>
+                                candidate.Enabled && candidate.ApplyWhileRunning))
+                            {
+                                foreach (RunningAppObservation app in runningApps.Where(app =>
+                                    MatchesForeground(candidate, app.AppName, app.ExecutablePath)))
+                                {
+                                    foreach (MonitorInfo monitor in activeMonitors)
+                                    {
+                                        if (TargetsMonitor(candidate, monitor, app.Bounds, activeMonitors.Count) &&
+                                            assignments.All(assignment => assignment.Monitor.HMonitor != monitor.HMonitor))
+                                            assignments.Add(new GamerSessionAssignment(monitor, candidate));
+                                    }
+                                }
+                                if (assignments.Count == 0) continue;
+                                profile = candidate;
+                                break;
+                            }
+                        }
                     }
 
                     bool blockChanged = _applyService.UpdateBlockedMonitors(blocked);
                     bool gamerChanged = _applyService.UpdateActiveGamerSessions(assignments);
                     if (gamerChanged && profile != null && assignments.Count > 0)
                     {
-                        string activatedApp = observation.AppName;
+                        string activatedApp = profile.AppName;
                         _ = Task.Run(() => _settings.MarkGamerProfileUsed(activatedApp, DateTime.UtcNow));
                     }
 
@@ -286,7 +364,9 @@ namespace Gloam.Core
             if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
             _settings.GamerSettingsChanged -= OnGamerSettingsChanged;
             _settings.MonitorProfileChanged -= OnMonitorProfileChanged;
+            _runningAppTimer.Dispose();
             _foregroundCoalescer.Dispose();
+            lock (_evaluationLock) { }
         }
     }
 }

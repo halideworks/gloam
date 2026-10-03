@@ -136,6 +136,7 @@ namespace Gloam.Core
         public string? ExecutablePath { get; set; }
         public string DisplayName { get; set; } = string.Empty;
         public bool Enabled { get; set; } = true;
+        public bool ApplyWhileRunning { get; set; }
         public GamerPictureIntent PictureIntent { get; set; } = GamerPictureIntent.CompetitiveClarity;
         public GamerDisplayScope DisplayScope { get; set; } = GamerDisplayScope.WindowDisplays;
         public string? MonitorDevicePath { get; set; }
@@ -184,6 +185,7 @@ namespace Gloam.Core
             ExecutablePath = ExecutablePath,
             DisplayName = DisplayName,
             Enabled = Enabled,
+            ApplyWhileRunning = ApplyWhileRunning,
             PictureIntent = PictureIntent,
             DisplayScope = DisplayScope,
             MonitorDevicePath = MonitorDevicePath,
@@ -239,7 +241,7 @@ namespace Gloam.Core
             return copy;
         }
 
-        public bool SemanticallyEquals(GamerProfileRule? other)
+        public bool SemanticallyEquals(GamerProfileRule? other, bool includeRecency = true)
         {
             if (other == null) return false;
             GamerProfileRule a = Sanitized();
@@ -248,6 +250,7 @@ namespace Gloam.Core
                 && string.Equals(a.ExecutablePath, b.ExecutablePath, StringComparison.OrdinalIgnoreCase)
                 && string.Equals(a.DisplayName, b.DisplayName, StringComparison.Ordinal)
                 && a.Enabled == b.Enabled
+                && a.ApplyWhileRunning == b.ApplyWhileRunning
                 && a.PictureIntent == b.PictureIntent
                 && a.DisplayScope == b.DisplayScope
                 && string.Equals(a.MonitorDevicePath, b.MonitorDevicePath, StringComparison.OrdinalIgnoreCase)
@@ -265,7 +268,7 @@ namespace Gloam.Core
                 && a.PaperWhiteNits == b.PaperWhiteNits
                 && a.PeakNits == b.PeakNits
                 && a.BlackLevelNits == b.BlackLevelNits
-                && a.LastUsedUtc == b.LastUsedUtc;
+                && (!includeRecency || a.LastUsedUtc == b.LastUsedUtc);
         }
 
         public bool IsHdrCapable() =>

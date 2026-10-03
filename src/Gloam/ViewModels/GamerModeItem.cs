@@ -662,6 +662,17 @@ namespace Gloam.ViewModels
             }
         }
 
+        public bool ApplyWhileRunning
+        {
+            get => _profile.ApplyWhileRunning;
+            set
+            {
+                if (_profile.ApplyWhileRunning == value) return;
+                _profile.ApplyWhileRunning = value;
+                OnPropertyChanged();
+            }
+        }
+
         public GamerDisplayScope DisplayScope
         {
             get => _profile.DisplayScope;

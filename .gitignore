@@ -9,6 +9,7 @@ obj/
 *_wpftmp.csproj
 
 # Build Output
+/artifacts/
 publish/
 publish-minimal/
 publish-small/

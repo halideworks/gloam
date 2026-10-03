@@ -179,7 +179,7 @@ namespace Gloam.Core
                     int signalKey = GamerSignalKey(monitor, monitorProfile, calibrationStatus);
 
                     if (_activeGamerSessions.TryGetValue(monitor.HMonitor, out var previous) &&
-                        previous.Profile.SemanticallyEquals(profile) &&
+                        previous.Profile.SemanticallyEquals(profile, includeRecency: false) &&
                         previous.SignalKey == signalKey &&
                         string.Equals(previous.Monitor.MonitorDevicePath, monitor.MonitorDevicePath,
                             StringComparison.OrdinalIgnoreCase))
@@ -264,7 +264,7 @@ namespace Gloam.Core
             foreach (var pair in right)
             {
                 if (!left.TryGetValue(pair.Key, out var existing)) return false;
-                if (!existing.Profile.SemanticallyEquals(pair.Value.Profile) ||
+                if (!existing.Profile.SemanticallyEquals(pair.Value.Profile, includeRecency: false) ||
                     existing.SignalKey != pair.Value.SignalKey ||
                     !string.Equals(existing.Monitor.MonitorDevicePath, pair.Value.Monitor.MonitorDevicePath,
                         StringComparison.OrdinalIgnoreCase))
