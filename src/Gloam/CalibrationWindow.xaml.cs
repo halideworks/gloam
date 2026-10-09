@@ -433,7 +433,8 @@ namespace Gloam
             _disabledProfileForMeasurement = null;
             if (CalibrationProfileInstaller.Reenable(_targetMonitor, profileName, _disabledProfileForMeasurementHdrMode))
             {
-                _settingsManager?.SetMhc2Calibration(_targetMonitor.MonitorDevicePath, profileName);
+                _settingsManager?.SetMhc2Calibration(_targetMonitor.MonitorDevicePath, profileName,
+                    builtForHdr: _disabledProfileForMeasurementHdrMode);
                 Log.Info($"CalibrationWindow: Restored calibration profile disabled for measurement: {profileName}");
             }
             else
@@ -1776,7 +1777,8 @@ namespace Gloam
                             monitor.MonitorDevicePath,
                             profileName,
                             previousDefaultProfile,
-                            _measuredInHdr);
+                            _measuredInHdr,
+                            builtForHdr: _measuredInHdr);
                         _disabledProfileForMeasurement = null;
                         Log.Info($"CalibrationWindow: Installed + recorded calibration profile {profileName}");
                     },

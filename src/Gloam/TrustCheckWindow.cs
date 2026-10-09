@@ -118,9 +118,16 @@ namespace Gloam
                 return;
             }
 
-            var target = StandardTargets.GetByName(profile.CalibTargetName ?? string.Empty)
+            var target = CalibrationProfileInstaller.TargetFromProfileName(profile.Mhc2ProfileName)
+                ?? StandardTargets.GetByName(profile.CalibTargetName ?? string.Empty)
                 ?? StandardTargets.SrgbGamma22;
-            bool hdrMode = profile.PreviousColorProfileHdrMode ?? monitor.IsHdrActive;
+            bool hdrMode = monitor.IsHdrActive;
+            if (target.IsHdr != hdrMode)
+            {
+                _status.Text = $"The active calibration targets {target.Name}, which does not match the display's current " +
+                               $"{(hdrMode ? "HDR" : "SDR")} mode. Switch modes or recalibrate, then check again.";
+                return;
+            }
 
             string? argyllBin = ArgyllDownloader.IsInstalled()
                 ? ArgyllDownloader.LocalArgyllBinDir

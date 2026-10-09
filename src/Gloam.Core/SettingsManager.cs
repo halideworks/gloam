@@ -95,6 +95,21 @@ namespace Gloam.Core
         public string? Mhc2ProfileName { get; set; }
 
         /// <summary>
+        /// Gloam profile built for each display mode. Windows keeps one Advanced Color
+        /// default for both SDR and HDR, so the active profile is swapped on mode changes.
+        /// </summary>
+        public string? Mhc2SdrProfileName { get; set; }
+
+        /// <inheritdoc cref="Mhc2SdrProfileName"/>
+        public string? Mhc2HdrProfileName { get; set; }
+
+        /// <summary>
+        /// Non-Gloam Advanced Color default that a Gloam install displaced, restored while
+        /// the current mode has no Gloam profile.
+        /// </summary>
+        public string? PreviousAdvancedColorProfileName { get; set; }
+
+        /// <summary>
         /// Windows color profile that was the display default before Gloam made an MHC2
         /// calibration active. Kept so explicit deactivation/delete can restore the user's
         /// prior color-management state instead of leaving the display with no default.
@@ -181,6 +196,9 @@ namespace Gloam.Core
             CalibrationProfileId = CalibrationProfileId,
             UseCalibrationForGamma = UseCalibrationForGamma,
             Mhc2ProfileName = Mhc2ProfileName,
+            Mhc2SdrProfileName = Mhc2SdrProfileName,
+            Mhc2HdrProfileName = Mhc2HdrProfileName,
+            PreviousAdvancedColorProfileName = PreviousAdvancedColorProfileName,
             PreviousColorProfileName = PreviousColorProfileName,
             PreviousColorProfileHdrMode = PreviousColorProfileHdrMode,
             MeterCorrectionPath = MeterCorrectionPath,
@@ -680,6 +698,17 @@ namespace Gloam.Core
             Log.Info($"SettingsManager.SetMonitorProfile: Saving {monitorDevicePath} - Brightness={profile.Brightness}, Gamma={profile.GammaMode}");
             lock (_dataLock)
             {
+                // Calibration fields change underneath an open editor (mode swaps on an HDR
+                // toggle), so a whole-record save from a stale copy must not roll them back.
+                if (_data.MonitorProfiles.TryGetValue(monitorDevicePath, out var current))
+                {
+                    profile.Mhc2ProfileName = current.Mhc2ProfileName;
+                    profile.Mhc2SdrProfileName = current.Mhc2SdrProfileName;
+                    profile.Mhc2HdrProfileName = current.Mhc2HdrProfileName;
+                    profile.PreviousAdvancedColorProfileName = current.PreviousAdvancedColorProfileName;
+                    profile.PreviousColorProfileName = current.PreviousColorProfileName;
+                    profile.PreviousColorProfileHdrMode = current.PreviousColorProfileHdrMode;
+                }
                 _data.MonitorProfiles[monitorDevicePath] = profile;
                 _dataVersion++;
             }
@@ -702,12 +731,15 @@ namespace Gloam.Core
         /// <summary>
         /// Records (or clears, with null) the installed native MHC2 calibration profile for a
         /// monitor. Used by the apply path to compose night mode on top without double-gamma.
+        /// A name with <paramref name="builtForHdr"/> also fills that mode's slot; null
+        /// clears the active profile and the slot that held it.
         /// </summary>
         public void SetMhc2Calibration(
             string monitorDevicePath,
             string? profileName,
             string? previousColorProfileName = null,
-            bool? previousColorProfileHdrMode = null)
+            bool? previousColorProfileHdrMode = null,
+            bool? builtForHdr = null)
         {
             if (string.IsNullOrEmpty(monitorDevicePath)) return;
             lock (_dataLock)
@@ -717,8 +749,16 @@ namespace Gloam.Core
                     profile = new MonitorProfileData();
                     _data.MonitorProfiles[monitorDevicePath] = profile;
                 }
+                if (profileName == null)
+                    ForgetSlot(profile, profile.Mhc2ProfileName);
+                else if (builtForHdr == true)
+                    profile.Mhc2HdrProfileName = profileName;
+                else if (builtForHdr == false)
+                    profile.Mhc2SdrProfileName = profileName;
                 profile.Mhc2ProfileName = profileName;
-                if (!string.IsNullOrEmpty(previousColorProfileName))
+                // A backup passed through unchanged keeps the mode it was captured in.
+                if (!string.IsNullOrEmpty(previousColorProfileName) &&
+                    !string.Equals(profile.PreviousColorProfileName, previousColorProfileName, StringComparison.OrdinalIgnoreCase))
                 {
                     profile.PreviousColorProfileName = previousColorProfileName;
                     profile.PreviousColorProfileHdrMode = previousColorProfileHdrMode;
@@ -727,6 +767,95 @@ namespace Gloam.Core
             }
             Save();
             NotifyMonitorProfileChanged(monitorDevicePath);
+        }
+
+        /// <summary>
+        /// Drops a profile from both mode slots and, if it is active, from the active record.
+        /// For explicit user deactivation or deletion.
+        /// </summary>
+        public void ForgetMhc2Profile(string monitorDevicePath, string profileName)
+        {
+            if (string.IsNullOrEmpty(monitorDevicePath) || string.IsNullOrEmpty(profileName)) return;
+            lock (_dataLock)
+            {
+                if (!_data.MonitorProfiles.TryGetValue(monitorDevicePath, out var profile)) return;
+                ForgetSlot(profile, profileName);
+                if (string.Equals(profile.Mhc2ProfileName, profileName, StringComparison.OrdinalIgnoreCase))
+                    profile.Mhc2ProfileName = null;
+                _dataVersion++;
+            }
+            Save();
+            NotifyMonitorProfileChanged(monitorDevicePath);
+        }
+
+        /// <summary>Changes only the active profile record; both mode slots are kept.</summary>
+        public void SetActiveMhc2Profile(string monitorDevicePath, string? profileName)
+        {
+            if (string.IsNullOrEmpty(monitorDevicePath)) return;
+            lock (_dataLock)
+            {
+                if (!_data.MonitorProfiles.TryGetValue(monitorDevicePath, out var profile)) return;
+                profile.Mhc2ProfileName = profileName;
+                _dataVersion++;
+            }
+            Save();
+            NotifyMonitorProfileChanged(monitorDevicePath);
+        }
+
+        /// <summary>Records which mode a profile belongs to without changing the active one.</summary>
+        public void SetMhc2ModeSlot(string monitorDevicePath, string profileName, bool hdr)
+        {
+            if (string.IsNullOrEmpty(monitorDevicePath) || string.IsNullOrEmpty(profileName)) return;
+            lock (_dataLock)
+            {
+                if (!_data.MonitorProfiles.TryGetValue(monitorDevicePath, out var profile)) return;
+                if (hdr) profile.Mhc2HdrProfileName = profileName;
+                else profile.Mhc2SdrProfileName = profileName;
+                _dataVersion++;
+            }
+            Save();
+        }
+
+        /// <summary>
+        /// Remembers the first non-Gloam Advanced Color default a Gloam install displaced.
+        /// Later installs see a Gloam profile there, so the first record is the one to keep.
+        /// </summary>
+        public void RecordDisplacedAdvancedColorProfile(string monitorDevicePath, string? profileName)
+        {
+            if (string.IsNullOrEmpty(monitorDevicePath) || string.IsNullOrEmpty(profileName)) return;
+            lock (_dataLock)
+            {
+                if (!_data.MonitorProfiles.TryGetValue(monitorDevicePath, out var profile) ||
+                    !string.IsNullOrEmpty(profile.PreviousAdvancedColorProfileName))
+                    return;
+                profile.PreviousAdvancedColorProfileName = profileName;
+                _dataVersion++;
+            }
+            Save();
+        }
+
+        /// <summary>Clears the displaced Advanced Color profile once it is the default again.</summary>
+        public void ClearDisplacedAdvancedColorProfile(string monitorDevicePath)
+        {
+            if (string.IsNullOrEmpty(monitorDevicePath)) return;
+            lock (_dataLock)
+            {
+                if (!_data.MonitorProfiles.TryGetValue(monitorDevicePath, out var profile) ||
+                    profile.PreviousAdvancedColorProfileName == null)
+                    return;
+                profile.PreviousAdvancedColorProfileName = null;
+                _dataVersion++;
+            }
+            Save();
+        }
+
+        private static void ForgetSlot(MonitorProfileData profile, string? profileName)
+        {
+            if (string.IsNullOrEmpty(profileName)) return;
+            if (string.Equals(profile.Mhc2SdrProfileName, profileName, StringComparison.OrdinalIgnoreCase))
+                profile.Mhc2SdrProfileName = null;
+            if (string.Equals(profile.Mhc2HdrProfileName, profileName, StringComparison.OrdinalIgnoreCase))
+                profile.Mhc2HdrProfileName = null;
         }
 
         /// <summary>Clears the saved pre-Gloam Windows profile after it has been restored.</summary>
@@ -1030,6 +1159,8 @@ namespace Gloam.Core
                         StringComparison.OrdinalIgnoreCase))
                     return false;
                 profile.Mhc2ProfileName = replacementProfileName;
+                if (string.Equals(profile.Mhc2HdrProfileName, expectedProfileName, StringComparison.OrdinalIgnoreCase))
+                    profile.Mhc2HdrProfileName = replacementProfileName;
                 _dataVersion++;
             }
 
@@ -1046,6 +1177,8 @@ namespace Gloam.Core
                         StringComparison.OrdinalIgnoreCase))
                 {
                     profile.Mhc2ProfileName = expectedProfileName;
+                    if (string.Equals(profile.Mhc2HdrProfileName, replacementProfileName, StringComparison.OrdinalIgnoreCase))
+                        profile.Mhc2HdrProfileName = expectedProfileName;
                     _dataVersion++;
                 }
             }

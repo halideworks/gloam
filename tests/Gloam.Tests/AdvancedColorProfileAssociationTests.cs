@@ -142,6 +142,17 @@ namespace Gloam.Tests
         }
 
         [Fact]
+        public void RemoveCurrentUser_ProfileNeverAssociated_IsSuccess()
+        {
+            var platform = new FakeAdvancedColorPlatform { PerUserEnabled = true };
+
+            bool success = AdvancedColorProfileAssociation.TryRemoveCurrentUser(
+                Monitor(), "Gloam never associated.icm", out string? error, platform);
+
+            Assert.True(success, error);
+        }
+
+        [Fact]
         public void VerifiedCurrentUserDefault_RejectsMatchingSystemDefault()
         {
             var platform = new FakeAdvancedColorPlatform
@@ -274,7 +285,8 @@ namespace Gloam.Tests
             if (scope == Wcs.WCS_PROFILE_MANAGEMENT_SCOPE.WCS_PROFILE_MANAGEMENT_SCOPE_SYSTEM_WIDE &&
                 string.Equals(SystemDefault, profileName, StringComparison.OrdinalIgnoreCase))
                 SystemDefault = null;
-            return removed ? 0 : unchecked((int)0x80070490);
+            // Windows answers ERROR_PROFILE_NOT_ASSOCIATED_WITH_DEVICE here.
+            return removed ? 0 : unchecked((int)0x800707DF);
         }
 
         public bool InstallColorProfile(string stagedPath)

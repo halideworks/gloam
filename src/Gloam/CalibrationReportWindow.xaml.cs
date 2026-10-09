@@ -137,6 +137,8 @@ namespace Gloam
         // Everything needed to install the calibration as a native Windows MHC2 profile and
         // to verify it afterwards. Set by the calibration window; when present, "Apply
         // Profile" does the real install and "Verify" can re-measure through it.
+        private bool _acmWarningShown;
+
         public sealed record ApplyContext(
             MonitorInfo Monitor, CalibrationTarget Target,
             double[] LutR, double[] LutG, double[] LutB, double WhiteLevel,
@@ -1439,6 +1441,16 @@ namespace Gloam
                     _installedHdrXyzCorrection = HdrColorMatrixLoop.IdentityCorrection();
                     Vm.ApplyButtonContent = "Disable Profile";
                     ctx.OnInstalled?.Invoke(result.ProfileName, previousDefaultProfile);
+                    ctx.SettingsManager?.RecordDisplacedAdvancedColorProfile(
+                        installMonitor.MonitorDevicePath, result.DisplacedAdvancedColorProfile);
+
+                    // Modal on purpose: the user can turn ACM on before dismissing, so the
+                    // verification below measures the corrected display.
+                    if (result.Warning != null && !_acmWarningShown)
+                    {
+                        _acmWarningShown = true;
+                        ConfirmDialog.Info(this, "Turn On Auto Color Management", result.Warning);
+                    }
 
                     if (runVerify && ctx.Colorimeter != null)
                     {
