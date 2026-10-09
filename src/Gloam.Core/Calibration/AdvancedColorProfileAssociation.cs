@@ -58,12 +58,14 @@ namespace Gloam.Core.Calibration
 
         /// <summary>
         /// "There was nothing there" HRESULTs: FILE_NOT_FOUND, PATH_NOT_FOUND and
-        /// NOT_FOUND. Removing an association that does not exist is a success, not a fault.
+        /// NOT_FOUND, plus PROFILE_NOT_ASSOCIATED_WITH_DEVICE. Removing an association that
+        /// does not exist is a success, not a fault.
         /// </summary>
         private static bool IsNotFound(int hr) =>
             hr == unchecked((int)0x80070002) ||
             hr == unchecked((int)0x80070003) ||
-            hr == unchecked((int)0x80070490);
+            hr == unchecked((int)0x80070490) ||
+            hr == unchecked((int)0x800707DF);
 
         internal static IAdvancedColorProfilePlatform Platform { get; set; } = new WindowsAdvancedColorProfilePlatform();
 

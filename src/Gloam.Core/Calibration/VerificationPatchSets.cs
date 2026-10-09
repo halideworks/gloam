@@ -438,7 +438,7 @@ namespace Gloam.Core.Calibration
                 pairs.Count,
                 nativeAverage,
                 verifiedAverage,
-                $"Profile activation sentinel warning: comparable patches were avg ΔE {nativeAverage:F2} native and {verifiedAverage:F2} after install, so the verification did not detect the expected movement toward target. Confirm the Windows color profile is active for this display and that verification ran on the same HDR/SDR mode used during measurement.");
+                $"Profile activation sentinel warning: comparable patches were avg ΔE {nativeAverage:F2} native and {verifiedAverage:F2} after install, so the verification did not detect the expected movement toward target. Confirm the Windows color profile is active for this display and that verification ran on the same HDR/SDR mode used during measurement. In SDR, Windows applies the profile only while \"Automatically manage color for apps\" is on.");
         }
 
         private static IEnumerable<PatchDeltaE> Eligible(IEnumerable<PatchDeltaE>? patches, bool whitePointOnly)

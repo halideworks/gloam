@@ -24,6 +24,7 @@ namespace Gloam.ViewModels
         public event Action<string, string>? NotificationRequested;
 
         private readonly MonitorManager _monitorManager;
+        private readonly AdvancedColorProfileMigrationService? _profileModeService;
         private readonly ProfileManager _profileManager;
         private readonly DispwinRunner _dispwinRunner;
         private readonly SettingsManager _settingsManager;
@@ -76,7 +77,8 @@ namespace Gloam.ViewModels
             UpdateService updateService,
             IToastService? toastService = null,
             MelanopicMonitorService? melanopicService = null,
-            HotkeyManager? hotkeyManager = null)
+            HotkeyManager? hotkeyManager = null,
+            AdvancedColorProfileMigrationService? profileModeService = null)
         {
             // Dependencies are constructed by the DI container (App.ConfigureServices)
             // and must all be assigned before starting any service: NightModeService and
@@ -84,6 +86,7 @@ namespace Gloam.ViewModels
             // and those handlers reach the apply service. The wiring/start order in
             // this constructor body is load-bearing; do not reorder it.
             _monitorManager = monitorManager;
+            _profileModeService = profileModeService;
             _settingsManager = settingsManager;
             _nightModeService = nightModeService;
             _profileManager = profileManager;
@@ -602,6 +605,8 @@ namespace Gloam.ViewModels
                 // dedupe skip the re-apply.
                 _applyService.InvalidateAppliedState();
                 RefreshMonitors();
+                // Must precede ApplyAll: the apply path reads the active MHC2 profile.
+                _profileModeService?.ReconcileModeChanges();
                 // HMONITOR handles and output facts can change across HDR/display events.
                 // Re-run foreground assignment so Gameplay Lock follows the refreshed path.
                 _appDetectionService.Refresh();

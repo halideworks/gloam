@@ -26,7 +26,8 @@ namespace Gloam.Core.Calibration
         /// really on the wire. Null for SDR installs and failures before LUT generation.
         /// </param>
         public sealed record InstallResult(bool Success, string ProfileName, string? Error,
-            HdrMhc2LutBuilder.Result? HdrLuts = null);
+            HdrMhc2LutBuilder.Result? HdrLuts = null, string? Warning = null,
+            string? DisplacedAdvancedColorProfile = null);
 
         /// <summary>
         /// The exact gamut-matrix plan the installer will write. Joint HDR refinement uses
@@ -358,8 +359,25 @@ namespace Gloam.Core.Calibration
             // Override names support the live white-trim preview: it alternates between two
             // fixed names so each step forces the compositor to load fresh content instead
             // of trusting a possibly-cached profile, without littering the store.
-            string profileName = profileNameOverride ?? BuildProfileName(monitor, target);
+            string profileName = profileNameOverride ?? UniqueInColorStore(BuildProfileName(monitor, target));
             string srcPath = Path.Combine(Path.GetTempPath(), profileName);
+            string? warning = null;
+            bool newlyInstalled = false, legacyAssociated = false;
+
+            void UndoFailedInstall()
+            {
+                try
+                {
+                    if (legacyAssociated)
+                        Wcs.DisassociateColorProfileFromDevice(null, profileName, monitor.MonitorDevicePath);
+                    if (newlyInstalled)
+                        AdvancedColorProfileAssociation.Platform.UninstallColorProfile(profileName, delete: true);
+                }
+                catch (Exception ex)
+                {
+                    Log.Error($"CalibrationProfileInstaller: cleanup after failed install of '{profileName}' failed: {ex.Message}");
+                }
+            }
 
             try
             {
@@ -385,48 +403,60 @@ namespace Gloam.Core.Calibration
                         ? characterization.PeakLuminance
                         : null);
 
-                if (hdrMode)
+                var platform = AdvancedColorProfileAssociation.Platform;
+                // Override names (the trim preview's A/B) are reused with new bytes and are
+                // never the recorded calibration, so the old file can go first.
+                if (profileNameOverride != null && File.Exists(Path.Combine(platform.ColorStoreDirectory, profileName)))
+                    Uninstall(monitor, profileName);
+                if (!TryInstallVerified(srcPath, profileName, platform, out newlyInstalled, out string? installError))
                 {
-                    if (!TryInstallVerified(srcPath, profileName,
-                            AdvancedColorProfileAssociation.Platform, out bool newlyInstalled, out string? installError))
-                    {
-                        Log.Error($"CalibrationProfileInstaller: color-store install failed for '{profileName}': {installError}");
-                        return new InstallResult(false, profileName, installError);
-                    }
-
-                    if (!AdvancedColorProfileAssociation.TryActivateInstalled(
-                            monitor, profileName, out _, out string? associationError))
-                    {
-                        Log.Error($"CalibrationProfileInstaller: Advanced Color association failed for '{profileName}': {associationError}");
-                        if (newlyInstalled)
-                            AdvancedColorProfileAssociation.Platform.UninstallColorProfile(profileName, delete: true);
-                        return new InstallResult(false, profileName, associationError);
-                    }
+                    Log.Error($"CalibrationProfileInstaller: color-store install failed for '{profileName}': {installError}");
+                    return new InstallResult(false, profileName, installError);
                 }
-                else
+
+                // Apps read the legacy list, but Windows applies MHC2 only from the
+                // Advanced Color list, and in SDR only while ACM is on.
+                if (!hdrMode)
                 {
-                    if (!Wcs.InstallColorProfile(null, srcPath))
-                        Log.Info($"CalibrationProfileInstaller: InstallColorProfile returned false for {profileName} (may already exist).");
-                    if (!Wcs.AssociateColorProfileWithDevice(null, srcPath, monitor.MonitorDevicePath))
+                    legacyAssociated = AssociateLegacyDefault(monitor, profileName);
+                    if (!legacyAssociated)
                     {
                         Log.Error($"CalibrationProfileInstaller: SDR association failed for '{profileName}' " +
                                   $"(Win32 {Marshal.GetLastWin32Error()}).");
+                        UndoFailedInstall();
                         return new InstallResult(false, profileName,
                             "Windows refused to associate the profile with the display. Make sure the monitor is active.");
                     }
-
-                    if (!Wcs.WcsSetDefaultColorProfile(
-                            Wcs.WCS_PROFILE_MANAGEMENT_SCOPE.WCS_PROFILE_MANAGEMENT_SCOPE_CURRENT_USER,
-                            monitor.MonitorDevicePath, Wcs.CPT_ICC, Wcs.CPST_PERCEPTUAL, 0, profileName))
-                        Log.Info($"CalibrationProfileInstaller: WcsSetDefaultColorProfile returned false for {profileName}.");
                 }
 
-                Log.Info($"CalibrationProfileInstaller: Installed + set default '{profileName}' for {monitor.FriendlyName} ({(hdrMode ? "advanced color" : "SDR")} association).");
-                return new InstallResult(true, profileName, null, installedHdrLuts);
+                if (!AdvancedColorProfileAssociation.TryActivateInstalled(
+                        monitor, profileName, out var receipt, out string? associationError))
+                {
+                    Log.Error($"CalibrationProfileInstaller: Advanced Color association failed for '{profileName}': {associationError}");
+                    UndoFailedInstall();
+                    return new InstallResult(false, profileName, hdrMode
+                        ? associationError
+                        : $"Windows refused the Advanced Color association, so the correction cannot apply: {associationError}");
+                }
+
+                string? displaced = ForeignPriorDefault(monitor, receipt);
+
+                if (!hdrMode &&
+                    CalibrationInstallPreflight.DetectSdrAutoColorManagement(monitor.DeviceName, hdrActive: false) == false)
+                {
+                    warning = "The profile is installed, but Windows applies SDR calibration only while " +
+                              "\"Automatically manage color for apps\" is on (Settings > System > Display). " +
+                              "Turn it on, then verify.";
+                    Log.Info($"CalibrationProfileInstaller: SDR profile '{profileName}' installed with Auto Color Management off; it will not apply until ACM is enabled.");
+                }
+
+                Log.Info($"CalibrationProfileInstaller: Installed + set default '{profileName}' for {monitor.FriendlyName} ({(hdrMode ? "advanced color" : "SDR + advanced color")} association).");
+                return new InstallResult(true, profileName, null, installedHdrLuts, warning, displaced);
             }
             catch (Exception ex)
             {
                 Log.Error($"CalibrationProfileInstaller: Install failed: {ex.Message}");
+                UndoFailedInstall();
                 return new InstallResult(false, profileName, ex.Message);
             }
             finally
@@ -481,28 +511,52 @@ namespace Gloam.Core.Calibration
         /// refuses the association.
         /// </summary>
         public static bool Reenable(MonitorInfo monitor, string profileName, bool hdrMode)
+            => Reenable(monitor, profileName, hdrMode, out _);
+
+        /// <param name="displacedAdvancedColorProfile">
+        /// The non-Gloam Advanced Color default this activation replaced, if any.
+        /// </param>
+        public static bool Reenable(
+            MonitorInfo monitor, string profileName, bool hdrMode, out string? displacedAdvancedColorProfile)
         {
+            displacedAdvancedColorProfile = null;
             if (string.IsNullOrEmpty(monitor.MonitorDevicePath) || string.IsNullOrEmpty(profileName)) return false;
             try
             {
-                if (hdrMode)
+                bool legacyWasDefault = false;
+                if (!hdrMode)
                 {
-                    return AdvancedColorProfileAssociation.TryActivateInstalled(
-                        monitor, profileName, out _, out _);
+                    legacyWasDefault = string.Equals(GetCurrentDefaultProfile(monitor, hdrMode: false), profileName,
+                        StringComparison.OrdinalIgnoreCase);
+                    if (!AssociateLegacyDefault(monitor, profileName))
+                        return false;
                 }
 
-                if (!Wcs.AssociateColorProfileWithDevice(null, profileName, monitor.MonitorDevicePath))
-                    return false;
-                Wcs.WcsSetDefaultColorProfile(
-                    Wcs.WCS_PROFILE_MANAGEMENT_SCOPE.WCS_PROFILE_MANAGEMENT_SCOPE_CURRENT_USER,
-                    monitor.MonitorDevicePath, Wcs.CPT_ICC, Wcs.CPST_PERCEPTUAL, 0, profileName);
-                return true;
+                // SDR MHC2 applies only from the Advanced Color list; see Install.
+                if (AdvancedColorProfileAssociation.TryActivateInstalled(monitor, profileName, out var receipt, out _))
+                {
+                    displacedAdvancedColorProfile = ForeignPriorDefault(monitor, receipt);
+                    return true;
+                }
+                if (!hdrMode && !legacyWasDefault)
+                    Wcs.DisassociateColorProfileFromDevice(null, profileName, monitor.MonitorDevicePath);
+                return false;
             }
             catch (Exception ex)
             {
                 Log.Error($"CalibrationProfileInstaller: Reenable failed: {ex.Message}");
                 return false;
             }
+        }
+
+        private static string? ForeignPriorDefault(
+            MonitorInfo monitor, AdvancedColorProfileAssociation.ActivationReceipt? receipt)
+        {
+            string? prior = receipt?.PriorCurrentUserDefault;
+            return string.IsNullOrWhiteSpace(prior) ||
+                   prior.StartsWith(BuildProfileNamePrefix(monitor), StringComparison.OrdinalIgnoreCase)
+                ? null
+                : prior;
         }
 
         /// <summary>
@@ -648,6 +702,17 @@ namespace Gloam.Core.Calibration
             }
         }
 
+        private static bool AssociateLegacyDefault(MonitorInfo monitor, string profileName)
+        {
+            if (!Wcs.AssociateColorProfileWithDevice(null, profileName, monitor.MonitorDevicePath))
+                return false;
+            if (!Wcs.WcsSetDefaultColorProfile(
+                    Wcs.WCS_PROFILE_MANAGEMENT_SCOPE.WCS_PROFILE_MANAGEMENT_SCOPE_CURRENT_USER,
+                    monitor.MonitorDevicePath, Wcs.CPT_ICC, Wcs.CPST_PERCEPTUAL, 0, profileName))
+                Log.Info($"CalibrationProfileInstaller: WcsSetDefaultColorProfile returned false for {profileName}.");
+            return true;
+        }
+
         /// <summary>
         /// Installs a staged profile and verifies the color-store bytes. InstallColorProfile
         /// returns false both for real failures and for a filename that already exists, so a
@@ -736,6 +801,47 @@ namespace Gloam.Core.Calibration
             string targetName = Sanitize(ShortTargetName(target));
             string stamp = DateTime.Now.ToString("yyyy-MM-dd HHmm");
             return $"{monitorName} - {targetName} - {stamp}.icm";
+        }
+
+        /// <summary>
+        /// Minute stamps repeat (a white trim accepted right after Apply), and Windows will
+        /// not overwrite a store file, so a taken name gets a numeric suffix.
+        /// </summary>
+        private static string UniqueInColorStore(string profileName)
+        {
+            string store = AdvancedColorProfileAssociation.Platform.ColorStoreDirectory;
+            string stem = Path.GetFileNameWithoutExtension(profileName);
+            string ext = Path.GetExtension(profileName);
+            string candidate = profileName;
+            for (int n = 2; File.Exists(Path.Combine(store, candidate)); n++)
+                candidate = $"{stem} ({n}){ext}";
+            return candidate;
+        }
+
+        /// <summary>Mode a Gloam profile was built for; see <see cref="TargetFromProfileName"/>.</summary>
+        public static bool? ClassifyHdrFromName(string profileName) => TargetFromProfileName(profileName)?.IsHdr;
+
+        /// <summary>
+        /// Standard target a Gloam profile was built for, read from the target segment of its
+        /// generated name. Null for custom targets and foreign names.
+        /// </summary>
+        public static CalibrationTarget? TargetFromProfileName(string profileName)
+        {
+            CalibrationTarget[] targets =
+            {
+                StandardTargets.SrgbGamma22, StandardTargets.SrgbPiecewise, StandardTargets.Rec709Gamma24,
+                StandardTargets.Rec709PureGamma22, StandardTargets.P3D65Gamma22, StandardTargets.P3D65Gamma26,
+                StandardTargets.Rec2020Gamma24, StandardTargets.Rec2020Pq, StandardTargets.Rec2020Hlg,
+                StandardTargets.Rec709Pq, StandardTargets.P3Pq,
+            };
+            foreach (var t in targets)
+            {
+                string segment = Sanitize(ShortTargetName(t));
+                if (profileName.Contains($" - {segment} - ", StringComparison.OrdinalIgnoreCase) ||
+                    profileName.Contains($" - {segment} WPonly - ", StringComparison.OrdinalIgnoreCase))
+                    return t;
+            }
+            return null;
         }
 
         /// <summary>

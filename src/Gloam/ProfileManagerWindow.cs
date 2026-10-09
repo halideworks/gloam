@@ -197,7 +197,7 @@ namespace Gloam
                 previous,
                 saved?.PreviousColorProfileName);
 
-            if (CalibrationProfileInstaller.Reenable(_monitor, row.Name, _monitor.IsHdrActive))
+            if (CalibrationProfileInstaller.Reenable(_monitor, row.Name, _monitor.IsHdrActive, out string? displaced))
             {
                 if (!string.IsNullOrEmpty(previous) && !string.Equals(previous, row.Name, StringComparison.OrdinalIgnoreCase))
                     CalibrationProfileInstaller.Disable(_monitor, previous);
@@ -205,8 +205,14 @@ namespace Gloam
                     _monitor.MonitorDevicePath,
                     row.Name,
                     previousDefault,
-                    _monitor.IsHdrActive);
-                SetStatus($"Activated: {row.Name}");
+                    _monitor.IsHdrActive,
+                    builtForHdr: CalibrationProfileInstaller.ClassifyHdrFromName(row.Name) ?? _monitor.IsHdrActive);
+                // After SetMhc2Calibration: it creates the monitor's settings record.
+                _settings?.RecordDisplacedAdvancedColorProfile(_monitor.MonitorDevicePath, displaced);
+                SetStatus(!_monitor.IsHdrActive &&
+                          CalibrationInstallPreflight.DetectSdrAutoColorManagement(_monitor.DeviceName, hdrActive: false) == false
+                    ? $"Activated: {row.Name}. Windows applies it only while \"Automatically manage color for apps\" is on (Settings > System > Display)."
+                    : $"Activated: {row.Name}");
             }
             else
             {
@@ -230,8 +236,8 @@ namespace Gloam
                 {
                     touchedActive = true;
                     restoreMessage = RestorePreviousProfileIfAvailable();
-                    _settings?.SetMhc2Calibration(_monitor.MonitorDevicePath, null);
                 }
+                _settings?.ForgetMhc2Profile(_monitor.MonitorDevicePath, row.Name);
             }
             if (!string.IsNullOrEmpty(restoreMessage))
                 SetStatus(restoreMessage);
@@ -264,10 +270,8 @@ namespace Gloam
                 bool wasActive = string.Equals(row.Name, activeBefore, StringComparison.OrdinalIgnoreCase);
                 CalibrationProfileInstaller.Uninstall(_monitor, row.Name);
                 if (wasActive)
-                {
                     restoreMessage = RestorePreviousProfileIfAvailable();
-                    _settings?.SetMhc2Calibration(_monitor.MonitorDevicePath, null);
-                }
+                _settings?.ForgetMhc2Profile(_monitor.MonitorDevicePath, row.Name);
             }
             if (!string.IsNullOrEmpty(restoreMessage))
                 SetStatus(restoreMessage);
@@ -279,18 +283,38 @@ namespace Gloam
         private string RestorePreviousProfileIfAvailable()
         {
             var profile = ActiveMonitorProfile;
+            string previousMessage = "";
             string? previous = profile?.PreviousColorProfileName;
-            if (string.IsNullOrWhiteSpace(previous))
-                return "";
-
-            bool hdrMode = profile?.PreviousColorProfileHdrMode ?? _monitor.IsHdrActive;
-            if (CalibrationProfileInstaller.RestoreDefaultProfile(_monitor, previous, hdrMode))
+            if (!string.IsNullOrWhiteSpace(previous))
             {
-                _settings?.ClearMhc2PreviousColorProfile(_monitor.MonitorDevicePath);
-                return $"Restored previous Windows color profile: {previous}";
+                bool hdrMode = profile?.PreviousColorProfileHdrMode ?? _monitor.IsHdrActive;
+                if (CalibrationProfileInstaller.RestoreDefaultProfile(_monitor, previous, hdrMode))
+                {
+                    _settings?.ClearMhc2PreviousColorProfile(_monitor.MonitorDevicePath);
+                    previousMessage = $"Restored previous Windows color profile: {previous}";
+                }
+                else
+                {
+                    previousMessage = $"Gloam profile disabled, but Windows refused to restore previous profile: {previous}";
+                }
             }
 
-            return $"Gloam profile disabled, but Windows refused to restore previous profile: {previous}";
+            // Last, so it wins the Advanced Color slot: it is re-recorded on every
+            // displacement, while the backup above is captured once and can be older.
+            string? displaced = profile?.PreviousAdvancedColorProfileName;
+            if (string.IsNullOrWhiteSpace(displaced))
+                return previousMessage;
+            string displacedMessage;
+            if (CalibrationProfileInstaller.RestoreDefaultProfile(_monitor, displaced, hdrMode: true))
+            {
+                _settings?.ClearDisplacedAdvancedColorProfile(_monitor.MonitorDevicePath);
+                displacedMessage = $"Restored previous advanced color profile: {displaced}";
+            }
+            else
+            {
+                displacedMessage = $"Gloam profile disabled, but Windows refused to restore previous advanced color profile: {displaced}";
+            }
+            return string.IsNullOrEmpty(previousMessage) ? displacedMessage : previousMessage + " " + displacedMessage;
         }
     }
 }

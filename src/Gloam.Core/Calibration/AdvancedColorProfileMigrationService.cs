@@ -44,6 +44,8 @@ namespace Gloam.Core.Calibration
                 return new Result(0, 0, 0, 0, 1);
             }
 
+            ReconcileModeChanges(monitors);
+
             foreach (var monitor in monitors)
             {
                 var saved = _settings.GetMonitorProfile(monitor.MonitorDevicePath);
@@ -146,6 +148,145 @@ namespace Gloam.Core.Calibration
             Log.Info($"AdvancedColorProfileMigration: inspected {inspected}, repaired {repaired}, " +
                      $"reactivated {reactivated}, deferred {deferred}, failed {failed}.");
             return result;
+        }
+
+        internal readonly record struct ModeSwitch(string? Disable, string? Enable, bool VerifyOnly, bool RestorePrevious);
+
+        /// <summary>
+        /// Windows has one Advanced Color default for SDR and HDR, so the Gloam profile built
+        /// for the display's current mode must be swapped in whenever that mode changes.
+        /// Acts on first sight of a monitor and on each SDR/HDR transition, not on every
+        /// display event.
+        /// </summary>
+        public void ReconcileModeChanges()
+        {
+            IReadOnlyList<MonitorInfo> monitors;
+            try { monitors = _enumerateMonitors(); }
+            catch (Exception ex)
+            {
+                Log.Info($"AdvancedColorProfileMigration: monitor enumeration failed: {ex.Message}");
+                return;
+            }
+            ReconcileModeChanges(monitors);
+        }
+
+        internal void ReconcileModeChanges(IReadOnlyList<MonitorInfo> monitors)
+        {
+            foreach (var monitor in monitors)
+            {
+                if (string.IsNullOrEmpty(monitor.MonitorDevicePath)) continue;
+                lock (_lastHdrLock)
+                {
+                    if (_lastHdr.TryGetValue(monitor.MonitorDevicePath, out bool last) && last == monitor.IsHdrActive)
+                        continue;
+                    _lastHdr[monitor.MonitorDevicePath] = monitor.IsHdrActive;
+                }
+                bool settled;
+                try { settled = ReconcileMode(monitor); }
+                catch (Exception ex)
+                {
+                    settled = false;
+                    Log.Error($"AdvancedColorProfileMigration: mode reconcile failed on {monitor.FriendlyName}: {ex.Message}");
+                }
+                // Forget the mode so the next display event retries instead of waiting for a flip.
+                if (!settled)
+                    lock (_lastHdrLock) _lastHdr.Remove(monitor.MonitorDevicePath);
+            }
+        }
+
+        private readonly Dictionary<string, bool> _lastHdr = new(StringComparer.OrdinalIgnoreCase);
+        private readonly object _lastHdrLock = new();
+        private readonly HashSet<string> _restorePending = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Returns false when Windows refused a step and the reconcile should be retried.</summary>
+        private bool ReconcileMode(MonitorInfo monitor)
+        {
+            string path = monitor.MonitorDevicePath;
+            var saved = _settings.GetMonitorProfile(path);
+            if (saved == null) return true;
+
+            // Records from before per-mode slots: classify the active profile from its
+            // generated name, else from the mode stored with the pre-Gloam default.
+            if (saved.Mhc2SdrProfileName == null && saved.Mhc2HdrProfileName == null &&
+                !string.IsNullOrEmpty(saved.Mhc2ProfileName) &&
+                (CalibrationProfileInstaller.ClassifyHdrFromName(saved.Mhc2ProfileName) ?? saved.PreviousColorProfileHdrMode)
+                    is bool legacyHdr)
+            {
+                _settings.SetMhc2ModeSlot(path, saved.Mhc2ProfileName, legacyHdr);
+                saved = _settings.GetMonitorProfile(path)!;
+            }
+
+            var plan = DecideModeSwitch(saved.Mhc2SdrProfileName, saved.Mhc2HdrProfileName,
+                saved.Mhc2ProfileName, monitor.IsHdrActive);
+            bool hdr = monitor.IsHdrActive;
+
+            if (plan.VerifyOnly)
+            {
+                // Same handling as the startup repair always had: re-assert, never clear.
+                if (!AdvancedColorProfileAssociation.TryIsVerifiedCurrentUserDefault(
+                        monitor, plan.Enable!, out bool isActive, out _))
+                    return false;
+                if (isActive) return true;
+                if (CalibrationProfileInstaller.Reenable(monitor, plan.Enable!, hdr, out string? displacedOnVerify))
+                {
+                    _settings.RecordDisplacedAdvancedColorProfile(path, displacedOnVerify);
+                    Log.Info($"AdvancedColorProfileMigration: re-activated '{plan.Enable}' on {monitor.FriendlyName}.");
+                    return true;
+                }
+                Log.Error($"AdvancedColorProfileMigration: could not re-activate '{plan.Enable}' on {monitor.FriendlyName}.");
+                return false;
+            }
+
+            if (plan.Disable != null)
+            {
+                if (!CalibrationProfileInstaller.Disable(monitor, plan.Disable))
+                {
+                    Log.Error($"AdvancedColorProfileMigration: could not retire '{plan.Disable}' on {monitor.FriendlyName}; keeping it recorded as active.");
+                    return false;
+                }
+                _settings.SetActiveMhc2Profile(path, null);
+                Log.Info($"AdvancedColorProfileMigration: retired '{plan.Disable}' on {monitor.FriendlyName}; it was built for {(hdr ? "SDR" : "HDR")}.");
+            }
+
+            if (plan.Enable != null)
+            {
+                if (!CalibrationProfileInstaller.Reenable(monitor, plan.Enable, hdr, out string? displaced))
+                {
+                    Log.Error($"AdvancedColorProfileMigration: could not activate {(hdr ? "HDR" : "SDR")} profile '{plan.Enable}' on {monitor.FriendlyName}.");
+                    return false;
+                }
+                _settings.SetActiveMhc2Profile(path, plan.Enable);
+                _settings.RecordDisplacedAdvancedColorProfile(path, displaced);
+                Log.Info($"AdvancedColorProfileMigration: activated {(hdr ? "HDR" : "SDR")} profile '{plan.Enable}' on {monitor.FriendlyName}.");
+            }
+
+            bool restorePending;
+            lock (_lastHdrLock) restorePending = _restorePending.Remove(path);
+            if (plan.Enable == null && (plan.RestorePrevious || restorePending) &&
+                saved.PreviousAdvancedColorProfileName is { Length: > 0 } previous)
+            {
+                bool restored = CalibrationProfileInstaller.RestoreDefaultProfile(monitor, previous, hdrMode: true);
+                Log.Info($"AdvancedColorProfileMigration: {(restored ? "restored" : "could not restore")} previous Advanced Color profile '{previous}' on {monitor.FriendlyName}.");
+                if (!restored)
+                {
+                    // The retire already happened, so the retry's plan will not ask for this again.
+                    lock (_lastHdrLock) _restorePending.Add(path);
+                    return false;
+                }
+                // Back in place; a later Gloam activation records whatever is default then.
+                _settings.ClearDisplacedAdvancedColorProfile(path);
+            }
+            return true;
+        }
+
+        internal static ModeSwitch DecideModeSwitch(string? sdrSlot, string? hdrSlot, string? active, bool hdr)
+        {
+            // No slot at all: no calibration, or a legacy record whose mode is unknown.
+            if (sdrSlot == null && hdrSlot == null) return default;
+            string? desired = hdr ? hdrSlot : sdrSlot;
+            if (string.Equals(desired, active, StringComparison.OrdinalIgnoreCase))
+                return desired == null ? default : new ModeSwitch(null, desired, VerifyOnly: true, RestorePrevious: false);
+            return new ModeSwitch(active, desired, VerifyOnly: false, RestorePrevious: desired == null && active != null);
         }
 
         internal static string BuildRepairedProfileName(string existingProfileName)
